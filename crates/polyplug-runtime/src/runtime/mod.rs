@@ -204,7 +204,9 @@ impl Runtime {
 // Returns PluginHandle::null() when registry not set or plugin not found — never panics.
 unsafe extern "C" fn host_find_plugin(contract_id: u64, min_version: u32) -> PluginHandle {
     match global_registry() {
-        Some(reg) => reg.find(contract_id, min_version).unwrap_or(PluginHandle::null()),
+        Some(reg) => reg
+            .find(contract_id, min_version)
+            .unwrap_or(PluginHandle::null()),
         None => PluginHandle::null(),
     }
 }
@@ -301,6 +303,9 @@ mod tests {
         // GLOBAL_REGISTRY is set.
         // SAFETY: host_find_plugin has no pointer preconditions — args are plain integers.
         let handle: PluginHandle = unsafe { host_find_plugin(0_u64, 0_u32) };
-        assert!(handle.is_null(), "host_find_plugin must return null when plugin not found");
+        assert!(
+            handle.is_null(),
+            "host_find_plugin must return null when plugin not found"
+        );
     }
 }

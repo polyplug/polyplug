@@ -16,6 +16,13 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    // Emit -export-dynamic linker flag so that polyplug_host_alloc and
+    // polyplug_host_free are visible to plugins loaded via dlopen at test time.
+    // This is a no-op for non-executable link jobs (cdylib/rlib).
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg=-Wl,-export-dynamic");
+
+    // Re-run if test_plugin sources change.
     // Re-run if test_plugin sources change.
     println!("cargo:rerun-if-changed=tests/fixtures/test_plugin/src/lib.rs");
     println!("cargo:rerun-if-changed=tests/fixtures/test_plugin/Cargo.toml");
@@ -117,7 +124,10 @@ fn main() {
         .expect("failed to run cargo build for memory_plugin");
 
     if !memory_status.success() {
-        panic!("cargo build -p memory_plugin failed with status: {}", memory_status);
+        panic!(
+            "cargo build -p memory_plugin failed with status: {}",
+            memory_status
+        );
     }
 
     let memory_lib_filename: &str = if cfg!(target_os = "macos") {
@@ -130,12 +140,13 @@ fn main() {
 
     let built_memory_so: PathBuf = target_dir.join("release").join(memory_lib_filename);
     let dest_memory_so: PathBuf = fixtures_dir.join(memory_lib_filename);
-    fs::copy(&built_memory_so, &dest_memory_so).unwrap_or_else(|e| {
-        panic!("failed to copy memory_plugin .so: {}", e)
-    });
+    fs::copy(&built_memory_so, &dest_memory_so)
+        .unwrap_or_else(|e| panic!("failed to copy memory_plugin .so: {}", e));
 
-    println!("cargo:rustc-env=MEMORY_PLUGIN_SO={}", dest_memory_so.display());
-
+    println!(
+        "cargo:rustc-env=MEMORY_PLUGIN_SO={}",
+        dest_memory_so.display()
+    );
 
     // ─── error_plugin build ──────────────────────────────────────────────────
     // Re-run if error_plugin sources change.
@@ -155,7 +166,10 @@ fn main() {
         .expect("failed to run cargo build for error_plugin");
 
     if !error_status.success() {
-        panic!("cargo build -p error_plugin failed with status: {}", error_status);
+        panic!(
+            "cargo build -p error_plugin failed with status: {}",
+            error_status
+        );
     }
 
     let error_lib_filename: &str = if cfg!(target_os = "macos") {
@@ -168,11 +182,13 @@ fn main() {
 
     let built_error_so: PathBuf = target_dir.join("release").join(error_lib_filename);
     let dest_error_so: PathBuf = fixtures_dir.join(error_lib_filename);
-    fs::copy(&built_error_so, &dest_error_so).unwrap_or_else(|e| {
-        panic!("failed to copy error_plugin .so: {}", e)
-    });
+    fs::copy(&built_error_so, &dest_error_so)
+        .unwrap_or_else(|e| panic!("failed to copy error_plugin .so: {}", e));
 
-    println!("cargo:rustc-env=ERROR_PLUGIN_SO={}", dest_error_so.display());
+    println!(
+        "cargo:rustc-env=ERROR_PLUGIN_SO={}",
+        dest_error_so.display()
+    );
 
     // Emit polyplugc binary path so integration tests can use env!("CARGO_BIN_EXE_polyplugc").
     // polyplugc lives in the same workspace target directory.
