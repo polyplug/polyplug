@@ -1,2 +1,0 @@
-use super::vtables::TEST_ADD_CONTRACT_ID;
-use super::vtables::TEST_ADD_VTABLE;

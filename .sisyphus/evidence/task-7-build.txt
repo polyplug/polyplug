@@ -1,9 +1,0 @@
-   Compiling error_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/error_plugin)
-    Finished `release` profile [optimized] target(s) in 0.08s
-
---- cargo clippy -p error_plugin ---
-
---- nm exported symbols ---
-00000000000120b0 T polyplug_abi_version
-                 U polyplug_host_alloc
-00000000000120c0 T polyplug_init

@@ -1,4 +1,0 @@
-guest_sdk.rs
-host_callers.rs
-manifest.toml
-types.rs

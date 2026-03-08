@@ -1,5 +1,0 @@
-   Compiling polyplug-runtime v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug-runtime)
-   Compiling polyplugc v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplugc)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
-     Running `target/debug/polyplugc validate --api tests/fixtures/test_api.toml`
-OK: tests/fixtures/test_api.toml

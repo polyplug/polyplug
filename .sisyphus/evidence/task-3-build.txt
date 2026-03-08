@@ -1,5 +1,0 @@
-   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
-   Compiling polyplugc v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplugc)
-   Compiling polyplug-guest v0.1.0 (/mnt/data/Projects/Utils/polyplug/guest-libs/rust)
-   Compiling polyplug-host v0.1.0 (/mnt/data/Projects/Utils/polyplug/host-libs/rust)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.44s

@@ -1,5 +1,0 @@
-   Compiling polyplug-runtime v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug-runtime)
-   Compiling polyplugc v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplugc)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.47s
-     Running `target/debug/polyplugc generate --api crates/polyplugc/tests/fixtures/test_api.toml --lang rust --out /tmp/gen_api`
-error: failed to write generated file `crates/polyplugc/tests/fixtures/test_api.toml`: No such file or directory (os error 2)

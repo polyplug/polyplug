@@ -1,7 +1,0 @@
-Exit: 0
-contracts.hpp
-host_callers.hpp
-init.hpp
-manifest.toml
-types.hpp
-vtables.hpp
