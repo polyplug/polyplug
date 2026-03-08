@@ -1,0 +1,46 @@
+   Compiling polyplug-runtime v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug-runtime)
+    Finished `bench` profile [optimized] target(s) in 1.20s
+     Running benches/vtable_dispatch.rs (target/release/deps/vtable_dispatch-efc4d933118b0c8a)
+Gnuplot not found, using plotters backend
+Benchmarking dispatch/noop/add(0,0)
+Benchmarking dispatch/noop/add(0,0): Warming up for 3.0000 s
+Benchmarking dispatch/noop/add(0,0): Collecting 100 samples in estimated 5.0000 s (2.5B iterations)
+Benchmarking dispatch/noop/add(0,0): Analyzing
+dispatch/noop/add(0,0)  time:   [1.9627 ns 1.9656 ns 1.9699 ns]
+                        thrpt:  [507.64 Melem/s 508.75 Melem/s 509.50 Melem/s]
+Found 17 outliers among 100 measurements (17.00%)
+  3 (3.00%) low severe
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  9 (9.00%) high severe
+
+Benchmarking dispatch/buffer_arg/fill_4096
+Benchmarking dispatch/buffer_arg/fill_4096: Warming up for 3.0000 s
+Benchmarking dispatch/buffer_arg/fill_4096: Collecting 100 samples in estimated 5.0001 s (141M iterations)
+Benchmarking dispatch/buffer_arg/fill_4096: Analyzing
+dispatch/buffer_arg/fill_4096
+                        time:   [35.357 ns 35.456 ns 35.617 ns]
+                        thrpt:  [28.077 Melem/s 28.204 Melem/s 28.283 Melem/s]
+Found 11 outliers among 100 measurements (11.00%)
+  2 (2.00%) high mild
+  9 (9.00%) high severe
+
+Benchmarking dispatch/struct_arg_and_return/add(42,57)
+Benchmarking dispatch/struct_arg_and_return/add(42,57): Warming up for 3.0000 s
+Benchmarking dispatch/struct_arg_and_return/add(42,57): Collecting 100 samples in estimated 5.0000 s (2.5B iterations)
+Benchmarking dispatch/struct_arg_and_return/add(42,57): Analyzing
+dispatch/struct_arg_and_return/add(42,57)
+                        time:   [1.9643 ns 1.9691 ns 1.9764 ns]
+                        thrpt:  [505.97 Melem/s 507.85 Melem/s 509.09 Melem/s]
+Found 6 outliers among 100 measurements (6.00%)
+  2 (2.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking dispatch/cross_plugin/find+call
+Benchmarking dispatch/cross_plugin/find+call: Warming up for 3.0000 s
+Benchmarking dispatch/cross_plugin/find+call: Collecting 100 samples in estimated 5.0000 s (128M iterations)
+Benchmarking dispatch/cross_plugin/find+call: Analyzing
+dispatch/cross_plugin/find+call
+                        time:   [39.480 ns 39.712 ns 39.932 ns]
+                        thrpt:  [25.043 Melem/s 25.181 Melem/s 25.329 Melem/s]
+
