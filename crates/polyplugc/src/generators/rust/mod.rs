@@ -10,14 +10,14 @@ use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::PrimitiveType;
+use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedParam;
+use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::ResolvedBundle;
-use crate::ir::ResolvedPlugin;
 
 /// The Rust code generator.
 pub(crate) struct RustGenerator;
@@ -218,7 +218,7 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
             "[{}]",
             provides
                 .iter()
-                .map(|s: &String| format!("\"{}\"" , s))
+                .map(|s: &String| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -231,7 +231,7 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
             "[{}]",
             requires
                 .iter()
-                .map(|s: &String| format!("\"{}\"" , s))
+                .map(|s: &String| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ")
         )

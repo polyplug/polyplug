@@ -314,13 +314,13 @@ fn test_cpp_host_loads_rust_plugin() {
 
     // SAFETY: TEST_PLUGIN_SO is a compiled Rust cdylib built by build.rs
     let library: libloading::Library = unsafe {
-        libloading::Library::new(TEST_PLUGIN_SO)
-            .expect("failed to load Rust test plugin")
+        libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin")
     };
 
     // SAFETY: symbol matches expected ABI signature
     let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
-        library.get(b"polyplug_init\0")
+        library
+            .get(b"polyplug_init\0")
             .expect("polyplug_init not found in Rust plugin")
     };
 
@@ -335,7 +335,10 @@ fn test_cpp_host_loads_rust_plugin() {
 
     // SAFETY: init_fn is valid; registrar lives for call duration
     let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
-    assert_eq!(init_result.code, ABI_OK, "Rust plugin polyplug_init must return ABI_OK");
+    assert_eq!(
+        init_result.code, ABI_OK,
+        "Rust plugin polyplug_init must return ABI_OK"
+    );
 
     let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
@@ -351,7 +354,10 @@ fn test_cpp_host_loads_rust_plugin() {
 
     // SAFETY: vtable_ptr is valid — plugin is loaded
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    assert_eq!(vtable.function_count, 1_u32, "test.add vtable must have 1 function");
+    assert_eq!(
+        vtable.function_count, 1_u32,
+        "test.add vtable must have 1 function"
+    );
 
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
@@ -370,10 +376,16 @@ fn test_cpp_host_loads_rust_plugin() {
         )
     };
 
-    assert_eq!(call_result.code, ABI_OK, "Rust plugin add(3,5) must return ABI_OK");
+    assert_eq!(
+        call_result.code, ABI_OK,
+        "Rust plugin add(3,5) must return ABI_OK"
+    );
     assert_eq!(out, 8_u32, "Rust plugin add(3,5) must equal 8");
 
-    println!("test_cpp_host_loads_rust_plugin: Rust plugin add(3,5) = {} ✓", out);
+    println!(
+        "test_cpp_host_loads_rust_plugin: Rust plugin add(3,5) = {} ✓",
+        out
+    );
     core::mem::forget(library);
 }
 
@@ -395,11 +407,14 @@ fn test_exception_isolation_cpp() {
     };
 
     let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
-        library.get(b"polyplug_init\0")
+        library
+            .get(b"polyplug_init\0")
             .expect("polyplug_init not found")
     };
 
-    CPP_DISPATCH_REGISTRY.with(|cell| { *cell.borrow_mut() = Registry::new(); });
+    CPP_DISPATCH_REGISTRY.with(|cell| {
+        *cell.borrow_mut() = Registry::new();
+    });
 
     let mut registrar: PluginRegistrar = PluginRegistrar {
         register_plugin: registry_register_callback,
@@ -408,7 +423,10 @@ fn test_exception_isolation_cpp() {
 
     // SAFETY: init_fn is valid; registrar lives for call duration
     let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
-    assert_eq!(init_result.code, ABI_OK, "throwing plugin init must return ABI_OK");
+    assert_eq!(
+        init_result.code, ABI_OK,
+        "throwing plugin init must return ABI_OK"
+    );
 
     let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
@@ -416,11 +434,8 @@ fn test_exception_isolation_cpp() {
             .expect("test.add registered from throwing plugin")
     });
 
-    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY.with(|cell| {
-        cell.borrow()
-            .resolve(handle)
-            .expect("vtable resolvable")
-    });
+    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY
+        .with(|cell| cell.borrow().resolve(handle).expect("vtable resolvable"));
 
     // SAFETY: vtable_ptr is valid — plugin is loaded
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
@@ -442,7 +457,10 @@ fn test_exception_isolation_cpp() {
     };
 
     // Must return ABI_ERROR_GENERIC (code=1) — std::exception was caught by noexcept wrapper
-    assert_eq!(call_result.code, 1_u32, "exception must be caught and returned as ABI_ERROR_GENERIC");
+    assert_eq!(
+        call_result.code, 1_u32,
+        "exception must be caught and returned as ABI_ERROR_GENERIC"
+    );
     // Process survived — if we reach this line, no crash occurred
     println!("test_exception_isolation_cpp: exception caught, host survived ✓");
     core::mem::forget(library);

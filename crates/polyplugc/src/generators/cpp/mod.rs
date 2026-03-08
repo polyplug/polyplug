@@ -10,13 +10,13 @@ use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::PrimitiveType;
+use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::ResolvedBundle;
-use crate::ir::ResolvedPlugin;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -546,7 +546,7 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
             "[{}]",
             provides
                 .iter()
-                .map(|s: &String| format!("\"{}\"" , s))
+                .map(|s: &String| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -559,7 +559,7 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
             "[{}]",
             requires
                 .iter()
-                .map(|s: &String| format!("\"{}\"" , s))
+                .map(|s: &String| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ")
         )

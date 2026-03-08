@@ -11,12 +11,12 @@ pub use polyplug::abi::ABI_ERROR_GENERIC;
 pub use polyplug::abi::ABI_ERROR_PANIC;
 pub use polyplug::abi::ABI_OK;
 pub use polyplug::abi::AbiError;
+pub use polyplug::abi::Buffer;
 pub use polyplug::abi::PluginDescriptor;
 pub use polyplug::abi::PluginHandle;
 pub use polyplug::abi::PluginRegistrar;
 pub use polyplug::abi::PluginVTable;
 pub use polyplug::abi::StringView;
-pub use polyplug::abi::Buffer;
 pub use polyplug::allocator::polyplug_host_alloc;
 pub use polyplug::allocator::polyplug_host_free;
 
