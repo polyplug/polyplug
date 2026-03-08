@@ -16,6 +16,7 @@ pub use polyplug::abi::PluginHandle;
 pub use polyplug::abi::PluginRegistrar;
 pub use polyplug::abi::PluginVTable;
 pub use polyplug::abi::StringView;
+pub use polyplug::abi::Buffer;
 pub use polyplug::allocator::polyplug_host_alloc;
 pub use polyplug::allocator::polyplug_host_free;
 
