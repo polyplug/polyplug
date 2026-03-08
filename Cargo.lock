@@ -466,7 +466,19 @@ dependencies = [
  "criterion",
  "libloading",
  "petgraph",
+ "polyplug-dotnet",
+ "polyplug-lua",
+ "polyplug-python",
+ "serde",
  "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "polyplug-dotnet"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
 ]
 
 [[package]]
@@ -478,6 +490,20 @@ dependencies = [
 
 [[package]]
 name = "polyplug-host"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+]
+
+[[package]]
+name = "polyplug-lua"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+]
+
+[[package]]
+name = "polyplug-python"
 version = "0.1.0"
 dependencies = [
  "polyplug",
