@@ -44,3 +44,7 @@ path = "../../tests/integration_codegen_rust/mod.rs"
 [[test]]
 name = "integration_codegen_cpp"
 path = "../../tests/integration_codegen_cpp/mod.rs"
+
+[[test]]
+name = "smoke"
+path = "../../tests/smoke/mod.rs"
