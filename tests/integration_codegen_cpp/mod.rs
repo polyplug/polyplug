@@ -1,4 +1,4 @@
-//! Integration test: run polyplugc to generate C++ bindings, assert all 6 expected
+//! Integration test: run polyplugc to generate C++ bindings, assert all 7 expected
 //! files are present, optionally compile with g++, and dispatch through the pre-built
 //! C++ test plugin vtable when TEST_PLUGIN_CPP_SO is non-empty.
 //!
@@ -140,13 +140,14 @@ fn test_cpp_codegen_files_exist() {
         String::from_utf8_lossy(&gen_output.stderr),
     );
 
-    // ── 3. Assert all 6 expected files exist ─────────────────────────────────
-    let expected_files: [&str; 6] = [
-        "types.hpp",
-        "contracts.hpp",
-        "vtables.hpp",
-        "init.hpp",
-        "host_callers.hpp",
+    // ── 3. Assert all 7 expected files exist ─────────────────────────────
+    let expected_files: [&str; 7] = [
+        "host/types.hpp",
+        "host/host_callers.hpp",
+        "guest/types.hpp",
+        "guest/contracts.hpp",
+        "guest/vtables.hpp",
+        "guest/init.hpp",
         "manifest.toml",
     ];
     for filename in expected_files {
@@ -159,7 +160,7 @@ fn test_cpp_codegen_files_exist() {
     }
 
     println!(
-        "test_cpp_codegen_files_exist: all 6 files present in {} ✓",
+        "test_cpp_codegen_files_exist: all 7 files present in {} ✓",
         out_dir.display()
     );
 
@@ -170,14 +171,15 @@ fn test_cpp_codegen_files_exist() {
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
             let host_libs_cpp: PathBuf = workspace_root().join("host-libs").join("cpp");
-            let vtables_hpp: PathBuf = out_dir.join("vtables.hpp");
+            let vtables_hpp: PathBuf = out_dir.join("guest").join("vtables.hpp");
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_vtables.o");
 
             let compile_result: std::process::Output = Command::new("g++")
                 .arg("-std=c++17")
+                .arg(format!("-I{}", out_dir.join("guest").display()))
+                .arg(format!("-I{}", out_dir.join("host").display()))
                 .arg(format!("-I{}", host_libs_cpp.display()))
-                .arg(format!("-I{}", out_dir.display()))
                 .arg(&vtables_hpp)
                 .arg("-c")
                 .arg("-o")
@@ -295,5 +297,153 @@ fn test_cpp_plugin_dispatch() {
     println!("test_cpp_plugin_dispatch: add(10, 20) = {} ✓", out);
 
     // Keep the library alive until after the last call.
+    core::mem::forget(library);
+}
+
+// ─── Part C: Cross-language test — Rust plugin loaded via Rust test infrastructure ───
+
+/// Path to the pre-compiled Rust test plugin, set by build.rs.
+const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
+
+#[test]
+fn test_cpp_host_loads_rust_plugin() {
+    if TEST_PLUGIN_SO.is_empty() {
+        eprintln!("skipping: TEST_PLUGIN_SO not set");
+        return;
+    }
+
+    // SAFETY: TEST_PLUGIN_SO is a compiled Rust cdylib built by build.rs
+    let library: libloading::Library = unsafe {
+        libloading::Library::new(TEST_PLUGIN_SO)
+            .expect("failed to load Rust test plugin")
+    };
+
+    // SAFETY: symbol matches expected ABI signature
+    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+        library.get(b"polyplug_init\0")
+            .expect("polyplug_init not found in Rust plugin")
+    };
+
+    CPP_DISPATCH_REGISTRY.with(|cell| {
+        *cell.borrow_mut() = Registry::new();
+    });
+
+    let mut registrar: PluginRegistrar = PluginRegistrar {
+        register_plugin: registry_register_callback,
+        host: core::ptr::null(),
+    };
+
+    // SAFETY: init_fn is valid; registrar lives for call duration
+    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    assert_eq!(init_result.code, ABI_OK, "Rust plugin polyplug_init must return ABI_OK");
+
+    let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .find(TEST_ADD_CONTRACT_ID, 0_u32)
+            .expect("test.add must be registered from Rust plugin")
+    });
+
+    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .resolve(handle)
+            .expect("vtable must be resolvable")
+    });
+
+    // SAFETY: vtable_ptr is valid — plugin is loaded
+    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    assert_eq!(vtable.function_count, 1_u32, "test.add vtable must have 1 function");
+
+    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
+    let mut out: u32 = 0_u32;
+
+    // SAFETY: functions[0] is the first ABI wrapper with signature
+    //   extern "C" fn(*const (), *mut ()) -> AbiError
+    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+
+    // SAFETY: args and out are valid stack allocations
+    let call_result: AbiError = unsafe {
+        dispatch_fn(
+            &args as *const AddArgs as *const (),
+            &mut out as *mut u32 as *mut (),
+        )
+    };
+
+    assert_eq!(call_result.code, ABI_OK, "Rust plugin add(3,5) must return ABI_OK");
+    assert_eq!(out, 8_u32, "Rust plugin add(3,5) must equal 8");
+
+    println!("test_cpp_host_loads_rust_plugin: Rust plugin add(3,5) = {} ✓", out);
+    core::mem::forget(library);
+}
+
+// ─── Part D: Exception isolation test — throwing C++ plugin ───
+
+const TEST_PLUGIN_CPP_THROW_SO: &str = env!("TEST_PLUGIN_CPP_THROW_SO");
+
+#[test]
+fn test_exception_isolation_cpp() {
+    if TEST_PLUGIN_CPP_THROW_SO.is_empty() {
+        eprintln!("skipping exception isolation test: g++ not available");
+        return;
+    }
+
+    // SAFETY: TEST_PLUGIN_CPP_THROW_SO is a compiled C++ cdylib built by build.rs
+    let library: libloading::Library = unsafe {
+        libloading::Library::new(TEST_PLUGIN_CPP_THROW_SO)
+            .expect("failed to load throwing C++ test plugin")
+    };
+
+    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+        library.get(b"polyplug_init\0")
+            .expect("polyplug_init not found")
+    };
+
+    CPP_DISPATCH_REGISTRY.with(|cell| { *cell.borrow_mut() = Registry::new(); });
+
+    let mut registrar: PluginRegistrar = PluginRegistrar {
+        register_plugin: registry_register_callback,
+        host: core::ptr::null(),
+    };
+
+    // SAFETY: init_fn is valid; registrar lives for call duration
+    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    assert_eq!(init_result.code, ABI_OK, "throwing plugin init must return ABI_OK");
+
+    let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .find(TEST_ADD_CONTRACT_ID, 0_u32)
+            .expect("test.add registered from throwing plugin")
+    });
+
+    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY.with(|cell| {
+        cell.borrow()
+            .resolve(handle)
+            .expect("vtable resolvable")
+    });
+
+    // SAFETY: vtable_ptr is valid — plugin is loaded
+    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+
+    let args: AddArgs = AddArgs { a: 0_u32, b: 0_u32 };
+    let mut out: u32 = 0_u32;
+
+    // SAFETY: functions[0] is the cpp_throw_abi with noexcept wrapper
+    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+
+    // SAFETY: args and out are valid
+    let call_result: AbiError = unsafe {
+        dispatch_fn(
+            &args as *const AddArgs as *const (),
+            &mut out as *mut u32 as *mut (),
+        )
+    };
+
+    // Must return ABI_ERROR_GENERIC (code=1) — std::exception was caught by noexcept wrapper
+    assert_eq!(call_result.code, 1_u32, "exception must be caught and returned as ABI_ERROR_GENERIC");
+    // Process survived — if we reach this line, no crash occurred
+    println!("test_exception_isolation_cpp: exception caught, host survived ✓");
     core::mem::forget(library);
 }

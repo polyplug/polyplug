@@ -1,0 +1,12 @@
+   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running ../../tests/integration_codegen_cpp/mod.rs (target/debug/deps/integration_codegen_cpp-08e0e08f3f0992c7)
+
+running 4 tests
+test test_cpp_host_loads_rust_plugin ... ok
+test test_cpp_plugin_dispatch ... ok
+test test_exception_isolation_cpp ... ok
+test test_cpp_codegen_files_exist ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
