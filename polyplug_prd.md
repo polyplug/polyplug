@@ -293,27 +293,43 @@ One pointer dereference. One indirect call. Nothing else.
 
 ## 8. Host Libraries
 
-Host libs are the ergonomic layer that app developers actually use. They wrap the runtime C ABI in a natural, idiomatic way for each language. They are thin by design.
+**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the same four functions — `host_alloc/host_free`, `find_plugin`, `call_plugin`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
+
+The generated host callers from `polyplugc` sit on top of the host lib. The host lib is contract-agnostic infrastructure; generated code is contract-specific.
 
 ```
 App Developer Code
         ↓
-Generated Host Callers      (polyplugc output, contract-specific)
+Generated Host Callers      (polyplugc output — contract-specific, per app)
         ↓
-Host Lib                    (language wrapper, thin)
+Host Lib                    (C ABI wrapper — contract-agnostic, written once)
         ↓
-Runtime C ABI               (polyplug core)
+polyplug C ABI
 ```
 
-**Per language:**
+**Per language — source location, published artifact, and contents:**
 
 ```
-Rust    → polyplug crate IS the runtime core, no separate wrapper needed
-C++     → host-libs/cpp/ header-only, RAII wrappers, zero overhead
-C#      → Polyplug NuGet, P/Invoke declarations, ref structs
-Python  → polyplug pip package, ctypes wrappers
-Lua     → polyplug.lua + C extension binding
+Rust    host-libs/rust/    →  polyplug crate
+                               PluginRuntime builder, type-safe ABI wrappers
+
+C++     host-libs/cpp/     →  single-header / vcpkg / conan
+                               RAII Runtime class, zero-overhead ABI wrappers
+
+C#      host-libs/csharp/  →  Polyplug NuGet
+                               P/Invoke declarations, Runtime builder class,
+                               ref struct wrappers for StringView and Buffer
+
+Python  host-libs/python/  →  polyplug pip package
+                               ctypes bindings, Runtime class, ctypes.Structure
+                               wrappers for StringView and Buffer
+
+Lua     host-libs/lua/     →  polyplug.lua + .so
+                               FFI declarations, Runtime table, FFI cdata
+                               wrappers for StringView and Buffer
 ```
+
+Note: `polyplug-dotnet`, `polyplug-python`, `polyplug-lua` are **not** host libs. They are Rust adapter crates that teach the runtime how to *load* plugins written in those languages. A C# host app needs `host-libs/csharp/` to drive the runtime. It separately needs `polyplug-dotnet` only if it wants to load `.NET plugins`.
 
 **App developer runtime initialization:**
 
@@ -352,12 +368,12 @@ var runtime = Polyplug.Runtime.Builder()
 
 ## 9. Guest Libraries
 
-Guest libs are the thin bootstrap layer that every plugin is built on top of.
+**Guest libs are the C ABI bootstrap layer that every plugin is built on top of, one per language.** They are the plugin-side mirror of the host libs — hand-written once, contract-agnostic, stable forever.
 
 **Responsibilities:**
 - Plugin entry point macro / attribute
-- Host allocator hookup
-- Panic / exception boundary
+- Host allocator hookup (all allocations go through host_alloc)
+- Panic / exception boundary (plugin crash cannot take down host)
 - ABI primitive types (StringView, Buffer, AbiError, PluginError)
 - Basic FFI safety helpers
 
