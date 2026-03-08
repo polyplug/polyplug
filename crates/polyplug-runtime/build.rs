@@ -49,6 +49,11 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| workspace_root.join("target"));
 
+    // Use a dedicated subdirectory for plugin builds so the parent `cargo bench`
+    // (or `cargo test`) process does not hold a file lock on the same target dir.
+    // Without this, sub-cargo invocations deadlock waiting for the lock.
+    let plugin_target_dir: PathBuf = target_dir.join("plugin-builds");
+
     // Build test_plugin as a release cdylib via cargo.
     // We pass --target-dir to avoid polluting or conflicting with the current build.
     let status: std::process::ExitStatus = Command::new(env!("CARGO"))
@@ -57,7 +62,7 @@ fn main() {
         .arg("test_plugin")
         .arg("--release")
         .arg("--target-dir")
-        .arg(&target_dir)
+        .arg(&plugin_target_dir)
         .current_dir(&workspace_root)
         .status()
         .expect("failed to run cargo build for test_plugin");
@@ -75,7 +80,7 @@ fn main() {
         "libtest_plugin.so"
     };
 
-    let built_so: PathBuf = target_dir.join("release").join(lib_filename);
+    let built_so: PathBuf = plugin_target_dir.join("release").join(lib_filename);
 
     // Copy to tests/fixtures/ with a stable, known name.
     let fixtures_dir: PathBuf = workspace_root.join("tests").join("fixtures");
@@ -118,7 +123,7 @@ fn main() {
         .arg("memory_plugin")
         .arg("--release")
         .arg("--target-dir")
-        .arg(&target_dir)
+        .arg(&plugin_target_dir)
         .current_dir(&workspace_root)
         .status()
         .expect("failed to run cargo build for memory_plugin");
@@ -138,7 +143,7 @@ fn main() {
         "libmemory_plugin.so"
     };
 
-    let built_memory_so: PathBuf = target_dir.join("release").join(memory_lib_filename);
+    let built_memory_so: PathBuf = plugin_target_dir.join("release").join(memory_lib_filename);
     let dest_memory_so: PathBuf = fixtures_dir.join(memory_lib_filename);
     fs::copy(&built_memory_so, &dest_memory_so)
         .unwrap_or_else(|e| panic!("failed to copy memory_plugin .so: {}", e));
@@ -160,7 +165,7 @@ fn main() {
         .arg("error_plugin")
         .arg("--release")
         .arg("--target-dir")
-        .arg(&target_dir)
+        .arg(&plugin_target_dir)
         .current_dir(&workspace_root)
         .status()
         .expect("failed to run cargo build for error_plugin");
@@ -180,7 +185,7 @@ fn main() {
         "liberror_plugin.so"
     };
 
-    let built_error_so: PathBuf = target_dir.join("release").join(error_lib_filename);
+    let built_error_so: PathBuf = plugin_target_dir.join("release").join(error_lib_filename);
     let dest_error_so: PathBuf = fixtures_dir.join(error_lib_filename);
     fs::copy(&built_error_so, &dest_error_so)
         .unwrap_or_else(|e| panic!("failed to copy error_plugin .so: {}", e));
