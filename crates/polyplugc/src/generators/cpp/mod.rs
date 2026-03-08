@@ -15,6 +15,8 @@ use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::ResolvedBundle;
+use crate::ir::ResolvedPlugin;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -32,14 +34,14 @@ impl CodeGenerator for CppGenerator {
         // ── File 1: types.hpp ────────────────────────────────────────────────
         let types_hpp: String = generate_types_hpp(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("types.hpp"),
+            path: std::path::PathBuf::from("host/types.hpp"),
             content: types_hpp,
         });
 
         // ── File 2: host_callers.hpp ─────────────────────────────────────────
         let host_callers_hpp: String = generate_host_callers_hpp(ir)?;
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("host_callers.hpp"),
+            path: std::path::PathBuf::from("host/host_callers.hpp"),
             content: host_callers_hpp,
         });
 
@@ -61,38 +63,41 @@ impl CodeGenerator for CppGenerator {
         // ── File 1: types.hpp ────────────────────────────────────────────────
         let types_hpp: String = generate_types_hpp(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("types.hpp"),
+            path: std::path::PathBuf::from("guest/types.hpp"),
             content: types_hpp,
         });
 
         // ── File 2: contracts.hpp ────────────────────────────────────────────
         let contracts_hpp: String = generate_contracts_hpp(ir);
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("contracts.hpp"),
+            path: std::path::PathBuf::from("guest/contracts.hpp"),
             content: contracts_hpp,
         });
 
         // ── File 3: vtables.hpp ──────────────────────────────────────────────
         let vtables_hpp: String = generate_vtables_hpp(ir)?;
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("vtables.hpp"),
+            path: std::path::PathBuf::from("guest/vtables.hpp"),
             content: vtables_hpp,
         });
 
         // ── File 4: init.hpp ─────────────────────────────────────────────────
         let init_hpp: String = generate_init_hpp(ir)?;
         files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("init.hpp"),
+            path: std::path::PathBuf::from("guest/init.hpp"),
             content: init_hpp,
         });
 
-        // ── File 5: manifest.toml ────────────────────────────────────────────
-        let manifest_toml: String = generate_manifest_toml();
-        files.files.push(GeneratedFile {
-            path: std::path::PathBuf::from("manifest.toml"),
-            content: manifest_toml,
-        });
-
+        // --api: manifest emitted by generate_host(); --bundle: emit full discovery manifest
+        if ir.bundle.is_some() {
+            let manifest_toml: String = generate_bundle_manifest_cpp(ir);
+            files.files.push(GeneratedFile {
+                path: std::path::PathBuf::from("manifest.toml"),
+                content: manifest_toml,
+            });
+        }
+        // When ir.bundle.is_none() (--api mode): NO manifest emitted here.
+        // The root manifest.toml was already emitted by generate_host().
         Ok(())
     }
 }
@@ -500,6 +505,89 @@ fn generate_manifest_toml() -> String {
     out
 }
 
+/// Generate a full discovery `manifest.toml` for `--bundle` invocations.
+/// Called only when `ir.bundle.is_some()`.
+fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
+    let bundle: &ResolvedBundle = match ir.bundle.as_ref() {
+        Some(b) => b,
+        None => return String::from("# ERROR: bundle manifest called without bundle IR\n"),
+    };
+
+    let name: &str = &bundle.name;
+    let version: String = format!(
+        "{}.{}.{}",
+        bundle.version.major, bundle.version.minor, bundle.version.patch
+    );
+    let file: String = format!("lib{}.so", bundle.name);
+
+    // Collect provides: all implements from all plugins, deduplicated
+    let mut provides: Vec<String> = bundle
+        .plugins
+        .iter()
+        .flat_map(|p: &ResolvedPlugin| p.implements.iter().cloned())
+        .collect();
+    provides.sort();
+    provides.dedup();
+
+    // Collect requires: all requires from all plugins, deduplicated
+    let mut requires: Vec<String> = bundle
+        .plugins
+        .iter()
+        .flat_map(|p: &ResolvedPlugin| p.requires.iter().cloned())
+        .collect();
+    requires.sort();
+    requires.dedup();
+
+    // Build TOML string arrays (keys with @ must be quoted)
+    let provides_toml: String = if provides.is_empty() {
+        String::from("[]")
+    } else {
+        format!(
+            "[{}]",
+            provides
+                .iter()
+                .map(|s: &String| format!("\"{}\"" , s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    let requires_toml: String = if requires.is_empty() {
+        String::from("[]")
+    } else {
+        format!(
+            "[{}]",
+            requires
+                .iter()
+                .map(|s: &String| format!("\"{}\"" , s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    // Build function_count inline table: { "name@major" = count }
+    let fn_count_entries: Vec<String> = ir
+        .contracts
+        .iter()
+        .map(|c: &ResolvedContract| {
+            let fn_count: u32 = c.functions.len() as u32;
+            format!("\"{}@{}\" = {}", c.name, c.version.major, fn_count)
+        })
+        .collect();
+    let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
+
+    format!(
+        "# THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n\
+name = \"{name}\"\n\
+version = \"{version}\"\n\
+runtime = \"native\"\n\
+file = \"{file}\"\n\
+provides = {provides_toml}\n\
+requires = {requires_toml}\n\
+function_count = {function_count_toml}\n"
+    )
+}
+
 // ─── Per-type struct emitter ──────────────────────────────────────────────────
 
 fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
@@ -785,17 +873,16 @@ mod tests {
         generator
             .generate_guest(&ir, &mut files)
             .expect("generate_guest");
-        // Produces 5 files: types.hpp, contracts.hpp, vtables.hpp, init.hpp, manifest.toml
-        assert_eq!(files.files.len(), 5);
+        // Produces 4 files (bundle=None, so no manifest): types.hpp, contracts.hpp, vtables.hpp, init.hpp
+        assert_eq!(files.files.len(), 4);
         let names: Vec<String> = files
             .files
             .iter()
             .map(|f| f.path.to_string_lossy().to_string())
             .collect();
-        assert!(names.contains(&"types.hpp".to_owned()));
-        assert!(names.contains(&"contracts.hpp".to_owned()));
-        assert!(names.contains(&"vtables.hpp".to_owned()));
-        assert!(names.contains(&"init.hpp".to_owned()));
-        assert!(names.contains(&"manifest.toml".to_owned()));
+        assert!(names.contains(&"guest/types.hpp".to_owned()));
+        assert!(names.contains(&"guest/contracts.hpp".to_owned()));
+        assert!(names.contains(&"guest/vtables.hpp".to_owned()));
+        assert!(names.contains(&"guest/init.hpp".to_owned()));
     }
 }
