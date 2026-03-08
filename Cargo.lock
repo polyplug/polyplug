@@ -460,21 +460,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "polyplug-guest"
-version = "0.1.0"
-dependencies = [
- "polyplug-runtime",
-]
-
-[[package]]
-name = "polyplug-host"
-version = "0.1.0"
-dependencies = [
- "polyplug-runtime",
-]
-
-[[package]]
-name = "polyplug-runtime"
+name = "polyplug"
 version = "0.1.0"
 dependencies = [
  "criterion",
@@ -484,11 +470,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyplug-guest"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+]
+
+[[package]]
+name = "polyplug-host"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+]
+
+[[package]]
 name = "polyplugc"
 version = "0.1.0"
 dependencies = [
  "clap",
- "polyplug-runtime",
+ "polyplug",
  "serde",
  "thiserror",
  "toml",

@@ -1,4 +1,4 @@
-//! Build script for polyplug-runtime.
+//! Build script for polyplug.
 //!
 //! Compiles `test_plugin` (a cdylib workspace member) and copies the resulting
 //! shared library to `tests/fixtures/` so integration tests can load it.
@@ -30,10 +30,10 @@ fn main() {
     let manifest_dir: PathBuf =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
 
-    // Workspace root is two levels up from crates/polyplug-runtime/
+    // Workspace root is two levels up from crates/polyplug/
     let workspace_root: PathBuf = manifest_dir
         .parent()
-        .expect("parent of polyplug-runtime")
+        .expect("parent of polyplug")
         .parent()
         .expect("workspace root")
         .to_path_buf();
@@ -221,7 +221,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../../crates/polyplugc/src");
 
     // ─── C++ test plugin compilation ─────────────────────────────────────────────────
-    println!("cargo:rerun-if-changed=crates/polyplug-runtime/build.rs");
+    println!("cargo:rerun-if-changed=crates/polyplug/build.rs");
 
     // Check if g++ is available.
     let gpp_available: bool = Command::new("g++")

@@ -5,19 +5,19 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_runtime::abi::ABI_OK;
-use polyplug_runtime::abi::AbiError;
-use polyplug_runtime::abi::Buffer;
-use polyplug_runtime::abi::HostVTable;
-use polyplug_runtime::abi::PluginDescriptor;
-use polyplug_runtime::abi::PluginHandle;
-use polyplug_runtime::abi::PluginRegistrar;
-use polyplug_runtime::abi::PluginVTable;
-use polyplug_runtime::abi::StringView;
-use polyplug_runtime::allocator::polyplug_host_alloc;
-use polyplug_runtime::allocator::polyplug_host_free;
-use polyplug_runtime::allocator::tracking::TrackingAllocator;
-use polyplug_runtime::registry::Registry;
+use polyplug::abi::ABI_OK;
+use polyplug::abi::AbiError;
+use polyplug::abi::Buffer;
+use polyplug::abi::HostVTable;
+use polyplug::abi::PluginDescriptor;
+use polyplug::abi::PluginHandle;
+use polyplug::abi::PluginRegistrar;
+use polyplug::abi::PluginVTable;
+use polyplug::abi::StringView;
+use polyplug::allocator::polyplug_host_alloc;
+use polyplug::allocator::polyplug_host_free;
+use polyplug::allocator::tracking::TrackingAllocator;
+use polyplug::registry::Registry;
 use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
@@ -158,11 +158,11 @@ unsafe extern "C" fn registry_register_callback(
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
 
-/// Returns the workspace root path (two levels up from crates/polyplug-runtime/).
+/// Returns the workspace root path (two levels up from crates/polyplug/).
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("parent of crates/polyplug-runtime")
+        .expect("parent of crates/polyplug")
         .parent()
         .expect("workspace root")
         .to_path_buf()
@@ -198,7 +198,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
     let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
 
-    let contract_id: u64 = polyplug_runtime::abi::contract_id("memory.test", 1);
+    let contract_id: u64 = polyplug::abi::contract_id("memory.test", 1);
     let handle: PluginHandle = STRESS_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)

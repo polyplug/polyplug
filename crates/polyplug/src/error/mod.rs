@@ -1,4 +1,4 @@
-//! Error — error type hierarchy for polyplug-runtime.
+//! Error — error type hierarchy for polyplug.
 
 use thiserror::Error;
 

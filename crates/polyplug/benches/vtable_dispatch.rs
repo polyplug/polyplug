@@ -1,5 +1,5 @@
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
-// Run with: cargo bench -p polyplug-runtime --bench vtable_dispatch
+// Run with: cargo bench -p polyplug --bench vtable_dispatch
 
 #![allow(clippy::expect_used)]
 use criterion::BenchmarkId;
@@ -7,18 +7,18 @@ use criterion::Criterion;
 use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
-use polyplug_runtime::abi::ABI_OK;
-use polyplug_runtime::abi::AbiError;
-use polyplug_runtime::abi::Buffer;
-use polyplug_runtime::abi::HostVTable;
-use polyplug_runtime::abi::PluginDescriptor;
-use polyplug_runtime::abi::PluginHandle;
-use polyplug_runtime::abi::PluginRegistrar;
-use polyplug_runtime::abi::PluginVTable;
-use polyplug_runtime::abi::StringView;
-use polyplug_runtime::allocator::polyplug_host_alloc;
-use polyplug_runtime::allocator::polyplug_host_free;
-use polyplug_runtime::registry::Registry;
+use polyplug::abi::ABI_OK;
+use polyplug::abi::AbiError;
+use polyplug::abi::Buffer;
+use polyplug::abi::HostVTable;
+use polyplug::abi::PluginDescriptor;
+use polyplug::abi::PluginHandle;
+use polyplug::abi::PluginRegistrar;
+use polyplug::abi::PluginVTable;
+use polyplug::abi::StringView;
+use polyplug::allocator::polyplug_host_alloc;
+use polyplug::allocator::polyplug_host_free;
+use polyplug::registry::Registry;
 use std::cell::RefCell;
 use std::hint::black_box;
 

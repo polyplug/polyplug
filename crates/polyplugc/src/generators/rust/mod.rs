@@ -62,10 +62,10 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str(header);
 
         callers_out.push_str("use polyplug_guest::PluginError;\n");
-        callers_out.push_str("use polyplug_runtime::abi::ABI_OK;\n");
-        callers_out.push_str("use polyplug_runtime::abi::AbiError;\n");
-        callers_out.push_str("use polyplug_runtime::abi::PluginHandle;\n");
-        callers_out.push_str("use polyplug_runtime::runtime::Runtime;\n");
+        callers_out.push_str("use polyplug::abi::ABI_OK;\n");
+        callers_out.push_str("use polyplug::abi::AbiError;\n");
+        callers_out.push_str("use polyplug::abi::PluginHandle;\n");
+        callers_out.push_str("use polyplug::runtime::Runtime;\n");
         callers_out.push_str("use super::types::*;\n\n");
 
         for contract in &ir.contracts {

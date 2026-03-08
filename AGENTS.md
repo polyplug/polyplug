@@ -267,7 +267,7 @@ If you believe an ABI change is necessary, stop and raise it as a discussion. Do
 polyplug/
 ├── AGENTS.md                        this file
 ├── crates/
-│   ├── polyplug-runtime/            Rust runtime core
+│   ├── polyplug/                    Rust runtime core
 │   │   └── src/
 │   │       ├── lib/
 │   │       │   └── mod.rs

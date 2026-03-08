@@ -11,12 +11,12 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_runtime::abi::ABI_OK;
-use polyplug_runtime::abi::AbiError;
-use polyplug_runtime::abi::PluginDescriptor;
-use polyplug_runtime::abi::PluginRegistrar;
-use polyplug_runtime::abi::PluginVTable;
-use polyplug_runtime::abi::StringView;
+use polyplug::abi::ABI_OK;
+use polyplug::abi::AbiError;
+use polyplug::abi::PluginDescriptor;
+use polyplug::abi::PluginRegistrar;
+use polyplug::abi::PluginVTable;
+use polyplug::abi::StringView;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -24,11 +24,11 @@ use std::process::Output;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Workspace root resolved from `CARGO_MANIFEST_DIR` (`crates/polyplug-runtime`).
+/// Workspace root resolved from `CARGO_MANIFEST_DIR` (`crates/polyplug`).
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("parent of crates/polyplug-runtime")
+        .expect("parent of crates/polyplug")
         .parent()
         .expect("workspace root")
         .to_path_buf()

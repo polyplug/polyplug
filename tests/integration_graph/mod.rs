@@ -10,15 +10,15 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_runtime::abi::ABI_OK;
-use polyplug_runtime::abi::AbiError;
-use polyplug_runtime::abi::PluginDescriptor;
-use polyplug_runtime::abi::PluginHandle;
-use polyplug_runtime::abi::PluginRegistrar;
-use polyplug_runtime::abi::PluginVTable;
-use polyplug_runtime::abi::StringView;
-use polyplug_runtime::abi::contract_id;
-use polyplug_runtime::registry::Registry;
+use polyplug::abi::ABI_OK;
+use polyplug::abi::AbiError;
+use polyplug::abi::PluginDescriptor;
+use polyplug::abi::PluginHandle;
+use polyplug::abi::PluginRegistrar;
+use polyplug::abi::PluginVTable;
+use polyplug::abi::StringView;
+use polyplug::abi::contract_id;
+use polyplug::registry::Registry;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");

@@ -11,7 +11,7 @@ name = "polyplug_guest"
 path = "src/lib/mod.rs"
 
 [dependencies]
-polyplug-runtime = { path = "../../crates/polyplug-runtime" }
+polyplug = { path = "../../crates/polyplug" }
 
 [lints]
 workspace = true

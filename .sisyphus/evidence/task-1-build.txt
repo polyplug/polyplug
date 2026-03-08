@@ -1,0 +1,8 @@
+   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling test_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/test_plugin)
+   Compiling error_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/error_plugin)
+   Compiling memory_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/memory_plugin)
+   Compiling polyplugc v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplugc)
+   Compiling polyplug-guest v0.1.0 (/mnt/data/Projects/Utils/polyplug/guest-libs/rust)
+   Compiling polyplug-host v0.1.0 (/mnt/data/Projects/Utils/polyplug/host-libs/rust)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.07s

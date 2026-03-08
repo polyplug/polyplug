@@ -3,8 +3,8 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
-use polyplug_runtime::abi::contract_id as runtime_contract_id;
-use polyplug_runtime::abi::extension_id as runtime_extension_id;
+use polyplug::abi::contract_id as runtime_contract_id;
+use polyplug::abi::extension_id as runtime_extension_id;
 
 use crate::error::CodegenError;
 

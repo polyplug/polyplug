@@ -8,7 +8,7 @@
 //! These constants are the ABI freeze verification: if anyone changes the
 //! FNV-1a algorithm or the canonical format, these assertions will catch it.
 
-use polyplug_runtime::abi::contract_id;
+use polyplug::abi::contract_id;
 
 /// Known-good FNV-1a("test.add@1") — matches C++ constexpr and test_plugin constant.
 const EXPECTED_TEST_ADD: u64 = 0xCC4232FAB0410D2B;

@@ -5,11 +5,11 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_runtime::abi::ABI_OK;
-use polyplug_runtime::abi::AbiError;
-use polyplug_runtime::abi::PluginDescriptor;
-use polyplug_runtime::abi::PluginRegistrar;
-use polyplug_runtime::abi::PluginVTable;
+use polyplug::abi::ABI_OK;
+use polyplug::abi::AbiError;
+use polyplug::abi::PluginDescriptor;
+use polyplug::abi::PluginRegistrar;
+use polyplug::abi::PluginVTable;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -29,7 +29,7 @@ unsafe extern "C" fn capture_register(
     if registrar.is_null() || descriptor.is_null() || vtable.is_null() {
         return AbiError {
             code: 1, // ABI_ERROR_GENERIC
-            message: polyplug_runtime::abi::StringView::null(),
+            message: polyplug::abi::StringView::null(),
         };
     }
     // SAFETY: vtable is valid for the call duration. We store the contract_id for
@@ -47,7 +47,7 @@ unsafe extern "C" fn capture_register(
 
     AbiError {
         code: ABI_OK,
-        message: polyplug_runtime::abi::StringView::null(),
+        message: polyplug::abi::StringView::null(),
     }
 }
 
@@ -124,7 +124,7 @@ fn test_init_registers_vtable() {
         .expect("function_count was not captured");
 
     // FNV-1a("test.add@1") = 0xCC4232FAB0410D2B (verified at compile time)
-    let expected_contract_id: u64 = polyplug_runtime::abi::contract_id("test.add", 1);
+    let expected_contract_id: u64 = polyplug::abi::contract_id("test.add", 1);
     assert_eq!(
         captured_id, expected_contract_id,
         "contract_id must match FNV-1a(\"test.add@1\")"

@@ -1,0 +1,10 @@
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/abi/mod.rs:/// Configuration passed to `polyplug_runtime_init`.
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/abi/mod.rs:/// OWNERSHIP: borrowed for the duration of `polyplug_runtime_init` only.
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/abi/mod.rs:/// The caller may free all pointed-to memory after `polyplug_runtime_init`
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/lib.rs:pub extern "C" fn polyplug_runtime_init(
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/lib.rs:    // polyplug_runtime_destroy to free it.
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/lib.rs:/// `polyplug_runtime_init`. Must not be called more than once.
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/lib.rs:pub unsafe extern "C" fn polyplug_runtime_destroy(runtime: *mut runtime::Runtime) {
+/mnt/data/Projects/Utils/polyplug/crates/polyplug/src/lib.rs:    // SAFETY: runtime was created with Box::new() in polyplug_runtime_init.
+/mnt/data/Projects/Utils/polyplug/guest-libs/rust/Cargo.toml:description  = "Guest-side Rust bindings for plugin authors using the polyplug runtime"
+/mnt/data/Projects/Utils/polyplug/host-libs/rust/src/lib/mod.rs://! for applications that want to host a polyplug runtime.

@@ -1,0 +1,301 @@
+   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling memory_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/memory_plugin)
+   Compiling error_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/error_plugin)
+   Compiling test_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/tests/fixtures/test_plugin)
+   Compiling polyplug-host v0.1.0 (/mnt/data/Projects/Utils/polyplug/host-libs/rust)
+   Compiling polyplug-guest v0.1.0 (/mnt/data/Projects/Utils/polyplug/guest-libs/rust)
+   Compiling polyplugc v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplugc)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.99s
+     Running unittests src/lib.rs (target/debug/deps/error_plugin-d40d5d3948d18190)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/memory_plugin-7ecffccff096bb13)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/polyplug-5c12c751603c5a30)
+
+running 33 tests
+test abi::tests::abi_error_ok ... ok
+test abi::tests::fnv1a_known_values ... ok
+test abi::tests::contract_id_canonical_format ... ok
+test abi::tests::layout_abi_error ... ok
+test abi::tests::layout_buffer ... ok
+test abi::tests::layout_extension_entry ... ok
+test abi::tests::layout_host_vtable ... ok
+test abi::tests::layout_plugin_descriptor ... ok
+test abi::tests::layout_plugin_handle ... ok
+test abi::tests::layout_plugin_registrar ... ok
+test abi::tests::layout_plugin_vtable ... ok
+test abi::tests::layout_runtime_config ... ok
+test abi::tests::layout_string_view ... ok
+test abi::tests::plugin_handle_null ... ok
+test allocator::tests::alloc_and_free_basic ... ok
+test allocator::tests::alloc_invalid_align_returns_null ... ok
+test allocator::tests::alloc_zero_size_returns_null ... ok
+test allocator::tests::free_null_is_noop ... ok
+test allocator::tracking::tests::tracking_allocator_counts_alloc_and_free ... ok
+test allocator::tracking::tests::assert_no_leaks_panics_on_mismatch - should panic ... ok
+test graph::tests::cycle_detection ... ok
+test graph::tests::topological_sort_no_deps ... ok
+test graph::tests::unsatisfied_capability_error ... ok
+test graph::tests::topological_sort_with_dependency ... ok
+test loader::tests::loader_module_compiles ... ok
+test registry::tests::collision_detection ... ok
+test registry::tests::duplicate_provider_rejected ... ok
+test registry::tests::register_and_find ... ok
+test registry::tests::resolve_returns_vtable_pointer ... ok
+test registry::tests::stale_handle_detection ... ok
+test runtime::tests::abi_ok_constant ... ok
+test runtime::tests::builder_creates_runtime ... ok
+test runtime::tests::dispatcher_graceful_degradation_when_no_registry ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/fnv1a_compat/mod.rs (target/debug/deps/fnv1a_compat-9cdcf0aec2556ea0)
+
+running 3 tests
+test fnv1a_contract_id_image_decode ... ok
+test fnv1a_algorithm_stability ... ok
+test fnv1a_contract_id_test_add ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/integration_codegen_cpp/mod.rs (target/debug/deps/integration_codegen_cpp-08e0e08f3f0992c7)
+
+running 2 tests
+test test_cpp_plugin_dispatch ... ok
+test test_cpp_codegen_files_exist ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running ../../tests/integration_codegen_rust/mod.rs (target/debug/deps/integration_codegen_rust-e0cfc6f81ffce779)
+
+running 1 test
+     Locking 1 package to latest compatible version
+      Adding polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling polyplug-guest v0.1.0 (/mnt/data/Projects/Utils/polyplug/guest-libs/rust)
+   Compiling codegen_rust_test_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/target/tmp/codegen_rust_test)
+warning: unused import: `polyplug_guest::ABI_OK`
+ --> src/vtables.rs:6:5
+  |
+6 | use polyplug_guest::ABI_OK;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `polyplug_guest::ABI_ERROR_PANIC`
+ --> src/vtables.rs:8:5
+  |
+8 | use polyplug_guest::ABI_ERROR_PANIC;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `codegen_rust_test_plugin` (lib) generated 2 warnings (run `cargo fix --lib -p codegen_rust_test_plugin` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.60s
+test test_rust_codegen_compile_and_run ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running ../../tests/integration_dispatch/mod.rs (target/debug/deps/integration_dispatch-57e6aadd9e4bc328)
+
+running 3 tests
+test test_dispatch_add_function ... ok
+test test_dispatch_add_with_zero ... ok
+test test_dispatch_add_wrapping_overflow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/integration_graph/mod.rs (target/debug/deps/integration_graph-a54c05390037ce3a)
+
+running 5 tests
+test test_duplicate_registration_is_rejected ... ok
+test test_multi_lookup_consistent ... ok
+test test_single_contract_registration_and_lookup ... ok
+test test_stale_handle_detected_after_explicit_construction ... ok
+test test_unknown_contract_returns_not_found ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/integration_load/mod.rs (target/debug/deps/integration_load-0d97c1874f90de2d)
+
+running 3 tests
+test test_init_registers_vtable ... ok
+test test_load_and_abi_version ... ok
+test test_missing_symbol_returns_error ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/integration_panic/mod.rs (target/debug/deps/integration_panic-61ceb5b52e8e4e17)
+
+running 1 test
+     Locking 1 package to latest Rust 1.93.1 compatible version
+      Adding polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling polyplug-guest v0.1.0 (/mnt/data/Projects/Utils/polyplug/guest-libs/rust)
+   Compiling panic_plugin v0.1.0 (/tmp/polyplug_panic_plugin_test)
+warning: unused import: `polyplug_guest::StringView`
+ --> src/contracts.rs:5:5
+  |
+5 | use polyplug_guest::StringView;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `super::types::*`
+ --> src/contracts.rs:6:5
+  |
+6 | use super::types::*;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `polyplug_guest::ABI_OK`
+ --> src/vtables.rs:6:5
+  |
+6 | use polyplug_guest::ABI_OK;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `polyplug_guest::ABI_ERROR_PANIC`
+ --> src/vtables.rs:8:5
+  |
+8 | use polyplug_guest::ABI_ERROR_PANIC;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `super::types::*`
+  --> src/vtables.rs:12:5
+   |
+12 | use super::types::*;
+   |     ^^^^^^^^^^^^^^^
+
+warning: `panic_plugin` (lib) generated 5 warnings (run `cargo fix --lib -p panic_plugin` to apply 5 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.54s
+
+thread '<unnamed>' (1077287) panicked at src/lib.rs:23:9:
+intentional test panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test test_panic_returns_abi_error_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+     Running ../../tests/smoke/mod.rs (target/debug/deps/smoke-f68b27bf1651f921)
+
+running 2 tests
+     Locking 1 package to latest compatible version
+      Adding polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+   Compiling polyplug v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug)
+test smoke_cpp_codegen_dispatch ... ok
+   Compiling polyplug-guest v0.1.0 (/mnt/data/Projects/Utils/polyplug/guest-libs/rust)
+   Compiling smoke_rust_test_plugin v0.1.0 (/mnt/data/Projects/Utils/polyplug/target/tmp/smoke_rust_test)
+warning: unused import: `polyplug_guest::ABI_OK`
+ --> src/vtables.rs:6:5
+  |
+6 | use polyplug_guest::ABI_OK;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `polyplug_guest::ABI_ERROR_PANIC`
+ --> src/vtables.rs:8:5
+  |
+8 | use polyplug_guest::ABI_ERROR_PANIC;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `smoke_rust_test_plugin` (lib) generated 2 warnings (run `cargo fix --lib -p smoke_rust_test_plugin` to apply 2 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.59s
+test smoke_rust_codegen_dispatch ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+     Running ../../tests/stress_error/mod.rs (target/debug/deps/stress_error-ec6cf9682f008a92)
+
+running 4 tests
+
+thread '<unnamed>' (1077558) panicked at tests/fixtures/error_plugin/src/lib.rs:236:9:
+intentional error_plugin panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test stress_error_code_and_message_received_correctly ... ok
+
+thread '<unnamed>' (1077561) panicked at tests/fixtures/error_plugin/src/lib.rs:236:9:
+intentional error_plugin panic
+test stress_error_message_lifetime_valid_during_read ... ok
+test stress_error_chain_b_errors_a_propagates ... ok
+test stress_panic_returns_abi_error_panic_process_continues ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running ../../tests/stress_memory/mod.rs (target/debug/deps/stress_memory-2da88a473363456c)
+
+running 6 tests
+test stress_caller_alloc_plugin_fills_freed_after_use ... ok
+test stress_plugin_allocates_returns_to_host_then_host_frees ... ok
+test stress_zero_length_buffer_and_string_view ... ok
+test stress_string_view_non_ascii_utf8 ... ok
+test stress_concurrent_8_threads_no_shared_memory ... ok
+test stress_large_buffer_fill_and_read ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib/mod.rs (target/debug/deps/polyplug_guest-c932cfdd7ce2e472)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib/mod.rs (target/debug/deps/polyplug_host-c0e97535773d2466)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/polyplugc-091f4d46e3a20658)
+
+running 18 tests
+test generators::cpp::tests::generate_guest_empty_ir ... ok
+test generators::cpp::tests::generate_host_empty_ir ... ok
+test generators::cpp::tests::class_name_conversion ... ok
+test generators::cpp::tests::upper_snake_conversion ... ok
+test generators::cpp::tests::lower_snake_conversion ... ok
+test generators::rust::tests::arg_pack_struct_name_conversion ... ok
+test generators::cpp::tests::plugin_class_name_conversion ... ok
+test generators::rust::tests::contract_name_to_struct_conversion ... ok
+test generators::rust::tests::generate_host_empty_ir ... ok
+test generators::rust::tests::generate_host_produces_three_files ... ok
+test ir::tests::contract_id_uses_fnv1a ... ok
+test ir::tests::primitive_type_roundtrip ... ok
+test ir::tests::resolve_type_ref_primitive ... ok
+test ir::tests::resolve_type_ref_unknown ... ok
+test ir::tests::version_minor_patch_encoded ... ok
+test ir::tests::version_parse ... ok
+test parser::tests::parse_minimal_bundle ... ok
+test parser::tests::parse_minimal_api ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/test_plugin-b1045f1129cd7891)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests polyplug
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests polyplug_guest
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests polyplug_host
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

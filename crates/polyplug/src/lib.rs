@@ -1,7 +1,7 @@
-//! polyplug-runtime — core plugin runtime for the polyplug platform.
+//! polyplug — core plugin runtime for the polyplug platform.
 //!
 //! This crate exports:
-//! - 6 C ABI functions (the complete public contract of polyplug-runtime)
+//! - 6 C ABI functions (the complete public contract of polyplug)
 //! - Module-level access to all subsystems
 
 pub mod abi;
