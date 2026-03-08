@@ -8,6 +8,8 @@
 //! the `Loader` struct and never dropped. This ensures vtable function pointers
 //! remain valid for the entire process lifetime (per architecture §7.3).
 
+pub mod manifest;
+
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -22,6 +24,74 @@ use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
 use crate::error::LoaderError;
 use crate::registry::Registry;
+use std::sync::Arc;
+
+use crate::error::PolyplugError;
+use crate::loader::manifest::ManifestData;
+
+/// Trait implemented by all bundle loaders (native and adapter crates).
+///
+/// The runtime dispatches each bundle to the loader whose `runtime_name()`
+/// matches the `runtime` field in the bundle's `manifest.toml`.
+pub trait BundleLoader: Send + Sync {
+    /// The runtime identifier this loader handles.
+    ///
+    /// Must match the `runtime` field in `manifest.toml` exactly (case-sensitive).
+    /// The built-in native loader returns `"native"`.
+    fn runtime_name(&self) -> &'static str;
+
+    /// Load a plugin bundle at `path` and register its vtables via `registrar`.
+    ///
+    /// # Errors
+    /// Returns `Err(PolyplugError::...)` on any failure. For stub loaders,
+    /// returns `Err(PolyplugError::Loader(LoaderError::RuntimeNotImplemented { .. }))`.
+    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError>;
+}
+
+/// The built-in loader for native (Rust/C++/NativeAOT) plugin bundles.
+///
+/// Uses dlopen (via libloading) to load `.so` / `.dll` / `.dylib` files.
+/// Automatically registered in `RuntimeBuilder::new()` — app developers
+/// do not need to call `.loader()` for native plugins.
+#[allow(dead_code)]
+pub(crate) struct NativeBundleLoader {
+    registry: Arc<Registry>,
+    host_vtable: &'static HostVTable,
+}
+
+#[allow(dead_code)]
+impl NativeBundleLoader {
+    /// Create a new `NativeBundleLoader` with the given registry and host vtable.
+    pub(crate) fn new(
+        registry: Arc<Registry>,
+        host_vtable: &'static HostVTable,
+    ) -> NativeBundleLoader {
+        NativeBundleLoader {
+            registry,
+            host_vtable,
+        }
+    }
+}
+
+impl BundleLoader for NativeBundleLoader {
+    fn runtime_name(&self) -> &'static str {
+        "native"
+    }
+
+    fn load(&self, path: &Path, _registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+        // NativeBundleLoader uses the internal load_bundle() free function
+        // which constructs its own PluginRegistrar for the FFI boundary.
+        // The trait's `registrar` parameter is not used here — native loading
+        // goes through dlopen + ABI init directly via the injected registry
+        // and host_vtable.
+        let _bundle: LoadedBundle = load_bundle(path, &self.registry, self.host_vtable)
+            .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
+        // Note: bundle is intentionally dropped here — the library is already
+        // leaked inside load_bundle() via Box::leak, so this is safe.
+        // TODO Epic 12: retain LoadedBundle in Runtime._bundles for inventory.
+        Ok(())
+    }
+}
 
 /// A successfully loaded plugin bundle.
 //
@@ -40,6 +110,54 @@ struct RegistrarState<'a> {
     bundle_path: &'a str,
     /// All vtables registered during this init call (for rollback on failure).
     registered_handles: Vec<PluginHandle>,
+}
+
+/// Read and parse the companion `manifest.toml` for a bundle at `bundle_path`.
+///
+/// `bundle_path` is the path to the bundle file itself (e.g. `plugins/foo.so`).
+/// The manifest is expected at `bundle_path.with_extension("manifest.toml")`.
+/// Tries the stem-based path first.
+///
+/// If the manifest file does not exist, returns a `ManifestData` with
+/// `runtime = "native"` (the default).
+#[allow(dead_code)]
+pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderError> {
+    // Try: same directory, same stem, extension = "manifest.toml"
+    // e.g. "plugins/foo.so" → "plugins/foo.manifest.toml"
+    let manifest_path: PathBuf = bundle_path.with_extension("manifest.toml");
+
+    if !manifest_path.exists() {
+        // No manifest → default to native
+        return Ok(ManifestData {
+            runtime: "native".to_owned(),
+        });
+    }
+
+    let contents: String =
+        std::fs::read_to_string(&manifest_path).map_err(|_e: std::io::Error| {
+            LoaderError::ManifestParse {
+                path: manifest_path.to_string_lossy().into_owned(),
+                reason: "failed to read manifest file".to_owned(),
+            }
+        })?;
+
+    let data: ManifestData =
+        toml::from_str(&contents).map_err(|e: toml::de::Error| LoaderError::ManifestParse {
+            path: manifest_path.to_string_lossy().into_owned(),
+            reason: e.to_string(),
+        })?;
+
+    let trimmed: &str = data.runtime.trim();
+    if trimmed.is_empty() {
+        return Err(LoaderError::ManifestParse {
+            path: manifest_path.to_string_lossy().into_owned(),
+            reason: "runtime field cannot be empty".to_owned(),
+        });
+    }
+
+    Ok(ManifestData {
+        runtime: trimmed.to_owned(),
+    })
 }
 
 /// Load a single bundle from the given path.
