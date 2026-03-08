@@ -420,7 +420,10 @@ You are the PLANNER agent for the `polyplug` project.
 Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
 The plan must be granular enough that the executer can implement each step without
 making any architectural decisions. Every ambiguity must be resolved in the plan.
-Do not write the plan until you have interviewed me and I have answered your questions.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
 
 ---
 
@@ -437,78 +440,128 @@ C# plugins come in two modes:
 - NativeAOT: compile to native .so/.dll, loaded by NativeBundleLoader, no adapter
 - Standard .NET: managed IL assembly, requires polyplug-dotnet adapter
 
-polyplug-dotnet uses Microsoft's hostfxr native API to:
-1. Initialize the CLR once per process (shared across all .NET plugins)
-2. Load the managed assembly
-3. Obtain a native fn ptr to the [UnmanagedCallersOnly] Init method
-4. Call Init(registrar) — identical vtable exchange from here
-
 The crate scaffold exists from Epic 8 at crates/polyplug-dotnet/.
-This epic fills it in completely.
+This epic fills it in completely, plus C# guest lib, C# host lib,
+and CSharpGenerator in polyplugc.
 
-This epic also covers:
-- C# guest lib (guest-libs/csharp/)
-- C# host lib (host-libs/csharp/)
-- CSharpGenerator in polyplugc
+---
+
+PRE-ANSWERED DECISIONS
+
+.NET target version: net10.0
+
+DotnetConfig:
+  pub struct DotnetConfig {
+      pub min_framework: String,   // e.g. "net10.0"
+  }
+  DotnetLoader::new(DotnetConfig { min_framework: "net10.0".into() })
+  DotnetConfig is mandatory — no default constructor.
+
+runtimeconfig.json strategy:
+  polyplug-dotnet generates a minimal runtimeconfig.json in a temp dir
+  from DotnetConfig.min_framework at first CLR init. Never shipped by
+  plugin developer. Deleted immediately after hostfxr_initialize_for_runtime_config.
+  Plugin bundle ships only: image_bundle.dll + image_bundle.manifest.toml
+
+Multi-version strategy:
+  CLR initialized once via OnceLock<Arc<HostfxrContext>> in DotnetLoader.
+  Subsequent plugins: read target framework from assembly metadata.
+  - Compatible (same major, minor >= min_framework minor) → load silently
+  - Higher minor → load with warning
+  - Different major → PolyplugError::RuntimeVersionMismatch { required, found }
+  NativeAOT is the escape hatch for plugins targeting a different major version.
+
+hostfxr location: DOTNET_ROOT env var → PATH scan → well-known paths
+  (/usr/lib/dotnet, /usr/share/dotnet, ~/.dotnet)
+  Clear error if not found.
+
+C# error model: exceptions. Plugin methods throw PluginException.
+  Generated Init.cs wraps each ABI function in try/catch, converts to AbiError.
+
+Async: out of scope. Sync only.
+
+C# plugin .dll compilation in tests: dotnet CLI via build.rs.
+  build.rs runs `dotnet build` on the C# fixture project before tests run.
+
+NuGet publishing: out of scope. Local .csproj class libraries only.
+
+Dependency order: Rust crate first → C# libs → CSharpGenerator.
 
 ---
 
 EPIC GOAL
 
 1. polyplug-dotnet crate (crates/polyplug-dotnet/):
-   DotnetLoader fully implementing BundleLoader:
+   DotnetConfig struct (as above).
+   DotnetLoader implementing BundleLoader:
    - runtime_name returns "dotnet"
-   - Locates hostfxr: checks DOTNET_ROOT, PATH, well-known install paths
-   - Initializes CLR via hostfxr_initialize_for_runtime_config (once per process)
-   - Loads managed assembly via load_assembly_and_get_function_pointer
-   - Obtains fn ptr to Init method marked [UnmanagedCallersOnly]
-   - Calls Init(registrar) — vtable exchange identical to native path
-   - CLR shared across all .NET plugins loaded in same process
-   - Proper PolyplugError variants for every failure mode:
-     hostfxr not found, CLR init failed, assembly not found, Init symbol missing
+   - Locates hostfxr: DOTNET_ROOT → PATH → well-known paths
+   - On first .NET bundle load:
+     generates minimal runtimeconfig.json in temp dir from min_framework
+     calls hostfxr_initialize_for_runtime_config with temp path
+     deletes temp file immediately
+     stores HostfxrContext in OnceLock
+   - Per bundle:
+     reads target framework from assembly metadata
+     version check per multi-version strategy above
+     calls load_assembly_and_get_function_pointer
+     obtains fn ptr to [UnmanagedCallersOnly] Init method
+     calls Init(registrar) — identical vtable exchange from here
+   - PolyplugError variants for every failure mode:
+     HostfxrNotFound, ClrInitFailed, AssemblyNotFound, InitSymbolMissing,
+     RuntimeVersionMismatch { required: String, found: String }
 
-2. C# guest lib (guest-libs/csharp/):
+2. C# guest lib (guest-libs/csharp/) — .csproj class library, net10.0:
    - ABI types as [StructLayout(LayoutKind.Sequential)] structs
-   - StringView and Buffer as ref structs (stack-only, no GC)
+   - StringView and Buffer as ref structs (stack-only, no GC pressure)
    - PluginRegistrar P/Invoke wrappers
-   - PluginError type
+   - PluginException type (code: uint, message: string)
    - [UnmanagedCallersOnly] entry point infrastructure
 
-3. C# host lib (host-libs/csharp/):
-   - P/Invoke declarations for all runtime C ABI functions
-   - Polyplug.Runtime class with builder pattern matching PRD section 8
+3. C# host lib (host-libs/csharp/) — .csproj class library, net10.0:
+   - P/Invoke declarations for all polyplug C ABI functions
+   - Polyplug.Runtime class with builder pattern (PluginDir, Loader, Extension, Build)
    - ref struct wrappers for StringView and Buffer
+   - P/Invoke declarations for StringView and Buffer interop
 
-4. CSharpGenerator in polyplugc
-   (crates/polyplugc/src/generators/csharp/mod.rs — new file):
+4. CSharpGenerator (crates/polyplugc/src/generators/csharp/mod.rs — new):
 
    From --api api.toml:
-   - generated/host/Types.cs         domain types as ref structs
-   - generated/host/Callers.cs       contract caller classes
+   - generated/host/Types.cs         domain types as [StructLayout] structs
+   - generated/host/Callers.cs       contract caller classes (P/Invoke into vtable)
    - generated/guest/Types.cs        same domain types
-   - generated/guest/Contracts.cs    interfaces for plugin developer to implement
+   - generated/guest/Contracts.cs    interfaces plugin developer implements
 
    From --bundle bundle.toml:
    - generated/Types.cs
    - generated/Contracts.cs
-   - generated/Vtables.cs            vtable construction
-   - generated/Init.cs               [UnmanagedCallersOnly] Init with try/catch
+   - generated/Vtables.cs            vtable construction, function ptr delegates
+   - generated/Init.cs               [UnmanagedCallersOnly] Init,
+                                     try/catch per ABI function → AbiError
    - generated/manifest.toml         runtime = "dotnet"
 
 5. UTF-16 to UTF-8 transcoding in generated C# code:
-   - ASCII fast path (strip high byte — near zero cost)
-   - Full transcoding for non-ASCII
-   - Transcoding buffer uses host_alloc, not managed heap
+   - ASCII fast path: strip high byte, near-zero cost
+   - Full transcoding for non-ASCII via Encoding.UTF8
+   - Transcoding buffer allocated via host_alloc, not managed heap
 
 6. polyplugc generate --lang csharp wired into CLI
 
-7. Cross-language integration tests:
-   - Rust host loads standard .NET C# plugin
-   - C# host (standard .NET) loads Rust plugin
-   - C# host loads standard .NET C# plugin
-   - UTF-16/UTF-8 round-trip: ASCII content and non-ASCII content
-   - C# exception in plugin does not crash Rust host
-   - GC stress test: trigger GC during plugin call, assert no corruption
+7. C# fixture plugin for integration tests:
+   - tests/fixtures/csharp_plugin/ — .csproj targeting net10.0
+   - Implements the test contract from test_api.toml
+   - build.rs compiles it via `dotnet build` before tests run
+   - Output: tests/fixtures/libtest_plugin_csharp.dll
+
+8. Cross-language integration tests:
+   - Rust host loads standard .NET C# plugin → call two functions → assert results
+   - C# host (using host-libs/csharp/) loads Rust plugin → call → assert
+   - C# host loads C# plugin
+   - UTF-16/UTF-8 round-trip: ASCII and non-ASCII strings
+   - C# exception in plugin does not crash Rust host → AbiError returned
+   - GC stress: trigger GC during plugin call, assert no memory corruption
+   - Multi-version: second .NET plugin with higher minor → warning emitted, loads
+   - Multi-version: .NET plugin targeting different major → RuntimeVersionMismatch error
 
 ---
 
@@ -518,27 +571,15 @@ VERIFICATION CHECKLIST
 - GC stress test passes with no corruption
 - UTF-16/UTF-8 round-trip passes for ASCII and non-ASCII
 - C# exception does not crash Rust host
-- CLR initialized once even when multiple .NET plugins are loaded
-- hostfxr not found produces clear actionable error
-- polyplugc generate --lang csharp produces compilable C# output
+- CLR initialized exactly once (OnceLock guarantees, verified in multi-plugin test)
+- runtimeconfig.json temp file does not persist after CLR init
+- hostfxr not found produces clear actionable error message
+- Higher minor version: warning emitted, plugin loads
+- Different major version: RuntimeVersionMismatch error, clear message
+- polyplugc generate --lang csharp produces compilable net10.0 C# output
 - No .unwrap() in Rust production code
 - clippy passes with zero warnings
-
----
-
-QUESTIONS TO ASK ME BEFORE PLANNING
-
-Ask me about:
-- .NET version to target (net8.0 recommended — confirm)
-- C# error model in generated code: exceptions (throws) or Result-style
-- Whether async support is in scope for this epic
-- How C# plugin .dll compilation is triggered in integration tests
-  (MSBuild? dotnet CLI? pre-compiled fixture?)
-- NuGet package publishing: in scope or just local structure for tests
-- How to locate hostfxr on the CI machine used for testing
-- Which comes first: host lib, guest lib, or generator — any dependency order
-
-Do not write the plan until I have answered all questions.
+- cargo test --workspace passes
 ```
 
 ---
@@ -551,7 +592,10 @@ You are the PLANNER agent for the `polyplug` project.
 Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
 The plan must be granular enough that the executer can implement each step without
 making any architectural decisions. Every ambiguity must be resolved in the plan.
-Do not write the plan until you have interviewed me and I have answered your questions.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
 
 ---
 
@@ -572,47 +616,88 @@ The Python runtime is the performance bottleneck — not polyplug.
 ctypes.Structure keeps cross-boundary data in C memory, outside Python GC.
 
 The crate scaffold exists from Epic 8 at crates/polyplug-python/.
-This epic fills it in completely.
+This epic fills it in completely, plus Python guest lib, Python host lib,
+and PythonGenerator in polyplugc.
 
-This epic also covers:
-- Python guest lib (guest-libs/python/)
-- Python host lib (host-libs/python/)
-- PythonGenerator in polyplugc
+---
+
+PRE-ANSWERED DECISIONS
+
+PythonConfig:
+  pub struct PythonConfig {
+      pub min_version: (u32, u32),   // (major, minor) e.g. (3, 10)
+  }
+  PythonLoader::new(PythonConfig { min_version: (3, 10) })
+  PythonConfig is mandatory.
+
+Multi-version strategy (mirrors DotnetLoader):
+  Interpreter initialized once via OnceLock.
+  Each plugin's Python version read from its module metadata at load time.
+  - Compatible (same major, minor >= min_version.minor) → load silently
+  - Higher minor → load with warning
+  - Different major → PolyplugError::RuntimeVersionMismatch { required, found }
+
+Interpreter location: PYTHONHOME env var → PATH scan → well-known paths
+  (/usr/bin/python3, /usr/local/bin/python3, system default)
+  Clear error if not found.
+
+Embedding approach: pyo3 for CPython embedding.
+  Provides safe Rust bindings, handles GIL correctly, well-maintained.
+
+ctypes vs cffi: ctypes.
+  Standard library, no extra dependency, sufficient for ABI bridging.
+
+Plugin format: single .py file.
+  Bundle path in manifest file field points to the .py file directly.
+
+Interpreter sharing: one shared interpreter per process.
+  Same reasoning as CLR — one GIL, one interpreter, all plugins share it.
+
+pip publishing: out of scope. Local package structure only.
+
+Plugin packaging in tests: .py file copied directly into tests/fixtures/.
+  No build step needed — Python is interpreted.
+
+Dependency order: Rust crate first → Python libs → PythonGenerator.
 
 ---
 
 EPIC GOAL
 
 1. polyplug-python crate (crates/polyplug-python/):
-   PythonLoader fully implementing BundleLoader:
+   PythonConfig struct (as above).
+   PythonLoader implementing BundleLoader:
    - runtime_name returns "python"
-   - Initializes CPython interpreter once per process
-   - Imports plugin module from bundle path
-   - Calls init(registrar_ptr) passing registrar as integer/ctypes pointer
-   - Python init registers vtables via ctypes calls back into C ABI
-   - Python interpreter shared across all Python plugins in process
-   - Proper PolyplugError variants: interpreter init failed,
-     module import failed, init function missing, init raised exception
+   - Locates CPython: PYTHONHOME → PATH → well-known paths
+   - Initializes CPython interpreter once via pyo3 + OnceLock
+   - Per bundle:
+     reads Python version from module metadata
+     version check per multi-version strategy above
+     imports plugin module from bundle path (.py file)
+     calls init(registrar_ptr) passing registrar as ctypes integer pointer
+     Python init registers vtables via ctypes calls back into C ABI
+   - PolyplugError variants: InterpreterNotFound, InterpreterInitFailed,
+     ModuleImportFailed, InitFunctionMissing, InitRaisedException,
+     RuntimeVersionMismatch { required: String, found: String }
 
-2. Python guest lib (guest-libs/python/):
-   - pip package structure
+2. Python guest lib (guest-libs/python/) — local package structure:
    - ctypes bindings for PluginRegistrar, HostVTable, PluginVTable
    - StringView and Buffer as ctypes.Structure (C memory, not Python heap)
    - Plugin entry point decorator
-   - Exception boundary: catch all Python exceptions, convert to AbiError
+   - Exception boundary: try/except in generated init wraps each ABI fn
+   - PluginError(code: int, message: str) exception class
 
-3. Python host lib (host-libs/python/):
-   - pip package structure
-   - ctypes bindings for all runtime C ABI functions
-   - PluginRuntime class with builder pattern
+3. Python host lib (host-libs/python/) — local package structure:
+   - ctypes bindings for all polyplug C ABI functions
+   - PluginRuntime class with builder pattern (plugin_dir, loader, extension, build)
+   - StringView and Buffer as ctypes.Structure
 
-4. PythonGenerator in polyplugc
-   (crates/polyplugc/src/generators/python/mod.rs — new file):
+4. PythonGenerator (crates/polyplugc/src/generators/python/mod.rs — new):
 
    From --api api.toml:
    - generated/host/types.py        domain types as ctypes.Structure
    - generated/host/callers.py      contract caller classes
-   - generated/host/types.pyi       type stubs
+   - generated/host/types.pyi       type stubs for IDE support
    - generated/host/callers.pyi
    - generated/guest/types.py
    - generated/guest/contracts.py   ABC per contract
@@ -621,21 +706,28 @@ EPIC GOAL
    - generated/types.py
    - generated/contracts.py
    - generated/vtables.py           vtable construction via ctypes
-   - generated/init.py              init function with try/except boundary
+   - generated/init.py              init function, try/except per ABI fn → AbiError
    - generated/manifest.toml        runtime = "python"
 
 5. polyplugc generate --lang python wired into CLI
 
-6. .pyi stubs generated alongside .py files for IDE support
+6. .pyi stubs generated alongside every .py file
 
-7. Cross-language integration tests:
-   - Rust host loads Python plugin
-   - Python host loads Rust plugin
+7. Python fixture plugin for integration tests:
+   - tests/fixtures/test_plugin.py — single .py file
+   - Implements test contract from test_api.toml
+   - No build step — .py file used directly
+
+8. Cross-language integration tests:
+   - Rust host loads Python plugin → call two functions → assert results
+   - Python host (host-libs/python/) loads Rust plugin → call → assert
    - Python host loads Python plugin
-   - Python exception in plugin does not crash Rust host
+   - Python exception in plugin does not crash Rust host → AbiError returned
    - UTF-8 string round-trip test
+   - Multi-version: higher minor Python plugin → warning emitted, loads
+   - Multi-version: different major → RuntimeVersionMismatch error
 
-8. Generated Python passes mypy --strict with zero errors
+9. Generated Python passes mypy --strict with zero errors
 
 ---
 
@@ -643,29 +735,15 @@ VERIFICATION CHECKLIST
 
 - All cross-language tests pass
 - Python exception does not crash Rust host
-- ctypes.Structure used for all cross-boundary types — no Python heap objects crossing
+- ctypes.Structure used for all cross-boundary types
 - Generated Python passes mypy --strict
-- .pyi stubs generated alongside .py files
+- .pyi stubs generated alongside all .py files
 - polyplugc generate --lang python produces runnable output
+- Higher minor version: warning emitted, plugin loads
+- Different major version: RuntimeVersionMismatch error, clear message
 - No .unwrap() in Rust production code
 - clippy passes with zero warnings
-
----
-
-QUESTIONS TO ASK ME BEFORE PLANNING
-
-Ask me about:
-- Minimum Python version to support
-- pyo3 vs direct libpython for embedding (discuss tradeoffs)
-- ctypes vs cffi preference (discuss tradeoffs)
-- Whether Python plugins are always .py files or can be compiled extensions
-- How Python interpreter is located at runtime
-  (PYTHONHOME, PATH, system default, configurable?)
-- One shared interpreter per process or one per bundle (discuss tradeoffs)
-- pip package publishing: in scope or just local structure for tests
-- How Python plugin packaging works in the integration test suite
-
-Do not write the plan until I have answered all questions.
+- cargo test --workspace passes
 ```
 
 ---
@@ -678,7 +756,10 @@ You are the PLANNER agent for the `polyplug` project.
 Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
 The plan must be granular enough that the executer can implement each step without
 making any architectural decisions. Every ambiguity must be resolved in the plan.
-Do not write the plan until you have interviewed me and I have answered your questions.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
 
 ---
 
@@ -691,68 +772,113 @@ READ FIRST
 
 PROJECT CONTEXT
 
-LuaJIT is strongly recommended over standard Lua for near-native performance
-via JIT compilation and its FFI library which enables zero-copy struct passing.
+LuaJIT provides near-native performance via JIT compilation and its FFI library
+which enables zero-copy struct passing — no intermediate copies at the ABI boundary.
 
 The crate scaffold exists from Epic 8 at crates/polyplug-lua/.
-This epic fills it in completely.
+This epic fills it in completely, plus Lua guest lib, Lua host lib,
+and LuaGenerator in polyplugc.
 
-This epic also covers:
-- Lua guest lib (guest-libs/lua/)
-- Lua host lib (host-libs/lua/)
-- LuaGenerator in polyplugc
+---
+
+PRE-ANSWERED DECISIONS
+
+LuaConfig:
+  pub enum LuaVersion { Jit, Lua54, Lua53 }
+  pub struct LuaConfig {
+      pub min_version: LuaVersion,
+  }
+  LuaLoader::new(LuaConfig { min_version: LuaVersion::Jit })
+  LuaConfig is mandatory.
+
+Version strategy:
+  LuaJIT is a separate implementation, not a version of standard Lua.
+  LuaVersion::Jit means LuaJIT is required — standard Lua is not acceptable.
+  LuaVersion::Lua54 / Lua53 means standard Lua, minimum that version.
+  If min_version = Jit and LuaJIT is not found: PolyplugError::RuntimeNotFound.
+  If min_version = Lua54 and only Lua53 found:
+    PolyplugError::RuntimeVersionMismatch { required, found }.
+
+VM sharing: one shared VM per process (OnceLock), same as CLR and Python.
+
+Struct passing: LuaJIT FFI for zero-copy. ffi.cdef + ffi.cast for all ABI types.
+  Standard Lua fallback uses lightuserdata — acceptable performance for non-JIT.
+
+Plugin format: single .lua file.
+  Bundle path in manifest file field points to the .lua file directly.
+  Script bundles are directories containing the .lua file + manifest.toml.
+
+Lua host lib C extension: built via build.rs using cc crate.
+  Produces polyplug_lua.so alongside polyplug.lua.
+
+Lua publishing: out of scope. Local files only.
+
+Dependency order: Rust crate first → Lua libs → LuaGenerator.
 
 ---
 
 EPIC GOAL
 
 1. polyplug-lua crate (crates/polyplug-lua/):
-   LuaLoader fully implementing BundleLoader:
+   LuaConfig + LuaVersion (as above).
+   LuaLoader implementing BundleLoader:
    - runtime_name returns "lua"
-   - Initializes Lua VM via mlua crate
-   - Loads plugin script from bundle path
-   - Calls init(registrar_ptr) passing registrar as lightuserdata
-   - Lua init registers vtables via FFI calls back into C ABI
-   - Proper PolyplugError variants: VM init failed, script load failed,
-     init function missing, init raised error
+   - Locates LuaJIT or Lua VM based on LuaConfig.min_version
+   - Initializes VM once via mlua + OnceLock
+   - Per bundle:
+     detects VM type/version
+     version check per version strategy above
+     loads plugin script from bundle path (.lua file)
+     calls init(registrar_ptr) passing registrar as lightuserdata
+     Lua init registers vtables via LuaJIT FFI calls back into C ABI
+   - PolyplugError variants: RuntimeNotFound, VmInitFailed, ScriptLoadFailed,
+     InitFunctionMissing, InitRaisedError,
+     RuntimeVersionMismatch { required: String, found: String }
 
 2. Lua guest lib (guest-libs/lua/):
-   - polyplug_guest.lua file
-   - LuaJIT FFI declarations for PluginRegistrar, HostVTable, PluginVTable
-   - StringView and Buffer as FFI cdata structs (zero-copy via LuaJIT FFI)
+   - polyplug_guest.lua
+   - LuaJIT FFI: ffi.cdef declarations for PluginRegistrar, HostVTable, PluginVTable,
+     StringView, Buffer — zero-copy via ffi.cast
+   - Standard Lua fallback: lightuserdata + manual field extraction
    - Plugin entry point registration helper
-   - Error boundary using pcall at ABI level
+   - Error boundary: pcall wrapper per ABI function in generated init
 
 3. Lua host lib (host-libs/lua/):
-   - polyplug.lua + C extension .so
-   - LuaJIT FFI declarations for all runtime C ABI functions
-   - PluginRuntime table with builder pattern
+   - polyplug.lua + polyplug_lua.so (C extension, built via cc crate in build.rs)
+   - LuaJIT FFI declarations for all polyplug C ABI functions
+   - PluginRuntime table with builder pattern (plugin_dir, loader, extension, build)
 
-4. LuaGenerator in polyplugc
-   (crates/polyplugc/src/generators/lua/mod.rs — new file):
+4. LuaGenerator (crates/polyplugc/src/generators/lua/mod.rs — new):
 
    From --api api.toml:
-   - generated/host/types.lua       domain type constructors via FFI
+   - generated/host/types.lua       domain types via LuaJIT FFI cdata
    - generated/host/callers.lua     contract caller tables
    - generated/guest/types.lua
-   - generated/guest/contracts.lua  contract interface tables
+   - generated/guest/contracts.lua  contract interface tables (metatables)
 
    From --bundle bundle.toml:
    - generated/types.lua
    - generated/contracts.lua
-   - generated/vtables.lua          vtable construction via FFI
-   - generated/init.lua             init function with pcall boundary
+   - generated/vtables.lua          vtable construction via LuaJIT FFI
+   - generated/init.lua             init function, pcall per ABI fn → AbiError
    - generated/manifest.toml        runtime = "lua"
 
 5. polyplugc generate --lang lua wired into CLI
 
-6. Cross-language integration tests:
-   - Rust host loads Lua plugin
-   - Lua host loads Rust plugin
+6. Lua fixture plugin for integration tests:
+   - tests/fixtures/test_plugin.lua — single .lua file
+   - Implements test contract from test_api.toml
+   - No build step — .lua file used directly
+
+7. Cross-language integration tests:
+   - Rust host loads Lua plugin → call two functions → assert results
+   - Lua host (host-libs/lua/) loads Rust plugin → call → assert
    - Lua host loads Lua plugin
-   - Lua error() in plugin does not crash Rust host
+   - Lua error() in plugin does not crash Rust host → AbiError returned
+   - LuaJIT FFI zero-copy test: assert no buffer copies at ABI boundary
    - LuaJIT performance test: call overhead within 2x of native baseline
-     from BENCHMARKS.md
+     (from BENCHMARKS.md baseline)
+   - Version mismatch: Jit required but standard Lua found → RuntimeNotFound error
 
 ---
 
@@ -761,26 +887,13 @@ VERIFICATION CHECKLIST
 - All cross-language tests pass
 - Lua error does not crash Rust host
 - LuaJIT FFI used for zero-copy struct passing (verified by code inspection)
+- LuaJIT performance test passes within 2x of native baseline
 - polyplugc generate --lang lua produces runnable output
-- LuaJIT performance test: overhead within 2x of native baseline
+- Version mismatch error is clear and actionable
+- polyplug_lua.so C extension built correctly via cc crate
 - No .unwrap() in Rust production code
 - clippy passes with zero warnings
-
----
-
-QUESTIONS TO ASK ME BEFORE PLANNING
-
-Ask me about:
-- LuaJIT vs standard Lua: final decision
-- mlua crate configuration for LuaJIT
-- One VM per process or one per bundle (discuss tradeoffs)
-- LuaJIT FFI vs classic C userdata for struct passing
-- How Lua plugins are structured as bundles
-  (single .lua file? directory with manifest.toml? what does the file field contain?)
-- How the Lua host lib C extension is built and distributed for tests
-- Any Lua-specific performance requirements beyond the 2x baseline
-
-Do not write the plan until I have answered all questions.
+- cargo test --workspace passes
 ```
 
 ---
