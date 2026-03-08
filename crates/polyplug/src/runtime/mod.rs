@@ -27,6 +27,11 @@ use crate::error::RegistryError;
 use crate::error::RuntimeError;
 use crate::loader::LoadedBundle;
 use crate::registry::Registry;
+use std::collections::HashMap;
+
+use crate::error::LoaderError;
+use crate::loader::BundleLoader;
+use crate::loader::NativeBundleLoader;
 
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
@@ -55,6 +60,8 @@ pub struct Runtime {
     _bundles: Vec<LoadedBundle>,
     /// The static HostVTable given to plugins. Must be 'static.
     host_vtable: &'static HostVTable,
+    /// All registered loaders, keyed by runtime_name. Immutable after build().
+    _loaders: HashMap<String, Box<dyn BundleLoader>>,
 }
 
 // SAFETY: Runtime wraps Arc<Registry> (Send+Sync) and Vec<LoadedBundle>.
@@ -68,6 +75,7 @@ unsafe impl Sync for Runtime {}
 /// Builder for constructing a Runtime.
 pub struct RuntimeBuilder {
     plugin_dirs: Vec<PathBuf>,
+    loaders: Vec<Box<dyn BundleLoader>>,
 }
 
 impl RuntimeBuilder {
@@ -75,12 +83,26 @@ impl RuntimeBuilder {
     pub fn new() -> RuntimeBuilder {
         RuntimeBuilder {
             plugin_dirs: Vec::new(),
+            loaders: Vec::new(),
         }
     }
 
     /// Add a directory to scan for plugin bundles.
     pub fn plugin_dir(mut self, path: PathBuf) -> RuntimeBuilder {
         self.plugin_dirs.push(path);
+        self
+    }
+
+    /// Register an additional bundle loader for a non-native runtime.
+    ///
+    /// The loader is identified by `loader.runtime_name()`. Duplicate registrations
+    /// (same runtime name) are detected in `build()` and cause `build()` to return
+    /// `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))`.
+    ///
+    /// Native bundles do not require calling this method — `NativeBundleLoader` is
+    /// registered automatically.
+    pub fn loader(mut self, loader: impl BundleLoader + 'static) -> RuntimeBuilder {
+        self.loaders.push(Box::new(loader));
         self
     }
 
@@ -107,12 +129,33 @@ impl RuntimeBuilder {
             get_extension: host_get_extension,
         }));
 
+        // Build loader dispatch map. Start with the built-in NativeBundleLoader.
+        let native_loader: NativeBundleLoader =
+            NativeBundleLoader::new(Arc::clone(&registry), host_vtable);
+        let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
+        loader_map.insert(
+            native_loader.runtime_name().to_owned(),
+            Box::new(native_loader),
+        );
+
+        // Register user-provided loaders, checking for duplicates.
+        for loader in self.loaders {
+            let name: String = loader.runtime_name().to_owned();
+            if loader_map.contains_key(&name) {
+                return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
+                    runtime_name: name,
+                }));
+            }
+            loader_map.insert(name, loader);
+        }
+
         let _ = &self.plugin_dirs;
 
         Ok(Runtime {
             registry,
             _bundles: bundles,
             host_vtable,
+            _loaders: loader_map,
         })
     }
 }
