@@ -1,0 +1,34 @@
+[package]
+name        = "polyplug-runtime"
+version     = "0.1.0"
+edition.workspace     = true
+license.workspace     = true
+rust-version.workspace = true
+
+[lib]
+name       = "polyplug_runtime"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+thiserror  = { workspace = true }
+libloading = { workspace = true }
+petgraph   = { workspace = true }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "integration_load"
+path = "../../tests/integration_load/mod.rs"
+
+[[test]]
+name = "integration_dispatch"
+path = "../../tests/integration_dispatch/mod.rs"
+
+[[test]]
+name = "integration_graph"
+path = "../../tests/integration_graph/mod.rs"
+
+[[test]]
+name = "fnv1a_compat"
+path = "../../tests/fnv1a_compat/mod.rs"

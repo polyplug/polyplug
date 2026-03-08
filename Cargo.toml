@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members  = ["crates/*", "tests/fixtures/test_plugin", "host-libs/rust", "guest-libs/rust"]
+
+[workspace.package]
+edition      = "2024"
+license      = "MIT OR Apache-2.0"
+rust-version = "1.93"
+
+[workspace.dependencies]
+# Serialization
+serde      = { version = "1.0", features = ["derive"] }
+toml       = { version = "0.9" }
+
+# Error handling
+thiserror  = { version = "2.0" }
+
+# Dynamic loading
+libloading = { version = "0.9" }
+
+# Graph algorithms
+petgraph   = { version = "0.8", default-features = false, features = ["stable_graph"] }
+
+# CLI (polyplugc only)
+clap       = { version = "4.5", features = ["derive"] }
+
+# Internal crates
+polyplug-runtime = { path = "crates/polyplug-runtime" }
+polyplugc        = { path = "crates/polyplugc" }
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+unwrap_used                = "deny"
+expect_used                = "deny"
+std_instead_of_core        = "warn"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn     = "warn"

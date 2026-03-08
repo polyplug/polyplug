@@ -1,0 +1,11 @@
+   Compiling polyplug-runtime v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running ../../tests/integration_dispatch/mod.rs (target/debug/deps/integration_dispatch-6be14f19c9aeb71c)
+
+running 3 tests
+test test_dispatch_add_wrapping_overflow ... ok
+test test_dispatch_add_with_zero ... ok
+test test_dispatch_add_function ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

@@ -1,0 +1,1 @@
+tests/fixtures/libtest_plugin_cpp.so

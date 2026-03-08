@@ -1,0 +1,11 @@
+[bundle]
+name = "test_bundle"
+version = "1.0.0"
+api = "test_api.toml"
+
+[[plugin]]
+name = "test_adder"
+version = "1.0.0"
+implements = ["test.add@1"]
+requires = []
+optional = []

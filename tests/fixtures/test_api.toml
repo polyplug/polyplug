@@ -1,0 +1,27 @@
+[[types]]
+name = "AddArgs"
+fields = [
+  { name = "a", type = "u32" },
+  { name = "b", type = "u32" }
+]
+
+[[contract]]
+name = "test.add"
+version = "1.0.0"
+
+[[contract.functions]]
+name = "add"
+params = [{ name = "args", type = "AddArgs" }]
+return = "u32"
+
+[[contract.functions]]
+name = "add_primitive"
+params = [{ name = "a", type = "u32" }, { name = "b", type = "u32" }]
+return = "u32"
+
+[[contract.functions]]
+name = "version"
+return = "StringView"
+
+[[contract.functions]]
+name = "reset"
