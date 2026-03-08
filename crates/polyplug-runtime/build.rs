@@ -115,7 +115,10 @@ fn main() {
         "debug"
     };
     let polyplugc_path: PathBuf = target_dir.join(profile).join(polyplugc_filename);
-    println!("cargo:rustc-env=CARGO_BIN_EXE_polyplugc={}", polyplugc_path.display());
+    println!(
+        "cargo:rustc-env=CARGO_BIN_EXE_polyplugc={}",
+        polyplugc_path.display()
+    );
     println!("cargo:rerun-if-changed=../../crates/polyplugc/src");
 
     // ─── C++ test plugin compilation ─────────────────────────────────────────────────
@@ -177,8 +180,7 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
 "#;
 
         let cpp_src_path: PathBuf = out_dir.join("test_plugin_cpp.cpp");
-        std::fs::write(&cpp_src_path, cpp_src)
-            .expect("failed to write C++ test plugin source");
+        std::fs::write(&cpp_src_path, cpp_src).expect("failed to write C++ test plugin source");
 
         let cpp_so_filename: &str = if cfg!(target_os = "macos") {
             "libtest_plugin_cpp.dylib"
@@ -205,6 +207,9 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
         fs::copy(&cpp_so_out, &cpp_dest_so)
             .expect("failed to copy C++ test plugin .so to fixtures/");
 
-        println!("cargo:rustc-env=TEST_PLUGIN_CPP_SO={}", cpp_dest_so.display());
+        println!(
+            "cargo:rustc-env=TEST_PLUGIN_CPP_SO={}",
+            cpp_dest_so.display()
+        );
     }
 }

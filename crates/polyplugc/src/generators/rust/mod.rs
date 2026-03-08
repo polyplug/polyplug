@@ -217,11 +217,7 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
 }
 
 /// Emit one trait method line into the contracts.rs trait.
-fn generate_guest_trait_method(
-    out: &mut String,
-    func: &ResolvedFunction,
-    contract_struct: &str,
-) {
+fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
     let ret_type: String = match &func.returns {
         Some(ty) => rust_type_name(ty),
         None => "()".to_owned(),
@@ -277,10 +273,7 @@ fn contract_name_to_upper_snake(name: &str) -> String {
 }
 
 /// Generate the full vtables.rs content.
-fn generate_guest_vtables_file(
-    out: &mut String,
-    ir: &ValidatedIr,
-) -> Result<(), CodegenError> {
+fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(), CodegenError> {
     // Shared imports
     out.push_str("use std::sync::OnceLock;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
@@ -296,7 +289,9 @@ fn generate_guest_vtables_file(
     out.push_str("use super::types::*;\n\n");
 
     // Suppress ABI_ERROR_PANIC lint if no panics — always included.
-    out.push_str("// ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC used in generated wrappers below.\n");
+    out.push_str(
+        "// ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC used in generated wrappers below.\n",
+    );
     out.push_str("#[allow(unused_imports)]\n");
     out.push_str("use polyplug_guest::ABI_OK as _ABI_OK_USED;\n\n");
 
@@ -305,10 +300,16 @@ fn generate_guest_vtables_file(
     out.push_str("#[repr(transparent)]\n");
     out.push_str("pub struct FnPtr(pub *const ());\n");
     out.push_str("// SAFETY: FnPtr wraps a 'static function pointer. Function pointers are safe\n");
-    out.push_str("// to share across threads — the function itself handles its own synchronization.\n");
+    out.push_str(
+        "// to share across threads — the function itself handles its own synchronization.\n",
+    );
     out.push_str("unsafe impl Send for FnPtr {}\n");
-    out.push_str("// SAFETY: Function pointers are inherently Sync — multiple threads may call the\n");
-    out.push_str("// same function concurrently. The underlying data is read-only 'static memory.\n");
+    out.push_str(
+        "// SAFETY: Function pointers are inherently Sync — multiple threads may call the\n",
+    );
+    out.push_str(
+        "// same function concurrently. The underlying data is read-only 'static memory.\n",
+    );
     out.push_str("unsafe impl Sync for FnPtr {}\n\n");
 
     for contract in &ir.contracts {
@@ -346,24 +347,43 @@ fn generate_guest_contract_vtable(
 
     // ABI wrapper functions
     for func in &contract.functions {
-        generate_guest_abi_wrapper(out, func, &lower, &upper, &struct_name, &trait_name, contract)?;
+        generate_guest_abi_wrapper(
+            out,
+            func,
+            &lower,
+            &upper,
+            &struct_name,
+            &trait_name,
+            contract,
+        )?;
     }
 
     // FnPtr array
-    out.push_str(&format!("static {upper}_FNS: [FnPtr; {fn_count}_usize] = [\n"));
+    out.push_str(&format!(
+        "static {upper}_FNS: [FnPtr; {fn_count}_usize] = [\n"
+    ));
     for func in &contract.functions {
-        out.push_str(&format!("    FnPtr({lower}_{}_abi as *const ()),\n", func.name));
+        out.push_str(&format!(
+            "    FnPtr({lower}_{}_abi as *const ()),\n",
+            func.name
+        ));
     }
     out.push_str("];\n\n");
 
     // Static PluginVTable
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
-    out.push_str(&format!("pub(crate) static {upper}_VTABLE: PluginVTable = PluginVTable {{\n"));
+    out.push_str(&format!(
+        "pub(crate) static {upper}_VTABLE: PluginVTable = PluginVTable {{\n"
+    ));
     out.push_str(&format!("    contract_id: {upper}_CONTRACT_ID,\n"));
-    out.push_str(&format!("    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"));
+    out.push_str(&format!(
+        "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
+    ));
     out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
-    out.push_str(&format!("    functions: {upper}_FNS.as_ptr() as *const *const (),\n"));
+    out.push_str(&format!(
+        "    functions: {upper}_FNS.as_ptr() as *const *const (),\n"
+    ));
     out.push_str("};\n\n");
 
     Ok(())
@@ -381,13 +401,26 @@ fn generate_guest_abi_wrapper(
 ) -> Result<(), CodegenError> {
     let wrapper_name: String = format!("{contract_lower}_{}_abi", func.name);
     let has_return: bool = func.returns.is_some();
-    let out_param: &str = if has_return { "out: *mut ()" } else { "_out: *mut ()" };
+    let out_param: &str = if has_return {
+        "out: *mut ()"
+    } else {
+        "_out: *mut ()"
+    };
 
-    out.push_str(&format!("/// ABI wrapper for {} (function_id = {}).\n", func.name, func.function_id));
-    out.push_str("// SAFETY: args and out pointers are validated by the host runtime ABI contract.\n");
-    out.push_str(&format!("extern \"C\" fn {wrapper_name}(args: *const (), {out_param}) -> AbiError {{\n"));
+    out.push_str(&format!(
+        "/// ABI wrapper for {} (function_id = {}).\n",
+        func.name, func.function_id
+    ));
+    out.push_str(
+        "// SAFETY: args and out pointers are validated by the host runtime ABI contract.\n",
+    );
+    out.push_str(&format!(
+        "extern \"C\" fn {wrapper_name}(args: *const (), {out_param}) -> AbiError {{\n"
+    ));
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
-    out.push_str(&format!("        let impl_ref: &Box<dyn {trait_name}> = match {contract_upper}_IMPL.get() {{\n"));
+    out.push_str(&format!(
+        "        let impl_ref: &Box<dyn {trait_name}> = match {contract_upper}_IMPL.get() {{\n"
+    ));
     out.push_str("            Some(i) => i,\n");
     out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },\n");
     out.push_str("        };\n");
@@ -411,12 +444,16 @@ fn generate_guest_abi_wrapper(
         ));
         out.push_str("                AbiError::ok()\n");
         out.push_str("            }\n");
-        out.push_str("            Err(e) => AbiError { code: e.code, message: StringView::null() },\n");
+        out.push_str(
+            "            Err(e) => AbiError { code: e.code, message: StringView::null() },\n",
+        );
         out.push_str("        }\n");
     } else {
         out.push_str("        match result {\n");
         out.push_str("            Ok(()) => AbiError::ok(),\n");
-        out.push_str("            Err(e) => AbiError { code: e.code, message: StringView::null() },\n");
+        out.push_str(
+            "            Err(e) => AbiError { code: e.code, message: StringView::null() },\n",
+        );
         out.push_str("        }\n");
     }
 
@@ -430,11 +467,7 @@ fn generate_guest_abi_wrapper(
 }
 
 /// Emit the trait call inside the ABI wrapper.
-fn emit_guest_wrapper_call(
-    out: &mut String,
-    func: &ResolvedFunction,
-    contract_struct: &str,
-) {
+fn emit_guest_wrapper_call(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
     if func.params.is_empty() {
         out.push_str("        // SAFETY: no args for this function.\n");
         out.push_str("        let _ = args;\n");
@@ -511,9 +544,13 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("/// # Safety\n");
     out.push_str("/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n");
     out.push_str("#[unsafe(no_mangle)]\n");
-    out.push_str("pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n");
+    out.push_str(
+        "pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n",
+    );
     out.push_str("    if registrar.is_null() {\n");
-    out.push_str("        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n");
+    out.push_str(
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
+    );
     out.push_str("    }\n");
     out.push_str("    // SAFETY: registrar is non-null and valid per ABI contract.\n");
     out.push_str("    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };\n\n");
@@ -537,20 +574,12 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
         out.push_str(&format!(
             "        contract_name: StringView {{ ptr: b\"{contract_name}\".as_ptr(), len: {contract_name_len}_usize }},\n"
         ));
-        out.push_str(&format!(
-            "        version_major: {major}_u32,\n"
-        ));
-        out.push_str(&format!(
-            "        version_minor: {minor}_u32,\n"
-        ));
-        out.push_str(&format!(
-            "        version_patch: {patch}_u32,\n"
-        ));
+        out.push_str(&format!("        version_major: {major}_u32,\n"));
+        out.push_str(&format!("        version_minor: {minor}_u32,\n"));
+        out.push_str(&format!("        version_patch: {patch}_u32,\n"));
         out.push_str("    };\n");
         out.push_str("    // SAFETY: desc and vtable are 'static.\n");
-        out.push_str(&format!(
-            "    let err_{upper}: AbiError = unsafe {{\n"
-        ));
+        out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
         out.push_str(&format!(
             "        (reg.register_plugin)(registrar, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const PluginVTable)\n"
         ));

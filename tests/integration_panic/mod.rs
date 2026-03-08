@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
+use polyplug_runtime::abi::ABI_ERROR_PANIC;
 use polyplug_runtime::abi::AbiError;
 use polyplug_runtime::abi::PluginDescriptor;
 use polyplug_runtime::abi::PluginRegistrar;
 use polyplug_runtime::abi::PluginVTable;
 use polyplug_runtime::abi::StringView;
-use polyplug_runtime::abi::ABI_ERROR_PANIC;
 
 // ─── Registrar callback that stores the vtable pointer ───────────────────────
 

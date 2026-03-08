@@ -6,12 +6,12 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplug_runtime::abi::ABI_OK;
 use polyplug_runtime::abi::AbiError;
 use polyplug_runtime::abi::PluginDescriptor;
 use polyplug_runtime::abi::PluginRegistrar;
 use polyplug_runtime::abi::PluginVTable;
 use polyplug_runtime::abi::StringView;
-use polyplug_runtime::abi::ABI_OK;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
