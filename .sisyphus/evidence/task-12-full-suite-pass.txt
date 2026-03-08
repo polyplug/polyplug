@@ -1,0 +1,93 @@
+
+running 30 tests
+test abi::tests::abi_error_ok ... ok
+test abi::tests::contract_id_canonical_format ... ok
+test abi::tests::fnv1a_known_values ... ok
+test abi::tests::layout_buffer ... ok
+test abi::tests::layout_abi_error ... ok
+test abi::tests::layout_extension_entry ... ok
+test abi::tests::layout_host_vtable ... ok
+test abi::tests::layout_plugin_descriptor ... ok
+test abi::tests::layout_plugin_handle ... ok
+test abi::tests::layout_plugin_registrar ... ok
+test abi::tests::layout_plugin_vtable ... ok
+test abi::tests::layout_runtime_config ... ok
+test abi::tests::layout_string_view ... ok
+test abi::tests::plugin_handle_null ... ok
+test allocator::tests::alloc_and_free_basic ... ok
+test allocator::tests::alloc_invalid_align_returns_null ... ok
+test allocator::tests::alloc_zero_size_returns_null ... ok
+test allocator::tests::free_null_is_noop ... ok
+test graph::tests::cycle_detection ... ok
+test graph::tests::topological_sort_no_deps ... ok
+test graph::tests::unsatisfied_capability_error ... ok
+test graph::tests::topological_sort_with_dependency ... ok
+test loader::tests::loader_module_compiles ... ok
+test registry::tests::collision_detection ... ok
+test registry::tests::duplicate_provider_rejected ... ok
+test registry::tests::register_and_find ... ok
+test registry::tests::resolve_returns_vtable_pointer ... ok
+test registry::tests::stale_handle_detection ... ok
+test runtime::tests::abi_ok_constant ... ok
+test runtime::tests::builder_creates_runtime ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test fnv1a_algorithm_stability ... ok
+test fnv1a_contract_id_image_decode ... ok
+test fnv1a_contract_id_test_add ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test test_cpp_plugin_dispatch ... ok
+test test_cpp_codegen_files_exist ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 1 test
+test test_rust_codegen_compile_and_run ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+
+running 3 tests
+test test_dispatch_add_function ... ok
+test test_dispatch_add_with_zero ... ok
+test test_dispatch_add_wrapping_overflow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test test_duplicate_registration_is_rejected ... ok
+test test_multi_lookup_consistent ... ok
+test test_single_contract_registration_and_lookup ... ok
+test test_stale_handle_detected_after_explicit_construction ... ok
+test test_unknown_contract_returns_not_found ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test test_init_registers_vtable ... ok
+test test_load_and_abi_version ... ok
+test test_missing_symbol_returns_error ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test test_panic_returns_abi_error_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

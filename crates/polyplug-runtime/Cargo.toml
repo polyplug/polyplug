@@ -32,3 +32,15 @@ path = "../../tests/integration_graph/mod.rs"
 [[test]]
 name = "fnv1a_compat"
 path = "../../tests/fnv1a_compat/mod.rs"
+
+[[test]]
+name = "integration_panic"
+path = "../../tests/integration_panic/mod.rs"
+
+[[test]]
+name = "integration_codegen_rust"
+path = "../../tests/integration_codegen_rust/mod.rs"
+
+[[test]]
+name = "integration_codegen_cpp"
+path = "../../tests/integration_codegen_cpp/mod.rs"

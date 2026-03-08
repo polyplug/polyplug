@@ -1,0 +1,323 @@
+//! Integration test: run polyplugc to generate Rust bindings, compile them as a
+//! cdylib, load with libloading, dispatch `add(3, 5)` through the vtable, assert == 8.
+//!
+//! This test crate is the crate root for the `integration_codegen_rust` test binary.
+//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
+
+#![allow(clippy::expect_used)]
+
+use polyplug_runtime::abi::AbiError;
+use polyplug_runtime::abi::PluginDescriptor;
+use polyplug_runtime::abi::PluginRegistrar;
+use polyplug_runtime::abi::PluginVTable;
+use polyplug_runtime::abi::StringView;
+use polyplug_runtime::abi::ABI_OK;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+use std::process::Output;
+
+// ─── Helper: compile target dir ──────────────────────────────────────────────
+
+/// Workspace root resolved from `CARGO_MANIFEST_DIR` (`crates/polyplug-runtime`).
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("parent of crates/polyplug-runtime")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
+}
+
+/// Platform-specific shared library filename for the generated plugin.
+fn so_filename() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "libcodegen_rust_test_plugin.dylib"
+    } else if cfg!(target_os = "windows") {
+        "codegen_rust_test_plugin.dll"
+    } else {
+        "libcodegen_rust_test_plugin.so"
+    }
+}
+
+// ─── Helper: run polyplugc ────────────────────────────────────────────────────
+
+/// Run `polyplugc generate --api <api_toml> --lang rust --out <out_dir>`.
+/// Returns the `Output` for inspection.
+fn run_polyplugc(api_toml: &Path, out_dir: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_polyplugc"))
+        .arg("generate")
+        .arg("--api")
+        .arg(api_toml)
+        .arg("--lang")
+        .arg("rust")
+        .arg("--out")
+        .arg(out_dir)
+        .output()
+        .expect("failed to spawn polyplugc")
+}
+
+// ─── Helper: write Cargo.toml for the generated cdylib ───────────────────────
+
+/// Write a `Cargo.toml` for a cdylib crate that depends on `polyplug-guest`.
+fn write_plugin_cargo_toml(crate_dir: &Path, guest_lib_path: &Path) {
+    let content: String = format!(
+        r#"[package]
+name    = "codegen_rust_test_plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name      = "codegen_rust_test_plugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+polyplug-guest = {{ path = "{}" }}
+
+[workspace]
+"#,
+        guest_lib_path.display()
+    );
+    let cargo_toml_path: PathBuf = crate_dir.join("Cargo.toml");
+    std::fs::write(&cargo_toml_path, content).expect("failed to write plugin Cargo.toml");
+}
+
+// ─── Helper: write src/lib.rs for the generated cdylib ───────────────────────
+
+/// Write a `src/lib.rs` that:
+///   - Declares generated modules (types, contracts, vtables) but NOT init.
+///   - Defines `MyPlugin` and implements `TestAddPlugin`.
+///   - Exports a custom `polyplug_init` that sets `TEST_ADD_IMPL` then registers the vtable.
+fn write_plugin_lib_rs(src_dir: &Path) {
+    let content: &str = r#"// THIS FILE IS WRITTEN BY integration_codegen_rust TEST — DO NOT EDIT BY HAND
+
+mod types;
+mod contracts;
+mod vtables;
+
+#[allow(unused_imports)]
+use polyplug_guest::ABI_ERROR_GENERIC;
+use polyplug_guest::AbiError;
+use polyplug_guest::PluginDescriptor;
+use polyplug_guest::PluginError;
+use polyplug_guest::PluginRegistrar;
+use polyplug_guest::StringView;
+use contracts::TestAddPlugin;
+use types::AddArgs;
+use vtables::TEST_ADD_IMPL;
+use vtables::TEST_ADD_VTABLE;
+
+struct MyPlugin;
+
+impl TestAddPlugin for MyPlugin {
+    fn add(&self, args: &AddArgs) -> Result<u32, PluginError> {
+        Ok(args.a.wrapping_add(args.b))
+    }
+
+    fn add_primitive(&self, a: u32, b: u32) -> Result<u32, PluginError> {
+        Ok(a.wrapping_add(b))
+    }
+
+    fn version(&self) -> Result<StringView, PluginError> {
+        Ok(StringView { ptr: b"1.0.0".as_ptr(), len: 5_usize })
+    }
+
+    fn reset(&self) -> Result<(), PluginError> {
+        Ok(())
+    }
+}
+
+
+/// # Safety
+/// `registrar` must be a valid non-null pointer to a `PluginRegistrar`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
+    // Set the OnceLock impl before any vtable function can be called.
+    TEST_ADD_IMPL.get_or_init(|| Box::new(MyPlugin));
+
+    if registrar.is_null() {
+        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+    }
+
+    // SAFETY: registrar is non-null and valid per ABI contract.
+    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
+
+    let desc: PluginDescriptor = PluginDescriptor {
+        name: StringView { ptr: b"codegen_test_plugin".as_ptr(), len: 19_usize },
+        contract_name: StringView { ptr: b"test.add".as_ptr(), len: 8_usize },
+        version_major: 1_u32,
+        version_minor: 0_u32,
+        version_patch: 0_u32,
+    };
+
+    // SAFETY: desc and TEST_ADD_VTABLE are 'static; registrar is valid.
+    unsafe {
+        (reg.register_plugin)(
+            registrar,
+            &desc as *const PluginDescriptor,
+            &TEST_ADD_VTABLE as *const _,
+        )
+    }
+}
+"#;
+    let lib_rs_path: PathBuf = src_dir.join("lib.rs");
+    std::fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
+}
+
+// ─── Registrar callback capturing the vtable pointer ─────────────────────────
+
+// Captured vtable pointer from the registrar callback, stored in a thread-local.
+std::thread_local! {
+    static CAPTURED_VTABLE: core::cell::Cell<*const PluginVTable> =
+        const { core::cell::Cell::new(core::ptr::null()) };
+}
+
+/// Registrar callback that captures the vtable pointer into `CAPTURED_VTABLE`.
+///
+/// # Safety
+/// `descriptor` and `vtable` must be valid for the duration of the call.
+unsafe extern "C" fn capture_vtable_callback(
+    _registrar: *mut PluginRegistrar,
+    _descriptor: *const PluginDescriptor,
+    vtable: *const PluginVTable,
+) -> AbiError {
+    CAPTURED_VTABLE.with(|cell| cell.set(vtable));
+    AbiError {
+        code: ABI_OK,
+        message: StringView::null(),
+    }
+}
+
+// ─── AddArgs mirrors the generated repr(C) struct ────────────────────────────
+
+/// `AddArgs` — must match generated `types.rs` layout (`#[repr(C)]`).
+#[repr(C)]
+struct AddArgs {
+    a: u32,
+    b: u32,
+}
+
+// ─── Test ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_rust_codegen_compile_and_run() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let tmp_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("codegen_rust_test");
+    let src_dir: PathBuf = tmp_dir.join("src");
+    let api_toml: PathBuf = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("test_api.toml");
+    let guest_lib_path: PathBuf = workspace_root().join("guest-libs").join("rust");
+
+    std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
+
+    // ── 2. Run polyplugc to generate Rust bindings into tmp_dir/src/ ──────────
+    let gen_output: Output = run_polyplugc(&api_toml, &src_dir);
+    assert!(
+        gen_output.status.success(),
+        "polyplugc generate failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&gen_output.stdout),
+        String::from_utf8_lossy(&gen_output.stderr),
+    );
+
+    // ── 3. Write Cargo.toml + src/lib.rs ─────────────────────────────────────
+    write_plugin_cargo_toml(&tmp_dir, &guest_lib_path);
+    write_plugin_lib_rs(&src_dir);
+
+    // ── 4. cargo build --release ──────────────────────────────────────────────
+    let workspace_root_path: PathBuf = workspace_root();
+    let target_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("codegen_rust_build");
+
+    let build_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .arg("--manifest-path")
+        .arg(tmp_dir.join("Cargo.toml"))
+        .current_dir(&workspace_root_path)
+        .status()
+        .expect("failed to spawn cargo build");
+
+    assert!(
+        build_status.success(),
+        "cargo build of generated plugin failed"
+    );
+
+    // ── 5. Locate the compiled .so ────────────────────────────────────────────
+    let so_path: PathBuf = target_dir.join("release").join(so_filename());
+    assert!(
+        so_path.exists(),
+        "compiled .so not found at {}",
+        so_path.display()
+    );
+
+    // ── 6. Load with libloading ───────────────────────────────────────────────
+    // SAFETY: so_path is a compiled cdylib we just built.
+    let library: libloading::Library =
+        unsafe { libloading::Library::new(&so_path).expect("failed to load generated plugin .so") };
+
+    // ── 7. Resolve polyplug_init ──────────────────────────────────────────────
+    // SAFETY: symbol matches expected ABI signature.
+    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+        library
+            .get(b"polyplug_init\0")
+            .expect("polyplug_init symbol not found")
+    };
+
+    // ── 8. Build registrar + call polyplug_init ───────────────────────────────
+    CAPTURED_VTABLE.with(|cell| cell.set(core::ptr::null()));
+
+    let mut registrar: PluginRegistrar = PluginRegistrar {
+        register_plugin: capture_vtable_callback,
+        host: core::ptr::null(),
+    };
+
+    // SAFETY: init_fn is valid; registrar lives for the duration of the call.
+    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+
+    // ── 9. Retrieve the captured vtable ──────────────────────────────────────
+    let vtable_ptr: *const PluginVTable = CAPTURED_VTABLE.with(|cell| cell.get());
+    assert!(
+        !vtable_ptr.is_null(),
+        "vtable pointer must be non-null after polyplug_init"
+    );
+
+    // SAFETY: vtable_ptr is valid — plugin is loaded and library is not yet dropped.
+    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+
+    assert_eq!(
+        vtable.function_count, 4_u32,
+        "test.add vtable must have 4 functions"
+    );
+
+    // ── 10. Dispatch add(3, 5) via function_id 0 ─────────────────────────────
+    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
+    let mut out: u32 = 0_u32;
+
+    // SAFETY: functions[0] is the `add` ABI wrapper with signature
+    //   extern "C" fn(*const (), *mut ()) -> AbiError.
+    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
+    // types are enforced by the test: AddArgs matches what the generated wrapper expects.
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+
+    // SAFETY: args is a valid AddArgs; out is a valid u32 location.
+    let call_result: AbiError = unsafe {
+        dispatch_fn(
+            &args as *const AddArgs as *const (),
+            &mut out as *mut u32 as *mut (),
+        )
+    };
+
+    assert_eq!(call_result.code, ABI_OK, "add(3, 5) must return ABI_OK");
+    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+
+    println!("test_rust_codegen_compile_and_run: add(3, 5) = {} ✓", out);
+
+    // Keep the library alive until after the last call.
+    core::mem::forget(library);
+}

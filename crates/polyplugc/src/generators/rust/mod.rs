@@ -341,7 +341,7 @@ fn generate_guest_contract_vtable(
 
     // OnceLock for the trait object
     out.push_str(&format!(
-        "static {upper}_IMPL: OnceLock<Box<dyn {trait_name}>> = OnceLock::new();\n\n"
+        "pub(crate) static {upper}_IMPL: OnceLock<Box<dyn {trait_name}>> = OnceLock::new();\n\n"
     ));
 
     // ABI wrapper functions
@@ -376,7 +376,7 @@ fn generate_guest_abi_wrapper(
     contract_lower: &str,
     contract_upper: &str,
     contract_struct: &str,
-    _trait_name: &str,
+    trait_name: &str,
     _contract: &ResolvedContract,
 ) -> Result<(), CodegenError> {
     let wrapper_name: String = format!("{contract_lower}_{}_abi", func.name);
@@ -387,7 +387,7 @@ fn generate_guest_abi_wrapper(
     out.push_str("// SAFETY: args and out pointers are validated by the host runtime ABI contract.\n");
     out.push_str(&format!("extern \"C\" fn {wrapper_name}(args: *const (), {out_param}) -> AbiError {{\n"));
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
-    out.push_str(&format!("        let impl_ref: &Box<dyn _> = match {contract_upper}_IMPL.get() {{\n"));
+    out.push_str(&format!("        let impl_ref: &Box<dyn {trait_name}> = match {contract_upper}_IMPL.get() {{\n"));
     out.push_str("            Some(i) => i,\n");
     out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },\n");
     out.push_str("        };\n");

@@ -1,0 +1,10 @@
+
+running 2 tests
+test_cpp_plugin_dispatch: add(10, 20) = 30 ✓
+test test_cpp_plugin_dispatch ... ok
+test_cpp_codegen_files_exist: all 6 files present in /mnt/data/Projects/Utils/polyplug/target/tmp/gen_cpp_codegen ✓
+test_cpp_codegen_files_exist: vtables.hpp compiled successfully ✓
+test test_cpp_codegen_files_exist ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

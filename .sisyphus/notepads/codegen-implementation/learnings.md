@@ -261,3 +261,140 @@
 - `init.rs` contains: `#[unsafe(no_mangle)]` ×2, `polyplug_abi_version`, `polyplug_init`
 - `cargo test -p polyplugc` → 14/14 pass
 - `cargo clippy --workspace -- -D warnings` → zero warnings/errors
+## 2026-03-08 -- Task 9: CppGenerator::generate_guest() rewrite
+
+### What was done
+- Rewrote `CppGenerator::generate_guest()` in `crates/polyplugc/src/generators/cpp/mod.rs`
+- Now emits 5 files: `types.hpp`, `contracts.hpp`, `vtables.hpp`, `init.hpp`, `manifest.toml`
+- Removed old `guest_sdk.hpp` single-file stub
+- Used shared `generate_types_hpp()` helper (already extracted in Task 8) for both host and guest
+
+### New helper functions added
+- `generate_contracts_hpp()` -- emits abstract base class per contract
+- `generate_cpp_guest_contract_class()` -- per-contract abstract class
+- `generate_cpp_guest_abstract_method()` -- per-function pure virtual method
+- `generate_vtables_hpp()` -- ABI wrappers + function pointer arrays + vtable statics
+- `generate_cpp_guest_contract_vtable()` -- per-contract vtable code
+- `generate_cpp_guest_abi_wrapper()` -- per-function noexcept ABI wrapper with try/catch
+- `build_guest_call_expr()` -- builds the impl->fn() call expression with param unpacking
+- `generate_init_hpp()` -- polyplug_init + polyplug_abi_version + impl pointer definitions
+- `generate_init_hpp_register_contract()` -- per-contract registration in polyplug_init
+- `contract_name_to_plugin_class()` -- "test.add" -> "TestAddPlugin"
+- `contract_name_to_lower_snake()` -- "test.add" -> "test_add"
+- `contract_name_to_upper_snake()` -- "test.add" -> "TEST_ADD"
+
+### Key design decisions
+- `contracts.hpp`: abstract base class with `virtual ~T() = default` + pure virtual methods
+- Non-primitive params use `const T&` (reference), primitives use by-value in abstract methods
+- `vtables.hpp`: `extern T* g_{lower}_impl` for impl pointer, `constexpr uint64_t {UPPER}_CONTRACT_ID`
+- ABI wrappers: `inline AbiError ... noexcept` with try/catch(exception) + catch(...)
+- No-param functions: `(void)args;` before call
+- Multi-param functions: inline local struct `struct {FnName}Args { T a; T b; };` + packed cast
+- `init.hpp`: impl pointer definitions (initialized to nullptr) + factory forward decls + `polyplug_init`
+- `init.hpp` uses double namespace blocks (definitions then forward decls) to avoid circular headers
+- ABI_OK used for success; raw `1U` and `3U` with comments for error/panic codes
+
+### Bugs hit and fixed
+1. **Useless format!**: `out.push_str(&format!("// Forward declaration...\n"))` -- clippy rejects format! with no args. Fixed by using bare string literal.
+2. **Include path in task description**: The task says `-I/mnt/data/Projects/Utils/polyplug` but `polyplug/abi.hpp` is in `host-libs/cpp/`. Correct path is `-I.../host-libs/cpp`. The generated headers are valid C++17 with correct paths.
+
+### Verification
+- `cargo run -p polyplugc -- generate --api tests/fixtures/test_api.toml --lang cpp --out /tmp/gen_cpp_guest` -> exit 0
+- Output: `types.hpp`, `contracts.hpp`, `vtables.hpp`, `init.hpp`, `manifest.toml` (+ `host_callers.hpp` from generate_host)
+- `vtables.hpp` contains: 4x `try {`, 4x `catch (const std::exception&`, 4x `catch (...)`, `void* const` array
+- `g++ -std=c++17 -I.../host-libs/cpp -I/tmp/gen_cpp_guest vtables.hpp -c -o /tmp/test_v.o` -> exit 0
+- `cargo test -p polyplugc` -> 18/18 pass (4 new tests added)
+- `cargo clippy --workspace -- -D warnings` -> zero warnings/errors
+- Evidence saved to `.sisyphus/evidence/task-9-*.txt`
+
+## Task 10: integration_codegen_rust test
+
+### Generator Bug Fixed
+- `vtables.rs` generator emitted `dyn _` which is invalid Rust syntax. Fixed in
+  `crates/polyplugc/src/generators/rust/mod.rs` line ~390 to use the actual trait name.
+- `TEST_ADD_IMPL` was `static` (private). Changed to `pub(crate) static` so `lib.rs` can access it.
+
+### CARGO_BIN_EXE_polyplugc cross-crate
+- `CARGO_BIN_EXE_polyplugc` is only available at compile-time for binaries in the same package.
+- For cross-crate tests, emit it from `build.rs` via `cargo:rustc-env=CARGO_BIN_EXE_polyplugc=<path>`.
+- The build.rs computes: `target_dir.join(profile).join("polyplugc")`.
+
+### Workspace collision fix
+- Generated plugin crate inside `CARGO_TARGET_TMPDIR` gets picked up by workspace.
+- Fix: add `[workspace]` table to the generated `Cargo.toml` to declare it standalone.
+
+### polyplug_abi_version duplicate symbol
+- `polyplug_runtime` (cdylib+rlib) exports `#[no_mangle] polyplug_abi_version`.
+- When plugin links `polyplug-guest -> polyplug-runtime` as rlib, the symbol is included.
+- Do NOT define `polyplug_abi_version` in the plugin's `lib.rs`; rely on the one from runtime.
+
+### OnceLock access pattern
+- Generated `init.rs` defines `polyplug_init` but does NOT set `TEST_ADD_IMPL`.
+- Plugin's custom `polyplug_init` must call `TEST_ADD_IMPL.get_or_init(|| Box::new(MyPlugin))` first.
+- Skip `mod init;` entirely — define your own `polyplug_init` in `lib.rs`.
+
+### Thread-local clippy rules
+- Use `const {}` initializer in `thread_local!` for const-evaluable values.
+- Use `core::cell::Cell` not `std::cell::Cell` (clippy `std_instead_of_core`).
+
+## Task 11: integration_panic test
+
+### catch_unwind ABI pattern verified
+- The generated `vtables.rs` wraps every ABI function with `std::panic::catch_unwind(std::panic::AssertUnwindSafe(...))` INSIDE the `extern "C"` function
+- When the plugin panics, the host receives `AbiError { code: 3 (ABI_ERROR_PANIC), message: "plugin panicked" }` instead of process abort
+- Test confirmed: `thread '<unnamed>' panicked... intentional test panic` appears in stderr, but process continues and test returns `ok`
+
+### Symbol conflict with polyplug-runtime cdylib
+- `polyplug-runtime` has `crate-type = ["cdylib", "rlib"]` and defines `#[unsafe(no_mangle)] polyplug_abi_version` in its lib.rs
+- When linking a cdylib that depends on polyplug-runtime as rlib, the `#[no_mangle]` symbol from the rlib gets included in the output cdylib
+- DO NOT also define `polyplug_abi_version` in the plugin lib.rs — it creates a duplicate symbol linker error
+- FIX: Let polyplug-runtime's rlib provide `polyplug_abi_version`; only write `polyplug_init` in the plugin
+
+### Generated code visibility
+- `TEST_PANIC_IMPL` is `pub(crate)` in the generated vtables.rs (accessible from crate root lib.rs)
+- `TEST_PANIC_VTABLE` is also `pub(crate)` 
+- Use `use vtables::TEST_PANIC_IMPL;` from the crate root (lib.rs is the crate root, vtables is a submodule — pub(crate) works)
+
+### Cargo.toml for test plugin cdylib
+- Only add `polyplug-guest` as dep (NOT `polyplug-runtime` directly)
+- polyplug-guest already re-exports everything needed
+- Adding polyplug-runtime directly causes duplicate `polyplug_abi_version` symbol
+
+### String literals in test templates
+- Use `concat!(...)` or `format!()` with `\n` escapes for multi-line string templates
+- Avoid `r#"..."#` raw strings when the content contains Rust code with backslash escapes — raw strings preserve literal backslashes which causes issues
+
+### Module naming (test.panic → TestPanicPlugin)
+- Contract "test.panic" → upper snake "TEST_PANIC", lower snake "test_panic", trait "TestPanicPlugin"
+- The generated `TEST_PANIC_IMPL` OnceLock must be initialized with `get_or_init` before any vtable function is called
+- `get_or_init` is safe to call multiple times (returns existing value if already set)
+
+## 2026-03-08 — Task 12: integration_codegen_cpp test
+
+### What was done
+- Created `tests/integration_codegen_cpp/mod.rs` — 300 lines, two tests
+- Added `[[test]]` entry to `crates/polyplug-runtime/Cargo.toml`
+
+### Part A: test_cpp_codegen_files_exist
+- Runs `polyplugc generate --api test_api.toml --lang cpp --out <tmpdir>`
+- Asserts exit 0 and all 6 files exist: `types.hpp`, `contracts.hpp`, `vtables.hpp`, `init.hpp`, `host_callers.hpp`, `manifest.toml`
+- Attempts `g++ -std=c++17 -I<host-libs/cpp> -I<out> vtables.hpp -c -o <obj>` — skips gracefully if g++ not found
+- On this system: g++ was available, vtables.hpp compiled successfully ✓
+
+### Part B: test_cpp_plugin_dispatch
+- Uses `TEST_PLUGIN_CPP_SO` env var (set by build.rs, empty if g++ unavailable)
+- Loads C++ plugin via libloading, calls `polyplug_init`, retrieves vtable
+- Dispatches `add(10, 20)` through `vtable.functions[0]` → asserts result == 30 ✓
+- Used separate thread-local `CPP_DISPATCH_REGISTRY` to avoid name collision with integration_dispatch tests
+
+### Key differences from integration_dispatch/mod.rs
+- Thread-local named `CPP_DISPATCH_REGISTRY` (not `DISPATCH_REGISTRY`) to avoid any potential static conflict
+- Loads `TEST_PLUGIN_CPP_SO` (not `TEST_PLUGIN_SO`)
+- Args: `AddArgs { a: 10, b: 20 }`, expected result: 30 (not 8)
+- Contract id: `0xCC4232FAB0410D2B_u64` (same as Rust test plugin)
+- vtable.function_count = 1 (C++ test plugin has only 1 function, not 4 like generated Rust)
+
+### Verification
+- `cargo test -p polyplug-runtime --test integration_codegen_cpp -- --nocapture` → 2/2 PASS
+- `cargo test -p polyplug-runtime` → all suites pass (30 unit + all integration)
+- Evidence saved to `.sisyphus/evidence/task-12-*.txt`

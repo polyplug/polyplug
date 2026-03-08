@@ -1,0 +1,6 @@
+[[contract]]
+name = "test.panic"
+version = "1.0.0"
+
+[[contract.functions]]
+name = "do_panic"

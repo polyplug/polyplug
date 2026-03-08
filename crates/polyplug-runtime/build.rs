@@ -99,6 +99,25 @@ fn main() {
     //   env!("TEST_PLUGIN_SO")
     println!("cargo:rustc-env=TEST_PLUGIN_SO={}", dest_so.display());
 
+    // Emit polyplugc binary path so integration tests can use env!("CARGO_BIN_EXE_polyplugc").
+    // polyplugc lives in the same workspace target directory.
+    let polyplugc_filename: &str = if cfg!(target_os = "windows") {
+        "polyplugc.exe"
+    } else {
+        "polyplugc"
+    };
+    // Determine the profile name from OUT_DIR. OUT_DIR is:
+    //   <target>/<profile>/build/<crate>-<hash>/out
+    // We want <target>/<profile>/polyplugc.
+    let profile: &str = if out_dir.components().any(|c| c.as_os_str() == "release") {
+        "release"
+    } else {
+        "debug"
+    };
+    let polyplugc_path: PathBuf = target_dir.join(profile).join(polyplugc_filename);
+    println!("cargo:rustc-env=CARGO_BIN_EXE_polyplugc={}", polyplugc_path.display());
+    println!("cargo:rerun-if-changed=../../crates/polyplugc/src");
+
     // ─── C++ test plugin compilation ─────────────────────────────────────────────────
     println!("cargo:rerun-if-changed=crates/polyplug-runtime/build.rs");
 
