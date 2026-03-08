@@ -357,8 +357,15 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     // Shared imports
     out.push_str("use std::sync::OnceLock;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
+    out.push_str("use polyplug_guest::PluginVTable;\n");
+    out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("#[allow(unused_imports)]\n");
     out.push_str("use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};\n");
+    out.push_str("use super::types::*;\n");
+    for contract in &ir.contracts {
+        let trait_name: String = contract_name_to_guest_trait(&contract.name);
+        out.push_str(&format!("use super::contracts::{trait_name};\n"));
+    }
 
     // FnPtr newtype — emitted once
     out.push_str("/// Wrapper for a function pointer stored in a static vtable array.\n");
