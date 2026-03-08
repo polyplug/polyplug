@@ -18,6 +18,9 @@ pub enum RuntimeError {
     Allocator(#[from] AllocatorError),
 }
 
+/// Convenience alias — the public API surface uses this name.
+pub type PolyplugError = RuntimeError;
+
 /// Errors from the bundle loading phase.
 #[derive(Debug, Error)]
 pub enum LoaderError {
@@ -43,6 +46,29 @@ pub enum LoaderError {
 
     #[error("manifest parse error for `{path}`: {reason}")]
     ManifestParse { path: String, reason: String },
+
+    #[error(
+        "duplicate loader for runtime \"{runtime_name}\": \
+         a loader for this runtime is already registered"
+    )]
+    DuplicateLoader { runtime_name: String },
+
+    #[error(
+        "bundle \"{bundle}\" requires runtime \"{runtime_name}\" \
+         but no loader is registered for runtime \"{runtime_name}\".\n\
+         Add polyplug-{runtime_name} as a dependency and register \
+         the loader at init."
+    )]
+    NoLoaderForRuntime {
+        bundle: String,
+        runtime_name: String,
+    },
+
+    #[error(
+        "runtime \"{runtime_name}\" is not yet implemented \
+         (this adapter crate is a stub)"
+    )]
+    RuntimeNotImplemented { runtime_name: String },
 }
 
 /// Errors from the plugin registry.

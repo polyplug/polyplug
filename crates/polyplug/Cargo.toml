@@ -13,6 +13,8 @@ crate-type = ["cdylib", "rlib"]
 thiserror  = { workspace = true }
 libloading = { workspace = true }
 petgraph   = { workspace = true }
+serde      = { workspace = true }
+toml       = { workspace = true }
 
 [lints]
 workspace = true
@@ -57,8 +59,16 @@ path = "../../tests/stress_error/mod.rs"
 name = "stress_memory"
 path = "../../tests/stress_memory/mod.rs"
 
+[[test]]
+name = "integration_loader_dispatch"
+path = "../../tests/integration_loader_dispatch/mod.rs"
+
 [dev-dependencies]
-criterion = { workspace = true }
+criterion          = { workspace = true }
+polyplug-dotnet    = { path = "../../crates/polyplug-dotnet" }
+polyplug-python    = { path = "../../crates/polyplug-python" }
+polyplug-lua       = { path = "../../crates/polyplug-lua" }
+toml               = { workspace = true }
 
 [[bench]]
 name    = "vtable_dispatch"
