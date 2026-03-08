@@ -3,6 +3,8 @@
 //! These functions are exported with C linkage and used by all plugins
 //! to allocate memory that crosses the plugin/host boundary.
 
+pub mod tracking;
+
 use core::alloc::GlobalAlloc;
 use core::alloc::Layout;
 use std::alloc::System;

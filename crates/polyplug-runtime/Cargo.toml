@@ -48,3 +48,10 @@ path = "../../tests/integration_codegen_cpp/mod.rs"
 [[test]]
 name = "smoke"
 path = "../../tests/smoke/mod.rs"
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name    = "vtable_dispatch"
+harness = false

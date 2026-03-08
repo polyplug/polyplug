@@ -99,6 +99,81 @@ fn main() {
     //   env!("TEST_PLUGIN_SO")
     println!("cargo:rustc-env=TEST_PLUGIN_SO={}", dest_so.display());
 
+    // ─── memory_plugin build ──────────────────────────────────────────────────
+    // Re-run if memory_plugin sources change.
+    println!("cargo:rerun-if-changed=tests/fixtures/memory_plugin/src/lib.rs");
+    println!("cargo:rerun-if-changed=tests/fixtures/memory_plugin/Cargo.toml");
+
+    // Build memory_plugin as a release cdylib via cargo.
+    let memory_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--package")
+        .arg("memory_plugin")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .current_dir(&workspace_root)
+        .status()
+        .expect("failed to run cargo build for memory_plugin");
+
+    if !memory_status.success() {
+        panic!("cargo build -p memory_plugin failed with status: {}", memory_status);
+    }
+
+    let memory_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libmemory_plugin.dylib"
+    } else if cfg!(target_os = "windows") {
+        "memory_plugin.dll"
+    } else {
+        "libmemory_plugin.so"
+    };
+
+    let built_memory_so: PathBuf = target_dir.join("release").join(memory_lib_filename);
+    let dest_memory_so: PathBuf = fixtures_dir.join(memory_lib_filename);
+    fs::copy(&built_memory_so, &dest_memory_so).unwrap_or_else(|e| {
+        panic!("failed to copy memory_plugin .so: {}", e)
+    });
+
+    println!("cargo:rustc-env=MEMORY_PLUGIN_SO={}", dest_memory_so.display());
+
+
+    // ─── error_plugin build ──────────────────────────────────────────────────
+    // Re-run if error_plugin sources change.
+    println!("cargo:rerun-if-changed=tests/fixtures/error_plugin/src/lib.rs");
+    println!("cargo:rerun-if-changed=tests/fixtures/error_plugin/Cargo.toml");
+
+    // Build error_plugin as a release cdylib via cargo.
+    let error_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--package")
+        .arg("error_plugin")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .current_dir(&workspace_root)
+        .status()
+        .expect("failed to run cargo build for error_plugin");
+
+    if !error_status.success() {
+        panic!("cargo build -p error_plugin failed with status: {}", error_status);
+    }
+
+    let error_lib_filename: &str = if cfg!(target_os = "macos") {
+        "liberror_plugin.dylib"
+    } else if cfg!(target_os = "windows") {
+        "error_plugin.dll"
+    } else {
+        "liberror_plugin.so"
+    };
+
+    let built_error_so: PathBuf = target_dir.join("release").join(error_lib_filename);
+    let dest_error_so: PathBuf = fixtures_dir.join(error_lib_filename);
+    fs::copy(&built_error_so, &dest_error_so).unwrap_or_else(|e| {
+        panic!("failed to copy error_plugin .so: {}", e)
+    });
+
+    println!("cargo:rustc-env=ERROR_PLUGIN_SO={}", dest_error_so.display());
+
     // Emit polyplugc binary path so integration tests can use env!("CARGO_BIN_EXE_polyplugc").
     // polyplugc lives in the same workspace target directory.
     let polyplugc_filename: &str = if cfg!(target_os = "windows") {

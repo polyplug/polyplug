@@ -14,6 +14,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::abi::ABI_FUNCTION_NOT_AVAIL;
 use crate::abi::AbiError;
@@ -26,6 +27,23 @@ use crate::error::RegistryError;
 use crate::error::RuntimeError;
 use crate::loader::LoadedBundle;
 use crate::registry::Registry;
+
+// ─── Global registry for cross-plugin dispatch ───────────────────────────────
+
+static GLOBAL_REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
+
+/// Set the global registry used by `host_find_plugin` and `host_call_plugin`.
+/// If the registry has already been set, this call is a no-op (OnceLock semantics).
+pub fn set_global_registry(registry: Arc<Registry>) {
+    // OnceLock::set returns Err(value) when already set — expected behaviour after
+    // the first RuntimeBuilder::build() call. Silently ignore.
+    let _: Result<(), Arc<Registry>> = GLOBAL_REGISTRY.set(registry);
+}
+
+/// Return the global registry for dispatching, or `None` if not yet initialised.
+pub(crate) fn global_registry() -> Option<Arc<Registry>> {
+    GLOBAL_REGISTRY.get().cloned()
+}
 
 /// The runtime instance. Thread-safe — implements `Send + Sync`.
 //
@@ -73,10 +91,13 @@ impl RuntimeBuilder {
     //  Full capability graph resolution is a future enhancement.
     pub fn build(self) -> Result<Runtime, RuntimeError> {
         let registry: Arc<Registry> = Arc::new(Registry::new());
+
+        // Wire the global dispatcher before leaking the HostVTable.
+        set_global_registry(Arc::clone(&registry));
+
         let bundles: Vec<LoadedBundle> = Vec::new();
 
         // Build the static HostVTable. This must be 'static.
-        // We use Box::leak to give it 'static lifetime.
         let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
             alloc: polyplug_host_alloc,
             // SAFETY: polyplug_host_free is unsafe extern C — we store its pointer for the vtable.
@@ -86,10 +107,7 @@ impl RuntimeBuilder {
             get_extension: host_get_extension,
         }));
 
-        // TODO: In full implementation, iterate plugin_dirs, scan for bundles,
-        // build capability graph, topological sort, call load_bundle() for each.
-        // For MVP scaffold, the registry starts empty.
-        let _ = &self.plugin_dirs; // suppress unused warning
+        let _ = &self.plugin_dirs;
 
         Ok(Runtime {
             registry,
@@ -182,8 +200,13 @@ impl Runtime {
 // SAFETY: This function is called by plugin code through the HostVTable function
 // pointer. The caller (generated plugin code) ensures the calling convention is
 // correct. The function body is entirely safe — no unsafe operations are performed.
-unsafe extern "C" fn host_find_plugin(_contract_id: u64, _min_version: u32) -> PluginHandle {
-    PluginHandle::null()
+// SAFETY: This function is called by plugin code through the HostVTable.
+// Returns PluginHandle::null() when registry not set or plugin not found — never panics.
+unsafe extern "C" fn host_find_plugin(contract_id: u64, min_version: u32) -> PluginHandle {
+    match global_registry() {
+        Some(reg) => reg.find(contract_id, min_version).unwrap_or(PluginHandle::null()),
+        None => PluginHandle::null(),
+    }
 }
 
 /// HostVTable.call_plugin callback.
@@ -191,17 +214,40 @@ unsafe extern "C" fn host_find_plugin(_contract_id: u64, _min_version: u32) -> P
 // SAFETY: This function is called by plugin code through the HostVTable function
 // pointer. The caller ensures the calling convention matches the extern "C" ABI.
 // The function body is entirely safe — no unsafe operations are performed.
+// SAFETY: This function is called by plugin code through the HostVTable.
+// args and out must point to valid memory per the function's ABI contract.
 unsafe extern "C" fn host_call_plugin(
-    _plugin: PluginHandle,
-    _fn_id: u32,
-    _args: *const (),
-    _out: *mut (),
+    plugin: PluginHandle,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
 ) -> AbiError {
-    // For MVP: stub returning not-found.
-    // Full implementation: dispatch through global runtime registry.
-    AbiError {
-        code: crate::abi::ABI_ERROR_NOT_FOUND,
-        message: crate::abi::StringView::null(),
+    match global_registry() {
+        Some(reg) => {
+            let vtable_ptr: *const PluginVTable = match reg.resolve(plugin) {
+                Ok(p) => p,
+                Err(e) => return registry_error_to_abi_error(e),
+            };
+            // SAFETY: vtable_ptr is 'static (library never dropped, §7.3).
+            let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+            if fn_id >= vtable.function_count {
+                return AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: crate::abi::StringView::null(),
+                };
+            }
+            // SAFETY: fn_id < function_count validated above.
+            let fn_ptr: *const () = unsafe { *vtable.functions.add(fn_id as usize) };
+            // SAFETY: Transmuted to generic dispatch signature; types enforced by generated callers.
+            let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                unsafe { core::mem::transmute(fn_ptr) };
+            // SAFETY: args and out are valid per ABI contract.
+            unsafe { dispatch_fn(args, out) }
+        }
+        None => AbiError {
+            code: crate::abi::ABI_ERROR_NOT_FOUND,
+            message: crate::abi::StringView::null(),
+        },
     }
 }
 
@@ -247,5 +293,14 @@ mod tests {
     #[test]
     fn abi_ok_constant() {
         assert_eq!(crate::abi::ABI_OK, 0_u32);
+    }
+
+    #[test]
+    fn dispatcher_graceful_degradation_when_no_registry() {
+        // contract_id=0 won't match any registered plugin regardless of whether
+        // GLOBAL_REGISTRY is set.
+        // SAFETY: host_find_plugin has no pointer preconditions — args are plain integers.
+        let handle: PluginHandle = unsafe { host_find_plugin(0_u64, 0_u32) };
+        assert!(handle.is_null(), "host_find_plugin must return null when plugin not found");
     }
 }
