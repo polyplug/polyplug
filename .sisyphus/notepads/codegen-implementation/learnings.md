@@ -133,4 +133,131 @@
 ### Verification
 - `cargo build -p polyplug-runtime` — PASSES
 - `tests/fixtures/libtest_plugin_cpp.so` — EXISTS
-- `cargo test -p polyplug-runtime --test integration_dispatch` — 3/3 PASS
+- `cargo test -p polyplug-runtime --test integration_dispatch` — 3/3 PASS# Codegen Implementation — Learnings
+
+## Task 5: Fix CLI Dispatch Logic
+
+**Date:** 2026-03-08
+
+### Changes Made
+
+1. **`crates/polyplugc/src/main.rs`**
+   - Added `let from_api: bool = api.is_some();` BEFORE the `let ir:` binding (captures before `api` is consumed by if-let).
+   - Changed `--bundle` branch of `ir` binding from `parser::parse_bundle(&bundle_path)?` → `parser::parse_bundle_with_api(&bundle_path)?`.
+   - Replaced single `generator.generate_host(...)` call with branching dispatch:
+     - `--api` path: calls both `generate_host` AND `generate_guest`
+     - `--bundle` path: calls only `generate_guest`
+
+2. **`crates/polyplugc/src/generators/mod.rs`**
+   - Removed `#[allow(dead_code)]` from `generate_guest` — it's now called by dispatch logic.
+   - Kept `#[allow(dead_code)]` on `language_name` — still unused, clippy would error without it.
+
+3. **`crates/polyplugc/src/parser/mod.rs`** (side effect fix)
+   - Added `#[allow(dead_code)]` to `parse_bundle` and `parse_bundle_str` — these became unused once `parse_bundle_with_api` replaced `parse_bundle` in dispatch. They're kept for potential future use.
+
+### Key Learnings
+
+- **Variable capture order matters**: `from_api: bool = api.is_some()` must come BEFORE `let ir:` because `api` is moved into the if-let arm.
+- **Removing `#[allow(dead_code)]` propagates**: When a suppressed warning is removed and the function becomes used, other dead functions that were previously masked may now surface. Always run full clippy after each change.
+- **`parse_bundle` vs `parse_bundle_with_api`**: `parse_bundle_with_api` resolves and merges the referenced `api.toml`. The dispatch must use it to get full type/contract resolution.
+
+### Verification Results
+
+- `cargo test -p polyplugc`: 12/12 tests pass
+- `cargo clippy --workspace -- -D warnings`: zero warnings/errors
+
+
+## Task 8: CppGenerator::generate_host() rewrite (2026-03-08)
+
+### What was done
+- Rewrote `generate_host()` to emit 3 separate files: `types.hpp`, `host_callers.hpp`, `manifest.toml`.
+- Introduced helpers: `generate_types_hpp()`, `generate_host_callers_hpp()`, `generate_manifest_toml()`, `generate_cpp_host_function()`, `build_args_ptr_code()`, `capitalise_first()`.
+- `generate_cpp_type()` and `cpp_type_name()` and `contract_name_to_class()` kept intact.
+- Existing `generate_cpp_host_contract()` body replaced to emit full C++ class with `PluginHandle handle_` + `const HostVTable* host_` constructor.
+
+### Key design decisions
+- `types.hpp` includes `<cstdint>` and `polyplug/abi.hpp` — struct defs go here.
+- `host_callers.hpp` includes `types.hpp`, `polyplug/error.hpp`, `polyplug/abi.hpp`, wrapped in `namespace polyplug_generated`.
+- `manifest.toml` has minimal TOML: `schema_version`, `lang`, `generated_by`.
+- `check_abi_error` is in `polyplug` namespace → generated code calls `polyplug::check_abi_error(err)`.
+- Void-return functions: `out_ptr = nullptr`, no `return`.
+- No-param functions: `args_ptr = nullptr`.
+- Single user-defined struct param: `const void* args_ptr = &{name};`.
+- Single primitive param: local copy + pointer.
+- Multiple params: inline-defined anonymous struct `{ClassName}{FuncName}Args` with value-init then `&args_val`.
+
+### Test update
+- `generate_host_empty_ir` now checks `files.files.len() >= 1` (not `== 1`) and checks `.any()` for AUTO-GENERATED string, since we now emit 3 files.
+
+### Verification
+- `cargo run -p polyplugc -- generate --api tests/fixtures/test_api.toml --lang cpp --out /tmp/gen_cpp_host` → exit 0
+- `/tmp/gen_cpp_host/` contains `types.hpp`, `host_callers.hpp`, `manifest.toml`
+- `g++ -std=c++17 -I<host-libs/cpp> -I<out> test_h.cpp` → exit 0 (no errors)
+- `cargo test -p polyplugc` → 12/12 pass
+- `cargo clippy --workspace -- -D warnings` → zero warnings/errors
+
+## 2026-03-08 — Task 6: Rust generate_host() rewrite
+
+### What was done
+- Rewrote `RustGenerator::generate_host()` in `crates/polyplugc/src/generators/rust/mod.rs` to produce 3 files:
+  1. `types.rs` — user-defined types (via `generate_rust_type`) + arg-pack structs for multi-param fns
+  2. `host_callers.rs` — contract caller structs with `call_plugin`, `PluginError`, `Runtime` references
+  3. `manifest.toml` — schema_version=1, lang=rust, generated_by=polyplugc
+
+### Key design decisions
+- Arg-packing strategy: `needs_arg_pack()` returns true for 2+ params; `emit_arg_pack_struct()` emits into `types.rs`; pack struct named `{ContractStruct}{FnPascal}Args`
+- Single UserDefined param → pass as `&AddArgs` reference (pointer directly to struct)
+- Single primitive param → copy to `{name}_val` local, then pointer
+- No params → `core::ptr::null()`; void return → `core::ptr::null_mut()`
+- Every unsafe block has `// SAFETY:` comment with args/out type
+- Updated `generate_host_empty_ir` test: now expects 3 files (was 1), checks all 3 for `AUTO-GENERATED`
+- Added `generate_host_produces_three_files` and `arg_pack_struct_name_conversion` tests
+
+### Verification
+- `cargo run -p polyplugc -- generate --api tests/fixtures/test_api.toml --lang rust --out /tmp/gen_rust_host` → exit 0
+- `/tmp/gen_rust_host/` contains `types.rs`, `host_callers.rs`, `manifest.toml`, `guest_sdk.rs`
+- `host_callers.rs` contains `call_plugin`, `PluginError`, `Runtime` — confirmed
+- `cargo test -p polyplugc` → 14/14 pass
+- `cargo clippy --workspace -- -D warnings` → zero warnings/errors
+
+## 2026-03-08 — Task 7: RustGenerator::generate_guest() rewrite
+
+### What was done
+- Rewrote `RustGenerator::generate_guest()` in `crates/polyplugc/src/generators/rust/mod.rs`
+- Now emits 5 files: `types.rs`, `contracts.rs`, `vtables.rs`, `init.rs`, `manifest.toml`
+- Removed old `guest_sdk.rs` single-file stub
+
+### New helper functions added
+- `generate_guest_contract_trait()` — emits trait with correct `&Self`/value params
+- `build_guest_trait_params()` — parallel to `build_sig_params` for guest side
+- `contract_name_to_guest_trait()` — "test.add" → "TestAddPlugin"
+- `contract_name_to_upper_snake()` — "test.add" → "TEST_ADD"
+- `generate_guest_vtables_file()` — writes all vtables.rs content
+- `generate_guest_contract_vtable()` — per-contract vtable code
+- `generate_guest_abi_wrapper()` — per-function ABI wrapper with catch_unwind
+- `emit_guest_wrapper_call()` — dispatches to trait method with correct param unpacking
+- `generate_guest_init_file()` — writes init.rs with polyplug_init
+
+### Key design decisions
+- `FnPtr` newtype emitted once at top of vtables.rs (not per-contract)
+- `OnceLock<Box<dyn {ContractName}Plugin>>` — one per contract, set by plugin developer at runtime
+- ABI wrappers: `catch_unwind(AssertUnwindSafe(|| { ... }))` for panic isolation
+- `functions: {upper}_FNS.as_ptr() as *const *const ()` — cast needed since FnPtr wraps *const ()
+- `version_minor` and `version_patch` read at codegen time: `{minor}_u32 << 16 | {patch}_u32`
+- Variable naming in init.rs: `desc_TEST_ADD`, `err_TEST_ADD` using upper-snake — avoids collision for multiple contracts
+
+### Bugs hit and fixed
+1. **Unicode escape**: `\u2014` is invalid Rust escape syntax → replaced with `--` (ASCII double dash)
+2. **Missing method closing brace**: The replacement range `103..132` included the old `    }` closing brace of `generate_guest` — it was replaced with new body content. Had to add `    }` back explicitly.
+3. **Extra `)`**: `out.push_str("..."));` had two `)` → should be one. The extra came from edit tool escaping during JSON stringification.
+4. **`&format!` with no format args**: clippy `-D useless_format` → changed to bare string literal
+5. **`.unwrap()` in production**: clippy `-D unwrap_used` → replaced with `match` on `func.returns`
+6. **`push_str("\n")`**: clippy `-D single_char_add_str` → changed to `push('\n')`
+
+### Verification
+- `cargo run -p polyplugc -- generate --api tests/fixtures/test_api.toml --lang rust --out /tmp/gen_rust_guest` → exit 0
+- Output: `contracts.rs`, `host_callers.rs`, `init.rs`, `manifest.toml`, `types.rs`, `vtables.rs`
+- `vtables.rs` contains: `catch_unwind` ×4, `AssertUnwindSafe` ×4, `FnPtr`, `OnceLock`, `TEST_ADD_IMPL`
+- `init.rs` contains: `#[unsafe(no_mangle)]` ×2, `polyplug_abi_version`, `polyplug_init`
+- `cargo test -p polyplugc` → 14/14 pass
+- `cargo clippy --workspace -- -D warnings` → zero warnings/errors

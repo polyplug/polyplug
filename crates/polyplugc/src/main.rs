@@ -75,10 +75,11 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
             lang,
             out,
         } => {
+            let from_api: bool = api.is_some();
             let ir: crate::ir::ValidatedIr = if let Some(api_path) = api {
                 parser::parse_api(&api_path)?
             } else if let Some(bundle_path) = bundle {
-                parser::parse_bundle(&bundle_path)?
+                parser::parse_bundle_with_api(&bundle_path)?
             } else {
                 return Err(CodegenError::ValidationFailed {
                     message: "Must specify --api or --bundle".to_owned(),
@@ -96,7 +97,12 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
             };
 
             let mut files: GeneratedFiles = GeneratedFiles::default();
-            generator.generate_host(&ir, &mut files)?;
+            if from_api {
+                generator.generate_host(&ir, &mut files)?;
+                generator.generate_guest(&ir, &mut files)?;
+            } else {
+                generator.generate_guest(&ir, &mut files)?;
+            }
 
             // Create output directory if it doesn't exist
             std::fs::create_dir_all(&out).map_err(|e| CodegenError::WriteFailed {

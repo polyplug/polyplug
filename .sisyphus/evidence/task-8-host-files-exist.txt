@@ -1,0 +1,4 @@
+   Compiling polyplug-runtime v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplug-runtime)
+   Compiling polyplugc v0.1.0 (/mnt/data/Projects/Utils/polyplug/crates/polyplugc)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running `target/debug/polyplugc generate --api tests/fixtures/test_api.toml --lang cpp --out /tmp/gen_cpp_host`

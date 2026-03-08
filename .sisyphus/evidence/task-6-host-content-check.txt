@@ -1,0 +1,16 @@
+4:use polyplug_guest::PluginError;
+8:use polyplug_runtime::runtime::Runtime;
+14:    runtime: &'static Runtime,
+18:    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> TestAddContract {
+23:    pub fn add(&self, args: &AddArgs) -> Result<u32, PluginError> {
+29:            self.runtime.call_plugin(self.handle, 0_u32, args_ptr, &mut out_val as *mut u32 as *mut ())
+32:            return Err(PluginError { code: err.code, message: String::new() });
+38:    pub fn add_primitive(&self, a: u32, b: u32) -> Result<u32, PluginError> {
+48:            self.runtime.call_plugin(self.handle, 1_u32, args_ptr, &mut out_val as *mut u32 as *mut ())
+51:            return Err(PluginError { code: err.code, message: String::new() });
+57:    pub fn version(&self) -> Result<StringView, PluginError> {
+63:            self.runtime.call_plugin(self.handle, 2_u32, args_ptr, &mut out_val as *mut StringView as *mut ())
+66:            return Err(PluginError { code: err.code, message: String::new() });
+72:    pub fn reset(&self) -> Result<(), PluginError> {
+77:            self.runtime.call_plugin(self.handle, 3_u32, args_ptr, core::ptr::null_mut())
+80:            return Err(PluginError { code: err.code, message: String::new() });

@@ -1,0 +1,4 @@
+14:#[unsafe(no_mangle)]
+15:pub extern "C" fn polyplug_abi_version() -> u32 { 1 }
+21:#[unsafe(no_mangle)]
+22:pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {

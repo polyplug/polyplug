@@ -33,7 +33,6 @@ pub(crate) trait CodeGenerator {
     ) -> Result<(), CodegenError>;
 
     /// Generate guest-side SDK + ABI wrappers for plugin developers.
-    #[allow(dead_code)]
     fn generate_guest(
         &self,
         ir: &ValidatedIr,

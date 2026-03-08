@@ -119,6 +119,7 @@ pub(crate) fn parse_api_str(content: &str) -> Result<ValidatedIr, CodegenError> 
 }
 
 /// Parse and validate a `bundle.toml` file.
+#[allow(dead_code)]
 pub(crate) fn parse_bundle(path: &Path) -> Result<ValidatedIr, CodegenError> {
     let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::WriteFailed {
         path: path.to_string_lossy().into_owned(),
@@ -128,6 +129,7 @@ pub(crate) fn parse_bundle(path: &Path) -> Result<ValidatedIr, CodegenError> {
 }
 
 /// Parse a `bundle.toml` TOML string.
+#[allow(dead_code)]
 pub(crate) fn parse_bundle_str(content: &str) -> Result<ValidatedIr, CodegenError> {
     let raw: RawBundleSchema =
         toml::from_str(content).map_err(|e| CodegenError::ValidationFailed {
