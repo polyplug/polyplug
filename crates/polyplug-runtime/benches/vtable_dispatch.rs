@@ -136,7 +136,7 @@ unsafe extern "C" fn bench_call_plugin(
                 return AbiError {
                     code: 4,
                     message: StringView::null(),
-                }
+                };
             }
         };
         // SAFETY: vtable_ptr is valid and 'static — the library is never dropped (mem::forget).

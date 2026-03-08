@@ -1,9 +1,9 @@
 {
-  "active_plan": "/mnt/data/Projects/Utils/polyplug/.sisyphus/plans/codegen-implementation.md",
-  "started_at": "2026-03-08T11:20:19.554Z",
+  "active_plan": "/mnt/data/Projects/Utils/polyplug/.sisyphus/plans/epic6-hardening.md",
+  "started_at": "2026-03-08T15:05:02.562Z",
   "session_ids": [
-    "ses_332d2c4a5ffeuekCTaBoKmk11y"
+    "ses_3326ff125ffeGKnxDiyj3TMVnr",
   ],
-  "plan_name": "codegen-implementation",
+  "plan_name": "epic6-hardening",
   "agent": "atlas"
 }

@@ -64,6 +64,7 @@ fn main() {
         .arg("--target-dir")
         .arg(&plugin_target_dir)
         .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
         .status()
         .expect("failed to run cargo build for test_plugin");
 
@@ -125,6 +126,7 @@ fn main() {
         .arg("--target-dir")
         .arg(&plugin_target_dir)
         .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
         .status()
         .expect("failed to run cargo build for memory_plugin");
 
@@ -167,6 +169,7 @@ fn main() {
         .arg("--target-dir")
         .arg(&plugin_target_dir)
         .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
         .status()
         .expect("failed to run cargo build for error_plugin");
 

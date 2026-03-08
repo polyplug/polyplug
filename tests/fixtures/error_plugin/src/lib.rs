@@ -200,7 +200,7 @@ pub struct ChainArgs {
 extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiError {
     let msg: &[u8] = b"test error from plugin";
     let len: usize = msg.len(); // 22 bytes
-                                // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
+    // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
     let ptr: *mut u8 = unsafe { polyplug_host_alloc(len, 1) };
     if ptr.is_null() {
         return AbiError {
