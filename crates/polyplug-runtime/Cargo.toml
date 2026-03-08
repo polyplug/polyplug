@@ -49,6 +49,14 @@ path = "../../tests/integration_codegen_cpp/mod.rs"
 name = "smoke"
 path = "../../tests/smoke/mod.rs"
 
+[[test]]
+name = "stress_error"
+path = "../../tests/stress_error/mod.rs"
+
+[[test]]
+name = "stress_memory"
+path = "../../tests/stress_memory/mod.rs"
+
 [dev-dependencies]
 criterion = { workspace = true }
 
