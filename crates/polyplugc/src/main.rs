@@ -135,6 +135,12 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
 fn write_files_if_changed(out_dir: &Path, files: &GeneratedFiles) -> Result<(), CodegenError> {
     for file in &files.files {
         let dest: PathBuf = out_dir.join(&file.path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e: std::io::Error| CodegenError::WriteFailed {
+                path: parent.to_string_lossy().into_owned(),
+                source: e,
+            })?;
+        }
         // Check if file exists and content is identical (avoid unnecessary writes)
         let needs_write: bool = match std::fs::read_to_string(&dest) {
             Ok(existing) => existing != file.content,
