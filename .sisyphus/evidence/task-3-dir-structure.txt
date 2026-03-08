@@ -1,0 +1,14 @@
+/tmp/polyplug_rust_test/:
+guest
+host
+manifest.toml
+
+/tmp/polyplug_rust_test/guest/:
+contracts.rs
+init.rs
+types.rs
+vtables.rs
+
+/tmp/polyplug_rust_test/host/:
+host_callers.rs
+types.rs

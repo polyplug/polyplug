@@ -1,0 +1,2 @@
+            std::fs::create_dir_all(&out).map_err(|e| CodegenError::WriteFailed {
+            std::fs::create_dir_all(parent).map_err(|e: std::io::Error| CodegenError::WriteFailed {
