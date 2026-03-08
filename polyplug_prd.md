@@ -1,4 +1,4 @@
-# polyplug — PRD v2
+# polyplug — PRD v3
 
 ## Table of Contents
 
@@ -11,21 +11,23 @@
 7. VTable System
 8. Host Libraries
 9. Guest Libraries
-10. Schema Files
-11. Code Generation Pipeline
-12. Plugin Discovery
-13. Cross-Plugin Communication
-14. Memory Model
-15. Error Handling
-16. Plugin Versioning and Compatibility
-17. Extension System
-18. Security Model
-19. Developer Experience — App Developer
-20. Developer Experience — Plugin Developer
-21. The Full Runtime Flow
-22. MVP Language Support
-23. Future Work
-24. Non-Goals
+10. Language Runtime Adapters
+11. Schema Files
+12. Code Generation Pipeline
+13. Plugin Discovery
+14. Cross-Plugin Communication
+15. Memory Model
+16. Error Handling
+17. Plugin Versioning and Compatibility
+18. Extension System
+19. Security Model
+20. Developer Experience — App Developer
+21. Developer Experience — Plugin Developer
+22. The Full Runtime Flow
+23. MVP Language Support
+24. Package Ecosystem
+25. Future Work
+26. Non-Goals
 
 ---
 
@@ -44,7 +46,7 @@ The platform is designed around one principle above all others: **performance ov
 Three distinct actors interact with this platform.
 
 **YOU — the runtime author**
-Builds and maintains the runtime core, host libs, guest libs, and the codegen CLI. Ships no schema files. Everything lives in source code.
+Builds and maintains the runtime core, language adapters, host libs, guest libs, and the codegen CLI. Ships no schema files. Everything lives in source code.
 
 **APP DEVELOPER — embeds the runtime**
 A developer who wants to add a plugin system to their application. They define the plugin API for their ecosystem, embed the runtime, and distribute an SDK for plugin developers to build against.
@@ -67,6 +69,9 @@ The app developer's entire plugin API is derived from a single schema file. Code
 
 **Language agnostic**
 Every supported language can be a host and a guest. No language is a first-class citizen. The C ABI is the universal boundary.
+
+**Pay only for what you use**
+Language runtime adapters (dotnet, python, lua) are separate crates following the serde model. If you do not depend on `polyplug-dotnet`, .NET support does not exist in your binary. Not a feature flag — a missing dependency. True zero cost for unused languages.
 
 **Generated code can be unsafe — tests confirm safety**
 Since all glue code is generated and not hand-written, it can use maximally unsafe patterns to achieve maximum performance. The test suite confirms correctness.
@@ -101,12 +106,12 @@ polyplugc generate                   polyplugc generate
 
 AT RUNTIME
 ──────────
-App initializes runtime
+App initializes runtime (with only the adapters it depends on)
 Runtime scans plugin dirs
-Reads manifest.toml (fast, no dlopen)
+Reads manifest.toml (fast, no loading)
 Resolves capability graph
-dlopen in correct order
-Calls generated init()
+Dispatches each bundle to correct loader (native, dotnet, python, lua)
+Loaders initialize bundles in correct order
 Vtables registered
 Ready — all future calls are one indirect call
 ```
@@ -115,11 +120,11 @@ Ready — all future calls are one indirect call
 
 ## 5. Runtime Core
 
-The runtime core is written in **Rust**. It is the heart of the system, responsible for everything that happens between app startup and the first plugin call.
+The runtime core is the `polyplug` crate written in **Rust**. It is the heart of the system and the only crate that is always present. It has zero knowledge of any managed runtime (CLR, CPython, Lua VM). That knowledge lives in adapter crates.
 
 **Responsibilities:**
 
-- Loading plugin bundles via platform dynamic loading (dlopen / LoadLibrary)
+- Loading native plugin bundles via platform dynamic loading (dlopen / LoadLibrary)
 - Reading and validating manifest files before loading
 - Building the capability graph and determining initialization order
 - Detecting dependency cycles
@@ -128,6 +133,7 @@ The runtime core is written in **Rust**. It is the heart of the system, responsi
 - Dispatching cross-plugin calls
 - Managing extensions
 - Enforcing compatibility rules
+- Providing the `BundleLoader` trait that adapter crates implement
 
 **The runtime exposes a minimal C ABI** so it can be embedded in any language. The C ABI is the only public contract of the runtime core. Host libs wrap this ABI for each supported language.
 
@@ -191,7 +197,7 @@ typedef void* PluginHandle;  // opaque, managed by runtime
 
 **Rules:**
 - All strings crossing the ABI boundary are UTF-8
-- All structs use `#[repr(C)]` on the Rust side and standard C struct layout (no packing attributes) on the C side
+- All structs use `#[repr(C)]` on the Rust side and standard C struct layout on the C side
 - Primitives (u8–u64, f32, f64, bool) are returned directly by value
 - All non-primitive return values use caller-provides-buffer pattern
 - Pointers passed across boundary always point into host allocator
@@ -205,7 +211,7 @@ The vtable system is how plugins and host exchange callable function pointers. I
 **Exchange happens once at load time:**
 
 ```
-Host loads bundle
+Host loads bundle (via correct loader — native, dotnet, python, or lua)
         │
         ▼
 Host builds HostVTable (its functions for plugins to call)
@@ -225,6 +231,8 @@ Host stores PluginVTable ptr
         ▼
 Load complete. All future calls = one indirect call.
 ```
+
+This exchange is identical regardless of what language the plugin is written in. The native loader uses dlopen. The dotnet loader uses hostfxr. The python loader uses CPython embedding. The lua loader uses the Lua VM. All arrive at the same vtable exchange. The host never knows what language loaded the plugin.
 
 **HostVTable — given to every plugin at init:**
 
@@ -268,13 +276,13 @@ typedef struct {
 void init(PluginRegistrar* registrar);
 ```
 
-**Hot path call — what actually happens at runtime:**
+**Hot path call:**
 
 ```c
-// Host side generated code — developer writes:
+// Developer writes:
 Stats stats = image_stats.compute(image);
 
-// Generated code does exactly this:
+// Generated code does:
 Stats stats;  // caller allocates on host allocator
 AbiError err = vtable->functions[COMPUTE_FN_ID](&image, &stats);
 ```
@@ -285,56 +293,58 @@ One pointer dereference. One indirect call. Nothing else.
 
 ## 8. Host Libraries
 
-Host libs are the ergonomic layer that app developers actually use. They wrap the runtime C ABI in a natural, idiomatic way for each language. They are thin by design — the heavy logic is in the runtime core.
-
-The generated host-side code from `polyplugc` sits on top of the host lib. The host lib provides the foundation; generated code provides the contract-specific callers.
+Host libs are the ergonomic layer that app developers actually use. They wrap the runtime C ABI in a natural, idiomatic way for each language. They are thin by design.
 
 ```
 App Developer Code
         ↓
 Generated Host Callers      (polyplugc output, contract-specific)
         ↓
-Host Lib                    (your language wrapper, thin)
+Host Lib                    (language wrapper, thin)
         ↓
-Runtime C ABI
+Runtime C ABI               (polyplug core)
 ```
 
 **Per language:**
 
 ```
-Rust    → crate, thin, mostly re-exports runtime directly
-C++     → header-only, RAII wrappers, zero overhead
-C#      → NuGet package, P/Invoke declarations, ref structs
-Python  → pip package, ctypes wrappers
-Lua     → .lua file + C extension binding
+Rust    → polyplug crate IS the runtime core, no separate wrapper needed
+C++     → host-libs/cpp/ header-only, RAII wrappers, zero overhead
+C#      → Polyplug NuGet, P/Invoke declarations, ref structs
+Python  → polyplug pip package, ctypes wrappers
+Lua     → polyplug.lua + C extension binding
 ```
 
-**App developer runtime initialization (always in code, no config file):**
+**App developer runtime initialization:**
 
 ```rust
-// Rust example
+// Rust
+use polyplug::PluginRuntime;
+use polyplug_dotnet::DotnetLoader;
+use polyplug_python::PythonLoader;
+
 let runtime: PluginRuntime = PluginRuntime::new()
     .plugin_dirs(["./plugins", "~/.myapp/plugins"])
     .compatibility(Compatibility::Strict)
+    .loader(DotnetLoader::new())
+    .loader(PythonLoader::new())
     .extension(TraceExtension::new())
     .init()?;
 ```
 
 ```cpp
-// C++ example
-auto runtime = PluginRuntime::builder()
+// C++
+auto runtime = Polyplug::Runtime::builder()
     .plugin_dir("./plugins")
-    .compatibility(Compatibility::Strict)
-    .extension(std::make_unique<TraceExtension>())
+    .compatibility(Polyplug::Compatibility::Strict)
     .init();
 ```
 
 ```csharp
-// C# example
-var runtime = PluginRuntime.Builder()
+// C#
+var runtime = Polyplug.Runtime.Builder()
     .PluginDir("./plugins")
-    .Compatibility(Compatibility.Strict)
-    .Extension(new TraceExtension())
+    .Compatibility(Polyplug.Compatibility.Strict)
     .Init();
 ```
 
@@ -342,23 +352,21 @@ var runtime = PluginRuntime.Builder()
 
 ## 9. Guest Libraries
 
-Guest libs are the thin bootstrap layer that every plugin is built on top of. They handle everything a plugin needs to function before any business logic runs. They are distributed as language-specific packages.
+Guest libs are the thin bootstrap layer that every plugin is built on top of.
 
 **Responsibilities:**
 - Plugin entry point macro / attribute
-- Host allocator hookup (so all allocations go through host_alloc)
-- Panic / exception boundary (so plugin crash cannot take down host)
-- ABI primitive types (StringView, Buffer, AbiError, PluginError, etc.)
+- Host allocator hookup
+- Panic / exception boundary
+- ABI primitive types (StringView, Buffer, AbiError, PluginError)
 - Basic FFI safety helpers
 
-**Guest lib is the foundation. Generated code from polyplugc sits on top of it:**
-
 ```
-Plugin Dev Business Logic       (implements contract traits)
+Plugin Dev Business Logic
         ↓
-Generated ABI Wrappers          (polyplugc output, contract-specific)
+Generated ABI Wrappers          (polyplugc output)
         ↓
-Guest Lib                       (your language bootstrap, thin)
+Guest Lib                       (language bootstrap, thin)
         ↓
 Runtime C ABI
 ```
@@ -366,16 +374,123 @@ Runtime C ABI
 **Per language:**
 
 ```
-Rust    → crate with proc macro for entry point, allocator hook
-C++     → header-only, entry point macro, RAII helpers
-C#      → NuGet, entry point attribute, P/Invoke helpers
-Python  → pip package, entry point decorator, ctypes helpers
-Lua     → .lua file, entry point registration helper
+Rust    → polyplug-guest crate, proc macro, allocator hook
+C++     → guest-libs/cpp/ header-only, entry point macro, RAII helpers
+C#      → Polyplug.Guest NuGet, entry point attribute, marshaling helpers
+Python  → polyplug-guest pip package, entry point decorator, ctypes helpers
+Lua     → polyplug-guest.lua, entry point registration helper
 ```
 
 ---
 
-## 10. Schema Files
+## 10. Language Runtime Adapters
+
+Language runtime adapters are separate crates that teach `polyplug` how to load non-native bundles. They follow the **serde model**: separate crates, not feature flags.
+
+- If `polyplug-dotnet` is not in your `Cargo.toml`, .NET support is not compiled into your binary
+- If `polyplug-python` is not in your `Cargo.toml`, Python support is not compiled into your binary
+- If `polyplug-lua` is not in your `Cargo.toml`, Lua support is not compiled into your binary
+
+This is not a feature flag. It is a missing dependency. True zero cost.
+
+Each adapter implements the `BundleLoader` trait defined in `polyplug`:
+
+```rust
+pub trait BundleLoader: Send + Sync {
+    fn runtime_name(&self) -> &'static str;
+    fn load(
+        &self,
+        path: &Path,
+        registrar: &mut PluginRegistrar,
+    ) -> Result<(), PolyplugError>;
+}
+```
+
+App developer registers adapters at init:
+
+```rust
+PluginRuntime::new()
+    .loader(DotnetLoader::new())    // from polyplug-dotnet
+    .loader(PythonLoader::new())    // from polyplug-python
+    .loader(LuaLoader::new())       // from polyplug-lua
+    .init()?;
+```
+
+If a bundle's manifest declares `runtime = "lua"` but no Lua loader is registered:
+
+```
+Error: bundle "my_lua_plugin" requires runtime "lua"
+but no loader is registered for runtime "lua".
+Add polyplug-lua as a dependency and register LuaLoader at init.
+```
+
+Native plugins (Rust, C++, C# NativeAOT) require no adapter. The built-in native loader in `polyplug` handles them via dlopen.
+
+---
+
+### polyplug-dotnet
+
+Enables loading of standard .NET C# plugins without NativeAOT.
+
+Uses Microsoft's `hostfxr` native API to initialize the CLR once per process, then uses `load_assembly_and_get_function_pointer` to obtain a native-callable pointer to the managed `Init` method.
+
+```
+polyplug-dotnet calls hostfxr
+        ↓
+hostfxr initializes CLR (once per process, shared across all .NET plugins)
+        ↓
+hostfxr loads managed assembly
+        ↓
+hostfxr returns fn ptr to [UnmanagedCallersOnly] Init method
+        ↓
+Init(registrar) called — identical vtable exchange from here
+```
+
+The C# plugin's Init method (generated by polyplugc):
+
+```csharp
+[UnmanagedCallersOnly(EntryPoint = "init")]
+public static unsafe void Init(PluginRegistrar* registrar) {
+    // register plugins, hand over vtable
+}
+```
+
+`[UnmanagedCallersOnly]` works in standard .NET, not just NativeAOT.
+
+**Performance:**
+- CLR startup: one-time cost at first .NET plugin load (~100–500ms)
+- Per-call: one managed/unmanaged transition (~50–200ns vs ~1ns native)
+- Subsequent .NET plugins share the already-running CLR — fast load
+- Full .NET framework available: reflection, EF, anything managed
+
+**C# bundle manifest:**
+
+```toml
+runtime = "dotnet"    # standard .NET, requires polyplug-dotnet
+# or absent           # NativeAOT, loaded by native loader, no adapter needed
+```
+
+---
+
+### polyplug-python
+
+Enables loading of Python plugins via CPython embedding.
+
+Uses `pyo3` or direct `libpython` linking to initialize a Python interpreter (once per process), import the plugin module, and extract the `init` callable. The Python `init` function calls back through ctypes to register vtables.
+
+**Performance:** Python interpreter is the bottleneck, not polyplug.
+
+---
+
+### polyplug-lua
+
+Enables loading of Lua plugins via LuaJIT or standard Lua embedding.
+
+Uses `mlua` to initialize a Lua VM, load the plugin script, and call `init`. LuaJIT is strongly recommended for near-native performance via JIT compilation.
+
+---
+
+## 11. Schema Files
 
 There are exactly **two schema files** in the entire system. Both are TOML.
 
@@ -383,14 +498,11 @@ There are exactly **two schema files** in the entire system. Both are TOML.
 
 ### api.toml — owned by App Developer
 
-Defines the complete plugin API for their ecosystem. Contains domain types and contracts. This is the single source of truth for what plugins can do in their ecosystem.
-
-App developer writes it. App developer distributes it to plugin developers (directly or bundled inside the published guest SDK package).
+Defines domain types and contracts. Single source of truth for what plugins can do in the app's ecosystem. Written by app developer. Distributed to plugin developers.
 
 ```toml
 # api.toml
 
-# Domain types — used in contract function signatures
 [[type]]
 name = "Image"
 fields = [
@@ -408,15 +520,6 @@ fields = [
     { name = "max",    type = "f32" }
 ]
 
-[[type]]
-name = "AudioFrame"
-fields = [
-    { name = "samples",     type = "Buffer" },
-    { name = "sample_rate", type = "u32" },
-    { name = "channels",    type = "u8" }
-]
-
-# Contracts — the plugin API
 [[contract]]
 name    = "image.decode"
 version = "1.0"
@@ -447,21 +550,9 @@ params  = [
     { name = "b", type = "Stats" }
 ]
 returns = "f32"
-
-
-[[contract]]
-name    = "audio.decode"
-version = "1.0"
-
-[[contract.functions]]
-name    = "decode"
-params  = [{ name = "raw", type = "Buffer" }]
-returns = "AudioFrame"
 ```
 
-**Primitive types available in any api.toml without declaration:**
-
-These come from the runtime and are always available:
+**Primitive types always available without declaration:**
 
 ```
 u8, u16, u32, u64
@@ -478,9 +569,7 @@ void          — no return value
 
 ### bundle.toml — owned by Plugin Developer
 
-Defines the contents of a plugin bundle. Declares which plugins are in the bundle, which contracts they implement, and what they depend on.
-
-Plugin developer writes it. It is the single input codegen needs to generate the entire bundle — entry point, vtables, ABI wrappers, and discovery manifest.
+Defines the contents of a plugin bundle. Written by plugin developer. Never distributed.
 
 ```toml
 # bundle.toml
@@ -488,12 +577,11 @@ Plugin developer writes it. It is the single input codegen needs to generate the
 [bundle]
 name    = "image_bundle"
 version = "1.0"
+runtime = "native"    # native (default) | dotnet | python | lua
 
-# Points to the app's api.toml
-# Can be a local path or a published package name
 api = "path/to/api.toml"
 # or
-api = "my_app_sdk"   # if installed as a package
+api = "my_app_sdk"    # if installed as a package
 
 [[plugin]]
 name       = "ImageDecoder"
@@ -521,37 +609,35 @@ generated/
 └── manifest.toml                    discovery manifest (auto-generated)
 ```
 
-The plugin developer implements only the contract traits. Everything else is generated.
-
 ---
 
 ### manifest.toml — generated, not hand-written
 
-Auto-generated by polyplugc at build time. Placed next to the compiled bundle. The runtime reads this file for fast pre-load discovery without dlopen.
+Auto-generated by polyplugc. Placed next to the compiled bundle. Runtime reads this for fast pre-load discovery without loading.
 
 ```toml
 # image_bundle.manifest.toml — GENERATED, never edit by hand
 
 name           = "image_bundle"
 version        = "1.0"
+runtime        = "native"
 file           = "image_bundle.so"
 provides       = ["image.decode@1.0", "image.stats@1.0"]
 requires       = ["image.decode@1.0"]
 function_count = { "image.decode@1.0" = 2, "image.stats@1.0" = 2 }
 ```
 
+The `runtime` field tells discovery which loader to dispatch to.
+
 ---
 
-## 11. Code Generation Pipeline
+## 12. Code Generation Pipeline
 
-`polyplugc` is a standalone CLI binary written in Rust. It is the only codegen tool. It reads schema files and generates all glue code for all supported languages.
+`polyplugc` is a standalone CLI binary written in Rust. Works with any build system.
 
-Being a standalone binary means it works with any build system: cargo, cmake, msbuild, make, or any custom pipeline.
-
-**The side is inferred from the schema file passed — there is no `--side` flag:**
-
-- `--api` → app developer context → generates **both** `host/` and `guest/` output
-- `--bundle` → plugin developer context → generates guest bundle code only
+**Side is inferred from schema file — no `--side` flag:**
+- `--api` → generates `host/` and `guest/` output
+- `--bundle` → generates guest bundle code only
 
 **Internal pipeline:**
 
@@ -563,44 +649,20 @@ Schema Parser
         │
         ▼
 Intermediate Representation (IR)
-[Rust structs, serde-based]
         │
         ▼
 Language Generators
-[one generator per language, implements CodeGenerator trait]
         │
         ▼
 Generated Files
 ```
 
-**IR structure:**
-
-```rust
-struct IR {
-    types:     Vec<TypeDef>,
-    contracts: Vec<Contract>,
-    bundle:    Option<BundleManifest>,
-}
-
-struct Contract {
-    name:      String,
-    version:   Version,
-    functions: Vec<Function>,
-}
-
-struct Function {
-    name:    String,
-    params:  Vec<Param>,
-    returns: Option<TypeRef>,  // None = void
-}
-```
-
-**Generator trait — adding a new language is implementing one trait:**
+**Generator trait:**
 
 ```rust
 trait CodeGenerator {
-    fn generate_host(&self, ir: &IR) -> GeneratedFiles;
-    fn generate_guest(&self, ir: &IR) -> GeneratedFiles;
+    fn generate_host(&self, ir: &IR) -> Result<GeneratedFiles, PolyplugcError>;
+    fn generate_guest(&self, ir: &IR) -> Result<GeneratedFiles, PolyplugcError>;
 }
 
 struct RustGenerator;
@@ -613,99 +675,50 @@ struct LuaGenerator;
 **CLI usage:**
 
 ```bash
-# App developer — pass --api to generate BOTH host callers AND guest SDK
-# Output is split into host/ and guest/ subdirectories automatically
-polyplugc generate \
-    --api api.toml \
-    --lang cpp \
-    --out ./generated
-# produces:
-#   ./generated/host/    ← type-safe callers for app developer
-#   ./generated/guest/   ← SDK distributed to plugin developers
+# App developer
+polyplugc generate --api api.toml --lang cpp --out ./generated
+# produces ./generated/host/ and ./generated/guest/
 
-# Plugin developer — pass --bundle to generate full bundle glue
-polyplugc generate \
-    --bundle bundle.toml \
-    --lang rust \
-    --out ./src/generated
-# produces:
-#   ./src/generated/types.rs
-#   ./src/generated/contracts.rs
-#   ./src/generated/vtables.rs
-#   ./src/generated/init.rs
-#   ./src/generated/manifest.toml
+# Plugin developer
+polyplugc generate --bundle bundle.toml --lang rust --out ./src/generated
 
-# Validate schema without generating
+# Validate only
 polyplugc validate --api api.toml
 polyplugc validate --bundle bundle.toml
 ```
 
-**Rust build.rs integration:**
-
-```rust
-// build.rs — automatic regeneration when schema changes
-fn main() {
-    polyplugc::build::generate()
-        .bundle("bundle.toml")
-        .lang(Lang::Rust)
-        .output("src/generated")
-        .watch()  // reruns if bundle.toml or api.toml changes
-        .run();
-}
-```
-
-**Code generation rules (baked into codegen, not schema annotations):**
-
-- Non-primitive params → always passed by reference
-- Non-primitive return values → caller-provides-buffer, hidden from developer
-- Primitive return values (u8–u64, f32, f64, bool) → returned directly by value
+**Code generation rules (baked in, not schema annotations):**
+- Non-primitive params → always by reference
+- Non-primitive returns → caller-provides-buffer, hidden from developer
+- Primitive returns (u8–u64, f32, f64, bool) → returned directly by value
 - Every ABI call wrapped in panic/exception catch on guest side
-- All cross-boundary strings are UTF-8; GC language boundaries transcode automatically
-- All cross-boundary structs live in host allocator; GC language wrappers are ref structs / stack-only
+- All strings are UTF-8 at ABI; GC languages transcode at boundary
+- All cross-boundary structs in host allocator; GC wrappers are ref structs / stack-only
 
 ---
 
-## 12. Plugin Discovery
+## 13. Plugin Discovery
 
-Discovery happens in four layers. The runtime works through them in order.
+Four layers, worked through in order.
 
 **Layer 1 — Directory scanning**
+Scans configured directories. Recognizes `.so/.dll/.dylib` for compiled bundles and directories for script bundles. Configured at runtime init in code, no config file.
 
-Runtime scans configured directories for bundle files:
-
-```
-.so / .dll / .dylib    compiled bundles
-directories            script bundles (Python, Lua)
-```
-
-Configured at runtime init in code. No config file.
-
-**Layer 2 — Manifest reading (fast pre-load)**
-
-For every bundle found, runtime reads the companion `manifest.toml` before calling dlopen. This is a fast file read — no dynamic loading, no code execution.
-
-Runtime uses manifest to:
-- Know what the bundle provides and requires
-- Decide whether to load it at all
-- Build the capability graph
+**Layer 2 — Manifest reading**
+Reads companion `manifest.toml` before any loading. Extracts: name, version, runtime, provides, requires, function_count. The `runtime` field determines which loader handles this bundle.
 
 **Layer 3 — Capability graph resolution**
-
-After reading all manifests, runtime:
-
 1. Collects all provided capabilities
-2. Validates all required capabilities are satisfied
-3. Detects dependency cycles
-4. Determines initialization order (topological sort)
+2. Validates all requires are satisfied
+3. Detects cycles
+4. Topological sort for initialization order
 
-If any required capability is missing, runtime fails with a clear error before loading anything.
+Fails with clear error before loading anything if requirements unmet.
 
 **Layer 4 — Explicit registration**
 
-App developer can also load bundles explicitly:
-
 ```rust
-runtime.load_bundle("./specific_plugin.so")?;
+runtime.load_bundle("./plugin.so")?;
 runtime.load_bundle_with("./plugin.so", LoadOptions {
     compatibility: Compatibility::Relaxed,
 })?;
@@ -713,361 +726,214 @@ runtime.load_bundle_with("./plugin.so", LoadOptions {
 
 ---
 
-## 13. Cross-Plugin Communication
+## 14. Cross-Plugin Communication
 
-Plugins never link to each other directly. All cross-plugin calls route through the host runtime dispatcher.
-
-**Call flow:**
+Plugins never link to each other. All calls route through host dispatcher.
 
 ```
-Plugin A
-    │ generated SDK wrapper
-    ▼
-host->call_plugin(handle, function_id, args, out)
-    │ runtime dispatch
-    ▼
-Plugin B vtable->functions[function_id](args, out)
+Plugin A → host->call_plugin(handle, fn_id, args, out) → Plugin B vtable
 ```
 
-Plugin A resolves Plugin B's handle once at init time via `find_plugin`. After that every call is one indirect call through the stored handle.
-
-**From plugin A's perspective (generated code):**
-
-```rust
-// At init — resolve once, store handle
-let decoder_handle: PluginHandle = host.find_plugin(IMAGE_DECODE_CONTRACT_ID, VERSION_1_0);
-
-// At call time — one indirect call
-let image: Image = decoder.decode(&raw_bytes)?;
-```
-
-**If caller and callee are in the same bundle**, the call still routes through host dispatch. This keeps the model consistent and simple. The overhead is one indirect call — acceptable given the simplicity gained.
+Handle resolved once at init via `find_plugin`. Every subsequent call is one indirect call. Works identically regardless of what languages A and B are written in.
 
 ---
 
-## 14. Memory Model
+## 15. Memory Model
 
-All memory that crosses a plugin boundary lives in the host allocator. This is the single most important rule of the memory model.
+All cross-boundary memory lives in the host allocator.
 
 **Rules:**
-
 1. All cross-boundary allocations use `host_alloc` / `host_free`
-2. Caller always allocates the output buffer, callee fills it
-3. A plugin must never free memory it did not allocate
-4. Large shared buffers (images, audio frames) are passed by reference — never copied
-5. GC languages never put cross-boundary data on their managed heap
+2. Caller allocates output buffer, callee fills it
+3. A plugin never frees memory it did not allocate
+4. Large buffers passed by reference — never copied
+5. GC languages never put cross-boundary data on managed heap
 
-**Per language implementation:**
+**Per language:**
 
 ```
-Rust    zero cost — host allocator is just the global allocator
+Rust    zero cost — host allocator is the global allocator
 C++     placement new into host_alloc buffer
 C#      ref struct wrapping unmanaged ptr, StructLayout.Sequential
-            Marshal.PtrToStructure only for reading, never for ownership
-Python  ctypes.Structure — lives in C memory, Python GC never sees it
+Python  ctypes.Structure — lives in C memory, GC never sees it
 Lua     lightuserdata pointing into host allocator
 ```
 
 **String model:**
 
-All strings at the ABI level are `StringView` — a UTF-8 byte slice with pointer and length. Non-owning. No null terminator.
+All ABI strings are UTF-8 `StringView` (ptr + len, non-owning, no null terminator).
 
 ```
-Rust    &str → StringView: zero cost, just ptr+len
+Rust    &str → StringView: zero cost
 C++     std::string_view → StringView: zero cost
-C#      string → StringView: transcode UTF-16 → UTF-8 into host_alloc
-                             ASCII fast path: near zero cost (strip high byte)
-Python  str → StringView: encode to UTF-8 bytes, pass ptr+len
-Lua     string → StringView: already byte array, just ptr+len
-```
-
-The ASCII fast path is significant: most strings in plugin systems (names, paths, identifiers) are ASCII. UTF-16 to UTF-8 for ASCII is just byte narrowing — near zero cost.
-
-**Caller-provides-buffer in practice:**
-
-```c
-// What the ABI looks like:
-AbiError image_stats_compute(
-    const Image* image,   // in — caller owns
-    Stats*       out      // out — caller allocated, callee fills
-);
-
-// What the developer sees (generated code hides the out param):
-Stats stats = image_stats.compute(image);
+C#      string → StringView: transcode UTF-16→UTF-8, ASCII fast path
+Python  str → StringView: encode UTF-8, pass ptr+len
+Lua     string → StringView: already bytes, just ptr+len
 ```
 
 ---
 
-## 15. Error Handling
+## 16. Error Handling
 
-**Two levels of errors:**
+**Level 1 — Recoverable:** plugin returns non-zero AbiError, generated code converts to native error style.
 
-**Level 1 — Recoverable errors**
-Business logic errors. Plugin returns an AbiError with a non-zero code and a message. Generated code translates to native error style per language.
+**Level 2 — Unrecoverable:** panics/exceptions caught at ABI boundary by generated wrapper, converted to AbiError. A crashing plugin cannot take down the host.
 
-**Level 2 — Unrecoverable errors**
-Panics, exceptions, crashes inside plugin code. Generated ABI wrapper catches everything at the boundary and converts to an AbiError. A crashing plugin cannot take down the host.
-
-**ABI error representation:**
-
-```c
-typedef struct {
-    uint32_t   code;     // 0 = success, non-zero = error
-    StringView message;  // empty if success
-} AbiError;
-```
-
-**PluginError — the shared error type for all contracts:**
-
-`PluginError` is a single shared type defined in the `polyplug-guest` crate. It is not generated per-contract. All generated contract traits use `Result<T, polyplug_guest::PluginError>`. This keeps error handling consistent and eliminates per-contract codegen complexity.
+**PluginError — defined once in guest lib, never generated:**
 
 ```rust
-// Defined once in polyplug-guest crate — never generated
 pub struct PluginError {
     pub code:    u32,
     pub message: String,
 }
 ```
 
-**Per language native error style (generated code handles translation):**
+**Per language native style:**
 
-```rust
-// Rust — Result using shared PluginError from polyplug-guest
-fn compute(&self, image: &Image) -> Result<Stats, polyplug_guest::PluginError>
-
-// C++ — exceptions, host callers throw PolyplugException on non-zero AbiError
-// matches the exception model already used in guest-libs
-Stats compute(const Image& image);  // throws PolyplugException on error
-
-// C# — exception
-Stats Compute(Image image);  // throws PluginException on error
-
-// Python — exception
-def compute(self, image: Image) -> Stats:  # raises PluginError
-
-// Lua — multiple return
-local stats, err = plugin.compute(image)
 ```
-
-**Generated guest wrapper (same pattern for all languages):**
-
-```rust
-// Generated — developer never writes this
-extern "C" fn compute_abi(image: *const Image, out: *mut Stats) -> AbiError {
-    std::panic::catch_unwind(|| {
-        let result: Result<Stats, polyplug_guest::PluginError> = IMPL.compute(unsafe { &*image });
-        match result {
-            Ok(stats) => { unsafe { *out = stats }; ABI_OK }
-            Err(e)    => e.into_abi_error()
-        }
-    }).unwrap_or(ABI_ERROR_PANIC)
-}
+Rust    Result<T, polyplug_guest::PluginError>
+C++     throws PolyplugException
+C#      throws PluginException
+Python  raises PluginError
+Lua     returns (value, err) multiple return
 ```
 
 ---
 
-## 16. Plugin Versioning and Compatibility
+## 17. Plugin Versioning and Compatibility
 
-**Versioning is at the contract level.** Plugin version and contract version are independent.
+Versioning at the contract level. Plugin version and contract version are independent.
 
-```toml
-[[contract]]
-name    = "image.decode"
-version = "1.0"          # this is the CONTRACT version
-```
+**Rules:**
+- Minor bump → adds functions, backward compatible
+- Major bump → breaking change, different contract
+- Compatible: provided major == required major AND provided minor >= required minor
 
-**Semantic versioning rules:**
-
-- Minor version bump → adds functions, backward compatible
-- Major version bump → breaking change, treated as different contract
-- Host requests contract by name + minimum version
-- Plugin provides contract at a specific version
-- Compatible if provided version >= required version (same major)
-
-**Function count validation:**
-
-The generated `manifest.toml` includes function count per contract. At load time the runtime validates this count matches what the schema expects. A mismatch indicates a contract version problem and is handled according to the active compatibility mode.
-
-**Compatibility modes** — configured at runtime init:
+**Compatibility modes:**
 
 ```rust
-Compatibility::Strict   // default — fail on any version mismatch
-Compatibility::Relaxed  // warn on mismatch, load anyway
-Compatibility::Yolo     // no version checks at all
+Compatibility::Strict   // default — fail on mismatch
+Compatibility::Relaxed  // warn, load anyway
+Compatibility::Yolo     // no checks
 ```
 
-Per-bundle override:
-
-```rust
-runtime.load_bundle_with("./plugin.so", LoadOptions {
-    compatibility:                   Compatibility::Relaxed,
-    ignore_function_count_mismatch:  false,
-})?;
-```
+Per-bundle override via `LoadOptions`.
 
 ---
 
-## 17. Extension System
+## 18. Extension System
 
-Extensions are optional host capabilities. They let the runtime evolve without touching the frozen core ABI. Plugins query extensions at init time and handle their absence gracefully.
+Optional host capabilities. Evolve the host API without touching frozen ABI. Always optional — a plugin must never require an extension.
 
-Extensions are implemented by the app developer and passed to the runtime at init. They are not schema-defined — they are Rust traits.
-
-**Built-in extensions (provided by the runtime):**
-
+**Built-in:**
 ```
-trace      — structured logging / tracing
-async      — async task spawning (future)
-sandbox    — permission queries (future)
+trace     — structured logging
+async     — async task spawning (future)
+sandbox   — permission queries (future)
 ```
 
-**App developer passes extensions at init:**
+**Registration:**
 
 ```rust
-let runtime: PluginRuntime = PluginRuntime::new()
+PluginRuntime::new()
     .extension(TraceExtension::new())
-    .extension(MyCustomExtension::new())  // app can add custom extensions
+    .extension(MyCustomExtension::new())
     .init()?;
 ```
 
-**Plugin queries extension at init (generated code):**
+**Query at plugin init (generated code):**
 
 ```c
 const TraceExtension* trace = host->get_extension(EXT_TRACE_ID);
-if (trace) {
-    trace->emit("ImageDecoder started");
-}
-// if extension absent, plugin continues without it
+if (trace) { trace->emit("started"); }
+// absent = zero overhead, null check only
 ```
-
-Extensions are always optional. A plugin must never require an extension to function.
 
 ---
 
-## 18. Security Model
-
-Three plugin execution environments are supported. App developer chooses per plugin dir or per bundle.
+## 19. Security Model
 
 ```
 Native    — compiled .so/.dll, full trust, maximum performance
-WASM      — WebAssembly sandbox, restricted access, near-native performance
-Script    — Python / Lua, runtime sandbox via interpreter restrictions
+WASM      — sandbox, near-native (future)
+Script    — Python / Lua, interpreter restrictions
 ```
 
-Sandbox policies can restrict:
-
-- File system access
-- Network access
-- Host API surface
-- Memory limits
-- CPU time limits (script plugins only)
-
-Security model is enforced at runtime init and at load time. It is not part of the ABI — it is a runtime concern layered on top.
-
-Native plugins are trusted by default. WASM and script plugins have configurable sandbox policies.
+Sandbox policies: FS access, network access, host API surface, memory limits, CPU time limits.
 
 ---
 
-## 19. Developer Experience — App Developer
+## 20. Developer Experience — App Developer
 
-The app developer's complete workflow.
-
-**Step 1: Add runtime as dependency**
+**Step 1: Add dependencies**
 
 ```toml
-# Cargo.toml (Rust host)
+# Cargo.toml
 [dependencies]
-polyplug-runtime = "1.0"
+polyplug        = "1.0"      # always required
+polyplug-dotnet = "1.0"      # only if loading .NET plugins
+polyplug-python = "1.0"      # only if loading Python plugins
+polyplug-lua    = "1.0"      # only if loading Lua plugins
 ```
 
-```cmake
-# CMakeLists.txt (C++ host)
-find_package(Polyplug REQUIRED)
-target_link_libraries(myapp Polyplug::host)
-```
-
-**Step 2: Write api.toml**
-
-```toml
-[[type]]
-name = "Image"
-fields = [
-    { name = "width",  type = "u32" },
-    { name = "height", type = "u32" },
-    { name = "pixels", type = "Buffer" }
-]
-
-[[contract]]
-name    = "image.decode"
-version = "1.0"
-
-[[contract.functions]]
-name    = "decode"
-params  = [{ name = "raw", type = "Buffer" }]
-returns = "Image"
-```
+**Step 2: Write api.toml** (see Section 11)
 
 **Step 3: Run codegen**
 
 ```bash
-# --api generates BOTH host callers and guest SDK in one command
 polyplugc generate --api api.toml --lang cpp --out ./generated
-# produces:
-#   ./generated/host/image_decode.hpp    ← app uses this
-#   ./generated/guest/image_decode.hpp   ← distribute this to plugin devs
 ```
 
-**Step 4: Initialize runtime and use plugins**
+**Step 4: Initialize runtime**
+
+```rust
+use polyplug::PluginRuntime;
+use polyplug_dotnet::DotnetLoader;
+
+let runtime: PluginRuntime = PluginRuntime::new()
+    .plugin_dir("./plugins")
+    .loader(DotnetLoader::new())
+    .init()?;
+```
+
+**Step 5: Use plugins**
 
 ```cpp
-// C++ app
 #include "generated/host/image_decode.hpp"
-
-auto runtime = PluginRuntime::builder()
-    .plugin_dir("./plugins")
-    .init();
-
 auto decoder = runtime.get<ImageDecodeContract>();
 Image img = decoder.decode(raw_bytes);
 ```
 
-**Step 5: Distribute SDK to plugin developers**
+**Step 6: Distribute SDK**
 
 ```bash
-# Run once per language you want to support for plugin developers
 polyplugc generate --api api.toml --lang rust   --out ./sdk/rust
 polyplugc generate --api api.toml --lang cpp    --out ./sdk/cpp
 polyplugc generate --api api.toml --lang csharp --out ./sdk/csharp
 polyplugc generate --api api.toml --lang python --out ./sdk/python
 polyplugc generate --api api.toml --lang lua    --out ./sdk/lua
-
-# Each --out directory contains host/ and guest/ subdirs
-# Distribute the guest/ subdir (or package as crate/NuGet/pip/etc)
-# Also distribute api.toml directly
+# distribute guest/ subdir of each + api.toml
 ```
 
 ---
 
-## 20. Developer Experience — Plugin Developer
-
-The plugin developer's complete workflow.
+## 21. Developer Experience — Plugin Developer
 
 **Step 1: Install app's SDK**
 
 ```bash
-cargo add my_app_plugin_sdk   # Rust
-# or
-pip install my_app_plugin_sdk # Python
-# etc.
+cargo add my_app_plugin_sdk
+pip install my_app_plugin_sdk
 ```
 
 **Step 2: Write bundle.toml**
 
 ```toml
 [bundle]
-name = "image_bundle"
+name    = "image_bundle"
 version = "1.0"
-api = "my_app_plugin_sdk"
+runtime = "native"         # native | dotnet | python | lua
+api     = "my_app_plugin_sdk"
 
 [[plugin]]
 name       = "ImageDecoder"
@@ -1086,18 +952,12 @@ polyplugc generate --bundle bundle.toml --lang rust --out ./src/generated
 **Step 4: Implement contracts — business logic only**
 
 ```rust
-// Rust plugin developer writes only this:
-use my_app_plugin_sdk::contracts::ImageDecodeContract;
-use generated::types::*;
-
+// Rust
 struct MyDecoder;
-
 impl ImageDecodeContract for MyDecoder {
     fn decode(&self, raw: &Buffer) -> Result<Image, polyplug_guest::PluginError> {
         // pure business logic
-        // no ABI, no vtables, no unsafe, no entry points
     }
-
     fn supported_formats(&self) -> StringView {
         StringView::from_static("png,jpg,webp")
     }
@@ -1105,161 +965,150 @@ impl ImageDecodeContract for MyDecoder {
 ```
 
 ```csharp
-// C# plugin developer writes only this:
+// C# (NativeAOT or standard .NET — same code either way)
 public class MyDecoder : IImageDecodeContract {
-    public Image Decode(Buffer raw) {
-        // pure business logic
-    }
+    public Image Decode(Buffer raw) { /* pure business logic */ }
     public StringView SupportedFormats() => StringView.FromStatic("png,jpg");
 }
 ```
 
 ```python
-# Python plugin developer writes only this:
+# Python
 class MyDecoder(ImageDecodeContract):
     def decode(self, raw: Buffer) -> Image:
-        # pure business logic
-        pass
-
+        pass  # pure business logic
     def supported_formats(self) -> str:
         return "png,jpg"
 ```
 
-**Step 5: Build**
+**Step 5: Build and ship**
 
 ```bash
 cargo build --release
-# produces:
-# image_bundle.so
-# image_bundle.manifest.toml  (auto-generated by build.rs + polyplugc)
+# ships: image_bundle.so + image_bundle.manifest.toml
 ```
-
-**Step 6: Ship**
-
-```
-image_bundle.so
-image_bundle.manifest.toml
-```
-
-Two files. Done.
 
 ---
 
-## 21. The Full Runtime Flow
+## 22. The Full Runtime Flow
 
 ```
 1.  App initializes runtime
-        .plugin_dirs(["./plugins"])
-        .extension(TraceExtension::new())
-        .init()
+        PluginRuntime::new()
+            .loader(DotnetLoader::new())
+            .loader(PythonLoader::new())
+            .plugin_dir("./plugins")
+            .init()
 
-2.  Runtime scans plugin directories
-        finds image_bundle.so + image_bundle.manifest.toml
+2.  Runtime scans ./plugins/
+        rust_bundle.so + rust_bundle.manifest.toml
+        csharp_bundle.dll + csharp_bundle.manifest.toml
+        python_plugin/ (directory with manifest.toml)
 
-3.  Runtime reads manifest.toml (fast, no dlopen)
-        learns: provides [image.decode@1.0, image.stats@1.0]
-                requires [image.decode@1.0]
+3.  Runtime reads all manifest.toml (no loading yet)
+        rust_bundle:   runtime = "native"
+        csharp_bundle: runtime = "dotnet"
+        python_plugin: runtime = "python"
 
-4.  Runtime builds capability graph across all found bundles
-        validates all required capabilities are satisfied
-        detects cycles
-        determines initialization order
+4.  Capability graph built, validated, sorted
 
-5.  Runtime dlopen bundles in correct order
+5.  Each bundle dispatched to correct loader:
+        rust_bundle   → native loader (dlopen)
+        csharp_bundle → DotnetLoader (hostfxr → CLR → managed assembly)
+        python_plugin → PythonLoader (CPython → import → ctypes bridge)
 
-6.  Runtime calls init(registrar) on each bundle
-        passes HostVTable ptr
-        bundle registers its PluginVTables
-        bundle queries extensions, stores what it needs
+6.  Each loader calls init(registrar)
+        vtables registered — identical path from here for all languages
 
-7.  Runtime stores all PluginVTable ptrs, indexed by contract_id
-
-8.  App requests contract:
-        runtime.get::<ImageDecodeContract>()
-        returns handle with stored vtable ptr
-
-9.  App calls plugin function:
+7.  App calls plugin:
         decoder.decode(raw_bytes)
-        → generated caller allocates Image on host allocator
-        → vtable->functions[DECODE_FN_ID](&raw, &out_image)
-        → one indirect call
-        → plugin fills out_image
-        → generated caller returns Image to app
-
-10. Cross-plugin call (ImageStats needs ImageDecoder):
-        at init: decoder_handle = host->find_plugin(IMAGE_DECODE_ID, 1_0)
-        at call: host->call_plugin(decoder_handle, DECODE_FN_ID, &raw, &out)
-        → one indirect call through runtime dispatcher
+        → one indirect call through vtable
+        → no knowledge of plugin language
 ```
 
 ---
 
-## 22. MVP Language Support
-
-All five languages supported as both host and guest.
+## 23. MVP Language Support
 
 ```
 Rust    host + guest    native, near zero overhead
 C++     host + guest    header-only libs, near zero overhead
-C#      host + guest    P/Invoke + ref structs, minimal overhead
-Python  host + guest    ctypes, Python runtime is the bottleneck
-Lua     host + guest    LuaJIT recommended, near-native performance
+C#      host + guest    NativeAOT (native loader) or standard .NET (polyplug-dotnet)
+Python  host + guest    ctypes, via polyplug-python
+Lua     host + guest    LuaJIT recommended, via polyplug-lua
 ```
 
-**Delivery per language:**
+**C# — two modes, same generated code:**
 
 ```
-Rust
-├── host-libs/rust/              thin crate wrapping runtime C ABI
-└── guest-libs/rust/             crate with proc macro, allocator hook
+NativeAOT       runtime = "native"    native loader, native performance, no adapter
+standard .NET   runtime = "dotnet"    polyplug-dotnet required, CLR via hostfxr
+```
 
-C++
-├── host-libs/cpp/               header-only host lib
-└── guest-libs/cpp/              header-only guest lib
+Plugin developer chooses in bundle.toml. App developer ensures the right adapter is registered.
 
-C#
-├── host-libs/csharp/            NuGet, P/Invoke declarations, ref structs
-└── guest-libs/csharp/           NuGet, entry point attribute, marshaling helpers
+---
 
-Python
-├── host-libs/python/            pip package, ctypes wrappers
-└── guest-libs/python/           pip package, entry point decorator
+## 24. Package Ecosystem
+
+Follows the serde model. `polyplug` is always present. Adapters are optional addons.
+
+```
+RUST (crates.io)
+├── polyplug              runtime core + Rust host lib
+├── polyplug-guest        Rust guest lib
+├── polyplug-dotnet       standard .NET adapter
+├── polyplug-python       Python adapter
+├── polyplug-lua          Lua adapter
+└── polyplugc             CLI codegen tool
+
+C++ (headers / vcpkg / conan)
+├── host-libs/cpp/        polyplug.hpp
+└── guest-libs/cpp/       polyplug_guest.hpp
+
+.NET (NuGet)
+├── Polyplug              C# host lib (P/Invoke into polyplug core)
+├── Polyplug.Dotnet       loads standard .NET plugins from C# host
+└── Polyplug.Guest        C# guest lib (NativeAOT or standard .NET)
+
+Python (pip)
+├── polyplug              Python host lib
+└── polyplug-guest        Python guest lib
 
 Lua
-├── host-libs/lua/               .lua file + C extension binding
-└── guest-libs/lua/              .lua file, entry point helpers
+├── polyplug.lua + .so    Lua host lib
+└── polyplug-guest.lua    Lua guest lib
 ```
 
 ---
 
-## 23. Future Work
+## 25. Future Work
 
 **Near term:**
-- Hot reload — watch plugin dirs, reload bundles without restart
-- Async plugin execution — spawn plugin calls on thread pool
-- WASM sandbox support — run untrusted plugins safely
-- Plugin marketplace tooling — signing, verification, distribution
+- Hot reload
+- Async plugin execution
+- WASM sandbox support
+- Plugin marketplace tooling (signing, verification, distribution)
 
 **Long term:**
-- Distributed plugins — plugins running in separate processes or machines
-- Remote plugin execution — plugins over network
-- Permission system — fine-grained capability control
-- Additional language support — Java, Kotlin, Swift, Zig
+- Distributed plugins
+- Remote plugin execution
+- Permission system
+- polyplug-jvm (Java/Kotlin via JNI embedding)
+- Swift support (native, no adapter needed)
+- Zig support (native, no adapter needed)
 
 ---
 
-## 24. Non-Goals
-
-The runtime does not provide:
+## 26. Non-Goals
 
 - UI frameworks
 - Build systems
 - Language compilers
 - Asset pipelines
 - Networking libraries
-- Serialization formats (beyond what the ABI needs)
-
-These remain the responsibility of the app developer and their ecosystem.
+- Serialization formats (beyond ABI needs)
+- Out-of-process plugin execution (IPC adds unacceptable overhead, violates performance goal)
 
 ---
 
@@ -1270,37 +1119,57 @@ polyplug/                                YOU maintain
 ├── AGENTS.md
 ├── Cargo.toml                           workspace root
 ├── crates/
-│   ├── polyplug-runtime/                Rust runtime core
+│   ├── polyplug/                        runtime core (renamed from polyplug-runtime)
 │   │   ├── build.rs
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs                   C ABI exports
+│   │       ├── lib.rs
 │   │       ├── abi/
-│   │       │   └── mod.rs              ABI structs (#[repr(C)])
+│   │       │   └── mod.rs
 │   │       ├── allocator/
-│   │       │   └── mod.rs              host allocator
+│   │       │   └── mod.rs
 │   │       ├── error/
-│   │       │   └── mod.rs              PolyplugError enum
+│   │       │   └── mod.rs
 │   │       ├── graph/
-│   │       │   └── mod.rs              capability graph + topo sort
+│   │       │   └── mod.rs
 │   │       ├── loader/
-│   │       │   └── mod.rs              bundle loading (dlopen)
+│   │       │   └── mod.rs              BundleLoader trait + native loader
 │   │       ├── registry/
-│   │       │   └── mod.rs              vtable registry
+│   │       │   └── mod.rs
 │   │       └── runtime/
-│   │           └── mod.rs              PluginRuntime public API
+│   │           └── mod.rs
+│   ├── polyplug-guest/                  Rust guest lib
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── lib/
+│   │           └── mod.rs
+│   ├── polyplug-dotnet/                 standard .NET adapter
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── lib/
+│   │           └── mod.rs
+│   ├── polyplug-python/                 Python adapter
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── lib/
+│   │           └── mod.rs
+│   ├── polyplug-lua/                    Lua adapter
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── lib/
+│   │           └── mod.rs
 │   └── polyplugc/                       CLI codegen tool
 │       ├── Cargo.toml
 │       └── src/
 │           ├── main.rs
 │           ├── error/
-│           │   └── mod.rs              PolyplugcError enum
+│           │   └── mod.rs
 │           ├── ir/
-│           │   └── mod.rs              IR structs
+│           │   └── mod.rs
 │           ├── parser/
-│           │   └── mod.rs              TOML schema parser
+│           │   └── mod.rs
 │           └── generators/
-│               ├── mod.rs              CodeGenerator trait
+│               ├── mod.rs
 │               ├── rust/
 │               │   └── mod.rs
 │               ├── cpp/
@@ -1312,29 +1181,27 @@ polyplug/                                YOU maintain
 │               └── lua/
 │                   └── mod.rs
 ├── host-libs/
-│   ├── rust/                            Rust host crate
-│   ├── cpp/                             header-only C++ host lib
-│   │   ├── polyplug.hpp                 single-include entry point
+│   ├── cpp/
+│   │   ├── polyplug.hpp
 │   │   └── polyplug/
 │   │       ├── abi.hpp
 │   │       ├── error.hpp
 │   │       ├── handle.hpp
 │   │       └── runtime.hpp
-│   ├── csharp/                          C# NuGet host lib
-│   ├── python/                          Python pip host lib
-│   └── lua/                             Lua host lib (.lua + .so)
+│   ├── csharp/                          Polyplug NuGet
+│   ├── python/                          polyplug pip
+│   └── lua/                             polyplug.lua + .so
 ├── guest-libs/
-│   ├── rust/                            Rust guest crate
-│   ├── cpp/                             header-only C++ guest lib
-│   │   ├── polyplug_guest.hpp           single-include entry point
+│   ├── cpp/
+│   │   ├── polyplug_guest.hpp
 │   │   └── polyplug/
 │   │       ├── abi.hpp
 │   │       ├── contract.hpp
 │   │       └── guest.hpp
-│   ├── csharp/                          C# NuGet guest lib
-│   ├── python/                          Python pip guest lib
-│   └── lua/                             Lua guest lib (.lua file)
-└── tests/                               integration tests
+│   ├── csharp/                          Polyplug.Guest NuGet
+│   ├── python/                          polyplug-guest pip
+│   └── lua/                             polyplug-guest.lua
+└── tests/
     ├── fixtures/
     │   ├── test_api.toml
     │   ├── test_bundle.toml
@@ -1353,29 +1220,26 @@ polyplug/                                YOU maintain
 
 
 my-game-engine/                          APP DEVELOPER
-├── api.toml                             only schema file they write
-├── src/
-│   └── generated/
-│       ├── host/                        polyplugc output (--api)
-│       │   ├── types.hpp
-│       │   └── callers.hpp
-│       └── guest/                       polyplugc output (--api, distributed)
-│           ├── types.hpp
-│           └── contracts.hpp
-└── plugins/                             runtime scans here
+├── api.toml
+├── Cargo.toml
+│   └── polyplug = "1.0"
+│       polyplug-dotnet = "1.0"          only if .NET plugins needed
+└── src/
+    └── generated/
+        ├── host/                        polyplugc --api output
+        └── guest/                       distributed to plugin devs
 
 
 image-plugin/                            PLUGIN DEVELOPER
-├── bundle.toml                          only schema file they write
+├── bundle.toml                          runtime = "native" | "dotnet" | "python" | "lua"
 ├── src/
 │   ├── decoder.rs                       business logic only
-│   ├── stats.rs                         business logic only
-│   └── generated/                       polyplugc output (--bundle)
+│   └── generated/                       polyplugc --bundle output
 │       ├── types.rs
 │       ├── contracts.rs
 │       ├── vtables.rs
 │       └── init.rs
 └── dist/
     ├── image_bundle.so
-    └── image_bundle.manifest.toml       auto-generated by polyplugc
+    └── image_bundle.manifest.toml       runtime field included
 ```
