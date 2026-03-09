@@ -70,6 +70,10 @@ polyplug-python    = { path = "../../crates/polyplug-python" }
 polyplug-lua       = { path = "../../crates/polyplug-lua" }
 toml               = { workspace = true }
 
+[[test]]
+name = "integration_dotnet"
+path = "../../tests/integration_dotnet/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false

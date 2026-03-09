@@ -399,4 +399,41 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
             cpp_throw_dest_so.display()
         );
     }
+
+    // ── C# fixture plugin (dotnet build) ──────────────────────────────────────
+    let csharp_csproj: PathBuf =
+        workspace_root.join("tests/fixtures/csharp_plugin/CsharpPlugin.csproj");
+    let csharp_out_dir: PathBuf =
+        workspace_root.join("tests/fixtures/csharp_plugin/bin/Debug/net10.0");
+
+    // Guard: only run dotnet build if the .csproj file exists AND dotnet is available on PATH
+    let dotnet_available: bool = csharp_csproj.exists()
+        && Command::new("dotnet")
+            .arg("--version")
+            .output()
+            .map(|o: std::process::Output| o.status.success())
+            .unwrap_or(false);
+
+    if dotnet_available {
+        let dotnet_status: std::process::ExitStatus = Command::new("dotnet")
+            .arg("build")
+            .arg(&csharp_csproj)
+            .arg("--configuration")
+            .arg("Debug")
+            .arg("--nologo")
+            .status()
+            .expect("dotnet build failed to spawn");
+        if !dotnet_status.success() {
+            panic!("dotnet build failed for CsharpPlugin.csproj");
+        }
+        println!(
+            "cargo:rustc-env=TEST_CSHARP_PLUGIN_DLL={}",
+            csharp_out_dir.join("CsharpPlugin.dll").display()
+        );
+    } else {
+        // No dotnet — emit a dummy env var so test code can skip gracefully
+        println!("cargo:rustc-env=TEST_CSHARP_PLUGIN_DLL=DOTNET_NOT_AVAILABLE");
+    }
+    println!("cargo:rerun-if-changed=tests/fixtures/csharp_plugin/Plugin.cs");
+    println!("cargo:rerun-if-changed=tests/fixtures/csharp_plugin/CsharpPlugin.csproj");
 }
