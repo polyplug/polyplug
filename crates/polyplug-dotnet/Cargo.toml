@@ -12,10 +12,13 @@ crate-type = ["rlib"]
 
 [dependencies]
 polyplug = { path = "../polyplug" }
-netcorehost = { version = "0.20.0", features = ["nethost-download", "net10_0"] }
+netcorehost = { version = "0.20", features = ["nethost", "net10_0"] }
 pelite = "0.10.0"
 tempfile = "3"
 once_cell = "1"
+
+[features]
+download-nethost = ["netcorehost/nethost-download"]
 
 [lints]
 workspace = true

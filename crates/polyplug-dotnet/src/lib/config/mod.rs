@@ -8,11 +8,37 @@
 /// # Example
 /// ```rust
 /// use polyplug_dotnet::DotnetConfig;
-/// let config = DotnetConfig { min_framework: String::from("net10.0") };
+/// let config = DotnetConfig::default();
 /// ```
 #[derive(Debug, Clone)]
 pub struct DotnetConfig {
     /// Minimum acceptable .NET framework version, e.g. `"net10.0"`.
     /// Used to generate the `runtimeconfig.json` for hostfxr initialization.
     pub min_framework: String,
+    /// Strategy for locating the hostfxr library.
+    pub hostfxr: HostfxrLocation,
+}
+
+impl Default for DotnetConfig {
+    fn default() -> DotnetConfig {
+        DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }
+    }
+}
+
+/// Location strategy for the hostfxr library.
+#[derive(Debug, Clone)]
+pub enum HostfxrLocation {
+    /// Automatically locate hostfxr using nethost.
+    Auto,
+    /// Use the hostfxr library at the given path.
+    Path(std::path::PathBuf),
+}
+
+impl Default for HostfxrLocation {
+    fn default() -> HostfxrLocation {
+        HostfxrLocation::Auto
+    }
 }

@@ -312,6 +312,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
     out.push_str("    public static uint PolyplugInit(PluginRegistrar* registrar) {\n");
     out.push_str("        if (registrar == null) return AbiConstants.ABI_ERROR_GENERIC;\n");
+    out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
 
     for contract in &ir.contracts {
@@ -366,6 +367,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("            return AbiConstants.ABI_OK;\n");
     out.push_str("        } catch {\n");
     out.push_str("            return AbiConstants.ABI_ERROR_PANIC;\n");
+    out.push_str("        } finally {\n");
+    out.push_str("            System.Threading.Thread.EndThreadAffinity();\n");
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n");

@@ -16,6 +16,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
+use polyplug_dotnet::HostfxrLocation;
 
 /// Path to the compiled C# fixture DLL — set by build.rs.
 /// Value is "DOTNET_NOT_AVAILABLE" if dotnet is not installed.
@@ -107,6 +108,7 @@ std::thread_local! {
 fn make_loader() -> DotnetLoader {
     DotnetLoader::new(DotnetConfig {
         min_framework: String::from("net10.0"),
+        hostfxr: HostfxrLocation::Auto,
     })
 }
 

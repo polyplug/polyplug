@@ -3,6 +3,7 @@
 
 pub mod config;
 pub use config::DotnetConfig;
+pub use config::HostfxrLocation;
 
 use std::fs;
 use std::io::Write;

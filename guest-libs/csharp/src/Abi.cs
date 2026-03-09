@@ -1,4 +1,5 @@
 // THIS FILE IS HAND-WRITTEN (not generated). Part of the Polyplug.Guest library.
+// REQUIREMENT: All [UnmanagedCallersOnly] methods in guest plugins MUST declare CallConvs = new[] { typeof(CallConvCdecl) }
 using System.Runtime.InteropServices;
 
 namespace Polyplug.Guest;
@@ -67,9 +68,10 @@ public unsafe struct HostVTable
 {
     public delegate* unmanaged[Cdecl]<nuint, nuint, byte*>                            Alloc;        // host_alloc(size, align) → ptr
     public delegate* unmanaged[Cdecl]<byte*, nuint, nuint, void>                      Free;         // host_free(ptr, size, align)
-    public delegate* unmanaged[Cdecl]<ulong, uint, PluginHandle>                      FindPlugin;   // find_plugin(contract_id, min_version) → handle
-    public delegate* unmanaged[Cdecl]<PluginHandle, uint, void*, void*, AbiError>     CallPlugin;   // call_plugin(handle, fn_id, args, out) → AbiError
-    public delegate* unmanaged[Cdecl]<uint, void*>                                    GetExtension; // get_extension(extension_id) → vtable ptr
+    // SuppressGCTransition: safe because find_plugin/call_plugin/get_extension are short non-blocking Rust calls that never call back into managed code
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle>                      FindPlugin;   // find_plugin(contract_id, min_version) → handle
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<PluginHandle, uint, void*, void*, AbiError>     CallPlugin;   // call_plugin(handle, fn_id, args, out) → AbiError
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<uint, void*>                                    GetExtension; // get_extension(extension_id) → vtable ptr
 }
 
 /// <summary>

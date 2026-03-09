@@ -43,9 +43,11 @@ public unsafe struct PluginVTable {
 public unsafe struct HostVTable {
     public delegate* unmanaged[Cdecl]<nuint, nuint, byte*> Alloc;
     public delegate* unmanaged[Cdecl]<byte*, nuint, nuint, void> Free;
-    public delegate* unmanaged[Cdecl]<ulong, uint, PluginHandle> FindPlugin;
-    public delegate* unmanaged[Cdecl]<PluginHandle, uint, void*, void*, AbiError> CallPlugin;
-    public delegate* unmanaged[Cdecl]<uint, void*> GetExtension;
+    // SuppressGCTransition: safe because find_plugin/call_plugin/get_extension are short non-blocking
+    // Rust calls that never call back into managed code:
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle> FindPlugin;
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<PluginHandle, uint, void*, void*, AbiError> CallPlugin;
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<uint, void*> GetExtension;
 }
 
 [StructLayout(LayoutKind.Sequential)]
