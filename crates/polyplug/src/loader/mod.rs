@@ -10,6 +10,7 @@
 //! (i.e., the `Runtime`). Dropping a `Library` calls `dlclose()` which unmaps
 //! plugin code — any vtable fn pointer into those pages would become dangling.
 pub mod manifest;
+pub mod scanner;
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -170,6 +171,11 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
             bundle_name: String::new(),
             dependencies: Vec::new(),
             bundle_id: 0,
+            name: String::new(),
+            version: String::new(),
+            file: String::new(),
+            provides: Vec::new(),
+            function_count: std::collections::HashMap::new(),
         });
     }
 
@@ -200,6 +206,11 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
         bundle_name: data.bundle_name,
         dependencies: data.dependencies,
         bundle_id: 0,
+        name: data.name,
+        version: data.version,
+        file: data.file,
+        provides: data.provides,
+        function_count: data.function_count,
     })
 }
 
@@ -237,7 +248,13 @@ pub fn load_bundle(
     let dep_contract_ids: Vec<u64> = manifest
         .dependencies
         .iter()
-        .map(|dep: &RawManifestDependency| crate::abi::contract_id(&dep.contract, 0))
+        .map(|dep: &RawManifestDependency| {
+            if dep.contract_id != 0 {
+                dep.contract_id
+            } else {
+                crate::abi::contract_id(&dep.contract, 0)
+            }
+        })
         .collect::<Vec<u64>>();
     registry
         .declare_deps(manifest.bundle_id, dep_contract_ids)
