@@ -73,6 +73,7 @@ criterion          = { workspace = true }
 polyplug-dotnet    = { path = "../../crates/polyplug-dotnet" }
 polyplug-python    = { path = "../../crates/polyplug-python" }
 polyplug-lua       = { path = "../../crates/polyplug-lua" }
+polyplug-js       = { path = "../../crates/polyplug-js" }
 tempfile           = "3"
 toml               = { workspace = true }
 
@@ -91,6 +92,10 @@ path = "../../tests/integration_python/mod.rs"
 [[test]]
 name = "integration_lua"
 path = "../../tests/integration_lua/mod.rs"
+
+[[test]]
+name = "integration_js"
+path = "../../tests/integration_js/mod.rs"
 
 [[bench]]
 name    = "vtable_dispatch"
