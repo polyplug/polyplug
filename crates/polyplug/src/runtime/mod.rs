@@ -12,6 +12,7 @@
 //!  - find_by_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -28,6 +29,12 @@ use crate::registry::Registry;
 use std::collections::HashMap;
 
 use crate::error::LoaderError;
+use crate::abi::PluginRegistrar;
+use crate::error::GraphError;
+use crate::error::PolyplugError;
+use crate::graph::CapabilityGraph;
+use crate::loader::BundleInitGuard;
+use crate::loader::manifest::ManifestData;
 use crate::loader::BundleLoader;
 use crate::loader::NativeBundleLoader;
 
@@ -68,7 +75,7 @@ pub struct Runtime {
     /// The static HostVTable given to plugins. Must be 'static.
     host_vtable: &'static HostVTable,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
-    _loaders: HashMap<String, Box<dyn BundleLoader>>,
+    loaders: HashMap<String, Box<dyn BundleLoader>>,
 }
 
 // SAFETY: Runtime wraps Arc<Registry> (Send+Sync) and Vec<LoadedBundle>.
@@ -79,6 +86,11 @@ pub struct Runtime {
 unsafe impl Send for Runtime {}
 // SAFETY: See above — Runtime is immutable after init. All mutable state is behind Arc<RwLock>.
 unsafe impl Sync for Runtime {}
+
+/// Options for `Runtime::load_bundle_with`.
+///
+/// Currently empty — placeholder for future compatibility options (Epic 14).
+pub struct LoadOptions {}
 
 /// Builder for constructing a Runtime.
 pub struct RuntimeBuilder {
@@ -167,13 +179,61 @@ impl RuntimeBuilder {
             }
         }
 
-        let _ = &self.plugin_dirs;
+        // Phase 1: Scan plugin directories for bundles
+        let discovered: Vec<(PathBuf, ManifestData)> = crate::loader::scanner::scan_dirs(&self.plugin_dirs);
+
+        // If nothing discovered, build Runtime with empty bundles (no graph needed)
+        if !discovered.is_empty() {
+            // Phase 2: Build capability graph
+            let graph: CapabilityGraph =
+                CapabilityGraph::from_manifests(&discovered).map_err(|e: GraphError| RuntimeError::Graph(e))?;
+
+            // Phase 3: Get topological load order (providers first)
+            let load_order: Vec<String> =
+                graph.topological_order().map_err(|e: GraphError| RuntimeError::Graph(e))?;
+
+            // Phase 4: Build lookup map bundle_name -> (path, manifest)
+            let mut bundle_map: HashMap<String, (PathBuf, ManifestData)> = HashMap::new();
+            for entry in discovered {
+                bundle_map.insert(entry.1.bundle_name.clone(), entry);
+            }
+
+            // Phase 5: Dispatch each bundle to its loader in topo order
+            for bundle_name in &load_order {
+                let (bundle_path, manifest): &(PathBuf, ManifestData) = bundle_map
+                    .get(bundle_name)
+                    .ok_or_else(|| RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: "bundle in topo order but not found in map".to_owned(),
+                    }))?;
+
+                let loader: &dyn BundleLoader = loader_map
+                    .get(&manifest.runtime)
+                    .map(Box::as_ref)
+                    .ok_or_else(|| RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
+                        bundle: bundle_path.display().to_string(),
+                        runtime_name: manifest.runtime.clone(),
+                    }))?;
+
+                let (mut registrar, _guard): (PluginRegistrar, BundleInitGuard) =
+                    crate::loader::make_registrar_context(&registry, manifest.bundle_id, host_vtable);
+
+                loader.load(bundle_path, &mut registrar)
+                    .map_err(|e: PolyplugError| match e {
+                        PolyplugError::Loader(le) => RuntimeError::Loader(le),
+                        other => RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: bundle_path.display().to_string(),
+                            error: other.to_string(),
+                        }),
+                    })?;
+            }
+        }
 
         Ok(Runtime {
             registry,
             _bundles: bundles,
             host_vtable,
-            _loaders: loader_map,
+            loaders: loader_map,
         })
     }
 }
@@ -226,6 +286,53 @@ impl Runtime {
     /// Get the HostVTable for use in plugin registrars.
     pub fn host_vtable(&self) -> &'static HostVTable {
         self.host_vtable
+    }
+
+    /// Load a single plugin bundle explicitly by path.
+    ///
+    /// Reads the companion manifest, finds the matching loader, and dispatches.
+    /// Does NOT perform graph pre-validation — intended for programmatic loads.
+    pub fn load_bundle(&self, path: &Path) -> Result<(), PolyplugError> {
+        self.load_bundle_with(path, LoadOptions {})
+    }
+
+    /// Load a single plugin bundle explicitly with options.
+    pub fn load_bundle_with(
+        &self,
+        path: &Path,
+        _opts: LoadOptions,
+    ) -> Result<(), PolyplugError> {
+        // Check companion manifest exists
+        let manifest_path: PathBuf = path.with_extension("manifest.toml");
+        if !manifest_path.exists() {
+            return Err(PolyplugError::Loader(LoaderError::ManifestParse {
+                path: manifest_path.display().to_string(),
+                reason: "manifest file not found".to_owned(),
+            }));
+        }
+        // Parse manifest and compute bundle_id
+        let mut manifest: ManifestData = crate::loader::parse_manifest(path)
+            .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
+        manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+        // Find the loader for this runtime
+        let runtime_name: &str = &manifest.runtime;
+        let loader: &dyn BundleLoader = self
+            .loaders
+            .get(runtime_name)
+            .map(Box::as_ref)
+            .ok_or_else(|| PolyplugError::Loader(LoaderError::NoLoaderForRuntime {
+                bundle: path.display().to_string(),
+                runtime_name: runtime_name.to_owned(),
+            }))?;
+        // Build registrar and dispatch
+        let mut registrar: PluginRegistrar = PluginRegistrar {
+            register_plugin: crate::loader::registrar_callback,
+            host: self.host_vtable as *const HostVTable,
+        };
+        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
+        let result: Result<(), PolyplugError> = loader.load(path, &mut registrar);
+        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0));
+        result
     }
 }
 

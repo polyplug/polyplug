@@ -44,7 +44,7 @@ thread_local! {
 }
 
 // ─── RAII guard: clears thread-locals on drop (even on panic) ────────────────
-struct BundleInitGuard;
+pub(crate) struct BundleInitGuard;
 
 impl Drop for BundleInitGuard {
     fn drop(&mut self) {
@@ -387,6 +387,32 @@ pub fn load_bundle(
     Ok(())
 }
 
+/// Set up TLS context for the registrar callback and return a PluginRegistrar + RAII guard.
+///
+/// Used by `RuntimeBuilder::build()` when dispatching non-native loaders.
+/// The `BundleInitGuard` returned clears all three TLS variables on drop,
+/// ensuring per-bundle state does not leak across loader invocations.
+///
+/// # Safety
+/// The caller must ensure `registry` outlives the returned `PluginRegistrar`.
+/// `host_vtable` must be `'static`.
+pub(crate) fn make_registrar_context(
+    registry: &Registry,
+    bundle_id: u64,
+    host_vtable: &'static HostVTable,
+) -> (PluginRegistrar, BundleInitGuard) {
+    REGISTRAR_REGISTRY_PTR.with(|c: &core::cell::Cell<*const Registry>| {
+        c.set(registry as *const Registry);
+    });
+    REGISTRAR_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(bundle_id));
+    crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(bundle_id));
+    let registrar: PluginRegistrar = PluginRegistrar {
+        register_plugin: registrar_callback,
+        host: host_vtable as *const HostVTable,
+    };
+    (registrar, BundleInitGuard)
+}
+
 /// The `register_plugin` callback passed to plugins in their `PluginRegistrar`.
 //
 //  Called by the plugin during `polyplug_init` to register vtables.
@@ -394,7 +420,7 @@ pub fn load_bundle(
 //  to recover the registry and bundle_id context through the FFI boundary.
 //  This is safe because polyplug_init is called synchronously on a single thread,
 //  and BundleInitGuard ensures the thread-locals are cleared after init returns.
-unsafe extern "C" fn registrar_callback(
+pub(crate) unsafe extern "C" fn registrar_callback(
     _registrar: *mut PluginRegistrar,
     descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
