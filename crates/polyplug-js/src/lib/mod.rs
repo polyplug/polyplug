@@ -1,11 +1,20 @@
-//! polyplug-js — JavaScript and TypeScript plugin loader for polyplug.
+//! polyplug-js — JS/TS adapter for the polyplug runtime.
 //!
-//! Supports Node.js, Bun, and Deno runtimes.
-//! This is a stub implementation — see Epic 11.5 for full implementation.
+//! Implements `BundleLoader` for `.node` plugin bundles (ts-node/js-node variants)
+//! and stubs for ts-bun/js-bun and ts-deno/js-deno.
+//!
+//! # Usage
+//! ```rust,ignore
+//! use polyplug::runtime::RuntimeBuilder;
+//! use polyplug_js::{JsConfig, JsLoader};
+//!
+//! let runtime = RuntimeBuilder::new()
+//!     .loader(JsLoader::new("ts-node", JsConfig::node_only()))
+//!     .loader(JsLoader::new("js-node", JsConfig::node_only()))
+//!     .build()?;
+//! ```
 
 pub mod config;
-
-pub use config::BunConfig;
-pub use config::DenoConfig;
+pub(crate) mod loader;
 pub use config::JsConfig;
-pub use config::NodeConfig;
+pub use loader::JsLoader;
