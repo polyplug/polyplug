@@ -436,4 +436,58 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
     }
     println!("cargo:rerun-if-changed=tests/fixtures/csharp_plugin/Plugin.cs");
     println!("cargo:rerun-if-changed=tests/fixtures/csharp_plugin/CsharpPlugin.csproj");
+
+    // ─── Python fixture availability check ──────────────────────────────────────
+    println!("cargo:rerun-if-changed=tests/fixtures/test_plugin.py");
+
+    // Check if python3 is available.
+    let python_available: bool = Command::new("python3")
+        .arg("--version")
+        .output()
+        .map(|o: std::process::Output| o.status.success())
+        .unwrap_or(false);
+
+    // Locate the polyplug shared library (built in this same invocation) so that
+    // integration_python tests can load it. The .so lives at:
+    //   <target_dir>/<profile>/libpolyplug.so
+    // We copy it to tests/fixtures/ with a stable name.
+    let polyplug_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libpolyplug.dylib"
+    } else if cfg!(target_os = "windows") {
+        "polyplug.dll"
+    } else {
+        "libpolyplug.so"
+    };
+
+    let polyplug_so_src: PathBuf = target_dir.join(profile).join(polyplug_lib_filename);
+    let polyplug_so_dest: PathBuf = fixtures_dir.join(polyplug_lib_filename);
+
+    if polyplug_so_src.exists() {
+        fs::copy(&polyplug_so_src, &polyplug_so_dest)
+            .unwrap_or_else(|e: std::io::Error| {
+                panic!(
+                    "failed to copy {} to {}: {}",
+                    polyplug_so_src.display(),
+                    polyplug_so_dest.display(),
+                    e
+                )
+            });
+        println!(
+            "cargo:rustc-env=POLYPLUG_SO={}",
+            polyplug_so_dest.display()
+        );
+    } else {
+        // polyplug.so might not be built yet in the very first incremental build.
+        // Emit empty env var; integration tests will skip if POLYPLUG_SO is empty.
+        println!("cargo:rustc-env=POLYPLUG_SO=");
+    }
+
+    if python_available {
+        println!(
+            "cargo:rustc-env=TEST_PYTHON_PLUGIN={}",
+            fixtures_dir.join("test_plugin.py").display()
+        );
+    } else {
+        println!("cargo:rustc-env=TEST_PYTHON_PLUGIN=PYTHON_NOT_AVAILABLE");
+    }
 }
