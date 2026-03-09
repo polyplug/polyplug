@@ -89,9 +89,12 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
             let generator: Box<dyn generators::CodeGenerator> = match lang.as_str() {
                 "rust" => Box::new(generators::rust::RustGenerator),
                 "cpp" | "c++" => Box::new(generators::cpp::CppGenerator),
+                "csharp" | "c#" => Box::new(generators::csharp::CSharpGenerator),
                 other => {
                     return Err(CodegenError::ValidationFailed {
-                        message: format!("Unknown language: `{other}`. Supported: rust, cpp"),
+                        message: format!(
+                            "Unknown language: `{other}`. Supported: rust, cpp, csharp"
+                        ),
                     });
                 }
             };

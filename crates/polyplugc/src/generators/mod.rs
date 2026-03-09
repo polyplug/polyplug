@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 pub(crate) mod cpp;
+pub(crate) mod csharp;
 pub(crate) mod rust;
 
 use crate::error::CodegenError;
