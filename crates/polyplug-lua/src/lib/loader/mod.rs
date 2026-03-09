@@ -246,7 +246,11 @@ pub(crate) fn ensure_lua_initialized(_config: &LuaConfig) -> Result<&'static Lua
         return Ok(vm);
     }
     // mlua 0.10: Lua::new() returns Lua directly (not Result).
-    let lua: Lua = Lua::new();
+    // mlua 0.10: Lua::unsafe_new() enables the FFI module required by LuaJIT plugins.
+    // SAFETY: We trust the Lua scripts loaded through this loader. The LuaJIT FFI is
+    // required for the polyplug_guest.lua ABI bridge (struct layout, pointer casts).
+    // All plugins are vetted before being passed to the loader.
+    let lua: Lua = unsafe { Lua::unsafe_new() };
     // Set package.path so that require("polyplug_guest") resolves correctly.
     let package_path_code: String = format!(
         "package.path = package.path .. ';' .. '{}/?.lua'",
@@ -291,6 +295,23 @@ impl BundleLoader for LuaLoader {
 
     fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
         let lua: &Lua = ensure_lua_initialized(&self.config)?;
+
+        // Clear globals from any previous load to ensure isolation.
+        // If the script does not define polyplug_init, we must return LuaInitFunctionMissing.
+        lua.globals()
+            .set("polyplug_init", mlua::Value::Nil)
+            .map_err(|e: mlua::Error| {
+                PolyplugError::Loader(LoaderError::LuaVmInitFailed {
+                    reason: format!("failed to clear polyplug_init global: {}", e),
+                })
+            })?;
+        lua.globals()
+            .set("_polyplug_handlers", mlua::Value::Nil)
+            .map_err(|e: mlua::Error| {
+                PolyplugError::Loader(LoaderError::LuaVmInitFailed {
+                    reason: format!("failed to clear _polyplug_handlers global: {}", e),
+                })
+            })?;
 
         // Read the plugin script source.
         let source: String = std::fs::read_to_string(path).map_err(|e: std::io::Error| {

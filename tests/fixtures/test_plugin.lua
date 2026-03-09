@@ -40,7 +40,7 @@ end
 -- after reading _G._polyplug_handlers and creating Rust-side trampolines.
 function polyplug_init(_registrar_ptr_int)
     _G._polyplug_handlers = {
-        contract_name = "test",
+        contract_name = "test.add",
         contract_id_hex = "0xCC4232FAB0410D2B",
         contract_version = 1,
         plugin_name = "test-plugin-lua",
