@@ -90,10 +90,11 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
                 "rust" => Box::new(generators::rust::RustGenerator),
                 "cpp" | "c++" => Box::new(generators::cpp::CppGenerator),
                 "csharp" | "c#" => Box::new(generators::csharp::CSharpGenerator),
+                "python" | "py" => Box::new(generators::python::PythonGenerator),
                 other => {
                     return Err(CodegenError::ValidationFailed {
                         message: format!(
-                            "Unknown language: `{other}`. Supported: rust, cpp, csharp"
+                            "Unknown language: `{other}`. Supported: rust, cpp, csharp, python"
                         ),
                     });
                 }
