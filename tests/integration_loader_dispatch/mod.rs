@@ -154,7 +154,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
 }
 
 #[test]
-fn python_loader_returns_not_implemented() {
+fn python_loader_loads_nonexistent_file_errors() {
     let loader: PythonLoader = PythonLoader::new(polyplug_python::PythonConfig::default());
     assert_eq!(loader.runtime_name(), "python");
 
@@ -165,10 +165,10 @@ fn python_loader_returns_not_implemented() {
     };
     let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
     match result {
-        Err(PolyplugError::Loader(LoaderError::RuntimeNotImplemented { runtime_name })) => {
-            assert_eq!(runtime_name, "python");
-        }
-        other => panic!("expected RuntimeNotImplemented, got: {other:?}"),
+        // Python loader is fully implemented — loading a non-existent file returns
+        // PythonModuleImportFailed (path does not exist or is not accessible).
+        Err(PolyplugError::Loader(LoaderError::PythonModuleImportFailed { .. })) => {}
+        other => panic!("expected PythonModuleImportFailed for dummy.py, got: {other:?}"),
     }
 }
 
