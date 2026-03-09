@@ -12,6 +12,7 @@ If you are unsure whether something violates a rule — it probably does. Ask fi
 - **CLI tool name:** `polyplugc`
 - **Language:** Rust (host runtime, CLI, guest libs)
 - **Goal:** The universal, blazing-fast, cross-language plugin runtime platform
+- **Trust model**: See `TRUST_MODEL.md` for bundle identity, declared dependencies, and ABI freeze details.
 
 ---
 

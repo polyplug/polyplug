@@ -1,3 +1,15 @@
+// =============================================================================
+// ABI FROZEN AS OF EPIC 9.7
+// =============================================================================
+//
+// The following types and function signatures constitute the frozen polyplug ABI.
+// NO CHANGES to #[repr(C)] structs, function pointer signatures, or the field
+// order of HostVTable are permitted after this point.
+//
+// All new functionality must go through the extension mechanism (get_extension).
+// For rationale and trust model, see TRUST_MODEL.md.
+// =============================================================================
+
 //! ABI — `#[repr(C)]` types, constants, and FNV-1a hashing for the polyplug ABI boundary.
 
 // ABI version sentinel — all bundles must export a function returning this value.

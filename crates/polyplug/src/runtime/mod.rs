@@ -16,11 +16,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::abi::AbiError;
 use crate::abi::HostVTable;
 use crate::abi::PluginHandle;
 use crate::abi::PluginVTable;
-use crate::abi::ABI_FUNCTION_NOT_AVAIL;
 use crate::allocator::polyplug_host_alloc;
 use crate::allocator::polyplug_host_free;
 use crate::error::RegistryError;
@@ -217,57 +215,6 @@ impl Runtime {
         self.registry.resolve(handle)
     }
 
-    /// Legacy: Find a plugin by contract_id. Use find_by_contract() instead.
-    pub fn find_plugin(
-        &self,
-        contract_id: u64,
-        min_version: u32,
-    ) -> Result<PluginHandle, RegistryError> {
-        self.registry.find_by_contract(contract_id, min_version)
-    }
-
-    /// Call a plugin function through its vtable.
-    ///
-    /// Returns AbiError with appropriate code on failure.
-    ///
-    /// # Safety
-    /// `args` and `out` must point to valid memory matching the function's expected types.
-    /// This is guaranteed by the generated caller code — app developers never call this directly.
-    pub unsafe fn call_plugin(
-        &self,
-        handle: PluginHandle,
-        fn_id: u32,
-        args: *const (),
-        out: *mut (),
-    ) -> AbiError {
-        let vtable_ptr: *const PluginVTable = match self.registry.resolve(handle) {
-            Ok(p) => p,
-            Err(e) => {
-                return registry_error_to_abi_error(e);
-            }
-        };
-
-        // SAFETY: vtable_ptr is 'static (library never dropped, §7.3).
-        let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-        if fn_id >= vtable.function_count {
-            return AbiError {
-                code: ABI_FUNCTION_NOT_AVAIL,
-                message: crate::abi::StringView::null(),
-            };
-        }
-
-        // Dispatch: index into the function pointer array.
-        // SAFETY: fn_id < function_count, so the array index is valid.
-        // functions points to a 'static array. The function has the correct
-        // signature for the contract (guaranteed by codegen).
-        let fn_ptr: *const () = unsafe { *vtable.functions.add(fn_id as usize) };
-        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-            // SAFETY: The function pointer is cast to the generic dispatch signature.
-            // Actual argument types are enforced by the generated caller code.
-            unsafe { core::mem::transmute(fn_ptr) };
-        // SAFETY: args and out point to valid memory as guaranteed by the generated caller.
-        unsafe { dispatch_fn(args, out) }
-    }
 
     /// Get the HostVTable for use in plugin registrars.
     pub fn host_vtable(&self) -> &'static HostVTable {
@@ -377,20 +324,6 @@ unsafe extern "C" fn host_get_extension(_extension_id: u32) -> *const () {
     core::ptr::null()
 }
 
-/// Convert a RegistryError to an AbiError.
-fn registry_error_to_abi_error(error: RegistryError) -> AbiError {
-    let code: u32 = match &error {
-        RegistryError::StaleHandle { .. } => crate::abi::ABI_ERROR_STALE_HANDLE,
-        RegistryError::PluginNotFound { .. } => crate::abi::ABI_ERROR_NOT_FOUND,
-        RegistryError::ContractIdCollision { .. } | RegistryError::DuplicateProvider { .. } => {
-            crate::abi::ABI_ERROR_GENERIC
-        }
-    };
-    AbiError {
-        code,
-        message: crate::abi::StringView::null(),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -402,7 +335,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
         // Registry starts empty
-        let result: Result<PluginHandle, _> = runtime.find_plugin(0x1234_5678_9ABC_DEF0_u64, 0);
+        let result: Result<PluginHandle, _> = runtime.find_by_contract(0x1234_5678_9ABC_DEF0_u64, 0);
         assert!(result.is_err(), "empty registry should return not found");
     }
 

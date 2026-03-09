@@ -11,3 +11,63 @@ pub use polyplug::abi;
 pub use polyplug::error;
 pub use polyplug::registry;
 pub use polyplug::runtime;
+
+use polyplug::abi::HostVTable;
+use polyplug::abi::PluginHandle;
+use polyplug::abi::PluginVTable;
+
+/// Look up the first provider of a contract at or above `min_version`.
+/// Returns `PluginHandle::null()` if not found.
+///
+/// # Safety
+/// `vtable` must point to a valid, live `HostVTable` backed by an active runtime.
+pub unsafe fn find_by_contract(
+    vtable: &HostVTable,
+    contract_id: u64,
+    min_version: u32,
+) -> PluginHandle {
+    // SAFETY: caller guarantees vtable is valid and runtime is alive.
+    unsafe { (vtable.find_by_contract)(contract_id, min_version) }
+}
+
+/// Look up a specific bundle's implementation of a contract.
+///
+/// # Safety
+/// `vtable` must point to a valid, live `HostVTable` backed by an active runtime.
+pub unsafe fn find_by_bundle(
+    vtable: &HostVTable,
+    bundle_id: u64,
+    contract_id: u64,
+    min_version: u32,
+) -> PluginHandle {
+    // SAFETY: caller guarantees vtable is valid and runtime is alive.
+    unsafe { (vtable.find_by_bundle)(bundle_id, contract_id, min_version) }
+}
+
+/// Enumerate all providers of a contract into a caller-provided buffer.
+/// Returns the number of handles written.
+///
+/// # Safety
+/// `vtable` must point to a valid, live `HostVTable` backed by an active runtime.
+pub unsafe fn find_all_by_contract(
+    vtable: &HostVTable,
+    contract_id: u64,
+    min_version: u32,
+    out: &mut [PluginHandle],
+) -> usize {
+    // SAFETY: out slice is valid for the duration of this call.
+    unsafe { (vtable.find_all_by_contract)(contract_id, min_version, out.as_mut_ptr(), out.len()) }
+}
+
+/// Resolve a handle to the raw vtable pointer for direct dispatch.
+/// Returns null if the handle is stale.
+///
+/// # Safety
+/// The returned pointer is valid only while the plugin library remains loaded.
+pub unsafe fn resolve_plugin(
+    vtable: &HostVTable,
+    handle: PluginHandle,
+) -> *const PluginVTable {
+    // SAFETY: caller guarantees vtable is valid and runtime is alive.
+    unsafe { (vtable.resolve_plugin)(handle) }
+}
