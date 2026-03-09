@@ -1882,7 +1882,7 @@ Max Concurrent: 8 (Wave 3)
 
   **Commit**: YES (Wave 3 group)
 
-- [ ] 19. Update `host-libs/rust/src/lib/mod.rs` — new ABI function wrappers
+- [x] 19. Update `host-libs/rust/src/lib/mod.rs` — new ABI function wrappers
 
   **What to do**:
   - Open `host-libs/rust/src/lib/mod.rs`
@@ -2549,7 +2549,7 @@ Max Concurrent: 8 (Wave 3)
 
   **Commit**: YES (Wave 4-5 group)
 
-- [ ] 30. Create `TRUST_MODEL.md` at repo root
+- [x] 30. Create `TRUST_MODEL.md` at repo root
 
   **What to do**:
   - Create a new file `TRUST_MODEL.md` at the repository root (same level as `AGENTS.md`)
@@ -2606,7 +2606,7 @@ Max Concurrent: 8 (Wave 3)
 
   **Commit**: YES (Wave 4-5 group)
 
-- [ ] 31. Update `AGENTS.md` with reference to `TRUST_MODEL.md`
+- [x] 31. Update `AGENTS.md` with reference to `TRUST_MODEL.md`
 
   **What to do**:
   - Open `AGENTS.md` at repo root
@@ -2654,7 +2654,7 @@ Max Concurrent: 8 (Wave 3)
 
   **Commit**: YES (Wave 4-5 group)
 
-- [ ] 32. Add ABI freeze comment block to `crates/polyplug/src/abi/mod.rs`
+- [x] 32. Add ABI freeze comment block to `crates/polyplug/src/abi/mod.rs`
 
   **What to do**:
   - Open `crates/polyplug/src/abi/mod.rs`

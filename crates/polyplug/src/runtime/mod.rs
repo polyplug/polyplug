@@ -377,4 +377,89 @@ mod tests {
             "dep enforcement must return null for undeclared contract during init phase"
         );
     }
+
+    // ── Tests f/g: dep enforcement with a registered plugin ─────────────────
+    //
+    // These use a module-level OnceLock to register the test plugin in the
+    // global registry exactly once. Cargo may run unit tests in parallel within
+    // a binary, so the OnceLock ensures idempotent setup.
+
+    use std::sync::OnceLock;
+
+    /// One-time setup: register a plugin for contract 0xF00D_CAFE in the global registry.
+    fn ensure_test_plugin_registered() {
+        static SETUP: OnceLock<()> = OnceLock::new();
+        SETUP.get_or_init(|| {
+            let vtable: &'static crate::abi::PluginVTable =
+                Box::leak(Box::new(crate::abi::PluginVTable {
+                    contract_id: 0xF00D_CAFE_0000_0001_u64,
+                    contract_version: 0,
+                    function_count: 0,
+                    functions: core::ptr::null(),
+                }));
+            let desc: crate::abi::PluginDescriptor = crate::abi::PluginDescriptor {
+                name: crate::abi::StringView::from_static(b"test-dep-plugin"),
+                contract_name: crate::abi::StringView::from_static(b"test.dep.Contract"),
+                version_major: 1,
+                version_minor: 0,
+                version_patch: 0,
+            };
+            // Use the existing global registry if already set; otherwise create and set one.
+            let registry: Arc<crate::registry::Registry> = global_registry()
+                .unwrap_or_else(|| {
+                    let r: Arc<crate::registry::Registry> =
+                        Arc::new(crate::registry::Registry::new());
+                    set_global_registry(Arc::clone(&r));
+                    r
+                });
+            // SAFETY: vtable is 'static and valid for the registry lifetime.
+            unsafe {
+                registry
+                    .register(desc, vtable, "test.dep.Contract".to_owned(), 0xBEEF_0001_u64)
+                    .expect("setup: register test-dep-plugin");
+            }
+        });
+    }
+
+    /// Test f — declared dependency passes dep enforcement.
+    #[test]
+    fn declared_dep_passes_enforcement() {
+        ensure_test_plugin_registered();
+        let caller_bid: u64 = crate::abi::bundle_id("caller-bundle-f");
+        let dep_cid: u64 = 0xF00D_CAFE_0000_0001_u64;
+        // Declare the dependency so enforcement allows lookup.
+        if let Some(reg) = global_registry() {
+            reg.declare_deps(caller_bid, vec![dep_cid])
+                .expect("declare_deps should succeed");
+        }
+        INIT_BUNDLE_ID.with(|c| c.set(caller_bid));
+        // SAFETY: host_find_by_contract has no pointer preconditions.
+        let handle: PluginHandle = unsafe { host_find_by_contract(dep_cid, 0_u32) };
+        // Reset INIT_BUNDLE_ID before asserting so other tests are unaffected.
+        INIT_BUNDLE_ID.with(|c| c.set(0_u64));
+        assert!(
+            !handle.is_null(),
+            "declared dependency must return a valid handle during init phase"
+        );
+    }
+
+    /// Test g — find_all_by_contract skips dependency enforcement.
+    #[test]
+    fn find_all_skips_dep_enforcement() {
+        ensure_test_plugin_registered();
+        let caller_bid: u64 = crate::abi::bundle_id("caller-bundle-g-no-deps");
+        let dep_cid: u64 = 0xF00D_CAFE_0000_0001_u64;
+        // Do NOT declare any deps for this bundle — enforcement would block find_by_contract.
+        INIT_BUNDLE_ID.with(|c| c.set(caller_bid));
+        // Use a local buffer for the out parameter.
+        let mut handles: [PluginHandle; 8] = [PluginHandle { index: 0, generation: 0 }; 8];
+        // SAFETY: handles is a valid local array; out pointer and cap are consistent.
+        let count: usize =
+            unsafe { host_find_all_by_contract(dep_cid, 0_u32, handles.as_mut_ptr(), 8_usize) };
+        INIT_BUNDLE_ID.with(|c| c.set(0_u64));
+        assert!(
+            count >= 1,
+            "find_all must return providers even without declared deps (no enforcement)"
+        );
+    }
 }
