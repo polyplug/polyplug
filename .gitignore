@@ -1,1 +1,6 @@
 /target
+
+
+# .NET build artifacts (dotnet build output)
+**/bin/
+**/obj/

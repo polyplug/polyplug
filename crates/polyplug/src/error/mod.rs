@@ -69,6 +69,23 @@ pub enum LoaderError {
          (this adapter crate is a stub)"
     )]
     RuntimeNotImplemented { runtime_name: String },
+
+    #[error("hostfxr not found: searched DOTNET_ROOT, PATH, and well-known paths")]
+    HostfxrNotFound,
+
+    #[error("CLR initialization failed for runtime config `{path}`: {reason}")]
+    ClrInitFailed { path: String, reason: String },
+
+    #[error("assembly not found at path `{path}`")]
+    AssemblyNotFound { path: String },
+
+    #[error(
+        "init symbol missing in assembly `{bundle}`: expected `[UnmanagedCallersOnly] polyplug_init`"
+    )]
+    InitSymbolMissing { bundle: String },
+
+    #[error(".NET runtime version mismatch: required={required}, found={found}")]
+    RuntimeVersionMismatch { required: String, found: String },
 }
 
 /// Errors from the plugin registry.
