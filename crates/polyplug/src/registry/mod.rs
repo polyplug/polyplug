@@ -5,6 +5,7 @@
 //! detect use-after-unload (stale handle detection).
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::RwLock;
 
 use crate::abi::PluginDescriptor;
@@ -34,15 +35,15 @@ pub(crate) struct RegistryEntry {
     pub contract_name: String,
 }
 
-// SAFETY: RegistryEntry contains raw pointers into library memory that is 'static
-// (the library is never dropped per the never-drop invariant). These pointers are
-// only written once (at registration) and only read after that, making concurrent
-// access safe once the write lock is released.
+// SAFETY: RegistryEntry contains raw pointers into library memory. The Library handle
+// is stored in Registry::loaded_libraries (declared before slots in the struct), so
+// the Library outlives all RegistryEntry instances. Pointers are written once at
+// registration and only read afterward, making concurrent access safe.
 unsafe impl Send for RegistryEntry {}
-// SAFETY: RegistryEntry contains raw pointers into library memory that is 'static
-// (the library is never dropped per the never-drop invariant). These pointers are
-// only written once (at registration) and only read after that, making concurrent
-// access safe once the write lock is released.
+// SAFETY: RegistryEntry contains raw pointers into library memory. The Library handle
+// is stored in Registry::loaded_libraries (declared before slots in the struct), so
+// the Library outlives all RegistryEntry instances. Pointers are written once at
+// registration and only read afterward, making concurrent access safe.
 unsafe impl Sync for RegistryEntry {}
 
 /// Thread-safe plugin registry.
@@ -51,24 +52,47 @@ unsafe impl Sync for RegistryEntry {}
 //  Reads (find_plugin, call_plugin) take a read guard and are concurrent.
 //  contract_index maps contract_id -> slot index for O(1) lookup.
 pub struct Registry {
+    /// Library handles for all loaded native bundles.
+    /// Declared FIRST so they drop LAST (Rust drops fields in reverse order).
+    /// This ensures vtable pointers in `slots` are never dangling during drop.
+    loaded_libraries: Mutex<Vec<libloading::Library>>,
     slots: RwLock<Vec<RegistrySlot>>,
     /// Maps contract_id (FNV-1a u64) to the index of the registered slot.
     contract_index: RwLock<HashMap<u64, u32>>,
 }
 
-// SAFETY: Registry uses RwLock internally, making it safe to share across threads.
+// SAFETY: Registry uses RwLock and Mutex internally for all interior mutability.
+// `loaded_libraries` is a Mutex<Vec<Library>>. `Library` is Send in libloading 0.9.
+// All mutable state is lock-protected; sharing across threads is safe.
 unsafe impl Send for Registry {}
-// SAFETY: Registry uses RwLock internally, making it safe to share across threads.
-// All interior mutability is protected by the RwLock.
+// SAFETY: Registry uses RwLock and Mutex internally for all interior mutability.
+// `loaded_libraries` is a Mutex<Vec<Library>>. `Library` is Send in libloading 0.9.
+// All mutable state is lock-protected; sharing across threads is safe.
 unsafe impl Sync for Registry {}
 
 impl Registry {
     /// Create an empty registry.
     pub fn new() -> Registry {
         Registry {
+            loaded_libraries: Mutex::new(Vec::new()),
             slots: RwLock::new(Vec::new()),
             contract_index: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Store a loaded native library handle, keeping it alive until this Registry drops.
+    ///
+    /// Called by `load_bundle()` after successfully extracting vtable pointers from
+    /// the library. The handle must outlive the Registry to prevent `dlclose()` from
+    /// unmapping code pages that vtable function pointers point into.
+    ///
+    /// `loaded_libraries` is declared as the first field in `Registry`, so it drops
+    /// last during `Registry` drop — after all `RegistryEntry` vtable pointers are gone.
+    pub(crate) fn push_library(&self, library: libloading::Library) {
+        self.loaded_libraries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(library);
     }
 
     /// Register a plugin vtable.

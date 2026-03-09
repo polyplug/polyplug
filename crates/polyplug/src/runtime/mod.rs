@@ -66,8 +66,9 @@ pub struct Runtime {
 
 // SAFETY: Runtime wraps Arc<Registry> (Send+Sync) and Vec<LoadedBundle>.
 // LoadedBundle contains a Box<Library> which is not Sync by itself,
-// but we never share the library references — only vtable pointers (which are 'static).
-// The Runtime is effectively immutable after initialization.
+// but libraries are stored in `Registry::loaded_libraries` and never shared
+// as references — only vtable pointers (which are valid for the Registry's
+// lifetime) are accessed concurrently. The Runtime is effectively immutable after init.
 unsafe impl Send for Runtime {}
 // SAFETY: See above — Runtime is immutable after init. All mutable state is behind Arc<RwLock>.
 unsafe impl Sync for Runtime {}

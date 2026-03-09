@@ -74,6 +74,10 @@ toml               = { workspace = true }
 name = "integration_dotnet"
 path = "../../tests/integration_dotnet/mod.rs"
 
+[[test]]
+name = "library_lifetime"
+path = "../../tests/library_lifetime/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false

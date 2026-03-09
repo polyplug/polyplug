@@ -3,11 +3,12 @@
 //! Loads plugin bundles (.so/.dll/.dylib), verifies the ABI version sentinel,
 //! calls `polyplug_init`, and registers vtables into the registry.
 //!
-//! # Library Lifetime (Never-Drop)
-//! Loaded libraries are stored in `LoadedBundle::library` which is owned by
-//! the `Loader` struct and never dropped. This ensures vtable function pointers
-//! remain valid for the entire process lifetime (per architecture §7.3).
-
+//! # Library Lifetime
+//! `libloading::Library` handles for loaded native bundles are moved into
+//! `Registry::loaded_libraries` immediately after symbol resolution.
+//! This ensures code pages remain mapped for the entire lifetime of the `Registry`
+//! (i.e., the `Runtime`). Dropping a `Library` calls `dlclose()` which unmaps
+//! plugin code — any vtable fn pointer into those pages would become dangling.
 pub mod manifest;
 
 use std::path::Path;
@@ -53,6 +54,8 @@ pub trait BundleLoader: Send + Sync {
 /// Uses dlopen (via libloading) to load `.so` / `.dll` / `.dylib` files.
 /// Automatically registered in `RuntimeBuilder::new()` — app developers
 /// do not need to call `.loader()` for native plugins.
+/// The `Library` handle for each loaded bundle is stored in the injected `Registry`,
+/// not in this struct, to guarantee it outlives all vtable function pointers.
 #[allow(dead_code)]
 pub(crate) struct NativeBundleLoader {
     registry: Arc<Registry>,
@@ -78,18 +81,19 @@ impl BundleLoader for NativeBundleLoader {
         "native"
     }
 
+    /// Load a native plugin bundle by calling `load_bundle()`.
+    ///
+    /// The `Library` handle for the loaded bundle is stored in the `Registry`
+    /// (`self.registry`) — NOT here in the loader. `NativeBundleLoader` may be
+    /// dropped before `Runtime` (e.g., after the build phase). Storing the library
+    /// here would allow `dlclose()` to fire while vtable pointers are still live.
     fn load(&self, path: &Path, _registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
-        // NativeBundleLoader uses the internal load_bundle() free function
-        // which constructs its own PluginRegistrar for the FFI boundary.
-        // The trait's `registrar` parameter is not used here — native loading
-        // goes through dlopen + ABI init directly via the injected registry
-        // and host_vtable.
-        let _bundle: LoadedBundle = load_bundle(path, &self.registry, self.host_vtable)
-            .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
-        // Note: bundle is intentionally dropped here — the library is already
-        // leaked inside load_bundle() via Box::leak, so this is safe.
-        // TODO Epic 12: retain LoadedBundle in Runtime._bundles for inventory.
-        Ok(())
+        // NativeBundleLoader uses load_bundle() which pushes the Library handle
+        // directly into the Registry via registry.push_library(). The trait's
+        // `registrar` parameter is unused here — native loading goes through
+        // dlopen + ABI init directly via the injected registry and host_vtable.
+        load_bundle(path, &self.registry, self.host_vtable)
+            .map_err(|e: LoaderError| PolyplugError::Loader(e))
     }
 }
 
@@ -160,21 +164,27 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
     })
 }
 
-/// Load a single bundle from the given path.
-//
-//  Steps:
-//  1. dlopen the library (RTLD_NOW semantics via libloading defaults)
-//  2. Resolve `polyplug_abi_version` sentinel — reject if missing or wrong version
-//  3. Resolve `polyplug_init` symbol
-//  4. Build HostVTable (using the runtime's exported functions via function pointers)
-//  5. Call `polyplug_init` with a PluginRegistrar callback
-//  6. On init failure: mark all registered vtables as failed (they remain in registry as vacant)
-//  7. Leak the library (never drop)
+/// Load a single native plugin bundle.
+///
+/// # Steps
+/// 1. `dlopen` the library (RTLD_NOW | RTLD_LOCAL via libloading defaults).
+///    RTLD_LOCAL: plugins must not pollute the global symbol namespace.
+///    RTLD_NOW: fail fast at load time if any symbols are missing.
+/// 2. Resolve `polyplug_abi_version` sentinel — reject if missing or wrong version.
+/// 3. Resolve `polyplug_init`, copy the fn pointer out of the `Symbol` borrow,
+///    then move `library` into `registry.loaded_libraries`.
+///    **Why critical**: `Library::drop` calls `dlclose()`, unmapping plugin code pages.
+///    Any vtable fn pointer into those pages then becomes dangling — silent
+///    memory corruption or SIGBUS on the next vtable call. By storing the handle in
+///    `Registry`, it lives exactly as long as the `Runtime`.
+/// 4. Call `polyplug_init` with a `PluginRegistrar` callback.
+/// 5. On init failure: propagate the error. The library remains in
+///    `registry.loaded_libraries` — the never-unload invariant applies.
 pub fn load_bundle(
     path: &Path,
     registry: &Registry,
     host_vtable: &'static HostVTable,
-) -> Result<LoadedBundle, LoaderError> {
+) -> Result<(), LoaderError> {
     let path_str: String = path.to_string_lossy().into_owned();
 
     // SAFETY: The path points to a compiled plugin bundle. libloading handles
@@ -191,6 +201,8 @@ pub fn load_bundle(
     // Step 1: Check ABI version sentinel BEFORE calling init
     // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
     // libloading resolves the symbol; if it doesn't exist, get() returns Err.
+    // The symbol is explicitly dropped after use to release its borrow on `library`
+    // before the init phase begins.
     let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
         library
             .get(b"polyplug_abi_version\0")
@@ -201,6 +213,9 @@ pub fn load_bundle(
     };
     // SAFETY: symbol was just resolved and is valid. No side effects.
     let found_version: u32 = unsafe { abi_version_symbol() };
+    // Explicitly drop the symbol to release its borrow on `library` before we move
+    // `library` into the registry below.
+    let _ = abi_version_symbol;
     if found_version != POLYPLUG_ABI_VERSION {
         return Err(LoaderError::AbiVersionMismatch {
             bundle: path_str.clone(),
@@ -209,44 +224,67 @@ pub fn load_bundle(
         });
     }
 
-    // Step 2: Resolve init symbol
+    // Step 2: Resolve init symbol and extract the raw function pointer.
+    // We copy the fn pointer out of the Symbol immediately so the Symbol's borrow
+    // on `library` is released before we move `library` into the registry below.
     // SAFETY: polyplug_init is guaranteed by the plugin build process to have the
-    // signature: extern "C" fn(*mut PluginRegistrar) -> AbiError
-    let init_fn: libloading::Symbol<
-        '_,
-        unsafe extern "C" fn(*mut PluginRegistrar) -> AbiErrorType,
-    > = unsafe {
-        library
-            .get(b"polyplug_init\0")
-            .map_err(|_| LoaderError::MissingSymbol {
-                bundle: path_str.clone(),
-                symbol: "polyplug_init".to_owned(),
-            })?
+    // signature: extern "C" fn(*mut PluginRegistrar) -> AbiError.
+    // Symbol<F> derefs to F (a fn pointer). Fn pointers are Copy — copying does not
+    // extend the lifetime of `library`. The pointer remains valid as long as `library`
+    // is alive. `library` is moved into `registry.loaded_libraries` immediately after,
+    // so the pointer is always valid while reachable.
+    let init_fn_ptr: unsafe extern "C" fn(*mut PluginRegistrar) -> AbiErrorType = {
+        // SAFETY: polyplug_init is resolved from a successfully loaded library.
+        // libloading's get() returns Err if the symbol doesn't exist; we propagate via ?.
+        // The returned Symbol borrows `library` and is valid for the duration of this block.
+        let sym: libloading::Symbol<
+            '_,
+            unsafe extern "C" fn(*mut PluginRegistrar) -> AbiErrorType,
+        > = unsafe {
+            library
+                .get(b"polyplug_init\0")
+                .map_err(|_| LoaderError::MissingSymbol {
+                    bundle: path_str.clone(),
+                    symbol: "polyplug_init".to_owned(),
+                })?
+        };
+        // SAFETY: Deref of Symbol<F> where F is a fn pointer type (Copy).
+        // This copies the function address out of the Symbol without cloning Library.
+        *sym
     };
+    // `sym` is dropped here, releasing the borrow on `library`.
 
-    // Step 3: Build registrar callback state
+    // Step 3: Move the library into the registry BEFORE calling init.
+    // SAFETY: `library` is a successfully loaded shared library. Moving it into
+    // `registry.loaded_libraries` transfers ownership to the Registry, which
+    // outlives this function and all vtable pointers registered during init.
+    // This prevents dlclose() from being called while vtable fn pointers are live.
+    registry.push_library(library);
+
+    // Step 4: Build registrar callback state
     let state: RegistrarState<'_> = RegistrarState {
         registry,
         bundle_path: &path_str,
         registered_handles: Vec::new(),
     };
 
-    // Step 4: Build PluginRegistrar with callback and host vtable
+    // Step 5: Build PluginRegistrar with callback and host vtable
     let mut registrar: PluginRegistrar = PluginRegistrar {
         register_plugin: registrar_callback,
         host: host_vtable as *const HostVTable,
     };
 
-    // Step 5: Call init
-    // SAFETY: init_fn was just resolved from the library. The PluginRegistrar is
-    // valid for the duration of the call. The state pointer is stable (pinned on
-    // the stack). init_fn must not be called again after this returns.
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    // Step 6: Call init
+    // SAFETY: init_fn_ptr was resolved from the library (now stored in registry).
+    // The PluginRegistrar is valid for the duration of the call.
+    // The state pointer is stable (pinned on the stack).
+    let init_result: AbiError = unsafe { init_fn_ptr(&mut registrar as *mut PluginRegistrar) };
 
     if init_result.code != ABI_OK {
-        // Step 6: Rollback — mark all registered slots as failed by vacating them.
-        // The slots remain in the registry with incremented generation (effectively unloaded).
-        // The library is still leaked (never unloaded) to avoid dangling pointers.
+        // Step 7: On init failure: the library is already stored in registry.loaded_libraries
+        // and will NOT be unloaded. The never-unload invariant means we never call
+        // dlclose on a library once any code from it has run. Failed slots remain
+        // vacant (non-functional) in the registry.
         for _handle in &state.registered_handles {
             // Future: add Registry::vacate(handle) for proper rollback.
             // For MVP: registrations during failed init remain but are non-functional.
@@ -272,14 +310,7 @@ pub fn load_bundle(
         });
     }
 
-    // Step 7: Leak the library — it must outlive all vtable pointers.
-    // Box::leak is used to make the leak explicit and intentional.
-    let leaked_library: Box<libloading::Library> = Box::new(library);
-
-    Ok(LoadedBundle {
-        path: path.to_path_buf(),
-        library: leaked_library,
-    })
+    Ok(())
 }
 
 /// The `register_plugin` callback passed to plugins in their `PluginRegistrar`.
