@@ -12,12 +12,12 @@ use crate::ir::AbiBuiltin;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::ResolvedDependency;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -550,7 +550,6 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
         )
     };
 
-
     // Build function_count inline table: { "name@major" = count }
     let fn_count_entries: Vec<String> = ir
         .contracts
@@ -566,13 +565,23 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
     let mut dep_tables: String = String::new();
     for dep in &bundle.dependencies {
         match dep {
-            ResolvedDependency::ByContract { contract, contract_id, min_version } => {
+            ResolvedDependency::ByContract {
+                contract,
+                contract_id,
+                min_version,
+            } => {
                 dep_tables.push_str(&format!(
                     "[[dependency]]\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
                     contract, contract_id, min_version
                 ));
             }
-            ResolvedDependency::ByBundle { bundle: dep_bundle, bundle_id, contract, contract_id, min_version } => {
+            ResolvedDependency::ByBundle {
+                bundle: dep_bundle,
+                bundle_id,
+                contract,
+                contract_id,
+                min_version,
+            } => {
                 dep_tables.push_str(&format!(
                     "[[dependency]]\nbundle = \"{}\"\nbundle_id = 0x{:016X}\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
                     dep_bundle, bundle_id, contract, contract_id, min_version
@@ -677,9 +686,7 @@ fn generate_cpp_host_function(
     );
 
     if is_void_return {
-        out.push_str(
-            "        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n"
-        );
+        out.push_str("        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n");
         out.push_str(&format!(
             "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->functions[{}U]);\n",
             fn_id
@@ -689,9 +696,7 @@ fn generate_cpp_host_function(
     } else {
         out.push_str(&format!("        {} out{{}};\n", return_type));
         out.push_str("        void* out_ptr = &out;\n");
-        out.push_str(
-            "        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n"
-        );
+        out.push_str("        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n");
         out.push_str("        if (!vtable_ || {}U >= vtable_->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
         );
         out.push_str(&format!(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 import ctypes
-from typing import ClassVar
+from typing import Any, ClassVar
 
 ABI_OK: int
 ABI_ERROR_GENERIC: int
@@ -50,4 +50,4 @@ class PluginRegistrar(ctypes.Structure):
     host: int | None
     _fields_: ClassVar[list[tuple[str, type]]]
 
-REGISTER_FN_TYPE: type[ctypes.CFUNCTYPE]
+REGISTER_FN_TYPE: Any

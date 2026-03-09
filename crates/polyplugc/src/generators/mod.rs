@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 pub(crate) mod cpp;
 pub(crate) mod csharp;
-pub(crate) mod rust;
 pub(crate) mod lua;
 pub(crate) mod python;
+pub(crate) mod rust;
 
 use crate::error::CodegenError;
 use crate::ir::ValidatedIr;

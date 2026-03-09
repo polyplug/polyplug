@@ -103,7 +103,6 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n");
-    out.push_str("from typing import Any\n");
     out.push_str("from polyplug_guest.abi import StringView\n\n");
 
     for ty in &ir.types {
@@ -155,8 +154,8 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import ABI_OK\n");
+    out.push_str("from typing import Callable, TypeAlias\n");
+    out.push_str("from polyplug_guest.abi import ABI_OK, Buffer, StringView\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -165,7 +164,10 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("POLYPLUG_ABI_VERSION: int = 1\n");
-    out.push_str("_DISPATCH_FN_TYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)\n\n");
+    out.push_str("_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)\n");
+    out.push_str(
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n",
+    );
 
     for contract in &ir.contracts {
         let struct_name: String = contract_name_to_struct(&contract.name);
@@ -188,6 +190,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
+    out.push_str("from typing import Any\n");
     out.push_str("from polyplug_guest.abi import Buffer, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
@@ -218,7 +221,11 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
+    out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
     out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, PluginDescriptor, PluginRegistrar, PluginVTable, StringView\n\n");
+    out.push_str("if TYPE_CHECKING:\n");
+    out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
+    out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -227,7 +234,10 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("POLYPLUG_ABI_VERSION: int = 1\n");
-    out.push_str("_DISPATCH_FN_TYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)\n\n");
+    out.push_str("_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)\n");
+    out.push_str(
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n",
+    );
 
     for contract in &ir.contracts {
         generate_guest_contract_trait(&mut out, contract);
@@ -242,7 +252,9 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("def polyplug_init(registrar_addr: int) -> None:\n");
     out.push_str("    if registrar_addr == 0:\n");
     out.push_str("        return\n");
-    out.push_str("    registrar_ptr: ctypes.POINTER[PluginRegistrar] = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))\n");
+    out.push_str(
+        "    registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))\n",
+    );
 
     for contract in &ir.contracts {
         let upper: String = contract_name_to_upper_snake(&contract.name);
@@ -559,7 +571,7 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract)
         emit_guest_abi_return(out, func);
         out.push('\n');
         out.push_str(&format!(
-            "{upper}_{abi_name}_CFUNC = _DISPATCH_FN_TYPE({abi_name})\n\n"
+            "{upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE({abi_name})\n\n"
         ));
     }
 
@@ -595,14 +607,22 @@ fn emit_guest_abi_args_unpack(out: &mut String, func: &ResolvedFunction, contrac
         match &param.ty {
             ResolvedTypeRef::UserDefined(_) => {
                 out.push_str(&format!(
-                    "    {name}: {ty} = ctypes.cast(args_ptr, ctypes.POINTER({ty})).contents\n",
+                    "    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER({ty}))\n",
+                    ty = ty_name
+                ));
+                out.push_str(&format!(
+                    "    {name}: {ty} = args_ptr_t.contents\n",
                     name = param.name,
                     ty = ty_name
                 ));
             }
             _ => {
                 out.push_str(&format!(
-                    "    {name}: {ty} = ctypes.cast(args_ptr, ctypes.POINTER({ty})).contents\n",
+                    "    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER({ty}))\n",
+                    ty = ty_name
+                ));
+                out.push_str(&format!(
+                    "    {name}: {ty} = args_ptr_t.contents\n",
                     name = param.name,
                     ty = ty_name
                 ));
@@ -612,9 +632,10 @@ fn emit_guest_abi_args_unpack(out: &mut String, func: &ResolvedFunction, contrac
     }
     let pack_struct: String = arg_pack_struct_name(contract_struct, &func.name);
     out.push_str(&format!(
-        "    args_val: {pack_struct} = ctypes.cast(args_ptr, ctypes.POINTER({pack_struct})).contents\n",
+        "    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER({pack_struct}))\n",
         pack_struct = pack_struct
     ));
+    out.push_str("    args_val = args_ptr_t.contents\n");
     for param in &func.params {
         out.push_str(&format!("    {} = args_val.{}\n", param.name, param.name));
     }
@@ -646,7 +667,7 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
     }
     let ret_ty: String = python_return_type(&func.returns);
     out.push_str(&format!(
-        "    out_ptr_t: ctypes.POINTER[{ret_ty}] = ctypes.cast(out_ptr, ctypes.POINTER({ret_ty}))\n"
+        "    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER({ret_ty}))\n"
     ));
     out.push_str("    out_ptr_t[0] = result\n");
     out.push_str("    return ABI_OK\n");

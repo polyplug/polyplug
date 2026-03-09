@@ -8,13 +8,13 @@ use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::PrimitiveType;
+use crate::ir::ResolvedBundle;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::ResolvedBundle;
-use crate::ir::ResolvedDependency;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -492,13 +492,23 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
     let mut dep_tables: String = String::new();
     for dep in &bundle.dependencies {
         match dep {
-            ResolvedDependency::ByContract { contract, contract_id, min_version } => {
+            ResolvedDependency::ByContract {
+                contract,
+                contract_id,
+                min_version,
+            } => {
                 dep_tables.push_str(&format!(
                     "[[dependency]]\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
                     contract, contract_id, min_version
                 ));
             }
-            ResolvedDependency::ByBundle { bundle: dep_bundle, bundle_id, contract, contract_id, min_version } => {
+            ResolvedDependency::ByBundle {
+                bundle: dep_bundle,
+                bundle_id,
+                contract,
+                contract_id,
+                min_version,
+            } => {
                 dep_tables.push_str(&format!(
                     "[[dependency]]\nbundle = \"{}\"\nbundle_id = 0x{:016X}\ncontract = \"{}\"\ncontract_id = 0x{:016X}\nmin_version = {}\n\n",
                     dep_bundle, bundle_id, contract, contract_id, min_version

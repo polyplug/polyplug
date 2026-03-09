@@ -207,13 +207,13 @@ pub(crate) struct ResolvedPlugin {
 #[derive(Debug)]
 pub(crate) struct ResolvedBundle {
     #[allow(dead_code)]
-    pub name:         String,
+    pub name: String,
     #[allow(dead_code)]
-    pub version:      Version,
+    pub version: Version,
     #[allow(dead_code)]
-    pub plugins:      Vec<ResolvedPlugin>,
+    pub plugins: Vec<ResolvedPlugin>,
     #[allow(dead_code)]
-    pub bundle_id:    u64,
+    pub bundle_id: u64,
     #[allow(dead_code)]
     pub dependencies: Vec<ResolvedDependency>,
 }
@@ -223,14 +223,14 @@ pub(crate) struct ResolvedBundle {
 #[derive(Debug, Clone)]
 pub(crate) enum ResolvedDependency {
     ByContract {
-        contract:    String,
+        contract: String,
         contract_id: u64,
         min_version: u32,
     },
     ByBundle {
-        bundle:      String,
-        bundle_id:   u64,
-        contract:    String,
+        bundle: String,
+        bundle_id: u64,
+        contract: String,
         contract_id: u64,
         min_version: u32,
     },
