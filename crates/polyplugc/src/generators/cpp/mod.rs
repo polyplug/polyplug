@@ -873,10 +873,12 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(files.files.len() >= 1);
         // At least one file contains the AUTO-GENERATED header
-        assert!(files
-            .files
-            .iter()
-            .any(|f| f.content.contains("AUTO-GENERATED")));
+        assert!(
+            files
+                .files
+                .iter()
+                .any(|f| f.content.contains("AUTO-GENERATED"))
+        );
     }
 
     #[test]
