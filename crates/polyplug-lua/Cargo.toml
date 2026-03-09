@@ -12,6 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 polyplug = { path = "../polyplug" }
+mlua = { version = "0.10", features = ["luajit", "vendored", "send"] }
 
 [lints]
 workspace = true
