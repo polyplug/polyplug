@@ -28,15 +28,15 @@ use crate::loader::LoadedBundle;
 use crate::registry::Registry;
 use std::collections::HashMap;
 
-use crate::error::LoaderError;
 use crate::abi::PluginRegistrar;
 use crate::error::GraphError;
+use crate::error::LoaderError;
 use crate::error::PolyplugError;
 use crate::graph::CapabilityGraph;
 use crate::loader::BundleInitGuard;
-use crate::loader::manifest::ManifestData;
 use crate::loader::BundleLoader;
 use crate::loader::NativeBundleLoader;
+use crate::loader::manifest::ManifestData;
 
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
@@ -180,17 +180,19 @@ impl RuntimeBuilder {
         }
 
         // Phase 1: Scan plugin directories for bundles
-        let discovered: Vec<(PathBuf, ManifestData)> = crate::loader::scanner::scan_dirs(&self.plugin_dirs);
+        let discovered: Vec<(PathBuf, ManifestData)> =
+            crate::loader::scanner::scan_dirs(&self.plugin_dirs);
 
         // If nothing discovered, build Runtime with empty bundles (no graph needed)
         if !discovered.is_empty() {
             // Phase 2: Build capability graph
-            let graph: CapabilityGraph =
-                CapabilityGraph::from_manifests(&discovered).map_err(|e: GraphError| RuntimeError::Graph(e))?;
+            let graph: CapabilityGraph = CapabilityGraph::from_manifests(&discovered)
+                .map_err(|e: GraphError| RuntimeError::Graph(e))?;
 
             // Phase 3: Get topological load order (providers first)
-            let load_order: Vec<String> =
-                graph.topological_order().map_err(|e: GraphError| RuntimeError::Graph(e))?;
+            let load_order: Vec<String> = graph
+                .topological_order()
+                .map_err(|e: GraphError| RuntimeError::Graph(e))?;
 
             // Phase 4: Build lookup map bundle_name -> (path, manifest)
             let mut bundle_map: HashMap<String, (PathBuf, ManifestData)> = HashMap::new();
@@ -200,25 +202,33 @@ impl RuntimeBuilder {
 
             // Phase 5: Dispatch each bundle to its loader in topo order
             for bundle_name in &load_order {
-                let (bundle_path, manifest): &(PathBuf, ManifestData) = bundle_map
-                    .get(bundle_name)
-                    .ok_or_else(|| RuntimeError::Loader(LoaderError::InitFailed {
-                        bundle: bundle_name.clone(),
-                        error: "bundle in topo order but not found in map".to_owned(),
-                    }))?;
+                let (bundle_path, manifest): &(PathBuf, ManifestData) =
+                    bundle_map.get(bundle_name).ok_or_else(|| {
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: bundle_name.clone(),
+                            error: "bundle in topo order but not found in map".to_owned(),
+                        })
+                    })?;
 
                 let loader: &dyn BundleLoader = loader_map
                     .get(&manifest.runtime)
                     .map(Box::as_ref)
-                    .ok_or_else(|| RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
-                        bundle: bundle_path.display().to_string(),
-                        runtime_name: manifest.runtime.clone(),
-                    }))?;
+                    .ok_or_else(|| {
+                        RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
+                            bundle: bundle_path.display().to_string(),
+                            runtime_name: manifest.runtime.clone(),
+                        })
+                    })?;
 
                 let (mut registrar, _guard): (PluginRegistrar, BundleInitGuard) =
-                    crate::loader::make_registrar_context(&registry, manifest.bundle_id, host_vtable);
+                    crate::loader::make_registrar_context(
+                        &registry,
+                        manifest.bundle_id,
+                        host_vtable,
+                    );
 
-                loader.load(bundle_path, &mut registrar)
+                loader
+                    .load(bundle_path, &mut registrar)
                     .map_err(|e: PolyplugError| match e {
                         PolyplugError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {
@@ -297,11 +307,7 @@ impl Runtime {
     }
 
     /// Load a single plugin bundle explicitly with options.
-    pub fn load_bundle_with(
-        &self,
-        path: &Path,
-        _opts: LoadOptions,
-    ) -> Result<(), PolyplugError> {
+    pub fn load_bundle_with(&self, path: &Path, _opts: LoadOptions) -> Result<(), PolyplugError> {
         // Check companion manifest exists
         let manifest_path: PathBuf = path.with_extension("manifest.toml");
         if !manifest_path.exists() {
@@ -320,10 +326,12 @@ impl Runtime {
             .loaders
             .get(runtime_name)
             .map(Box::as_ref)
-            .ok_or_else(|| PolyplugError::Loader(LoaderError::NoLoaderForRuntime {
-                bundle: path.display().to_string(),
-                runtime_name: runtime_name.to_owned(),
-            }))?;
+            .ok_or_else(|| {
+                PolyplugError::Loader(LoaderError::NoLoaderForRuntime {
+                    bundle: path.display().to_string(),
+                    runtime_name: runtime_name.to_owned(),
+                })
+            })?;
         // Build registrar and dispatch
         let mut registrar: PluginRegistrar = PluginRegistrar {
             register_plugin: crate::loader::registrar_callback,

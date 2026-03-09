@@ -216,7 +216,10 @@ min_version = "1.0"
                 Err(e) => format!("wrong error variant: {:?}", e),
                 Ok(_) => "unexpected Ok".to_owned(),
             };
-            panic!("expected DependencyCycle from from_manifests, got: {}", err_str);
+            panic!(
+                "expected DependencyCycle from from_manifests, got: {}",
+                err_str
+            );
         }
     }
 }
