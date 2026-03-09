@@ -15,9 +15,9 @@ use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 
-use crate::context::init_context;
-use crate::context::InitFn;
 use crate::context::CLR_CONTEXT;
+use crate::context::InitFn;
+use crate::context::init_context;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
