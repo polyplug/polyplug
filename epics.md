@@ -584,6 +584,506 @@ VERIFICATION CHECKLIST
 
 ---
 
+## Epic 9.5 — polyplug-dotnet: Performance Hardening
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 10 (polyplug-dotnet subsection)
+
+---
+
+PROJECT CONTEXT
+
+Epic 9 produced a working polyplug-dotnet implementation. This epic hardens it
+for maximum performance and correctness. Eight specific problems were identified
+in the Epic 9 design — all are fixed here. No new features, no scope creep.
+Every change is a targeted fix to an existing file.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+Problem 1 — Switch from raw hostfxr FFI to netcorehost crate:
+  Replace any manual hostfxr bindings with the netcorehost crate.
+  Cargo.toml:
+    netcorehost = { version = "0.20", features = ["nethost"] }
+  nethost::load_hostfxr() replaces the manual DOTNET_ROOT → PATH → well-known
+  path scan. The crate handles this automatically.
+
+Problem 2 — Add download-nethost Cargo feature (opt-in):
+  polyplug-dotnet/Cargo.toml gains:
+    [features]
+    download-nethost = ["netcorehost/download-nethost"]
+  NOT enabled by default. App developer enables via:
+    polyplug-dotnet = { ..., features = ["download-nethost"] }
+  Allows building polyplug-dotnet with zero system .NET install.
+  DotnetConfig gains HostfxrLocation enum:
+    pub enum HostfxrLocation { Auto, Path(PathBuf) }
+    pub struct DotnetConfig {
+        pub min_framework: String,
+        pub hostfxr: HostfxrLocation,   // default: Auto
+    }
+
+Problem 3 — Cache AssemblyDelegateLoader in OnceLock (critical ~30ms savings):
+  The AssemblyDelegateLoader obtained via hostfxr_get_runtime_delegate must be
+  stored in the OnceLock context alongside the hostfxr context.
+  Per-bundle load calls get_function_pointer on the CACHED loader — never
+  re-obtains the delegate loader. This saves ~30ms per bundle load.
+  OnceLock value changes from OnceLock<Arc<HostfxrContext>> to:
+    OnceLock<Arc<DotnetContext>>
+    pub struct DotnetContext {
+        hostfxr_context: HostfxrContext,
+        delegate_loader: AssemblyDelegateLoader,
+    }
+
+Problem 4 — Use pelite to read TargetFrameworkAttribute from PE metadata:
+  Replace any assembly metadata reading approach with pelite:
+    pelite = "0.10"
+  pelite reads TargetFrameworkAttribute from the CLR metadata section of the
+  .dll without loading the CLR and without requiring any extra file from the
+  plugin developer. This is the ONLY correct approach — no runtimeconfig.json
+  from plugin, no CLR needed for version check.
+  Version check runs on the raw .dll bytes before any load call.
+
+Problem 5 — runtimeconfig.json generated BEFORE nethost::load_hostfxr() init:
+  The temp runtimeconfig.json must exist on disk when
+  hostfxr_initialize_for_runtime_config is called. It is deleted immediately
+  after that call returns (hostfxr reads it synchronously, does not hold it).
+  Sequence:
+    1. write temp runtimeconfig.json from min_framework
+    2. nethost::load_hostfxr() → locate hostfxr
+    3. hostfxr context init with temp path
+    4. DELETE temp file
+    5. obtain + cache AssemblyDelegateLoader
+    6. store DotnetContext in OnceLock
+
+Problem 6 — [UnmanagedCallersOnly] must declare CallConvCdecl explicitly:
+  Every [UnmanagedCallersOnly] method in generated C# and in guest-libs/csharp/
+  must have CallConvs = new[] { typeof(CallConvCdecl) } explicitly.
+  Implicit calling convention is platform-dependent and wrong.
+  This applies to Init and every generated ABI wrapper function.
+  Update CSharpGenerator to emit this on every generated function.
+  Update guest-libs/csharp/ manually.
+
+Problem 7 — Thread.BeginThreadAffinity / EndThreadAffinity in generated Init:
+  Init is called from a Rust thread (foreign thread, not CLR-created).
+  Generated Init.cs must wrap its entire body:
+    Thread.BeginThreadAffinity();
+    try { ... } finally { Thread.EndThreadAffinity(); }
+  This ensures correct managed code execution on the foreign thread.
+  Update CSharpGenerator to always emit this pattern in Init.
+  Update guest-libs/csharp/ entry point infrastructure to document this requirement.
+
+Problem 8 — [SuppressGCTransition] on hot-path P/Invokes in host-libs/csharp/:
+  The following P/Invoke declarations in host-libs/csharp/ must add
+  [SuppressGCTransition]:
+    call_plugin    (hot path — vtable dispatch)
+    find_plugin    (hot path — plugin lookup)
+    get_extension  (hot path — extension query)
+  The following must NOT have [SuppressGCTransition]:
+    host_alloc     (may trigger GC)
+    host_free      (may interact with GC)
+  [SuppressGCTransition] is only safe for short, non-blocking native calls
+  that never call back into managed code. call_plugin, find_plugin,
+  get_extension satisfy this contract.
+
+---
+
+EPIC GOAL
+
+1. polyplug-dotnet/Cargo.toml:
+   - Replace raw hostfxr dependencies with netcorehost = { features = ["nethost"] }
+   - Add pelite = "0.10"
+   - Add [features] download-nethost = ["netcorehost/download-nethost"]
+
+2. DotnetConfig in crates/polyplug-dotnet/src/config/mod.rs (new submodule):
+   - HostfxrLocation enum (Auto, Path(PathBuf))
+   - DotnetConfig struct (min_framework: String, hostfxr: HostfxrLocation)
+   - impl Default for HostfxrLocation → Auto
+
+3. DotnetContext in crates/polyplug-dotnet/src/context/mod.rs (new submodule):
+   - DotnetContext struct (hostfxr_context, delegate_loader: AssemblyDelegateLoader)
+   - OnceLock<Arc<DotnetContext>> as the shared state in DotnetLoader
+   - init_context(config: &DotnetConfig) -> Result<Arc<DotnetContext>, PolyplugError>
+     implements the 6-step sequence from Problem 5 above
+
+4. pelite version reader in crates/polyplug-dotnet/src/version/mod.rs (new submodule):
+   - read_target_framework(dll_path: &Path) -> Result<String, PolyplugError>
+   - Uses pelite to open the PE file, walk CLR metadata, find TargetFrameworkAttribute
+   - Parses "net10.0" style string, returns it
+   - Called before any load attempt, purely on bytes — no CLR involvement
+
+5. DotnetLoader::load() rewrite:
+   - Calls read_target_framework() first → version check → warn or error
+   - Gets or initializes DotnetContext via OnceLock
+   - Calls cached delegate_loader.get_function_pointer("Init") only
+   - Calls Init(registrar) with correct calling convention
+
+6. CSharpGenerator updates (crates/polyplugc/src/generators/csharp/mod.rs):
+   - Init function template: add CallConvCdecl, Thread.BeginThreadAffinity/EndThreadAffinity
+   - Every generated ABI wrapper function: add CallConvCdecl
+   - All [UnmanagedCallersOnly] methods: verify return type is blittable AbiError (uint)
+     not void — exception path must return AbiError, cannot throw through ABI boundary
+
+7. guest-libs/csharp/ updates:
+   - Every [UnmanagedCallersOnly] method: add CallConvs = new[] { typeof(CallConvCdecl) }
+   - Entry point infrastructure: add Thread.BeginThreadAffinity/EndThreadAffinity pattern
+   - Document in code comments: all parameters must be blittable
+
+8. host-libs/csharp/ updates:
+   - call_plugin P/Invoke: add [SuppressGCTransition]
+   - find_plugin P/Invoke: add [SuppressGCTransition]
+   - get_extension P/Invoke: add [SuppressGCTransition]
+   - host_alloc / host_free: no [SuppressGCTransition] — leave as is
+
+9. Tests:
+   - Existing Epic 9 integration tests must all still pass unchanged
+   - New test: verify DelegateLoader cached — load two .NET plugins, assert
+     get_function_pointer called only once per bundle not twice
+   - New test: verify pelite reads TargetFrameworkAttribute correctly from test fixture .dll
+   - New test: version mismatch via pelite — wrong framework dll → RuntimeVersionMismatch
+   - New test: [SuppressGCTransition] hot path benchmark — assert call_plugin overhead
+     is within 3x of native vtable dispatch (from BENCHMARKS.md baseline)
+   - New test: download-nethost feature compiles when enabled (CI build matrix)
+
+---
+
+VERIFICATION CHECKLIST
+
+- All existing Epic 9 integration tests pass unchanged
+- netcorehost crate used — no raw hostfxr FFI anywhere in polyplug-dotnet
+- pelite reads TargetFrameworkAttribute correctly (unit test)
+- Version mismatch detected by pelite before CLR loads assembly
+- DelegateLoader cached in OnceLock — get_function_pointer not re-obtained per bundle
+- runtimeconfig.json temp file sequence correct: written → init → deleted → loader cached
+- Every [UnmanagedCallersOnly] in generated code has CallConvCdecl explicitly
+- Init.cs has Thread.BeginThreadAffinity / EndThreadAffinity
+- call_plugin / find_plugin / get_extension have [SuppressGCTransition]
+- host_alloc / host_free do NOT have [SuppressGCTransition]
+- download-nethost feature builds cleanly when enabled
+- Hot path benchmark within 3x of native baseline
+- No .unwrap() in Rust production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+---
+
+## Epic 9.6 — NativeBundleLoader: libloading Audit and Library Handle Lifetime
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 6 (ABI), section 7 (VTable System)
+
+---
+
+PROJECT CONTEXT
+
+Epic 6 implemented NativeBundleLoader using libloading (or equivalent).
+This epic audits the implementation for one critical correctness risk and
+ensures the crate version is current. No new features — targeted correctness
+and hardening only.
+
+The critical risk: libloading's Library handle must be kept alive as long as
+any function pointers derived from it are alive. If Library is dropped,
+dlclose() unmaps the plugin's code pages. Any subsequent vtable call into
+that plugin is a use-after-free — silent memory corruption or SIGBUS.
+
+polyplug stores raw function pointers in the Registry's PluginVTable entries.
+The Library handle that owns those pages must live exactly as long as the
+PluginRuntime that holds the Registry.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+libloading version: 0.9
+  Cargo.toml: libloading = "0.9"
+  Update if Epic 6 used an older version.
+
+Library handle storage:
+  The Library handle must be stored inside PluginRuntime (or Registry)
+  in a Vec<libloading::Library> (or equivalent owned collection).
+  It must NOT be stored as a local variable that drops at end of load().
+  It must NOT be stored in NativeBundleLoader — the loader may be
+  dropped before PluginRuntime.
+  Correct owner: Registry or PluginRuntime, lifetime tied to the runtime.
+
+  Concrete change if not already correct:
+    Registry gains: loaded_libraries: Vec<libloading::Library>
+    NativeBundleLoader::load() moves the Library into registry after
+    extracting the Init fn ptr.
+
+RTLD flags: libloading uses RTLD_NOW | RTLD_LOCAL by default.
+  RTLD_LOCAL is correct — plugins must not pollute the global symbol namespace.
+  RTLD_NOW is correct — fail fast if symbols are missing at load time.
+  No changes needed to dlopen flags.
+
+Symbol lookup: the only symbol looked up per native bundle is "init"
+  (the [no_mangle] extern "C" fn init(registrar: *mut PluginRegistrar)).
+  All other dispatch goes through the vtable — no further dlsym calls.
+
+---
+
+EPIC GOAL
+
+1. Audit crates/polyplug/src/loader/mod.rs (NativeBundleLoader):
+   - Confirm libloading = "0.9" in Cargo.toml — update if not
+   - Confirm Library handle is NOT dropped at end of load()
+   - Confirm Library handle is stored in Registry or PluginRuntime
+     with lifetime tied to the runtime
+   - If Library handle is incorrectly dropped: move it into
+     Registry::loaded_libraries: Vec<libloading::Library>
+   - Add // SAFETY: comment on every unsafe block involving Library
+     and Symbol explaining the lifetime guarantee
+
+2. If Registry gains loaded_libraries field:
+   - Add field to Registry struct in crates/polyplug/src/registry/mod.rs
+   - Ensure Registry::clear() or drop also drops all Library handles
+   - No public API change needed — internal field only
+
+3. Add explicit use-after-unload test:
+   - Load a native plugin, call it successfully
+   - Verify Library handle is still alive (not yet dropped)
+   - Drop PluginRuntime
+   - Verify no SIGBUS / use-after-free (address sanitizer or miri)
+   - This test must run under `cargo test` with ASAN or miri enabled
+
+4. Add doc comment to NativeBundleLoader::load() explaining:
+   - Why Library handle must be moved into Registry
+   - What happens if it is dropped early (dlclose, code unmap)
+   - That RTLD_LOCAL prevents symbol pollution
+
+---
+
+VERIFICATION CHECKLIST
+
+- libloading = "0.9" in Cargo.toml
+- Library handle stored in Registry or PluginRuntime — never drops before runtime
+- Every unsafe block in NativeBundleLoader has // SAFETY: comment
+- Use-after-unload test passes under miri or ASAN
+- All existing native plugin integration tests still pass
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+---
+
+## Epic 9.7 — Stable ABI Optimization: find_plugin returns *const PluginVTable
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 6 (C ABI), section 7 (VTable System),
+  section 8 (Host Libraries), section 9 (Guest Libraries)
+
+---
+
+PROJECT CONTEXT
+
+Currently find_plugin returns an opaque PluginHandle. Plugin-to-plugin calls
+route through call_plugin(handle, fn_id, args, out) which does:
+  registry lookup (handle → PluginVTable*)
+  + indirect call into plugin B
+= 2 indirect calls + 1 registry lookup per cross-plugin call.
+
+This epic changes find_plugin to return *const PluginVTable directly.
+Plugin-to-plugin calls then become identical to host-to-plugin calls:
+  vtable->functions[fn_id](args, out)
+= 1 load + 1 indirect call. Zero runtime involvement on the hot path.
+
+call_plugin is REMOVED from the stable ABI. It is no longer needed.
+PluginHandle opaque type is REMOVED. It is replaced by *const PluginVTable.
+
+This is a BREAKING change to the frozen stable ABI. It is safe to make now
+because no external consumers exist yet. After this epic the ABI is re-frozen.
+
+Trust model documented in this epic:
+  polyplug assumes plugins are trusted code loaded by the app developer.
+  Malicious in-process code is explicitly out of scope.
+  *const PluginVTable must never be cast to mutable and written to.
+  Doing so is undefined behavior. There is no runtime enforcement —
+  in-process code cannot be prevented from re-protecting pages.
+  Documentation is the only protection and it is sufficient for the trust model.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+find_plugin new signature:
+  // Before:
+  PluginHandle find_plugin(uint64_t contract_id, uint32_t min_version);
+  // After:
+  const PluginVTable* find_plugin(uint64_t contract_id, uint32_t min_version);
+  Returns null if no plugin satisfies the contract + version requirement.
+  Null check is the caller's responsibility (documented, enforced in generated code).
+
+call_plugin removal:
+  Removed from HostVTable entirely. HostVTable shrinks by one function pointer.
+  Any existing cross-plugin call code using call_plugin must be rewritten to:
+    const PluginVTable* vtable = host->find_plugin(CONTRACT_ID, min_version);
+    if (vtable) vtable->functions[fn_id](args, out);
+
+PluginHandle removal:
+  typedef void* PluginHandle removed from ABI types.
+  All references replaced with const PluginVTable*.
+
+Hot path after this change:
+  Plugin A at init: const PluginVTable* b = host->find_plugin(B_ID, 1);
+                    (store b as a module-level pointer)
+  Plugin A on hot path: b->functions[fn_id](args, out);
+  = 1 load + 1 indirect call. Identical to host-to-plugin dispatch.
+
+Null return handling:
+  find_plugin returning null means no plugin registered for that contract.
+  Generated guest code must null-check and return AbiError on null.
+  Generated pattern per language:
+    Rust:   vtable.is_null() → return Err(PluginError::ContractNotFound)
+    C++:    vtable == nullptr → return ABI_ERROR_CONTRACT_NOT_FOUND
+    C#:     vtable == null → return AbiError.ContractNotFound
+    Python: vtable is None → raise PluginError(CONTRACT_NOT_FOUND, ...)
+    Lua:    vtable == nil → return nil, "contract not found"
+
+New PolyplugError variant:
+  PolyplugError::ContractNotFound { contract_id: u64, min_version: u32 }
+
+---
+
+EPIC GOAL
+
+1. Stable ABI changes in crates/polyplug/src/abi/mod.rs:
+   - Remove PluginHandle typedef
+   - Remove call_plugin from HostVTable struct
+   - Change find_plugin signature: returns *const PluginVTable
+   - Update all #[repr(C)] struct definitions accordingly
+   - Add // ABI FROZEN comment block listing all current stable ABI items
+     so future readers know exactly what must never change
+
+2. Runtime core changes in crates/polyplug/src/runtime/mod.rs:
+   - Remove call_plugin implementation
+   - Update find_plugin implementation to return *const PluginVTable
+     (direct pointer into Registry — no copy, no allocation)
+   - Update HostVTable construction to remove call_plugin fn ptr
+
+3. Registry changes in crates/polyplug/src/registry/mod.rs:
+   - find_by_contract returns *const PluginVTable (raw pointer into stored vtable)
+   - Pointer is valid for the lifetime of the Registry
+   - Add // SAFETY: comment explaining pointer validity guarantee
+
+4. Add PolyplugError::ContractNotFound { contract_id: u64, min_version: u32 }
+   in crates/polyplug/src/error/mod.rs
+
+5. Update all 5 generators in polyplugc to emit null-check pattern
+   for find_plugin calls in generated guest cross-plugin callers:
+   - Rust generator: is_null() check → Err(PluginError::ContractNotFound)
+   - C++ generator: nullptr check → ABI_ERROR_CONTRACT_NOT_FOUND
+   - C# generator: null check + CallConvCdecl + blittable return
+   - Python generator: None check → PluginError raise
+   - Lua generator: nil check → error return
+
+6. Update all 5 host libs to remove call_plugin bindings:
+   - host-libs/rust/: remove call_plugin wrapper
+   - host-libs/cpp/: remove call_plugin wrapper
+   - host-libs/csharp/: remove call_plugin P/Invoke (was [SuppressGCTransition])
+   - host-libs/python/: remove call_plugin ctypes binding
+   - host-libs/lua/: remove call_plugin FFI declaration
+
+7. Update all 5 guest libs to use direct vtable dispatch:
+   - guest-libs/rust/: update cross-plugin call pattern
+   - guest-libs/cpp/: update cross-plugin call pattern
+   - guest-libs/csharp/: update cross-plugin call pattern
+   - guest-libs/python/: update cross-plugin call pattern
+   - guest-libs/lua/: update cross-plugin call pattern
+
+8. Trust model documentation:
+   - Add TRUST_MODEL.md at repo root:
+     - polyplug trust model: plugins are trusted, loaded by app developer
+     - *const PluginVTable must never be cast to mutable
+     - Doing so is undefined behavior — no runtime enforcement
+     - In-process mprotect is bypassable and not used (security theater)
+     - Malicious in-process code is explicitly out of scope
+   - Add reference to TRUST_MODEL.md in AGENTS.md
+   - Add // SAFETY: + trust model note on every raw vtable pointer in Rust code
+
+9. Update PRD section 6 (C ABI) and section 7 (VTable System):
+   - Remove call_plugin and PluginHandle from stable ABI listing
+   - Update find_plugin signature
+   - Update HostVTable struct
+   - Add "ABI re-frozen as of Epic 9.7" note
+   - Add trust model summary
+
+10. Cross-plugin integration tests:
+    - Plugin A calls plugin B directly via find_plugin → *const PluginVTable
+    - Null return: plugin A calls find_plugin for unregistered contract → null
+      generated code returns ContractNotFound error, does not crash
+    - Performance: cross-plugin call overhead == host-to-plugin overhead
+      (verified by adding cross-plugin case to vtable_dispatch bench)
+    - All 5 languages: each language's guest lib correctly dispatches
+      cross-plugin call without call_plugin
+
+---
+
+VERIFICATION CHECKLIST
+
+- call_plugin removed from HostVTable — does not exist anywhere in codebase
+- PluginHandle removed from ABI types — does not exist anywhere in codebase
+- find_plugin returns *const PluginVTable with null for not-found
+- All 5 generators emit null-check pattern for cross-plugin calls
+- All 5 host libs updated — no call_plugin bindings remain
+- All 5 guest libs updated — direct vtable dispatch
+- TRUST_MODEL.md exists at repo root and is referenced from AGENTS.md
+- Every raw vtable pointer in Rust has // SAFETY: comment
+- ContractNotFound error variant exists and is returned correctly
+- Cross-plugin benchmark overhead equals host-to-plugin baseline
+- Null return test: ContractNotFound returned, no crash
+- PRD sections 6 and 7 updated and consistent with implementation
+- All existing integration tests pass
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+---
+
 ## Epic 10 — polyplug-python: Python Adapter
 
 ```
@@ -630,33 +1130,42 @@ PythonConfig:
   PythonLoader::new(PythonConfig { min_version: (3, 10) })
   PythonConfig is mandatory.
 
-Multi-version strategy (mirrors DotnetLoader):
-  Interpreter initialized once via OnceLock.
-  Each plugin's Python version read from its module metadata at load time.
-  - Compatible (same major, minor >= min_version.minor) → load silently
-  - Higher minor → load with warning
-  - Different major → PolyplugError::RuntimeVersionMismatch { required, found }
+Version check strategy — ONE interpreter, checked ONCE:
+  Python has one interpreter per process. There is no per-plugin version.
+  All plugins share the same interpreter. Version is checked once at init
+  by reading sys.version_info via pyo3. If too old: hard error, no loading.
+  - interpreter minor >= min_version.minor (same major) → proceed
+  - interpreter minor < min_version.minor → InterpreterVersionTooOld error
+  - interpreter major != min_version.major → InterpreterVersionTooOld error
 
 Interpreter location: PYTHONHOME env var → PATH scan → well-known paths
-  (/usr/bin/python3, /usr/local/bin/python3, system default)
-  Clear error if not found.
+  (/usr/bin/python3, /usr/local/bin/python3, system default).
+  pyo3 respects PYO3_PYTHON env var for build-time selection.
 
-Embedding approach: pyo3 for CPython embedding.
-  Provides safe Rust bindings, handles GIL correctly, well-maintained.
+Embedding: pyo3 0.28 — auto-initialize feature removed, use manually:
+  Init: pyo3::prepare_freethreaded_python() once via OnceLock.
+  All plugin loads: Python::with_gil(|py| { ... }).
+  GIL released via py.allow_threads(|| { ... }) during any Rust-only work
+  between plugin calls — never hold the GIL when not interacting with Python.
+  pyo3 creates thread state automatically for each Rust thread.
+  Cargo.toml: pyo3 = { version = "0.28", features = [] }
 
-ctypes vs cffi: ctypes.
-  Standard library, no extra dependency, sufficient for ABI bridging.
+ctypes: standard library, no extra dependency.
 
-Plugin format: single .py file.
-  Bundle path in manifest file field points to the .py file directly.
+host-libs/python/ polyplug.so resolution:
+  ctypes.CDLL(os.path.join(os.path.dirname(__file__), "polyplug.so"))
+  Co-located with the Python package. In tests, build.rs copies the
+  built polyplug .so next to the Python package dir.
+  Path override: Polyplug.Runtime.Builder.lib_path(path).
 
-Interpreter sharing: one shared interpreter per process.
-  Same reasoning as CLR — one GIL, one interpreter, all plugins share it.
+Plugin format: single .py file (no sys.path mutation).
+  Loaded via importlib.util.spec_from_file_location.
+
+Interpreter sharing: one shared interpreter, one GIL per process. OnceLock.
 
 pip publishing: out of scope. Local package structure only.
 
-Plugin packaging in tests: .py file copied directly into tests/fixtures/.
-  No build step needed — Python is interpreted.
+Plugin packaging in tests: .py file in tests/fixtures/. No build step.
 
 Dependency order: Rust crate first → Python libs → PythonGenerator.
 
@@ -667,30 +1176,33 @@ EPIC GOAL
 1. polyplug-python crate (crates/polyplug-python/):
    PythonConfig struct (as above).
    PythonLoader implementing BundleLoader:
-   - runtime_name returns "python"
-   - Locates CPython: PYTHONHOME → PATH → well-known paths
-   - Initializes CPython interpreter once via pyo3 + OnceLock
-   - Per bundle:
-     reads Python version from module metadata
-     version check per multi-version strategy above
-     imports plugin module from bundle path (.py file)
-     calls init(registrar_ptr) passing registrar as ctypes integer pointer
-     Python init registers vtables via ctypes calls back into C ABI
+   - runtime_name() returns "python"
+   - On first load: pyo3::prepare_freethreaded_python() via OnceLock
+     then Python::with_gil checks sys.version_info vs min_version → error or proceed
+   - Per bundle: Python::with_gil(|py| {
+       load via importlib.util.spec_from_file_location (no sys.path mutation)
+       call init(registrar_ptr as ctypes c_void_p integer)
+       plugin init calls ctypes back into C ABI to register vtables
+     })
+   - GIL released via py.allow_threads() during Rust-only work between loads
    - PolyplugError variants: InterpreterNotFound, InterpreterInitFailed,
-     ModuleImportFailed, InitFunctionMissing, InitRaisedException,
-     RuntimeVersionMismatch { required: String, found: String }
+     InterpreterVersionTooOld { required: String, found: String },
+     ModuleImportFailed, InitFunctionMissing, InitRaisedException
 
 2. Python guest lib (guest-libs/python/) — local package structure:
    - ctypes bindings for PluginRegistrar, HostVTable, PluginVTable
    - StringView and Buffer as ctypes.Structure (C memory, not Python heap)
-   - Plugin entry point decorator
-   - Exception boundary: try/except in generated init wraps each ABI fn
-   - PluginError(code: int, message: str) exception class
+     All string data stays in host_alloc memory — never copied to Python str
+   - register_plugin(registrar_ptr, vtable) helper
+   - Exception boundary: bare try/except per ABI fn in generated init → AbiError
+   - PluginError(code: int, message: str) — encodes into ABI_ERROR_PLUGIN
 
 3. Python host lib (host-libs/python/) — local package structure:
-   - ctypes bindings for all polyplug C ABI functions
-   - PluginRuntime class with builder pattern (plugin_dir, loader, extension, build)
-   - StringView and Buffer as ctypes.Structure
+   - ctypes.CDLL loaded from co-located polyplug.so (path configurable)
+   - ctypes bindings for all polyplug C ABI functions with explicit
+     argtypes and restype on every function — no untyped calls
+   - PluginRuntime class with builder pattern (plugin_dir, lib_path, build)
+   - StringView and Buffer as ctypes.Structure — all data in C memory
 
 4. PythonGenerator (crates/polyplugc/src/generators/python/mod.rs — new):
 
@@ -706,8 +1218,13 @@ EPIC GOAL
    - generated/types.py
    - generated/contracts.py
    - generated/vtables.py           vtable construction via ctypes
-   - generated/init.py              init function, try/except per ABI fn → AbiError
+   - generated/init.py              init(registrar_ptr), try/except per ABI fn → AbiError
    - generated/manifest.toml        runtime = "python"
+
+   Performance rules for generated code:
+   - All ctypes function objects cached at module level (not re-looked-up per call)
+   - All argtypes/restype set once at import time
+   - No Python object allocation on the hot path — ctypes.Structure only
 
 5. polyplugc generate --lang python wired into CLI
 
@@ -716,18 +1233,21 @@ EPIC GOAL
 7. Python fixture plugin for integration tests:
    - tests/fixtures/test_plugin.py — single .py file
    - Implements test contract from test_api.toml
-   - No build step — .py file used directly
+   - No build step
 
-8. Cross-language integration tests:
+8. build.rs copies polyplug .so next to host-libs/python/ package dir for tests
+
+9. Cross-language integration tests:
    - Rust host loads Python plugin → call two functions → assert results
    - Python host (host-libs/python/) loads Rust plugin → call → assert
    - Python host loads Python plugin
    - Python exception in plugin does not crash Rust host → AbiError returned
-   - UTF-8 string round-trip test
-   - Multi-version: higher minor Python plugin → warning emitted, loads
-   - Multi-version: different major → RuntimeVersionMismatch error
+   - UTF-8 string round-trip: ASCII and non-ASCII
+   - Interpreter too old → InterpreterVersionTooOld error, clear message
+   - GIL released during Rust-only work (verified via allow_threads coverage)
+   - ctypes function objects cached at module level (code inspection check)
 
-9. Generated Python passes mypy --strict with zero errors
+10. Generated Python passes mypy --strict with zero errors
 
 ---
 
@@ -735,12 +1255,15 @@ VERIFICATION CHECKLIST
 
 - All cross-language tests pass
 - Python exception does not crash Rust host
-- ctypes.Structure used for all cross-boundary types
+- ctypes.Structure used for all cross-boundary types — no Python heap objects crossing ABI
+- All ctypes function objects cached at module level — no per-call lookup
+- argtypes/restype explicit on every ctypes function binding
 - Generated Python passes mypy --strict
 - .pyi stubs generated alongside all .py files
 - polyplugc generate --lang python produces runnable output
-- Higher minor version: warning emitted, plugin loads
-- Different major version: RuntimeVersionMismatch error, clear message
+- Interpreter version too old → InterpreterVersionTooOld error, clear message
+- GIL not held during Rust-only work between plugin loads
+- polyplug.so co-location and path resolution works in tests
 - No .unwrap() in Rust production code
 - clippy passes with zero warnings
 - cargo test --workspace passes
@@ -784,31 +1307,60 @@ and LuaGenerator in polyplugc.
 PRE-ANSWERED DECISIONS
 
 LuaConfig:
-  pub enum LuaVersion { Jit, Lua54, Lua53 }
+  pub enum LuaVersion { Jit, Lua55, Lua54, Lua53 }
   pub struct LuaConfig {
       pub min_version: LuaVersion,
   }
   LuaLoader::new(LuaConfig { min_version: LuaVersion::Jit })
   LuaConfig is mandatory.
 
+Cargo dependency:
+  LuaVersion::Jit:
+    mlua = { version = "0.11", features = ["luajit", "vendored", "send"] }
+  LuaVersion::Lua55:
+    mlua = { version = "0.11", features = ["lua55", "vendored", "send"] }
+  LuaVersion::Lua54:
+    mlua = { version = "0.11", features = ["lua54", "vendored", "send"] }
+  LuaVersion::Lua53:
+    mlua = { version = "0.11", features = ["lua53", "vendored", "send"] }
+  The "vendored" feature compiles LuaJIT/Lua from source — no system install needed.
+  The "send" feature makes mlua::Lua: Send + Sync, required for OnceLock<Lua>.
+  Internally mlua uses a reentrant mutex to serialize VM access when "send" enabled.
+
 Version strategy:
-  LuaJIT is a separate implementation, not a version of standard Lua.
-  LuaVersion::Jit means LuaJIT is required — standard Lua is not acceptable.
-  LuaVersion::Lua54 / Lua53 means standard Lua, minimum that version.
-  If min_version = Jit and LuaJIT is not found: PolyplugError::RuntimeNotFound.
-  If min_version = Lua54 and only Lua53 found:
-    PolyplugError::RuntimeVersionMismatch { required, found }.
+  LuaVersion::Jit: requires LuaJIT specifically. If LuaJIT not available at
+    compile time (vendored handles this), fail at build. No standard Lua fallback.
+  LuaVersion::Lua54 / Lua53: standard Lua minimum version.
+  This is a compile-time choice (feature flag), not a runtime check.
+  The "version mismatch" error only applies when app requests Jit but binary
+  was compiled with lua54 features — caught at Rust compile time via features.
 
-VM sharing: one shared VM per process (OnceLock), same as CLR and Python.
+VM: one shared Lua VM per process.
+  OnceLock<Lua> in LuaLoader (requires "send" feature).
+  Internally mlua uses a reentrant mutex — safe for concurrent access.
 
-Struct passing: LuaJIT FFI for zero-copy. ffi.cdef + ffi.cast for all ABI types.
-  Standard Lua fallback uses lightuserdata — acceptable performance for non-JIT.
+Registrar pointer passing — FFI cdata pointer, NOT lightuserdata:
+  CRITICAL: LuaJIT lightuserdata has a 47-bit pointer limit on x86_64 Linux
+  (only 47 bits of address space). Registrar pointer may be on the stack or
+  in any memory range. Use FFI cdata void pointer instead:
+    Rust side: lua.globals().set("_registrar_ptr",
+      lua.create_integer(registrar_ptr as usize as i64)?)
+    Lua side: local reg = ffi.cast("PluginRegistrar*",
+      ffi.cast("uintptr_t", _registrar_ptr))
+  The casts are done once at init time only — no overhead on hot path.
+  FFI cdata function pointer calls are JIT-compiled to indirect calls (~native speed).
+
+Zero-copy struct passing via LuaJIT FFI metatype:
+  All ABI structs declared via ffi.cdef in guest_lib.lua once at load.
+  Function pointers in vtable stored as FFI cdata — calls are JIT-compiled.
+  Performance: ffi metatype calls ~2B ops/sec vs lightuserdata ~45M ops/sec.
+  This is the correct pattern for near-zero overhead.
 
 Plugin format: single .lua file.
-  Bundle path in manifest file field points to the .lua file directly.
-  Script bundles are directories containing the .lua file + manifest.toml.
+  Bundle path in manifest file field points to the .lua file.
+  Bundle dir contains the .lua file + manifest.toml.
 
-Lua host lib C extension: built via build.rs using cc crate.
+Lua host lib C extension: built via cc crate in build.rs.
   Produces polyplug_lua.so alongside polyplug.lua.
 
 Lua publishing: out of scope. Local files only.
@@ -821,64 +1373,72 @@ EPIC GOAL
 
 1. polyplug-lua crate (crates/polyplug-lua/):
    LuaConfig + LuaVersion (as above).
+   Cargo.toml: mlua with features per LuaVersion (see PRE-ANSWERED DECISIONS).
    LuaLoader implementing BundleLoader:
-   - runtime_name returns "lua"
-   - Locates LuaJIT or Lua VM based on LuaConfig.min_version
-   - Initializes VM once via mlua + OnceLock
+   - runtime_name() returns "lua"
+   - VM initialized once via OnceLock<Lua> using "send" feature
    - Per bundle:
-     detects VM type/version
-     version check per version strategy above
-     loads plugin script from bundle path (.lua file)
-     calls init(registrar_ptr) passing registrar as lightuserdata
-     Lua init registers vtables via LuaJIT FFI calls back into C ABI
-   - PolyplugError variants: RuntimeNotFound, VmInitFailed, ScriptLoadFailed,
-     InitFunctionMissing, InitRaisedError,
-     RuntimeVersionMismatch { required: String, found: String }
+     lua.load(chunk).exec() to load plugin script
+     set _registrar_ptr global as i64 (uintptr_t of registrar pointer)
+     call init() Lua function — Lua FFI casts integer back to PluginRegistrar*
+     Lua init builds vtable via FFI and calls registrar->register()
+   - PolyplugError variants: VmInitFailed, ScriptLoadFailed,
+     InitFunctionMissing, InitRaisedError
 
-2. Lua guest lib (guest-libs/lua/):
-   - polyplug_guest.lua
-   - LuaJIT FFI: ffi.cdef declarations for PluginRegistrar, HostVTable, PluginVTable,
-     StringView, Buffer — zero-copy via ffi.cast
-   - Standard Lua fallback: lightuserdata + manual field extraction
-   - Plugin entry point registration helper
-   - Error boundary: pcall wrapper per ABI function in generated init
+2. Lua guest lib (guest-libs/lua/polyplug_guest.lua):
+   - ffi.cdef declarations for PluginRegistrar, HostVTable, PluginVTable,
+     StringView, Buffer — declared ONCE at load time
+   - Registrar accessed via:
+     local reg = ffi.cast("PluginRegistrar*", ffi.cast("uintptr_t", _registrar_ptr))
+   - All vtable function pointers stored as FFI cdata — JIT-compiled indirect calls
+   - ffi.metatype used for domain types — enables JIT allocation sinking
+   - Error boundary: lua_pcall wraps each ABI function in generated init
+   - NO lightuserdata used for pointers — all pointers are FFI cdata void*/typed*
 
 3. Lua host lib (host-libs/lua/):
-   - polyplug.lua + polyplug_lua.so (C extension, built via cc crate in build.rs)
-   - LuaJIT FFI declarations for all polyplug C ABI functions
+   - polyplug.lua: LuaJIT FFI declarations for all polyplug C ABI functions
+     loaded via ffi.load(polyplug_lib_path)
+   - polyplug_lua.so: C extension built via cc crate in build.rs
+     Exports one function: polyplug_lib_path() → path to polyplug .so
    - PluginRuntime table with builder pattern (plugin_dir, loader, extension, build)
+   - All function pointer calls via FFI cdata — JIT-compiled
 
 4. LuaGenerator (crates/polyplugc/src/generators/lua/mod.rs — new):
 
    From --api api.toml:
-   - generated/host/types.lua       domain types via LuaJIT FFI cdata
-   - generated/host/callers.lua     contract caller tables
+   - generated/host/types.lua       domain types via ffi.metatype cdata
+   - generated/host/callers.lua     contract caller tables (FFI function ptrs)
    - generated/guest/types.lua
    - generated/guest/contracts.lua  contract interface tables (metatables)
 
    From --bundle bundle.toml:
    - generated/types.lua
    - generated/contracts.lua
-   - generated/vtables.lua          vtable construction via LuaJIT FFI
-   - generated/init.lua             init function, pcall per ABI fn → AbiError
+   - generated/vtables.lua          vtable construction via ffi.new + ffi.cast
+   - generated/init.lua             init(registrar_ptr_int), pcall per ABI fn
    - generated/manifest.toml        runtime = "lua"
+
+   Performance rules for generated code:
+   - All ffi.cdef calls at module top level, never in hot path
+   - All function pointer casts done once at init, stored in locals
+   - ffi.metatype for all domain types — enables allocation sinking by JIT
+   - No Lua table lookups on hot path for vtable dispatch
 
 5. polyplugc generate --lang lua wired into CLI
 
 6. Lua fixture plugin for integration tests:
    - tests/fixtures/test_plugin.lua — single .lua file
    - Implements test contract from test_api.toml
-   - No build step — .lua file used directly
+   - No build step
 
 7. Cross-language integration tests:
    - Rust host loads Lua plugin → call two functions → assert results
    - Lua host (host-libs/lua/) loads Rust plugin → call → assert
    - Lua host loads Lua plugin
    - Lua error() in plugin does not crash Rust host → AbiError returned
-   - LuaJIT FFI zero-copy test: assert no buffer copies at ABI boundary
+   - FFI cdata pointer test: registrar pointer correctly cast via uintptr_t
    - LuaJIT performance test: call overhead within 2x of native baseline
      (from BENCHMARKS.md baseline)
-   - Version mismatch: Jit required but standard Lua found → RuntimeNotFound error
 
 ---
 
@@ -886,10 +1446,12 @@ VERIFICATION CHECKLIST
 
 - All cross-language tests pass
 - Lua error does not crash Rust host
-- LuaJIT FFI used for zero-copy struct passing (verified by code inspection)
+- No lightuserdata used for any pointer — all pointers are FFI cdata (code inspection)
+- Registrar pointer passed as uintptr_t integer, cast to typed* via FFI on Lua side
+- ffi.metatype used for domain types (code inspection)
+- All ffi.cdef calls at module load time, never on hot path
 - LuaJIT performance test passes within 2x of native baseline
 - polyplugc generate --lang lua produces runnable output
-- Version mismatch error is clear and actionable
 - polyplug_lua.so C extension built correctly via cc crate
 - No .unwrap() in Rust production code
 - clippy passes with zero warnings

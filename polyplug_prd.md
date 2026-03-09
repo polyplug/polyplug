@@ -158,16 +158,8 @@ The ABI is the frozen contract between the runtime and all plugins. It uses C ca
 void*  host_alloc(size_t size);
 void   host_free(void* ptr);
 
-// Plugin discovery
-PluginHandle find_plugin(uint64_t contract_id, uint32_t min_version);
-
-// Cross-plugin dispatch
-AbiError call_plugin(
-    PluginHandle plugin,
-    uint32_t     function_id,
-    void*        args,
-    void*        out
-);
+// Plugin discovery — returns direct vtable pointer, null if not found
+const PluginVTable* find_plugin(uint64_t contract_id, uint32_t min_version);
 
 // Extension lookup
 const void* get_extension(uint32_t extension_id);
@@ -191,9 +183,11 @@ typedef struct {
     size_t len;
     size_t cap;
 } Buffer;
-
-typedef void* PluginHandle;  // opaque, managed by runtime
 ```
+
+**Trust model — `*const PluginVTable` is never mutable:**
+
+`find_plugin` returns a direct pointer into the runtime's vtable storage. It is `const` — callers must never cast it to mutable and write to it. Doing so is undefined behavior. There is no runtime enforcement: in-process code cannot be reliably prevented from re-protecting pages (`mprotect` is bypassable by the same process). polyplug's trust model assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. See `TRUST_MODEL.md`.
 
 **Rules:**
 - All strings crossing the ABI boundary are UTF-8
@@ -238,12 +232,22 @@ This exchange is identical regardless of what language the plugin is written in.
 
 ```c
 typedef struct {
-    void*        (*alloc)(size_t size);
-    void         (*free)(void* ptr);
-    PluginHandle (*find_plugin)(uint64_t contract_id, uint32_t min_version);
-    AbiError     (*call_plugin)(PluginHandle, uint32_t fn_id, void* args, void* out);
-    const void*  (*get_extension)(uint32_t extension_id);
+    void*                (*alloc)(size_t size);
+    void                 (*free)(void* ptr);
+    const PluginVTable*  (*find_plugin)(uint64_t contract_id, uint32_t min_version);
+    const void*          (*get_extension)(uint32_t extension_id);
 } HostVTable;
+```
+
+**Cross-plugin call — direct vtable dispatch, zero runtime involvement:**
+
+```c
+// Plugin A at init time (once):
+const PluginVTable* b = host->find_plugin(CONTRACT_B_ID, 1);
+
+// Plugin A on hot path:
+if (b) b->functions[fn_id](args, out);
+// = 1 load + 1 indirect call. Identical to host-to-plugin dispatch.
 ```
 
 **PluginVTable — one per contract implemented:**
@@ -293,7 +297,7 @@ One pointer dereference. One indirect call. Nothing else.
 
 ## 8. Host Libraries
 
-**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the same four functions — `host_alloc/host_free`, `find_plugin`, `call_plugin`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
+**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the same three functions — `host_alloc/host_free`, `find_plugin`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
 
 The generated host callers from `polyplugc` sit on top of the host lib. The host lib is contract-agnostic infrastructure; generated code is contract-specific.
 
@@ -448,61 +452,128 @@ Native plugins (Rust, C++, C# NativeAOT) require no adapter. The built-in native
 
 Enables loading of standard .NET C# plugins without NativeAOT.
 
+**Cargo dependency:**
+
+```toml
+# polyplug-dotnet/Cargo.toml
+netcorehost = { version = "0.20", features = ["nethost"] }
+
+# Optional Cargo feature — app developer opts in when they want zero system .NET dep at build time
+[features]
+download-nethost = ["netcorehost/download-nethost"]
+```
+
+`nethost` feature: enables `nethost::load_hostfxr()` which automatically locates hostfxr via `DOTNET_ROOT`, `PATH`, and well-known system paths — no manual scanning needed.
+
+`download-nethost` feature: downloads the `nethost` binary from NuGet at build time — zero system .NET install required to compile `polyplug-dotnet`. App developers enable this via `polyplug-dotnet/download-nethost` in their own `Cargo.toml`. Not enabled by default (supply chain / CI caching concerns).
+
 **Configuration — app developer provides at init:**
 
 ```rust
+pub enum HostfxrLocation {
+    /// nethost::load_hostfxr() — searches DOTNET_ROOT, PATH, system (default)
+    Auto,
+    /// Explicit path to hostfxr .so/.dll
+    Path(PathBuf),
+}
+
+pub struct DotnetConfig {
+    pub min_framework: String,               // e.g. "net10.0"
+    pub hostfxr: HostfxrLocation,            // default: Auto
+}
+
 DotnetLoader::new(DotnetConfig {
-    min_framework: "net10.0",  // minimum acceptable .NET version
+    min_framework: "net10.0".into(),
+    hostfxr: HostfxrLocation::Auto,
 })
 ```
 
-`DotnetConfig` is mandatory. The app developer declares the minimum .NET version they support. This is the target framework used to generate the `runtimeconfig.json`.
-
 **runtimeconfig.json — generated on the fly, never shipped by plugin developer:**
 
-`hostfxr_initialize_for_runtime_config` requires a `.runtimeconfig.json` file path — there is no in-memory alternative in the .NET hosting API. `polyplug-dotnet` generates a minimal one in a temp dir from `DotnetConfig.min_framework` at first load, passes it to hostfxr, then deletes it. Plugin developers ship only the `.dll`. No `.runtimeconfig.json` in the bundle.
+`hostfxr_initialize_for_runtime_config` requires a `.runtimeconfig.json` file path — there is no in-memory alternative. `polyplug-dotnet` generates a minimal one in a temp dir from `DotnetConfig.min_framework` **before** calling `nethost::load_hostfxr()` context init, passes it to hostfxr, then deletes it immediately after. Plugin developers ship only the `.dll`. No `.runtimeconfig.json` in the bundle.
+
+**Assembly target framework version check — `pelite` reads PE metadata:**
+
+Plugin `.dll` target framework is read directly from the PE/COFF CLR metadata section using the `pelite` crate — specifically the `TargetFrameworkAttribute` custom attribute on the assembly. This happens before the CLR loads the assembly. Zero CLR involvement, zero extra files from plugin developer.
+
+```toml
+pelite = "0.10"   # lightweight zero-alloc PE reader
+```
 
 **Multi-version behavior:**
 
-A process can only host one CLR version. `polyplug-dotnet` enforces this:
-- First `.NET` plugin load initializes CLR for `min_framework` via `OnceLock`
-- Subsequent plugins: target framework read from assembly metadata
-  - Compatible (same major, equal or higher minor) → load silently
+A process can only host one CLR version:
+- First load: CLR initialized for `min_framework`, `DelegateLoader` cached in `OnceLock`
+- Subsequent bundles: `pelite` reads `TargetFrameworkAttribute` from PE metadata
+  - Compatible (same major, minor >= min_framework minor) → load silently
   - Higher minor → load with warning
-  - Different major → hard error with clear message
-- App developer uses NativeAOT for plugins that must target a different major version
+  - Different major → `PolyplugError::RuntimeVersionMismatch { required, found }`
+- NativeAOT is the escape hatch for plugins targeting a different major version
+
+**`DelegateLoader` caching — critical for performance:**
+
+`load_assembly_and_get_function_pointer` takes ~30ms per call if the delegate loader is re-obtained each time. The `AssemblyDelegateLoader` from `netcorehost` must be obtained once via `hostfxr_get_runtime_delegate` and stored in the `OnceLock` context. Per-bundle load only calls `get_function_pointer` on the cached loader — not the full chain.
 
 **Load flow:**
 
 ```
-DotnetLoader::new(DotnetConfig { min_framework: "net10.0" })
+DotnetLoader::new(DotnetConfig { min_framework: "net10.0", hostfxr: Auto })
         ↓
 First .NET bundle load:
-  generate runtimeconfig.json in temp dir → hostfxr init → delete temp file
-  CLR running (OnceLock, shared for all subsequent .NET plugins)
+  generate runtimeconfig.json in temp dir
+  nethost::load_hostfxr() → locate hostfxr
+  hostfxr context init with temp runtimeconfig.json → delete temp file
+  cache AssemblyDelegateLoader in OnceLock
         ↓
 Each .NET bundle:
-  inspect assembly target framework → version check → warn or error
-  load_assembly_and_get_function_pointer → fn ptr to [UnmanagedCallersOnly] Init
+  pelite reads TargetFrameworkAttribute from PE metadata → version check
+  cached AssemblyDelegateLoader.get_function_pointer("Init")
   Init(registrar) called — identical vtable exchange from here
 ```
 
-The C# plugin's Init method (generated by polyplugc):
+**Generated C# — performance requirements:**
 
 ```csharp
-[UnmanagedCallersOnly(EntryPoint = "init")]
-public static unsafe void Init(PluginRegistrar* registrar) {
-    // register plugins, hand over vtable
+// Init must declare explicit calling convention — never leave it implicit
+[UnmanagedCallersOnly(EntryPoint = "init",
+    CallConvs = new[] { typeof(CallConvCdecl) })]
+public static unsafe AbiError Init(PluginRegistrar* registrar) {
+    // Called from a Rust (foreign) thread — CLR thread affinity required
+    Thread.BeginThreadAffinity();
+    try {
+        // register vtables
+        return AbiError.Ok;
+    } catch (Exception ex) {
+        return AbiError.FromException(ex);  // blittable uint, no marshalling
+    } finally {
+        Thread.EndThreadAffinity();
+    }
 }
+
+// Every ABI function generated in Init.cs must also declare CallConvCdecl
+// All parameters and return types must be blittable — no managed references
 ```
 
-`[UnmanagedCallersOnly]` works in standard .NET, not just NativeAOT.
+**C# host lib P/Invoke — `[SuppressGCTransition]` on hot path:**
+
+```csharp
+// host-libs/csharp/ — P/Invoke for call_plugin on the hot path
+[DllImport("polyplug"), SuppressGCTransition]
+public static extern AbiError call_plugin(
+    PluginHandle handle, uint fn_id, void* args, void* out);
+
+// find_plugin and get_extension also get [SuppressGCTransition]
+// host_alloc / host_free do NOT — they may trigger GC
+```
+
+`[SuppressGCTransition]` eliminates the GC transition overhead on short, non-blocking native calls. Only safe when the native function is guaranteed short and does not block or call back into managed code directly.
 
 **Performance:**
 - CLR startup: one-time cost at first .NET plugin load (~100–500ms)
-- Per-call: one managed/unmanaged transition (~50–200ns vs ~1ns native)
+- Per-call managed/unmanaged transition with `[SuppressGCTransition]`: ~5–15ns
+- Per-call without: ~50–200ns
+- `DelegateLoader` cached: assembly function pointer lookup is ~0.1ms, not ~30ms
 - Subsequent .NET plugins share the already-running CLR — fast load
-- Full .NET framework available: reflection, EF, anything managed
 
 **C# bundle manifest — plugin ships only `.dll`:**
 
@@ -523,11 +594,20 @@ Enables loading of Python plugins via CPython embedding.
 PythonLoader::new(PythonConfig { min_version: (3, 10) })
 ```
 
-Uses `pyo3` to initialize a CPython interpreter once per process (OnceLock). Plugin format is a single `.py` file. Each plugin's Python version is read from module metadata at load time and checked against `min_version` — same warn-on-minor, error-on-major strategy as `polyplug-dotnet`. Interpreter located via `PYTHONHOME` → `PATH` → well-known system paths.
+Uses `pyo3` 0.28 to embed CPython (`auto-initialize` feature removed — `prepare_freethreaded_python()` called manually). Interpreter initialized once per process via `OnceLock` using `pyo3::prepare_freethreaded_python()`. Version checked once at init by reading `sys.version_info` — there is no per-plugin version, all plugins share the same interpreter.
 
-The `init` function in the plugin script receives the registrar pointer as a ctypes integer and registers vtables back through the C ABI via `ctypes`.
+All plugin loads run inside `Python::with_gil(|py| { ... })`. The GIL is released via `py.allow_threads()` during any Rust-only work between loads to avoid blocking other Python threads.
 
-**Performance:** Python interpreter is the bottleneck, not polyplug. `ctypes.Structure` keeps all cross-boundary data in C memory, outside the Python GC.
+Plugins are loaded via `importlib.util.spec_from_file_location` — no `sys.path` mutation. Plugin format is a single `.py` file. The `init(registrar_ptr)` function receives the registrar as a `ctypes.c_void_p` integer and registers vtables back through the C ABI via `ctypes`.
+
+The `host-libs/python/` package loads `polyplug.so` from a co-located path configured at builder time.
+
+**Generated code performance rules:**
+- All `ctypes` function objects cached at module level — no per-call lookup
+- All `argtypes`/`restype` set once at import time
+- All cross-boundary data in `ctypes.Structure` — never copied to Python heap
+
+**Performance:** Python interpreter is the bottleneck, not polyplug.
 
 ---
 
@@ -540,14 +620,36 @@ Enables loading of Lua plugins via LuaJIT or standard Lua embedding.
 ```rust
 LuaLoader::new(LuaConfig { min_version: LuaVersion::Jit })
 // or
+LuaLoader::new(LuaConfig { min_version: LuaVersion::Lua55 })
+// or
 LuaLoader::new(LuaConfig { min_version: LuaVersion::Lua54 })
 ```
 
-`LuaVersion::Jit` requires LuaJIT specifically — standard Lua is not acceptable. `LuaVersion::Lua54` / `Lua53` allows standard Lua at that minimum version. Uses `mlua` crate with a shared VM per process (OnceLock). Plugin format is a single `.lua` file inside a directory bundle alongside `manifest.toml`.
+Uses `mlua` crate with `vendored` feature (compiles LuaJIT/Lua from source — no system install) and `send` feature (makes `mlua::Lua: Send + Sync` for `OnceLock`). One shared VM per process.
 
-LuaJIT FFI (`ffi.cdef` + `ffi.cast`) provides zero-copy struct passing — no intermediate copies at the ABI boundary. Standard Lua fallback uses `lightuserdata`.
+```toml
+# Cargo.toml for polyplug-lua (LuaJIT variant)
+mlua = { version = "0.11", features = ["luajit", "vendored", "send"] }
+# Lua 5.5 variant:
+mlua = { version = "0.11", features = ["lua55", "vendored", "send"] }
+```
 
-**Performance:** LuaJIT achieves near-native performance via JIT compilation. Call overhead target: within 2x of native baseline.
+`LuaVersion` enum: `Jit | Lua55 | Lua54 | Lua53`
+
+**Registrar pointer passing — FFI cdata, NOT lightuserdata:**
+
+LuaJIT `lightuserdata` has a 47-bit pointer limit on x86_64 Linux. The registrar pointer may live anywhere in the address range. The correct pattern is to pass the pointer as a `uintptr_t` integer and cast it to a typed pointer on the Lua side via FFI:
+
+```lua
+-- Rust sets: lua.globals().set("_registrar_ptr", ptr as i64)
+local reg = ffi.cast("PluginRegistrar*", ffi.cast("uintptr_t", _registrar_ptr))
+```
+
+This cast happens once at init time. All subsequent vtable function pointer calls are FFI cdata indirect calls — JIT-compiled to near-native speed (~800M ops/sec vs ~45M for lightuserdata C bindings).
+
+`ffi.metatype` is used for all domain types, enabling LuaJIT's allocation sinking optimization — temporary struct allocations are eliminated entirely by the JIT.
+
+**Performance:** LuaJIT FFI call overhead is within 2x of native vtable dispatch.
 
 ---
 
