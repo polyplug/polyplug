@@ -49,14 +49,17 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     // Register with thread-local Registry.
+    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
         let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        registry.register(
-            *desc,
-            vtable as *const PluginVTable,
-            contract_name.to_owned(),
-            vt.contract_id,
-        )
+        unsafe {
+            registry.register(
+                *desc,
+                vtable as *const PluginVTable,
+                contract_name.to_owned(),
+                vt.contract_id,
+            )
+        }
     });
 
     match result {

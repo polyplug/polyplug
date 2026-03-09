@@ -3,6 +3,7 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
+use polyplug::abi::bundle_id as runtime_bundle_id;
 use polyplug::abi::contract_id as runtime_contract_id;
 use polyplug::abi::extension_id as runtime_extension_id;
 
@@ -200,19 +201,39 @@ pub(crate) struct ResolvedPlugin {
     #[allow(dead_code)]
     pub implements: Vec<String>,
     #[allow(dead_code)]
-    pub requires: Vec<String>,
-    #[allow(dead_code)]
     pub optional: Vec<String>,
 }
 
 #[derive(Debug)]
 pub(crate) struct ResolvedBundle {
     #[allow(dead_code)]
-    pub name: String,
+    pub name:         String,
     #[allow(dead_code)]
-    pub version: Version,
+    pub version:      Version,
     #[allow(dead_code)]
-    pub plugins: Vec<ResolvedPlugin>,
+    pub plugins:      Vec<ResolvedPlugin>,
+    #[allow(dead_code)]
+    pub bundle_id:    u64,
+    #[allow(dead_code)]
+    pub dependencies: Vec<ResolvedDependency>,
+}
+
+/// A resolved bundle dependency — either by contract (any provider) or by bundle (specific provider).
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(crate) enum ResolvedDependency {
+    ByContract {
+        contract:    String,
+        contract_id: u64,
+        min_version: u32,
+    },
+    ByBundle {
+        bundle:      String,
+        bundle_id:   u64,
+        contract:    String,
+        contract_id: u64,
+        min_version: u32,
+    },
 }
 
 /// The fully validated IR, ready for code generation.
@@ -229,6 +250,11 @@ pub(crate) struct ValidatedIr {
 /// Compute a contract ID: FNV-1a of "name@major".
 pub(crate) fn compute_contract_id(name: &str, major: u32) -> u64 {
     runtime_contract_id(name, major)
+}
+
+/// Compute a bundle ID: FNV-1a hash of the bundle name.
+pub(crate) fn compute_bundle_id(name: &str) -> u64 {
+    runtime_bundle_id(name)
 }
 
 /// Compute an extension ID: FNV-1a lower 32 bits of name.
@@ -316,5 +342,16 @@ mod tests {
             compute_contract_id("image.decode", 1),
             compute_contract_id("image.decode", 2)
         );
+    }
+
+    #[test]
+    fn bundle_id_uses_fnv1a() {
+        // FNV-1a of "test-bundle" must be deterministic and non-zero
+        let id: u64 = compute_bundle_id("test-bundle");
+        assert_ne!(id, 0);
+        // Same input → same output
+        assert_eq!(id, compute_bundle_id("test-bundle"));
+        // Different inputs → different outputs (basic collision check)
+        assert_ne!(compute_bundle_id("bundle-a"), compute_bundle_id("bundle-b"));
     }
 }

@@ -69,31 +69,51 @@ struct ZeroResult {
 
 // ─── HostVTable stub functions ────────────────────────────────────────────────
 
-/// Stub find_plugin — returns a null handle (not needed for memory stress tests).
+/// Stub find_by_contract — returns a null handle (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
-unsafe extern "C" fn stub_find_plugin(_contract_id: u64, _min_version: u32) -> PluginHandle {
+unsafe extern "C" fn stub_find_by_contract(_contract_id: u64, _min_version: u32) -> PluginHandle {
     PluginHandle {
         index: u32::MAX,
         generation: 0,
     }
 }
 
-/// Stub call_plugin — returns ABI_OK without doing anything.
+/// Stub find_by_bundle — returns a null handle (not needed for memory stress tests).
 ///
 /// # Safety
-/// Always safe to call; no pointer dereferences.
-unsafe extern "C" fn stub_call_plugin(
-    _plugin: PluginHandle,
-    _fn_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError {
-        code: ABI_OK,
-        message: StringView::null(),
+/// Always safe to call; returns a sentinel null handle.
+unsafe extern "C" fn stub_find_by_bundle(
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
     }
+}
+
+/// Stub find_all_by_contract — returns 0 (not needed for memory stress tests).
+///
+/// # Safety
+/// Always safe to call; no pointer dereferences if out_cap is 0.
+unsafe extern "C" fn stub_find_all_by_contract(
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// Stub resolve_plugin — returns null (not needed for memory stress tests).
+///
+/// # Safety
+/// Always safe to call; returns null pointer.
+unsafe extern "C" fn stub_resolve_plugin(_handle: PluginHandle) -> *const polyplug::abi::PluginVTable {
+    core::ptr::null()
 }
 
 /// Stub get_extension — returns null.
@@ -134,14 +154,17 @@ unsafe extern "C" fn registry_register_callback(
         core::str::from_utf8_unchecked(bytes)
     };
 
+    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
         let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        registry.register(
-            *desc,
-            vtable as *const PluginVTable,
-            contract_name.to_owned(),
-            vt.contract_id,
-        )
+        unsafe {
+            registry.register(
+                *desc,
+                vtable as *const PluginVTable,
+                contract_name.to_owned(),
+                vt.contract_id,
+            )
+        }
     });
 
     match result {
@@ -520,8 +543,10 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     let host_vtable: HostVTable = HostVTable {
         alloc: tracker.alloc_fn(),
         free: tracker.free_fn(),
-        find_plugin: stub_find_plugin,
-        call_plugin: stub_call_plugin,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
         get_extension: stub_get_extension,
     };
 

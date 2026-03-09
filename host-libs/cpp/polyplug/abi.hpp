@@ -66,14 +66,14 @@ struct PluginVTable {
 /// Host capabilities passed to every plugin at init time.
 /// OWNERSHIP: 'static, lives as long as the runtime.
 struct HostVTable {
-    void*        (*alloc)(size_t size, size_t align);
-    void         (*free)(void* ptr, size_t size, size_t align);
-    PluginHandle (*find_plugin)(uint64_t contract_id, uint32_t min_version);
-    AbiError     (*call_plugin)(PluginHandle plugin, uint32_t fn_id,
-                                const void* args, void* out);
-    const void*  (*get_extension)(uint32_t extension_id);
+    void*              (*alloc)(size_t size, size_t align);
+    void               (*free)(void* ptr, size_t size, size_t align);
+    PluginHandle       (*find_by_contract)(uint64_t contract_id, uint32_t min_version);
+    PluginHandle       (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    size_t             (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
+    const PluginVTable* (*resolve_plugin)(PluginHandle handle);
+    const void*        (*get_extension)(uint32_t extension_id);
 };
-
 /// Metadata about a plugin within a bundle.
 /// OWNERSHIP: value type passed by pointer during init. name and contract_name
 /// StringViews are borrowed from the plugin's static memory. Never freed by receiver.
@@ -140,16 +140,16 @@ RuntimeHandle polyplug_runtime_init(const RuntimeConfig* config);
 void polyplug_runtime_destroy(RuntimeHandle runtime);
 
 /// Find a plugin by contract_id and minimum version.
-PluginHandle polyplug_find_plugin(RuntimeHandle runtime,
-                                   uint64_t contract_id,
-                                   uint32_t min_version);
+PluginHandle polyplug_find_by_contract(uint64_t contract_id, uint32_t min_version);
 
-/// Call a plugin function through its vtable.
-AbiError polyplug_call_plugin(RuntimeHandle runtime,
-                               PluginHandle plugin,
-                               uint32_t function_id,
-                               const void* args,
-                               void* out);
+                                   /// Find a specific bundle's implementation of a contract.
+PluginHandle polyplug_find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+
+/// Enumerate all providers of a contract into caller-provided buffer. Returns count written.
+                               size_t polyplug_find_all_by_contract(uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
+
+                               /// Resolve a plugin handle to its raw vtable pointer.
+                               const PluginVTable* polyplug_resolve_plugin(PluginHandle handle);
 
 /// Retrieve an extension vtable by extension_id.
 const void* polyplug_get_extension(RuntimeHandle runtime, uint32_t extension_id);

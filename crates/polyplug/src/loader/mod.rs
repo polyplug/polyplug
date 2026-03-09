@@ -14,21 +14,45 @@ pub mod manifest;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::abi::ABI_OK;
 use crate::abi::AbiError;
 use crate::abi::AbiError as AbiErrorType;
 use crate::abi::HostVTable;
-use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::abi::PluginDescriptor;
 use crate::abi::PluginHandle;
 use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
+use crate::abi::ABI_OK;
+use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::error::LoaderError;
 use crate::registry::Registry;
 use std::sync::Arc;
 
 use crate::error::PolyplugError;
 use crate::loader::manifest::ManifestData;
+use crate::loader::manifest::RawManifestDependency;
+
+// ─── Thread-locals for state passing through the FFI boundary ────────────────
+//
+// These are set by load_bundle() immediately before calling polyplug_init and
+// cleared after by BundleInitGuard::drop(). The registrar_callback reads them
+// synchronously during the same call — thread-local is safe because init is
+// single-threaded per bundle.
+thread_local! {
+    static REGISTRAR_BUNDLE_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    static REGISTRAR_REGISTRY_PTR: core::cell::Cell<*const Registry> = const { core::cell::Cell::new(core::ptr::null()) };
+}
+
+// ─── RAII guard: clears thread-locals on drop (even on panic) ────────────────
+struct BundleInitGuard;
+
+impl Drop for BundleInitGuard {
+    fn drop(&mut self) {
+        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0));
+        REGISTRAR_REGISTRY_PTR
+            .with(|c: &core::cell::Cell<*const Registry>| c.set(core::ptr::null()));
+        REGISTRAR_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0));
+    }
+}
 
 /// Trait implemented by all bundle loaders (native and adapter crates).
 ///
@@ -134,6 +158,9 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
         // No manifest → default to native
         return Ok(ManifestData {
             runtime: "native".to_owned(),
+            bundle_name: String::new(),
+            dependencies: Vec::new(),
+            bundle_id: 0,
         });
     }
 
@@ -161,24 +188,28 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
 
     Ok(ManifestData {
         runtime: trimmed.to_owned(),
+        bundle_name: data.bundle_name,
+        dependencies: data.dependencies,
+        bundle_id: 0,
     })
 }
 
 /// Load a single native plugin bundle.
 ///
 /// # Steps
-/// 1. `dlopen` the library (RTLD_NOW | RTLD_LOCAL via libloading defaults).
+/// 1. Parse the manifest to extract bundle_name and dependencies.
+/// 2. `dlopen` the library (RTLD_NOW | RTLD_LOCAL via libloading defaults).
 ///    RTLD_LOCAL: plugins must not pollute the global symbol namespace.
 ///    RTLD_NOW: fail fast at load time if any symbols are missing.
-/// 2. Resolve `polyplug_abi_version` sentinel — reject if missing or wrong version.
-/// 3. Resolve `polyplug_init`, copy the fn pointer out of the `Symbol` borrow,
+/// 3. Resolve `polyplug_abi_version` sentinel — reject if missing or wrong version.
+/// 4. Resolve `polyplug_init`, copy the fn pointer out of the `Symbol` borrow,
 ///    then move `library` into `registry.loaded_libraries`.
 ///    **Why critical**: `Library::drop` calls `dlclose()`, unmapping plugin code pages.
 ///    Any vtable fn pointer into those pages then becomes dangling — silent
 ///    memory corruption or SIGBUS on the next vtable call. By storing the handle in
 ///    `Registry`, it lives exactly as long as the `Runtime`.
-/// 4. Call `polyplug_init` with a `PluginRegistrar` callback.
-/// 5. On init failure: propagate the error. The library remains in
+/// 5. Call `polyplug_init` with a `PluginRegistrar` callback.
+/// 6. On init failure: propagate the error. The library remains in
 ///    `registry.loaded_libraries` — the never-unload invariant applies.
 pub fn load_bundle(
     path: &Path,
@@ -186,6 +217,25 @@ pub fn load_bundle(
     host_vtable: &'static HostVTable,
 ) -> Result<(), LoaderError> {
     let path_str: String = path.to_string_lossy().into_owned();
+
+    // Step 0: Parse the manifest to get bundle_name and dependencies.
+    let mut manifest: ManifestData = parse_manifest(path)?;
+
+    // Compute bundle_id from bundle_name
+    manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+
+    // Resolve dependency contract_ids and declare them to the registry
+    let dep_contract_ids: Vec<u64> = manifest
+        .dependencies
+        .iter()
+        .map(|dep: &RawManifestDependency| crate::abi::contract_id(&dep.contract, 0))
+        .collect::<Vec<u64>>();
+    registry
+        .declare_deps(manifest.bundle_id, dep_contract_ids)
+        .map_err(|e: crate::error::RegistryError| LoaderError::InitFailed {
+            bundle: path_str.clone(),
+            error: format!("declare_deps failed: {e}"),
+        })?;
 
     // SAFETY: The path points to a compiled plugin bundle. libloading handles
     // platform-specific loading (RTLD_NOW | RTLD_LOCAL on Unix, LoadLibraryExW on Windows).
@@ -261,12 +311,15 @@ pub fn load_bundle(
     // This prevents dlclose() from being called while vtable fn pointers are live.
     registry.push_library(library);
 
-    // Step 4: Build registrar callback state
-    let state: RegistrarState<'_> = RegistrarState {
-        registry,
-        bundle_path: &path_str,
-        registered_handles: Vec::new(),
-    };
+    // Step 4: Set thread-locals for registrar_callback, then install RAII guard.
+    // The guard clears all three thread-locals on drop (even on panic).
+    REGISTRAR_REGISTRY_PTR.with(|c: &core::cell::Cell<*const Registry>| {
+        c.set(registry as *const Registry);
+    });
+    REGISTRAR_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
+    crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
+    // Guard clears all three thread-locals on drop (even on panic)
+    let _bundle_guard: BundleInitGuard = BundleInitGuard;
 
     // Step 5: Build PluginRegistrar with callback and host vtable
     let mut registrar: PluginRegistrar = PluginRegistrar {
@@ -277,7 +330,7 @@ pub fn load_bundle(
     // Step 6: Call init
     // SAFETY: init_fn_ptr was resolved from the library (now stored in registry).
     // The PluginRegistrar is valid for the duration of the call.
-    // The state pointer is stable (pinned on the stack).
+    // Thread-locals are set above and will be cleared by _bundle_guard on drop.
     let init_result: AbiError = unsafe { init_fn_ptr(&mut registrar as *mut PluginRegistrar) };
 
     if init_result.code != ABI_OK {
@@ -285,11 +338,6 @@ pub fn load_bundle(
         // and will NOT be unloaded. The never-unload invariant means we never call
         // dlclose on a library once any code from it has run. Failed slots remain
         // vacant (non-functional) in the registry.
-        for _handle in &state.registered_handles {
-            // Future: add Registry::vacate(handle) for proper rollback.
-            // For MVP: registrations during failed init remain but are non-functional.
-            // The init error is propagated to the caller who can reject the bundle.
-        }
 
         // Extract error message from AbiError (it's a static string in the guest binary)
         // SAFETY: init_result.message.ptr is either null (no message) or points to
@@ -315,26 +363,43 @@ pub fn load_bundle(
 
 /// The `register_plugin` callback passed to plugins in their `PluginRegistrar`.
 //
-//  This function is called by plugins during `polyplug_init` to register vtables.
-//  It receives a pointer to the PluginRegistrar struct — we use the `host` field
-//  (which we set to point to our RegistrarState) to recover the state context.
-//
-//  Wait — the architecture actually passes `host: *const HostVTable`. We can't
-//  store a RegistrarState pointer through host. We need a different approach.
-//
-//  Alternative: Use thread-local storage to pass state through the FFI boundary.
-//  The callback is called synchronously during init (single-threaded phase), so
-//  thread-local is safe.
-extern "C" fn registrar_callback(
+//  Called by the plugin during `polyplug_init` to register vtables.
+//  Uses thread-local storage (set by load_bundle before calling polyplug_init)
+//  to recover the registry and bundle_id context through the FFI boundary.
+//  This is safe because polyplug_init is called synchronously on a single thread,
+//  and BundleInitGuard ensures the thread-locals are cleared after init returns.
+unsafe extern "C" fn registrar_callback(
     _registrar: *mut PluginRegistrar,
-    _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginVTable,
+    descriptor: *const PluginDescriptor,
+    vtable: *const PluginVTable,
 ) -> AbiError {
-    // TODO: Implement proper state passing. For MVP, this is a stub that returns OK.
-    // Full implementation requires threading RegistrarState through the callback context.
-    // Options: (a) thread-local, (b) store state pointer in a custom field after PluginRegistrar,
-    //           (c) use a closure via raw pointer casting.
-    AbiError::ok()
+    let registry_ptr: *const Registry =
+        REGISTRAR_REGISTRY_PTR.with(|c: &core::cell::Cell<*const Registry>| c.get());
+    let bundle_id: u64 = REGISTRAR_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.get());
+    if registry_ptr.is_null() {
+        return AbiError {
+            code: 1,
+            message: crate::abi::StringView::null(),
+        };
+    }
+    // SAFETY: registry_ptr was set by load_bundle() immediately before calling polyplug_init
+    // on this thread. The Registry is stored in Arc<Registry> and outlives this synchronous callback.
+    let registry: &Registry = unsafe { &*registry_ptr };
+    // SAFETY: descriptor and vtable are provided by the plugin's polyplug_init function.
+    // They point to static data in the plugin binary (which is never unloaded per the invariant).
+    let desc: PluginDescriptor = unsafe { *descriptor };
+    // SAFETY: vtable is a valid 'static PluginVTable from the plugin binary — read contract_id.
+    let vtable_contract_id: u64 = unsafe { (*vtable).contract_id };
+    let contract_name: String = format!("contract_{:#x}", vtable_contract_id);
+    // SAFETY: vtable is a valid 'static PluginVTable from the plugin binary.
+    // Registry::register is marked unsafe because it dereferences vtable_ptr internally.
+    match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
+        Ok(_handle) => AbiError::ok(),
+        Err(_err) => AbiError {
+            code: 1,
+            message: crate::abi::StringView::null(),
+        },
+    }
 }
 
 #[cfg(test)]

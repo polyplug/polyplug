@@ -1,7 +1,7 @@
 //! polyplug — core plugin runtime for the polyplug platform.
 //!
 //! This crate exports:
-//! - 6 C ABI functions (the complete public contract of polyplug)
+//! - 8 C ABI functions (the complete public contract of polyplug)
 //! - Module-level access to all subsystems
 
 pub mod abi;
@@ -59,49 +59,61 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(runtime: *mut runtime::Runtime
     drop(unsafe { Box::from_raw(runtime) });
 }
 
-/// Find a plugin by contract_id and minimum version.
+/// Find the first plugin providing `contract_id` at or above `min_version`.
 ///
 /// # Safety
-/// `runtime` must be a valid non-null pointer to a live Runtime.
+/// Callable from any thread after `polyplug_runtime_init` returns.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_find_plugin(
-    runtime: *const runtime::Runtime,
+pub unsafe extern "C" fn polyplug_find_by_contract(
     contract_id: u64,
     min_version: u32,
 ) -> abi::PluginHandle {
-    if runtime.is_null() {
-        return abi::PluginHandle::null();
-    }
-    // SAFETY: runtime is non-null and points to a live Runtime instance.
-    match unsafe { (*runtime).find_plugin(contract_id, min_version) } {
-        Ok(handle) => handle,
-        Err(_) => abi::PluginHandle::null(),
-    }
+    // SAFETY: Delegates to host_find_by_contract. No pointer args — only plain integers.
+    // The outer function is unsafe; the inner call requires an explicit unsafe block (Rust 2024).
+    unsafe { crate::runtime::host_find_by_contract(contract_id, min_version) }
 }
 
-/// Call a function on a loaded plugin through its vtable.
+/// Find a specific bundle's provider of `contract_id`.
 ///
 /// # Safety
-/// - `runtime` must be a valid non-null pointer to a live Runtime.
-/// - `plugin` must be a valid PluginHandle (not stale).
-/// - `args` and `out` must point to valid memory matching the function's expected types.
+/// Callable from any thread after `polyplug_runtime_init` returns.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_call_plugin(
-    runtime: *const runtime::Runtime,
-    plugin: abi::PluginHandle,
-    function_id: u32,
-    args: *const (),
-    out: *mut (),
-) -> abi::AbiError {
-    if runtime.is_null() {
-        return abi::AbiError {
-            code: abi::ABI_ERROR_NOT_FOUND,
-            message: abi::StringView::null(),
-        };
-    }
-    // SAFETY: runtime is non-null and points to a live Runtime. args/out are
-    // valid memory for the function's expected types (enforced by generated code).
-    unsafe { (*runtime).call_plugin(plugin, function_id, args, out) }
+pub unsafe extern "C" fn polyplug_find_by_bundle(
+    bundle_id: u64,
+    contract_id: u64,
+    min_version: u32,
+) -> abi::PluginHandle {
+    // SAFETY: Delegates to host_find_by_bundle. No pointer args — only plain integers.
+    // The outer function is unsafe; the inner call requires an explicit unsafe block (Rust 2024).
+    unsafe { crate::runtime::host_find_by_bundle(bundle_id, contract_id, min_version) }
+}
+
+/// Fill `out` with up to `out_cap` handles providing `contract_id`. Returns count written.
+///
+/// # Safety
+/// `out` must point to a valid buffer of at least `out_cap` `PluginHandle` elements.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_find_all_by_contract(
+    contract_id: u64,
+    min_version: u32,
+    out: *mut abi::PluginHandle,
+    out_cap: usize,
+) -> usize {
+    // SAFETY: out is valid for out_cap PluginHandle elements per the ABI contract (Rust 2024).
+    unsafe { crate::runtime::host_find_all_by_contract(contract_id, min_version, out, out_cap) }
+}
+
+/// Resolve a `PluginHandle` to its vtable pointer.
+///
+/// # Safety
+/// `handle` must be a valid, non-stale handle. The returned pointer is valid
+/// as long as the host runtime is alive.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_resolve_plugin(
+    handle: abi::PluginHandle,
+) -> *const abi::PluginVTable {
+    // SAFETY: handle validity is the caller's responsibility per the ABI contract (Rust 2024).
+    unsafe { crate::runtime::host_resolve_plugin(handle) }
 }
 
 /// Retrieve an extension vtable by extension_id.

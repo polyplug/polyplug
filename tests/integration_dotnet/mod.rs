@@ -82,9 +82,10 @@ unsafe extern "C" fn registry_register_callback(
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
         core::str::from_utf8_unchecked(bytes)
     };
+    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = DOTNET_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
-        registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id)
+        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
     match result {
         Ok(_) => AbiError {

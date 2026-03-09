@@ -110,16 +110,13 @@ pub struct PluginHandle {
 /// Host VTable — mirrors polyplug::abi::HostVTable.
 #[repr(C)]
 pub struct HostVTable {
-    pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    pub free: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    pub find_plugin: unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
-    pub call_plugin: unsafe extern "C" fn(
-        plugin: PluginHandle,
-        fn_id: u32,
-        args: *const (),
-        out: *mut (),
-    ) -> AbiError,
-    pub get_extension: unsafe extern "C" fn(extension_id: u32) -> *const (),
+    pub alloc:                  unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
+    pub free:                   unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
+    pub find_by_contract:       unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
+    pub find_by_bundle:         unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
+    pub find_all_by_contract:   unsafe extern "C" fn(contract_id: u64, min_version: u32, out: *mut PluginHandle, out_cap: usize) -> usize,
+    pub resolve_plugin:         unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
+    pub get_extension:          unsafe extern "C" fn(extension_id: u32) -> *const (),
 }
 
 /// Plugin registrar — mirrors polyplug::abi::PluginRegistrar.
@@ -256,17 +253,33 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
     // SAFETY: chain_args.host is a valid HostVTable pointer provided by the host runtime.
     let host: &HostVTable = unsafe { &*chain_args.host };
-    // SAFETY: host.find_plugin is a valid function pointer set by the host runtime.
-    let plugin: PluginHandle = unsafe { (host.find_plugin)(chain_args.target_contract_id, 0_u32) };
-    // SAFETY: host.call_plugin is a valid function pointer; null args/out is valid for fns
-    // that don't require them (the target fn is expected to handle them).
-    let inner_result: AbiError = unsafe {
-        (host.call_plugin)(
-            plugin,
-            chain_args.target_fn_id,
-            core::ptr::null(),
-            core::ptr::null_mut(),
-        )
+    // SAFETY: host.find_by_contract is a valid function pointer set by the host runtime.
+    let plugin: PluginHandle = unsafe { (host.find_by_contract)(chain_args.target_contract_id, 0_u32) };
+    // SAFETY: host.resolve_plugin returns a 'static PluginVTable pointer for the handle.
+    let vtable_ptr: *const PluginVTable = unsafe { (host.resolve_plugin)(plugin) };
+    // Dispatch through the vtable if non-null and fn_id is in range.
+    let inner_result: AbiError = if vtable_ptr.is_null() {
+        AbiError {
+            code: 4_u32, // ABI_ERROR_NOT_FOUND
+            message: StringView::null(),
+        }
+    } else {
+        // SAFETY: vtable_ptr is 'static and non-null.
+        let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+        if chain_args.target_fn_id >= vtable.function_count {
+            AbiError {
+                code: 6_u32, // ABI_FUNCTION_NOT_AVAIL
+                message: StringView::null(),
+            }
+        } else {
+            // SAFETY: fn_id < function_count validated above.
+            let fn_ptr: *const () = unsafe { (*vtable.functions.add(chain_args.target_fn_id as usize)).0 };
+            // SAFETY: Transmuted to generic dispatch signature; types enforced by generated callers.
+            let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                unsafe { core::mem::transmute(fn_ptr) };
+            // SAFETY: null args/out is valid for fns that don\'t require them.
+            unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) }
+        }
     };
     // SAFETY: out points to a valid AbiError per the ABI contract.
     unsafe { (out as *mut AbiError).write(inner_result) };

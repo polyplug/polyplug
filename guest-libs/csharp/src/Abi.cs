@@ -61,17 +61,19 @@ public unsafe struct PluginVTable
 
 /// <summary>
 /// Host capabilities passed to every plugin at init time.
-/// 5 × fn-ptr(8) = 40 bytes. Matches Rust HostVTable.
+/// 7 × fn-ptr(8) = 56 bytes. Matches Rust HostVTable.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct HostVTable
 {
-    public delegate* unmanaged[Cdecl]<nuint, nuint, byte*>                            Alloc;        // host_alloc(size, align) → ptr
-    public delegate* unmanaged[Cdecl]<byte*, nuint, nuint, void>                      Free;         // host_free(ptr, size, align)
-    // SuppressGCTransition: safe because find_plugin/call_plugin/get_extension are short non-blocking Rust calls that never call back into managed code
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle>                      FindPlugin;   // find_plugin(contract_id, min_version) → handle
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<PluginHandle, uint, void*, void*, AbiError>     CallPlugin;   // call_plugin(handle, fn_id, args, out) → AbiError
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<uint, void*>                                    GetExtension; // get_extension(extension_id) → vtable ptr
+    public delegate* unmanaged[Cdecl]<nuint, nuint, byte*>                                                     Alloc;            // host_alloc(size, align) → ptr
+    public delegate* unmanaged[Cdecl]<byte*, nuint, nuint, void>                                               Free;             // host_free(ptr, size, align)
+    // SuppressGCTransition: safe because these are short non-blocking Rust calls that never call back into managed code
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle>                        FindByContract;    // find_by_contract(contract_id, min_version) → handle
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, ulong, uint, PluginHandle>                 FindByBundle;      // find_by_bundle(bundle_id, contract_id, min_version) → handle
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle*, nuint, nuint>         FindAllByContract; // find_all_by_contract(contract_id, min_version, out, out_cap) → count
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<PluginHandle, PluginVTable*>                      ResolvePlugin;     // resolve_plugin(handle) → vtable ptr
+    public delegate* unmanaged[Cdecl, SuppressGCTransition]<uint, void*>                                      GetExtension;      // get_extension(extension_id) → vtable ptr
 }
 
 /// <summary>

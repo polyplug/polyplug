@@ -169,16 +169,13 @@ unsafe impl Sync for PluginVTable {}
 /// OWNERSHIP: `'static`, lives as long as the runtime.
 #[repr(C)]
 pub struct HostVTable {
-    pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    pub free: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    pub find_plugin: unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
-    pub call_plugin: unsafe extern "C" fn(
-        plugin: PluginHandle,
-        fn_id: u32,
-        args: *const (),
-        out: *mut (),
-    ) -> AbiError,
-    pub get_extension: unsafe extern "C" fn(extension_id: u32) -> *const (),
+    pub alloc:                  unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
+    pub free:                   unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
+    pub find_by_contract:       unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
+    pub find_by_bundle:         unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
+    pub find_all_by_contract:   unsafe extern "C" fn(contract_id: u64, min_version: u32, out: *mut PluginHandle, out_cap: usize) -> usize,
+    pub resolve_plugin:         unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
+    pub get_extension:          unsafe extern "C" fn(extension_id: u32) -> *const (),
 }
 
 // SAFETY: HostVTable contains only function pointers.
@@ -296,6 +293,11 @@ pub fn extension_id(name: &str) -> u32 {
     fnv1a_32(name.as_bytes())
 }
 
+/// Compute a bundle ID from its name using FNV-1a 64-bit hash.
+pub fn bundle_id(name: &str) -> u64 {
+    fnv1a_64(name.as_bytes())
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -411,10 +413,18 @@ mod tests {
     #[test]
     fn layout_host_vtable() {
         use std::mem::align_of;
+        use std::mem::offset_of;
         use std::mem::size_of;
-        // HostVTable: 5 extern "C" fn pointers, each 8 bytes on x86_64.
-        assert_eq!(size_of::<HostVTable>(), 40);
+        // HostVTable: 7 extern "C" fn pointers, each 8 bytes on x86_64.
+        assert_eq!(size_of::<HostVTable>(), 56);
         assert_eq!(align_of::<HostVTable>(), 8);
+        assert_eq!(offset_of!(HostVTable, alloc), 0);
+        assert_eq!(offset_of!(HostVTable, free), 8);
+        assert_eq!(offset_of!(HostVTable, find_by_contract), 16);
+        assert_eq!(offset_of!(HostVTable, find_by_bundle), 24);
+        assert_eq!(offset_of!(HostVTable, find_all_by_contract), 32);
+        assert_eq!(offset_of!(HostVTable, resolve_plugin), 40);
+        assert_eq!(offset_of!(HostVTable, get_extension), 48);
     }
 
     #[test]

@@ -49,11 +49,11 @@ std::thread_local! {
 
 // ─── HostVTable callbacks (for Test 3 chain dispatch) ───────────────────────
 
-/// find_plugin that looks up a plugin from the thread-local ERROR_REGISTRY.
+/// find_by_contract that looks up a plugin from the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
 /// Must only be called when ERROR_REGISTRY has been populated on this thread.
-unsafe extern "C" fn chain_find_plugin(contract_id: u64, _min_version: u32) -> PluginHandle {
+unsafe extern "C" fn chain_find_by_contract(contract_id: u64, _min_version: u32) -> PluginHandle {
     ERROR_REGISTRY.with(|cell| {
         let registry: std::cell::Ref<'_, Registry> = cell.borrow();
         match registry.find(contract_id, 0) {
@@ -66,43 +66,40 @@ unsafe extern "C" fn chain_find_plugin(contract_id: u64, _min_version: u32) -> P
     })
 }
 
-/// call_plugin that dispatches through the thread-local ERROR_REGISTRY.
+/// find_by_bundle stub — delegates to find_by_contract (bundle-scoped lookup not implemented).
 ///
 /// # Safety
-/// `args` and `out` must match the target function's expected types.
-/// The vtable pointer stored in the registry must be valid.
-unsafe extern "C" fn chain_call_plugin(
-    plugin: PluginHandle,
-    fn_id: u32,
-    args: *const (),
-    out: *mut (),
-) -> AbiError {
+/// Always safe to call; delegates to chain_find_by_contract.
+unsafe extern "C" fn chain_find_by_bundle(
+    _bundle_id: u64,
+    contract_id: u64,
+    min_version: u32,
+) -> PluginHandle {
+    // SAFETY: chain_find_by_contract has no pointer preconditions.
+    unsafe { chain_find_by_contract(contract_id, min_version) }
+}
+
+/// find_all_by_contract stub — returns 0 (not needed for error chain tests).
+///
+/// # Safety
+/// Always safe to call; no pointer dereferences if out_cap is 0.
+unsafe extern "C" fn chain_find_all_by_contract(
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// resolve_plugin that dispatches through the thread-local ERROR_REGISTRY.
+///
+/// # Safety
+/// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
+unsafe extern "C" fn chain_resolve_plugin(handle: PluginHandle) -> *const PluginVTable {
     ERROR_REGISTRY.with(|cell| {
         let registry: std::cell::Ref<'_, Registry> = cell.borrow();
-        let vtable_ptr: *const PluginVTable = match registry.resolve(plugin) {
-            Ok(p) => p,
-            Err(_) => {
-                return AbiError {
-                    code: 4_u32,
-                    message: StringView::null(),
-                };
-            }
-        };
-        // SAFETY: vtable_ptr is 'static (error_plugin library is kept alive via mem::forget).
-        let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-        if fn_id >= vtable.function_count {
-            return AbiError {
-                code: 6_u32,
-                message: StringView::null(),
-            };
-        }
-        // SAFETY: fn_id < function_count validated above.
-        let fn_ptr: *const () = unsafe { *vtable.functions.add(fn_id as usize) };
-        // SAFETY: Transmuted to generic dispatch signature; types enforced by calling convention.
-        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-            unsafe { core::mem::transmute(fn_ptr) };
-        // SAFETY: args and out are forwarded per ABI contract from error_chain_propagate.
-        unsafe { dispatch_fn(args, out) }
+        registry.resolve(handle).unwrap_or(core::ptr::null())
     })
 }
 
@@ -144,14 +141,17 @@ unsafe extern "C" fn registry_register_callback(
         core::str::from_utf8_unchecked(bytes)
     };
 
+    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
         let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        registry.register(
-            *desc,
-            vtable as *const PluginVTable,
-            contract_name.to_owned(),
-            vt.contract_id,
-        )
+        unsafe {
+            registry.register(
+                *desc,
+                vtable as *const PluginVTable,
+                contract_name.to_owned(),
+                vt.contract_id,
+            )
+        }
     });
 
     match result {
@@ -345,14 +345,16 @@ fn stress_error_chain_b_errors_a_propagates() {
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
 
-    // Build a HostVTable that routes find_plugin and call_plugin through the
+    // Build a HostVTable that routes find_by_contract and resolve_plugin through the
     // thread-local ERROR_REGISTRY that contains error_plugin's vtable.
     let chain_host_vtable: HostVTable = HostVTable {
         alloc: polyplug::allocator::polyplug_host_alloc,
         // SAFETY: polyplug_host_free is a valid extern "C" fn pointer.
         free: polyplug_host_free,
-        find_plugin: chain_find_plugin,
-        call_plugin: chain_call_plugin,
+        find_by_contract: chain_find_by_contract,
+        find_by_bundle: chain_find_by_bundle,
+        find_all_by_contract: chain_find_all_by_contract,
+        resolve_plugin: chain_resolve_plugin,
         get_extension: stub_get_extension,
     };
 

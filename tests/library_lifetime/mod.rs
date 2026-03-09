@@ -22,19 +22,35 @@ use std::path::Path;
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_find_plugin(_contract_id: u64, _min_version: u32) -> PluginHandle {
+unsafe extern "C" fn stub_find_by_contract(_contract_id: u64, _min_version: u32) -> PluginHandle {
     PluginHandle::null()
 }
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_call_plugin(
-    _plugin: PluginHandle,
-    _fn_id: u32,
-    _args: *const (),
-    _out: *mut (),
-) -> AbiError {
-    AbiError::ok()
+unsafe extern "C" fn stub_find_by_bundle(
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle::null()
+}
+
+/// # Safety
+/// Stub callback — not called during this test.
+unsafe extern "C" fn stub_find_all_by_contract(
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// # Safety
+/// Stub callback — not called during this test.
+unsafe extern "C" fn stub_resolve_plugin(_handle: PluginHandle) -> *const polyplug::abi::PluginVTable {
+    core::ptr::null()
 }
 
 /// # Safety
@@ -71,8 +87,10 @@ fn library_handle_outlives_load_call() {
     let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
         alloc: polyplug_host_alloc,
         free: polyplug_host_free,
-        find_plugin: stub_find_plugin,
-        call_plugin: stub_call_plugin,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
         get_extension: stub_get_extension,
     }));
 
