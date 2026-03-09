@@ -1306,6 +1306,7 @@ dependencies = [
  "polyplug-lua",
  "polyplug-python",
  "serde",
+ "tempfile",
  "thiserror",
  "toml",
 ]

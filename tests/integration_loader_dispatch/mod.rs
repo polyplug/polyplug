@@ -7,17 +7,17 @@
 
 use std::path::Path;
 
-use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::ABI_OK;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_lua::LuaLoader;
@@ -155,7 +155,7 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
 
 #[test]
 fn python_loader_returns_not_implemented() {
-    let loader: PythonLoader = PythonLoader::new();
+    let loader: PythonLoader = PythonLoader::new(polyplug_python::PythonConfig::default());
     assert_eq!(loader.runtime_name(), "python");
 
     let dummy_path: &Path = Path::new("dummy.py");
