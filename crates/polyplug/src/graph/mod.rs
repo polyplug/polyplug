@@ -4,6 +4,8 @@
 //! dependency relationships ("bundle A requires something provided by bundle B").
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 use petgraph::algo;
 use petgraph::graph::DiGraph;
@@ -11,6 +13,8 @@ use petgraph::graph::NodeIndex;
 
 use crate::abi::contract_id as compute_contract_id;
 use crate::error::GraphError;
+use crate::loader::manifest::ManifestData;
+use crate::loader::manifest::ManifestDependency;
 
 /// Version with major.minor.patch components.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -172,6 +176,121 @@ impl CapabilityGraph {
             }
         }
     }
+
+    /// Build a `CapabilityGraph` from a set of discovered manifests.
+    ///
+    /// Validates all ByBundle dependencies against the discovered bundle set.
+    /// Returns `Err(GraphError::UnsatisfiedCapability)` if any ByBundle dep is missing
+    /// or if a bundle does not provide the required contract.
+    /// The caller should then call `graph.topological_order()` for load ordering.
+    pub fn from_manifests(
+        manifests: &[(PathBuf, ManifestData)],
+    ) -> Result<CapabilityGraph, GraphError> {
+        let mut graph: CapabilityGraph = CapabilityGraph::new();
+
+        // Build set of all discovered bundle names for ByBundle validation
+        let discovered_bundles: HashSet<String> = manifests
+            .iter()
+            .map(|(_path, manifest): &(PathBuf, ManifestData)| manifest.bundle_name.clone())
+            .collect::<HashSet<String>>();
+
+        // Build provides_map: bundle_name -> Vec<String> (contract names provided)
+        let mut provides_map: HashMap<String, Vec<String>> = HashMap::new();
+        for (_path, manifest) in manifests {
+            provides_map.insert(manifest.bundle_name.clone(), manifest.provides.clone());
+        }
+
+        for (_path, manifest) in manifests {
+            // Build provides capabilities
+            let provides_caps: Vec<ContractCapability> = manifest
+                .provides
+                .iter()
+                .map(|name: &String| {
+                    ContractCapability::new(
+                        name.clone(),
+                        Version {
+                            major: 1,
+                            minor: 0,
+                            patch: 0,
+                        },
+                    )
+                })
+                .collect::<Vec<ContractCapability>>();
+
+            // Build requires capabilities from resolved dependencies
+            let resolved: Vec<ManifestDependency> = manifest.resolved_dependencies();
+            let mut requires_caps: Vec<ContractCapability> = Vec::new();
+            for dep in &resolved {
+                match dep {
+                    ManifestDependency::ByContract {
+                        contract,
+                        contract_id,
+                        ..
+                    } => {
+                        let cap: ContractCapability = ContractCapability {
+                            contract_name: contract.clone(),
+                            contract_id: *contract_id,
+                            version: Version {
+                                major: 1,
+                                minor: 0,
+                                patch: 0,
+                            },
+                        };
+                        requires_caps.push(cap);
+                    }
+                    ManifestDependency::ByBundle {
+                        bundle,
+                        bundle_id: _,
+                        contract,
+                        contract_id,
+                        ..
+                    } => {
+                        // Validate bundle is in discovered set
+                        if !discovered_bundles.contains(bundle) {
+                            return Err(GraphError::UnsatisfiedCapability {
+                                requester: manifest.bundle_name.clone(),
+                                capability: format!("{} (from bundle {})", contract, bundle),
+                            });
+                        }
+                        // Validate bundle provides the required contract
+                        let provides: bool = provides_map
+                            .get(bundle)
+                            .map(|p: &Vec<String>| p.contains(contract))
+                            .unwrap_or(false);
+                        if !provides {
+                            return Err(GraphError::UnsatisfiedCapability {
+                                requester: manifest.bundle_name.clone(),
+                                capability: format!(
+                                    "{} not provided by bundle {}",
+                                    contract, bundle
+                                ),
+                            });
+                        }
+                        let cap: ContractCapability = ContractCapability {
+                            contract_name: contract.clone(),
+                            contract_id: *contract_id,
+                            version: Version {
+                                major: 1,
+                                minor: 0,
+                                patch: 0,
+                            },
+                        };
+                        requires_caps.push(cap);
+                    }
+                }
+            }
+
+            graph.add_bundle(BundleNode {
+                name: manifest.bundle_name.clone(),
+                provides: provides_caps,
+                requires: requires_caps,
+            });
+        }
+
+        graph.build_edges()?;
+        graph.detect_cycles()?;
+        Ok(graph)
+    }
 }
 
 impl Default for CapabilityGraph {
@@ -279,6 +398,138 @@ mod tests {
         assert!(
             matches!(result, Err(GraphError::UnsatisfiedCapability { .. })),
             "expected UnsatisfiedCapability error"
+        );
+    }
+
+    #[test]
+    fn from_manifests_chain_order() {
+        use crate::loader::manifest::ManifestData;
+        use crate::loader::manifest::RawManifestDependency;
+        use std::path::PathBuf;
+
+        let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
+        let cid_y: u64 = crate::abi::contract_id("contract.Y", 1);
+
+        let dep_b: RawManifestDependency = RawManifestDependency {
+            kind: "contract".to_owned(),
+            contract: "contract.X".to_owned(),
+            min_version: "1.0".to_owned(),
+            bundle: None,
+            contract_id: cid_x,
+            bundle_id: None,
+        };
+
+        let dep_c: RawManifestDependency = RawManifestDependency {
+            kind: "contract".to_owned(),
+            contract: "contract.Y".to_owned(),
+            min_version: "1.0".to_owned(),
+            bundle: None,
+            contract_id: cid_y,
+            bundle_id: None,
+        };
+
+        let manifest_a: ManifestData = ManifestData {
+            runtime: "native".to_owned(),
+            bundle_name: "bundle_a".to_owned(),
+            dependencies: Vec::new(),
+            bundle_id: 0,
+            name: String::new(),
+            version: String::new(),
+            file: String::new(),
+            provides: vec!["contract.X".to_owned()],
+            function_count: std::collections::HashMap::new(),
+        };
+
+        let manifest_b: ManifestData = ManifestData {
+            runtime: "native".to_owned(),
+            bundle_name: "bundle_b".to_owned(),
+            dependencies: vec![dep_b],
+            bundle_id: 0,
+            name: String::new(),
+            version: String::new(),
+            file: String::new(),
+            provides: vec!["contract.Y".to_owned()],
+            function_count: std::collections::HashMap::new(),
+        };
+
+        let manifest_c: ManifestData = ManifestData {
+            runtime: "native".to_owned(),
+            bundle_name: "bundle_c".to_owned(),
+            dependencies: vec![dep_c],
+            bundle_id: 0,
+            name: String::new(),
+            version: String::new(),
+            file: String::new(),
+            provides: Vec::new(),
+            function_count: std::collections::HashMap::new(),
+        };
+
+        let manifests: Vec<(PathBuf, ManifestData)> = vec![
+            (PathBuf::from("bundle_a.so"), manifest_a),
+            (PathBuf::from("bundle_b.so"), manifest_b),
+            (PathBuf::from("bundle_c.so"), manifest_c),
+        ];
+
+        let graph: CapabilityGraph =
+            CapabilityGraph::from_manifests(&manifests).expect("from_manifests should succeed");
+
+        let order: Vec<String> = graph.topological_order().expect("topo order");
+
+        let pos_a: usize = order
+            .iter()
+            .position(|n| n == "bundle_a")
+            .expect("bundle_a in order");
+        let pos_b: usize = order
+            .iter()
+            .position(|n| n == "bundle_b")
+            .expect("bundle_b in order");
+        let pos_c: usize = order
+            .iter()
+            .position(|n| n == "bundle_c")
+            .expect("bundle_c in order");
+
+        assert!(pos_a < pos_b, "bundle_a must load before bundle_b");
+        assert!(pos_b < pos_c, "bundle_b must load before bundle_c");
+    }
+
+    #[test]
+    fn from_manifests_bybundle_missing_fails() {
+        use crate::error::GraphError;
+        use crate::loader::manifest::ManifestData;
+        use crate::loader::manifest::RawManifestDependency;
+        use std::path::PathBuf;
+
+        let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
+
+        let dep_b: RawManifestDependency = RawManifestDependency {
+            kind: "bundle".to_owned(),
+            contract: "contract.X".to_owned(),
+            min_version: "1.0".to_owned(),
+            bundle: Some("missing_bundle".to_owned()),
+            contract_id: cid_x,
+            bundle_id: Some(999),
+        };
+
+        let manifest_b: ManifestData = ManifestData {
+            runtime: "native".to_owned(),
+            bundle_name: "bundle_b".to_owned(),
+            dependencies: vec![dep_b],
+            bundle_id: 0,
+            name: String::new(),
+            version: String::new(),
+            file: String::new(),
+            provides: Vec::new(),
+            function_count: std::collections::HashMap::new(),
+        };
+
+        let manifests: Vec<(PathBuf, ManifestData)> =
+            vec![(PathBuf::from("bundle_b.so"), manifest_b)];
+
+        let result: Result<CapabilityGraph, GraphError> =
+            CapabilityGraph::from_manifests(&manifests);
+        assert!(
+            matches!(result, Err(GraphError::UnsatisfiedCapability { .. })),
+            "expected UnsatisfiedCapability when ByBundle dep is missing"
         );
     }
 }
