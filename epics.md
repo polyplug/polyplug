@@ -896,7 +896,7 @@ VERIFICATION CHECKLIST
 
 ---
 
-## Epic 9.7 — Stable ABI Optimization: find_plugin returns *const PluginVTable
+## Epic 9.7 — Full ABI Redesign: Dependencies, Multi-Impl, arc-swap, Hot-Reload Foundation
 
 ```
 You are the PLANNER agent for the `polyplug` project.
@@ -913,169 +913,326 @@ genuinely contradictory or missing.
 
 READ FIRST
 - AGENTS.md — every rule applies
-- polyplug_prd.md — section 6 (C ABI), section 7 (VTable System),
-  section 8 (Host Libraries), section 9 (Guest Libraries)
+- polyplug_prd.md — section 6 (ABI Layer), section 7 (VTable System),
+  section 8 (Host Libraries), section 9 (Guest Libraries),
+  section 11 (Schema Files — bundle.toml and manifest.toml),
+  section 14 (Cross-Plugin Communication), section 27 (Hot-Reload Architecture)
 
 ---
 
 PROJECT CONTEXT
 
-Currently find_plugin returns an opaque PluginHandle. Plugin-to-plugin calls
-route through call_plugin(handle, fn_id, args, out) which does:
-  registry lookup (handle → PluginVTable*)
-  + indirect call into plugin B
-= 2 indirect calls + 1 registry lookup per cross-plugin call.
+The current ABI has:
+  - find_plugin(contract_id, min_version) → PluginHandle (generational index)
+  - call_plugin(handle, fn_id, args, out) → AbiError
+  - PluginHandle { index: u32, generation: u32 }
+  - Registry: HashMap<u64, u32> — one slot per contract, first-registered wins
+  - PluginSlot: { vtable: *const PluginVTable, generation: u32 }
 
-This epic changes find_plugin to return *const PluginVTable directly.
-Plugin-to-plugin calls then become identical to host-to-plugin calls:
-  vtable->functions[fn_id](args, out)
-= 1 load + 1 indirect call. Zero runtime involvement on the hot path.
+Problems with the current design:
+  1. call_plugin adds an extra indirection on every cross-plugin call
+  2. No multi-implementation support (one contract → one provider)
+  3. No plugin identity in ABI (cannot find a specific bundle's implementation)
+  4. No declared dependency enforcement (plugins can probe any contract)
+  5. Raw *const PluginVTable stored in slots — unsafe for hot-reload
+  6. bundle.toml has no [[dependency]] section — runtime has no dependency graph
+  7. manifest.toml has no dependency information — Epic 12 graph builder blind
 
-call_plugin is REMOVED from the stable ABI. It is no longer needed.
-PluginHandle opaque type is REMOVED. It is replaced by *const PluginVTable.
+This epic redesigns the entire cross-plugin interaction surface to fix all of this.
+It is a BREAKING change to the frozen stable ABI. Safe to make now — no external
+consumers exist. After this epic the ABI is re-frozen.
 
-This is a BREAKING change to the frozen stable ABI. It is safe to make now
-because no external consumers exist yet. After this epic the ABI is re-frozen.
-
-Trust model documented in this epic:
-  polyplug assumes plugins are trusted code loaded by the app developer.
-  Malicious in-process code is explicitly out of scope.
-  *const PluginVTable must never be cast to mutable and written to.
-  Doing so is undefined behavior. There is no runtime enforcement —
-  in-process code cannot be prevented from re-protecting pages.
-  Documentation is the only protection and it is sufficient for the trust model.
+Epic 9.5 (polyplug-dotnet hardening) is already implemented. Do not touch it.
 
 ---
 
 PRE-ANSWERED DECISIONS
 
-find_plugin new signature:
-  // Before:
-  PluginHandle find_plugin(uint64_t contract_id, uint32_t min_version);
-  // After:
-  const PluginVTable* find_plugin(uint64_t contract_id, uint32_t min_version);
-  Returns null if no plugin satisfies the contract + version requirement.
-  Null check is the caller's responsibility (documented, enforced in generated code).
+NEW ABI FUNCTIONS (replace find_plugin and call_plugin):
 
-call_plugin removal:
-  Removed from HostVTable entirely. HostVTable shrinks by one function pointer.
-  Any existing cross-plugin call code using call_plugin must be rewritten to:
-    const PluginVTable* vtable = host->find_plugin(CONTRACT_ID, min_version);
-    if (vtable) vtable->functions[fn_id](args, out);
+  // Any implementation of a contract
+  PluginHandle find_by_contract(uint64_t contract_id, uint32_t min_version);
 
-PluginHandle removal:
-  typedef void* PluginHandle removed from ABI types.
-  All references replaced with const PluginVTable*.
+  // Specific bundle's implementation of a contract
+  PluginHandle find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
 
-Hot path after this change:
-  Plugin A at init: const PluginVTable* b = host->find_plugin(B_ID, 1);
-                    (store b as a module-level pointer)
-  Plugin A on hot path: b->functions[fn_id](args, out);
-  = 1 load + 1 indirect call. Identical to host-to-plugin dispatch.
+  // All implementations of a contract — caller-provides-buffer
+  size_t find_all_by_contract(uint64_t contract_id, uint32_t min_version,
+                               PluginHandle* out, size_t out_cap);
 
-Null return handling:
-  find_plugin returning null means no plugin registered for that contract.
-  Generated guest code must null-check and return AbiError on null.
+  // One-time resolution: PluginHandle → opaque arc-swap guard
+  const PluginVTableGuard* resolve_plugin(PluginHandle handle);
+
+REMOVED FROM ABI:
+  call_plugin — removed entirely. No longer needed.
+  find_plugin — replaced by find_by_contract, find_by_bundle, find_all_by_contract.
+
+KEPT WITH SAME SEMANTICS:
+  host_alloc, host_free, get_extension — unchanged.
+  PluginHandle { index: u32, generation: u32 } — kept, generational check still valuable.
+  PluginHandle null sentinel: { index: u32::MAX, generation: 0 }.
+
+NEW ABI TYPE — PluginVTableGuard:
+  Opaque type. Returned by resolve_plugin. Holds an arc-swap read guard.
+  Keeps the vtable pointer alive for the duration it is held.
+  Plugin stores one guard per dependency at init time.
+  On hot path: guard->vtable() returns *const PluginVTable for that call.
+  Guard is NOT Send — must be resolved and used on the same thread as init,
+  or resolved per-call if plugin is called from multiple threads.
+  Lifetime: valid until the plugin is unloaded. Runtime manages guard validity.
+
+ID COMPUTATION (already implemented in abi/mod.rs, no changes needed):
+  contract_id = fnv1a_64("contract.name@major")  — existing function
+  bundle_id   = fnv1a_64("bundle_name")           — NEW, same algorithm
+  extension_id = fnv1a_32("extension_name")       — existing function
+
+DEPENDENCY ENFORCEMENT:
+  find_by_contract, find_by_bundle, find_all_by_contract ALL check that the
+  calling plugin's bundle_id declared the requested dependency.
+  If not declared → hard error: PolyplugError::UndeclaredDependency { bundle_id, contract_id }.
+  The calling bundle_id is passed implicitly — runtime tracks which plugin is
+  currently in its init() via a thread-local or init-context parameter.
+  Enforcement only applies during init(). Hot path calls go directly via guard.
+
+REGISTRY CHANGES:
+  Old: contract_index: HashMap<u64, u32>          — one slot per contract
+  New: contract_index: HashMap<u64, Vec<u32>>     — multiple slots per contract
+  find_by_contract returns first registered (index 0 of the Vec).
+  find_all_by_contract fills caller's buffer with all slots for that contract.
+  find_by_bundle looks up by bundle_id first, then filters by contract_id.
+  New index: bundle_index: HashMap<u64, u32>      — bundle_id → slot index.
+  PluginSlot gains: bundle_id: u64 field (set at registration time).
+
+REGISTRY SLOT CHANGE — arc-swap:
+  Old: vtable: *const PluginVTable
+  New: vtable: ArcSwap<VTableSlot>
+  where VTableSlot(pub *const PluginVTable) is Send + Sync by trust model.
+  arc-swap = "1.7" added to Cargo.toml of polyplug crate.
+  Generation check remains in resolve_plugin (not on hot path).
+  resolve_plugin(handle):
+    1. Validate generation (stale handle → PolyplugError::StaleHandle)
+    2. Return an opaque PluginVTableGuard wrapping an arc-swap Guard<Arc<VTableSlot>>
+    3. Guard keeps old vtable alive until dropped — automatic quiescence for hot-reload
+
+BUNDLE.TOML [[DEPENDENCY]] SCHEMA:
+  Plugin developer writes:
+    [[dependency]]
+    contract    = "image.decode"    # contract name, validated against api.toml
+    min_version = "1.0"
+
+    [[dependency]]
+    bundle      = "awesome_filter"  # bundle name, validated against api.toml ecosystem
+    contract    = "image.decode"
+    min_version = "1.0"
+
+  polyplugc validates both names at codegen time.
+  Hard error if contract name not in api.toml.
+  Hard error if bundle name not known (from api.toml or explicit bundle registry).
+  polyplugc computes and bakes:
+    const IMAGE_DECODE_CONTRACT_ID: u64 = fnv1a_64("image.decode@1");
+    const AWESOME_FILTER_BUNDLE_ID: u64 = fnv1a_64("awesome_filter");
+    const MY_BUNDLE_ID:             u64 = fnv1a_64("image_bundle");
+
+  The MY_BUNDLE_ID constant is passed to the runtime at init time so the runtime
+  knows which bundle is currently initializing (for dependency enforcement).
+
+GENERATED INIT CODE PATTERN (all 5 languages):
+  For each [[dependency]] in bundle.toml:
+    1. Call find_by_contract(CONTRACT_ID, MIN_VERSION)
+       or find_by_bundle(BUNDLE_ID, CONTRACT_ID, MIN_VERSION) for bundle deps
+    2. Hard null/error check → DependencyNotFound error with contract name in message
+    3. Call resolve_plugin(handle) → store guard as module-level / struct field
+  All dependency resolution MUST complete before any vtable registration.
   Generated pattern per language:
-    Rust:   vtable.is_null() → return Err(PluginError::ContractNotFound)
-    C++:    vtable == nullptr → return ABI_ERROR_CONTRACT_NOT_FOUND
-    C#:     vtable == null → return AbiError.ContractNotFound
-    Python: vtable is None → raise PluginError(CONTRACT_NOT_FOUND, ...)
-    Lua:    vtable == nil → return nil, "contract not found"
+    Rust:   let handle = host.find_by_contract(ID, VER).ok_or(DependencyNotFound)?;
+            let guard = host.resolve_plugin(handle)?;
+            self.decoder = guard;
+    C++:    auto handle = host->find_by_contract(ID, VER);
+            if (!handle) throw DependencyNotFound("image.decode");
+            decoder_guard_ = host->resolve_plugin(handle);
+    C#:     var handle = host.FindByContract(ID, VER);
+            if (handle.IsNull) throw new DependencyNotFoundException("image.decode");
+            _decoderGuard = host.ResolvePlugin(handle);
+    Python: handle = host.find_by_contract(ID, VER)
+            if handle is None: raise DependencyNotFoundError("image.decode")
+            self._decoder_guard = host.resolve_plugin(handle)
+    Lua:    local handle = host.find_by_contract(ID, VER)
+            if handle == nil then error("dependency not found: image.decode") end
+            decoder_guard = host.resolve_plugin(handle)
 
-New PolyplugError variant:
-  PolyplugError::ContractNotFound { contract_id: u64, min_version: u32 }
+MANIFEST.TOML CHANGES:
+  Add bundle_id field (fnv1a_64 of bundle name).
+  Replace requires = ["..."] array with [[dependency]] table array:
+    [[dependency]]
+    contract    = "image.decode"
+    contract_id = 0xA3F2...
+    min_version = "1.0"
+
+    [[dependency]]
+    bundle      = "awesome_filter"
+    bundle_id   = 0xB7C1...
+    contract    = "image.decode"
+    contract_id = 0xA3F2...
+    min_version = "1.0"
+  The old requires = [...] field is removed from manifest.toml.
+  Epic 12 graph builder reads [[dependency]] from manifest.toml.
+
+NEW ERROR VARIANTS (crates/polyplug/src/error/mod.rs):
+  PolyplugError::UndeclaredDependency { bundle_id: u64, contract_id: u64 }
+  PolyplugError::DependencyNotFound { contract_name: String, min_version: u32 }
+  PolyplugError::BundleNotFound { bundle_name: String, contract_name: String }
+  PolyplugError::StaleHandle { index: u32 }  (rename from existing if needed)
+
+TRUST MODEL — no changes from design:
+  Plugins are trusted code. *const PluginVTable is never mutable.
+  arc-swap ensures hot-reload safety without locks.
+  mprotect rejected — security theater for in-process trusted code.
 
 ---
 
 EPIC GOAL
 
-1. Stable ABI changes in crates/polyplug/src/abi/mod.rs:
-   - Remove PluginHandle typedef
-   - Remove call_plugin from HostVTable struct
-   - Change find_plugin signature: returns *const PluginVTable
-   - Update all #[repr(C)] struct definitions accordingly
-   - Add // ABI FROZEN comment block listing all current stable ABI items
-     so future readers know exactly what must never change
+1. Add arc-swap dependency to polyplug crate:
+   - arc-swap = "1.7" in crates/polyplug/Cargo.toml
+   - VTableSlot(pub *const PluginVTable) newtype with Send+Sync impls + SAFETY comments
+   - PluginVTableGuard as a public opaque wrapper around arc_swap::Guard<Arc<VTableSlot>>
 
-2. Runtime core changes in crates/polyplug/src/runtime/mod.rs:
+2. Registry changes in crates/polyplug/src/registry/mod.rs:
+   - contract_index: HashMap<u64, Vec<u32>> (multi-impl support)
+   - bundle_index: HashMap<u64, u32> (bundle_id → slot)
+   - PluginSlot gains: bundle_id: u64, vtable: ArcSwap<VTableSlot>
+   - New methods:
+       find_by_contract(contract_id, min_version) → Option<PluginHandle>
+       find_by_bundle(bundle_id, contract_id, min_version) → Option<PluginHandle>
+       find_all_by_contract(contract_id, min_version, out: &mut Vec<PluginHandle>) → usize
+       resolve(handle) → Result<PluginVTableGuard, PolyplugError>
+   - Remove old: find(contract_id) method
+
+3. ABI changes in crates/polyplug/src/abi/mod.rs:
+   - Remove: call_plugin extern fn, PluginHandle typedef (if was typedef, keep struct)
+   - Add: find_by_contract, find_by_bundle, find_all_by_contract, resolve_plugin
+   - Add: bundle_id() function: fnv1a_64(bundle_name: &str) → u64
+   - Add opaque PluginVTableGuard type to ABI types
+   - Add // ABI FROZEN AS OF EPIC 9.7 comment block listing all stable items
+   - Every unsafe block has // SAFETY: comment
+
+4. Runtime changes in crates/polyplug/src/runtime/mod.rs:
+   - Add init_context: thread-local tracking which bundle_id is in init()
+   - Implement find_by_contract with dependency enforcement check
+   - Implement find_by_bundle with dependency enforcement check
+   - Implement find_all_by_contract with dependency enforcement check
+   - Implement resolve_plugin delegating to registry
    - Remove call_plugin implementation
-   - Update find_plugin implementation to return *const PluginVTable
-     (direct pointer into Registry — no copy, no allocation)
-   - Update HostVTable construction to remove call_plugin fn ptr
+   - Update HostVTable construction: remove call_plugin ptr, add new fn ptrs
+   - HostVTable now has: alloc, free, find_by_contract, find_by_bundle,
+     find_all_by_contract, resolve_plugin, get_extension
 
-3. Registry changes in crates/polyplug/src/registry/mod.rs:
-   - find_by_contract returns *const PluginVTable (raw pointer into stored vtable)
-   - Pointer is valid for the lifetime of the Registry
-   - Add // SAFETY: comment explaining pointer validity guarantee
+5. New error variants in crates/polyplug/src/error/mod.rs:
+   - UndeclaredDependency { bundle_id: u64, contract_id: u64 }
+   - DependencyNotFound { contract_name: String, min_version: u32 }
+   - BundleNotFound { bundle_name: String, contract_name: String }
 
-4. Add PolyplugError::ContractNotFound { contract_id: u64, min_version: u32 }
-   in crates/polyplug/src/error/mod.rs
+6. polyplugc — bundle.toml parser changes (crates/polyplugc/src/parser/mod.rs):
+   - Parse [[dependency]] table array:
+       Dependency::ByContract { contract: String, min_version: String }
+       Dependency::ByBundle { bundle: String, contract: String, min_version: String }
+   - Validate contract names against api.toml schema — hard error if unknown
+   - Remove parsing of requires = [...] from [[plugin]] entries
+   - Store parsed dependencies in ResolvedBundle IR node
 
-5. Update all 5 generators in polyplugc to emit null-check pattern
-   for find_plugin calls in generated guest cross-plugin callers:
-   - Rust generator: is_null() check → Err(PluginError::ContractNotFound)
-   - C++ generator: nullptr check → ABI_ERROR_CONTRACT_NOT_FOUND
-   - C# generator: null check + CallConvCdecl + blittable return
-   - Python generator: None check → PluginError raise
-   - Lua generator: nil check → error return
+7. polyplugc — IR changes (crates/polyplugc/src/ir/mod.rs):
+   - ResolvedBundle gains: dependencies: Vec<ResolvedDependency>
+   - ResolvedDependency::ByContract { contract_id: u64, contract_name: String, min_version: u32 }
+   - ResolvedDependency::ByBundle { bundle_id: u64, bundle_name: String,
+                                     contract_id: u64, contract_name: String, min_version: u32 }
+   - bundle_id computed via new abi::bundle_id() function
+   - MY_BUNDLE_ID constant added to IR for the bundle being compiled
 
-6. Update all 5 host libs to remove call_plugin bindings:
-   - host-libs/rust/: remove call_plugin wrapper
-   - host-libs/cpp/: remove call_plugin wrapper
-   - host-libs/csharp/: remove call_plugin P/Invoke (was [SuppressGCTransition])
-   - host-libs/python/: remove call_plugin ctypes binding
-   - host-libs/lua/: remove call_plugin FFI declaration
+8. polyplugc — all 5 generators updated:
+   For each generator (Rust, C++, C#, Python, Lua):
+   a. Emit MY_BUNDLE_ID constant (fnv1a_64 of bundle name)
+   b. Emit per-dependency contract_id / bundle_id constants
+   c. Emit dependency resolution code in init():
+      - find_by_contract or find_by_bundle call with hard error on null
+      - resolve_plugin call, guard stored as module-level / struct field
+      - All dependency resolution before any vtable registration
+   d. Emit hot-path call pattern using guard->vtable() instead of stored raw ptr
+   e. Update cross-plugin callers to use guard-based dispatch
 
-7. Update all 5 guest libs to use direct vtable dispatch:
-   - guest-libs/rust/: update cross-plugin call pattern
-   - guest-libs/cpp/: update cross-plugin call pattern
-   - guest-libs/csharp/: update cross-plugin call pattern
-   - guest-libs/python/: update cross-plugin call pattern
-   - guest-libs/lua/: update cross-plugin call pattern
+9. polyplugc — manifest.toml generation updated (all 5 generators):
+   - Add bundle_id field to manifest output
+   - Replace requires = [...] with [[dependency]] table array
+   - Each dependency entry includes resolved IDs alongside human-readable names
 
-8. Trust model documentation:
-   - Add TRUST_MODEL.md at repo root:
-     - polyplug trust model: plugins are trusted, loaded by app developer
-     - *const PluginVTable must never be cast to mutable
-     - Doing so is undefined behavior — no runtime enforcement
-     - In-process mprotect is bypassable and not used (security theater)
-     - Malicious in-process code is explicitly out of scope
-   - Add reference to TRUST_MODEL.md in AGENTS.md
-   - Add // SAFETY: + trust model note on every raw vtable pointer in Rust code
+10. All 5 host libs updated (host-libs/):
+    - Remove find_plugin wrapper
+    - Remove call_plugin wrapper
+    - Add find_by_contract wrapper
+    - Add find_by_bundle wrapper
+    - Add find_all_by_contract wrapper (caller-provides-buffer pattern in each language)
+    - Add resolve_plugin wrapper returning opaque guard type
+    Each language wraps in its natural idiom.
 
-9. Update PRD section 6 (C ABI) and section 7 (VTable System):
-   - Remove call_plugin and PluginHandle from stable ABI listing
-   - Update find_plugin signature
-   - Update HostVTable struct
-   - Add "ABI re-frozen as of Epic 9.7" note
-   - Add trust model summary
+11. All 5 guest libs updated (guest-libs/):
+    - Remove call_plugin usage
+    - Update cross-plugin call helpers to use guard-based dispatch
+    - Add DependencyNotFound error type where not already present
 
-10. Cross-plugin integration tests:
-    - Plugin A calls plugin B directly via find_plugin → *const PluginVTable
-    - Null return: plugin A calls find_plugin for unregistered contract → null
-      generated code returns ContractNotFound error, does not crash
-    - Performance: cross-plugin call overhead == host-to-plugin overhead
-      (verified by adding cross-plugin case to vtable_dispatch bench)
-    - All 5 languages: each language's guest lib correctly dispatches
-      cross-plugin call without call_plugin
+12. TRUST_MODEL.md at repo root:
+    - polyplug trust model: plugins are trusted, loaded by app developer
+    - PluginVTable is never mutable — const always, UB to cast to mutable
+    - arc-swap provides hot-reload safety without locks
+    - mprotect rejected — bypassable by in-process code, security theater
+    - Malicious in-process code is explicitly out of scope
+    - Undeclared dependency access is a hard error — not a security boundary
+      but a correctness guarantee enabling the dependency graph
+    Add reference to TRUST_MODEL.md in AGENTS.md
+
+13. Integration tests:
+    a. Multi-impl: two bundles register for same contract_id
+       find_by_contract returns first registered
+       find_all_by_contract returns both
+       find_by_bundle returns the specific one requested
+    b. Undeclared dependency: bundle calls find_by_contract for undeclared contract
+       → UndeclaredDependency error, does not proceed
+    c. Declared dependency not loaded: bundle declares dep, nothing provides it
+       → DependencyNotFound from generated init code
+    d. Cross-plugin call via guard: plugin A calls plugin B through resolved guard
+       → correct result, overhead measured vs host-to-plugin baseline
+    e. arc-swap read path: verify guard keeps vtable alive during call
+       (inspect Arc refcount in test — drops to 1 after guard drops)
+    f. find_all_by_contract: caller-provides-buffer returns correct count and handles
+    g. All existing integration tests still pass
+
+14. Benchmarks:
+    - Cross-plugin call via guard vs host-to-plugin direct: must be within ~3 cycles
+    - find_by_contract uncontended: confirm O(1) HashMap lookup
 
 ---
 
 VERIFICATION CHECKLIST
 
-- call_plugin removed from HostVTable — does not exist anywhere in codebase
-- PluginHandle removed from ABI types — does not exist anywhere in codebase
-- find_plugin returns *const PluginVTable with null for not-found
-- All 5 generators emit null-check pattern for cross-plugin calls
-- All 5 host libs updated — no call_plugin bindings remain
-- All 5 guest libs updated — direct vtable dispatch
-- TRUST_MODEL.md exists at repo root and is referenced from AGENTS.md
-- Every raw vtable pointer in Rust has // SAFETY: comment
-- ContractNotFound error variant exists and is returned correctly
-- Cross-plugin benchmark overhead equals host-to-plugin baseline
-- Null return test: ContractNotFound returned, no crash
-- PRD sections 6 and 7 updated and consistent with implementation
+- call_plugin does not exist anywhere in codebase
+- find_plugin does not exist anywhere in codebase
+- find_by_contract, find_by_bundle, find_all_by_contract implemented and tested
+- resolve_plugin returns PluginVTableGuard wrapping arc-swap guard
+- ArcSwap<VTableSlot> in every PluginSlot — no raw *const PluginVTable in slots
+- bundle_index: HashMap<u64, u32> in Registry
+- contract_index: HashMap<u64, Vec<u32>> in Registry (multi-impl)
+- MY_BUNDLE_ID constant emitted by all 5 generators
+- Dependency resolution code emitted in init() by all 5 generators
+- Hard error on undeclared dependency access (not warn, not skip — error)
+- Hard error in generated init when declared dependency not found
+- [[dependency]] in bundle.toml parsed and validated by polyplugc
+- manifest.toml [[dependency]] array with resolved IDs emitted by all 5 generators
+- All 5 host libs updated — no find_plugin, no call_plugin
+- All 5 guest libs updated — guard-based cross-plugin dispatch
+- TRUST_MODEL.md exists, referenced from AGENTS.md
+- Every unsafe block has // SAFETY: comment
+- UndeclaredDependency, DependencyNotFound, BundleNotFound error variants exist
+- Multi-impl test: find_all_by_contract returns all providers
+- arc-swap read path test passes
+- Cross-plugin benchmark within ~3 cycles of host-to-plugin
 - All existing integration tests pass
 - No .unwrap() in production code
 - clippy passes with zero warnings
@@ -1487,7 +1644,14 @@ all discovered bundles, and dispatches each bundle to the correct loader.
 
 The BundleLoader trait and all five loader types (native + three adapters) exist.
 The manifest.toml runtime field is read by the parser (from Epic 8).
+Epic 9.7 redesigned manifest.toml — it now has:
+  - bundle_id: u64 (fnv1a_64 of bundle name)
+  - [[dependency]] table array (replaces the old requires = [...] string array)
+    each entry has: contract, contract_id, min_version
+    or: bundle, bundle_id, contract, contract_id, min_version
 This epic wires everything together into a complete discovery pipeline.
+The capability graph builder must consume [[dependency]] from manifest.toml,
+not the old requires = [...] field (which no longer exists).
 
 ---
 
@@ -1504,16 +1668,26 @@ EPIC GOAL
 2. Manifest reader:
    - Reads manifest.toml from disk
    - Parses into ManifestData with explicit types on all fields:
-     name: String, version: String, runtime: String, file: String,
-     provides: Vec<String>, requires: Vec<String>,
-     function_count: HashMap<String, u32>
+     name: String, bundle_id: u64, version: String, runtime: String, file: String,
+     provides: Vec<String>,
+     function_count: HashMap<String, u32>,
+     dependencies: Vec<ManifestDependency>
+   - ManifestDependency has two variants:
+       ByContract { contract: String, contract_id: u64, min_version: String }
+       ByBundle { bundle: String, bundle_id: u64, contract: String,
+                  contract_id: u64, min_version: String }
+   - The old requires = [...] string array NO LONGER EXISTS in manifest.toml.
+     Do not attempt to parse it. Use [[dependency]] exclusively.
    - Skips malformed manifests with warning, does not abort entire scan
    - Logs which manifests were skipped and why
 
 3. Full capability graph resolution across multiple discovered bundles:
    - Extends or replaces graph module to work across multiple bundle manifests
    - Collects all provides from all ManifestData
-   - Validates all requires are satisfied
+   - For each bundle, resolves all dependencies from ManifestData.dependencies:
+       ByContract: validates some bundle in discovered set provides that contract
+       ByBundle: validates the specific named bundle is present AND provides that contract
+   - Validates all dependencies are satisfied before loading anything
    - Detects dependency cycles across bundle boundaries
    - Topological sort produces ordered Vec<bundle_path> for loading
 
@@ -2037,4 +2211,227 @@ Ask me about:
 - Whether showcase has its own README.md or content goes into root README.md
 
 Do not write the plan until I have answered all questions.
+```
+
+---
+
+## Epic 17 — Hot-Reload
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 7 (VTable System — arc-swap slots),
+  section 14 (Cross-Plugin Communication),
+  section 27 (Hot-Reload Architecture)
+
+---
+
+PROJECT CONTEXT
+
+The arc-swap foundation was laid in Epic 9.7:
+  - Every PluginSlot holds ArcSwap<VTableSlot>
+  - resolve_plugin returns a PluginVTableGuard (arc-swap read guard)
+  - Guards keep old vtables alive until dropped — automatic quiescence
+  - manifest.toml [[dependency]] array gives the runtime the full dependency graph
+
+This epic implements the writer path — the actual hot-reload mechanism:
+  - Detecting when a new bundle version is available
+  - Loading the new version
+  - Atomically swapping the arc-swap slot
+  - Waiting for quiescence (all in-flight calls complete)
+  - Safely calling dlclose on the old bundle
+  - Cascading reload for dependents that need re-initialization
+
+The arc-swap reader path already costs ~2-3 cycles per call. This epic
+adds ZERO overhead to the reader path. All cost is in the reloader.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+DETECTION MODES — two supported:
+  1. inotify / FSEvents / ReadDirectoryChangesW (OS file watcher, per-platform)
+     runtime.watch_plugin_dir("./plugins") — background thread watches for changes
+  2. Explicit API — app calls runtime.reload_bundle(path) directly
+     Useful for tests and for apps that manage file watching themselves.
+  Both modes trigger the same internal reload path.
+  File watcher is opt-in via Cargo feature: hot-reload = ["notify"]
+  notify = "6" crate used for cross-platform file watching.
+
+RELOAD PATH (atomic, no locks on reader path):
+  Step 1: Load new bundle via correct loader (same as initial load).
+          New bundle runs its own init() — registers its new vtable.
+          New vtable ptr extracted from registrar before slot swap.
+  Step 2: Atomically swap arc-swap slot:
+          slot.vtable.store(Arc::new(VTableSlot(new_vtable_ptr)))
+          Readers immediately see new vtable on next call.
+  Step 3: Wait for quiescence in reloader thread ONLY:
+          while Arc::strong_count(&old_arc) > 1 { std::hint::spin_loop(); }
+          This spin only happens in the reloader thread. Callers never spin.
+  Step 4: dlclose old bundle (now safe — no caller holds old vtable).
+          drop(old_arc) triggers deallocation.
+  Step 5: Check dependency graph for cascade.
+          Any bundle that declared [[dependency]] bundle = "reloaded_bundle"
+          and set needs_reinit_on_dep_reload = true is re-initialized.
+          Cascade order follows topological sort from Epic 12 graph.
+
+CASCADING RELOAD:
+  Default: dependents automatically see new vtable via arc-swap — no action needed.
+  Optional: if bundle needs_reinit_on_dep_reload = true (in bundle.toml):
+    Runtime calls init() on the dependent bundle again after dep reload.
+    Dependent bundle re-resolves its guards and re-registers its vtable.
+    Cascade is topological — dependencies reload before dependents.
+  needs_reinit_on_dep_reload = false is the default. Most bundles do not need it.
+
+HOST DIRECT PATH — refresh after reload:
+  Generated host callers go through resolve_plugin on every use — not cached raw ptr.
+  App developers who cache raw pointers manually must call runtime.refresh_handle(handle)
+  after a reload event to get a fresh guard.
+  ReloadEvent is delivered via callback registered at runtime init.
+
+RELOAD CALLBACK — app developer opt-in:
+  runtime.on_reload(|event: ReloadEvent| {
+      // event.bundle_name: &str
+      // event.old_version: &str
+      // event.new_version: &str
+  });
+  Callback fires AFTER swap, BEFORE dlclose.
+  All new calls already use new vtable when callback fires.
+
+RECURSIVE SELF-CALL LIMITATION:
+  A bundle cannot call itself recursively during its own reload.
+  This is UB and explicitly documented as unsupported in TRUST_MODEL.md.
+  No runtime detection needed.
+
+NEW CARGO FEATURE in polyplug crate:
+  [features]
+  hot-reload = ["dep:notify"]
+  default = []
+  notify = { version = "6", optional = true }
+  All file-watcher code gated behind #[cfg(feature = "hot-reload")].
+  The arc-swap slot is ALWAYS present (foundational, not gated).
+  Only the file watcher and background thread are gated by the feature.
+
+NEEDS_REINIT_ON_DEP_RELOAD in bundle.toml:
+  [bundle]
+  name = "my_bundle"
+  needs_reinit_on_dep_reload = false   # default — omit if false
+
+---
+
+EPIC GOAL
+
+1. Add notify dependency to polyplug crate (optional):
+   notify = { version = "6", optional = true }
+   [features] hot-reload = ["dep:notify"]
+
+2. New module: crates/polyplug/src/reload/mod.rs
+   pub struct ReloadEvent {
+       pub bundle_name: String,
+       pub old_version: String,
+       pub new_version: String,
+   }
+   All reload logic lives here.
+
+3. ReloadCallback registration in PluginRuntime builder:
+   builder.on_reload(impl Fn(ReloadEvent) + Send + Sync + 'static)
+   Stored as Option<Arc<dyn Fn(ReloadEvent) + Send + Sync>> in runtime.
+
+4. Core reload function (always compiled, no feature gate):
+   runtime.reload_bundle(path: &Path) → Result<(), PolyplugError>
+   Implements the full 5-step reload path:
+   a. Load new bundle via correct loader, capture new vtable ptr from registrar
+   b. Swap arc-swap slot: slot.vtable.store(Arc::new(VTableSlot(new_ptr)))
+   c. Hold old_arc. Spin until Arc::strong_count(&old_arc) == 1 (quiescence).
+      Spin only in this function — callers never block.
+   d. dlclose: drop(old_arc), then drop old library handle.
+   e. Walk dependency graph. For each bundle with needs_reinit_on_dep_reload = true
+      that declared a dependency on the reloaded bundle:
+        call reload_bundle(dependent_path) recursively in topological order.
+   f. Fire on_reload callback if registered.
+
+5. File watcher (hot-reload feature only):
+   runtime.watch_plugin_dir(dir: &Path) → Result<(), PolyplugError>
+   Uses notify crate to watch directory recursively.
+   On file-change event for a known bundle file (.so/.dll/.dylib):
+     Debounce: 100ms — ignore events within 100ms of last event for same file
+     Call reload_bundle(changed_path) in background thread.
+   Watcher background thread stops when PluginRuntime drops (join on drop).
+
+6. needs_reinit_on_dep_reload in bundle.toml parser:
+   polyplugc parser: read optional needs_reinit_on_dep_reload = bool, default false.
+   Add to ResolvedBundle IR.
+   Add to manifest.toml generation: needs_reinit_on_dep_reload = bool field.
+   ManifestData gains: needs_reinit_on_dep_reload: bool field.
+   Epic 12 discovery reads this field. reload_bundle reads it from ManifestData.
+
+7. TRUST_MODEL.md — add section: Hot-Reload Safety Guarantees:
+   - arc-swap ensures readers never see a freed vtable
+   - dlclose only after quiescence (strong_count == 1)
+   - Recursive self-call during reload is UB — unsupported, not detected
+   - Host cached raw vtable pointers must be refreshed via runtime.refresh_handle()
+   - needs_reinit_on_dep_reload = false is safe for most bundles (arc-swap handles it)
+
+8. Integration tests (tests/integration_reload/mod.rs — new file):
+   a. Basic reload: load bundle V1, call it, replace file with V2, call reload_bundle,
+      call again — verify V2 behavior observed.
+   b. In-flight safety: spawn thread making calls into bundle in a tight loop,
+      call reload_bundle from main thread concurrently,
+      verify no crash, no use-after-free (ASAN), all calls return valid results.
+   c. Quiescence: after reload_bundle returns, Arc::strong_count of old_arc == 1.
+      Test by inspecting via test-only hook.
+   d. dlclose timing: verify old library handle NOT closed while call in flight.
+      Use ASAN or a test-only flag in VTableSlot drop impl.
+   e. Cascade: bundle A (needs_reinit = true) depends on B.
+      Reload B → A is automatically re-initialized.
+      Verify A uses new B vtable after cascade.
+   f. Callback: on_reload fires once per reload, correct bundle_name and versions.
+      Callback fires after swap (new vtable visible) and before dlclose.
+   g. File watcher (hot-reload feature): copy new .so into watched dir,
+      wait 200ms, verify reload_bundle was triggered automatically.
+   h. Multiple reloads: reload same bundle 50 times.
+      No memory leak (check RSS or use valgrind/ASAN).
+      No leaked library handles (check /proc/self/maps or equivalent).
+   i. All 5 languages: reload native, dotnet, python, lua bundles — each passes
+      basic reload test.
+
+9. Benchmarks (BENCHMARKS.md update):
+   - Steady-state call overhead: hot-reload feature enabled vs disabled.
+     Must be identical — arc-swap always present.
+   - Reload latency: time from reload_bundle() call to completion.
+     Include in BENCHMARKS.md.
+
+---
+
+VERIFICATION CHECKLIST
+
+- reload_bundle(path) swaps vtable, waits for quiescence, dlcloses old — passes
+- In-flight safety test passes under ASAN — no use-after-free
+- Arc strong_count == 1 before dlclose — verified via test hook
+- dlclose timing test passes — old handle not freed while call active
+- Cascade reload test passes — dependent re-initialized after dep reload
+- Callback fires after swap, before dlclose — timing verified in test
+- File watcher test passes (hot-reload feature)
+- Multiple reload test: no memory leak, no leaked handles
+- All 5 language bundles hot-reloadable
+- hot-reload Cargo feature gates file watcher only — arc-swap always compiled
+- Steady-state benchmark: feature on/off = identical overhead
+- needs_reinit_on_dep_reload in bundle.toml, manifest.toml, ManifestData
+- TRUST_MODEL.md hot-reload section exists and is accurate
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+- cargo test --workspace --features hot-reload passes
 ```

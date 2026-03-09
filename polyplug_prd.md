@@ -149,7 +149,7 @@ polyplug.dylib   (macOS)
 
 ## 6. ABI Layer
 
-The ABI is the frozen contract between the runtime and all plugins. It uses C calling conventions. It is minimal by design. Once v1 is released it never changes.
+The ABI is the frozen contract between the runtime and all plugins. It uses C calling conventions. It is minimal by design. Once v1 is released it never changes. **ABI re-frozen as of Epic 9.7.**
 
 **Core ABI functions:**
 
@@ -158,12 +158,31 @@ The ABI is the frozen contract between the runtime and all plugins. It uses C ca
 void*  host_alloc(size_t size);
 void   host_free(void* ptr);
 
-// Plugin discovery — returns direct vtable pointer, null if not found
-const PluginVTable* find_plugin(uint64_t contract_id, uint32_t min_version);
+// Dependency resolution — only valid for declared dependencies
+// contract_id and bundle_id are computed by polyplugc from names in bundle.toml
+// Plugin developers never write IDs — they write names. Codegen handles the rest.
+PluginHandle find_by_contract(uint64_t contract_id, uint32_t min_version);
+PluginHandle find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+size_t       find_all_by_contract(uint64_t contract_id, uint32_t min_version,
+                                   PluginHandle* out, size_t out_cap);  // caller-provides-buffer
+
+// One-time resolution at init: PluginHandle → arc-swap Guard (opaque)
+// Returned guard keeps vtable alive. Store the guard, use guard->vtable on hot path.
+const PluginVTableGuard* resolve_plugin(PluginHandle handle);
 
 // Extension lookup
 const void* get_extension(uint32_t extension_id);
 ```
+
+**ID computation — always done by polyplugc, never by developers:**
+
+```
+contract_id = fnv1a_64("contract.name@major")   e.g. fnv1a_64("image.decode@1") 
+bundle_id   = fnv1a_64("bundle_name")           e.g. fnv1a_64("awesome_filter")
+extension_id = fnv1a_32("extension_name")        e.g. fnv1a_32("trace")
+```
+
+These constants are baked into generated code as named constants. Plugin and app developers only ever write human-readable names in `.toml` files.
 
 **Core ABI types:**
 
@@ -183,11 +202,24 @@ typedef struct {
     size_t len;
     size_t cap;
 } Buffer;
+
+typedef struct {
+    uint32_t index;       // slot index in registry
+    uint32_t generation;  // detects use-after-unload
+} PluginHandle;           // null sentinel: { index: U32_MAX, generation: 0 }
+
+// Opaque — managed by runtime. Holds an arc-swap read guard keeping the
+// vtable pointer alive for exactly one call sequence.
+typedef struct PluginVTableGuard PluginVTableGuard;
 ```
 
-**Trust model — `*const PluginVTable` is never mutable:**
+**Dependency enforcement — hard error on undeclared access:**
 
-`find_plugin` returns a direct pointer into the runtime's vtable storage. It is `const` — callers must never cast it to mutable and write to it. Doing so is undefined behavior. There is no runtime enforcement: in-process code cannot be reliably prevented from re-protecting pages (`mprotect` is bypassable by the same process). polyplug's trust model assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. See `TRUST_MODEL.md`.
+`find_by_contract`, `find_by_bundle`, and `find_all_by_contract` check that the calling plugin (identified by its `bundle_id`) declared the requested dependency in its `bundle.toml`. If it did not, the call returns a null/error immediately. Plugins cannot discover arbitrary contracts by probing — they can only access what they declared. This enables the runtime to know the complete dependency graph at load time.
+
+**Trust model:**
+
+polyplug assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. `PluginVTable` pointers must never be cast to mutable and written to — doing so is undefined behavior. There is no runtime enforcement: `mprotect` is bypassable by in-process code and is not used (security theater). See `TRUST_MODEL.md`.
 
 **Rules:**
 - All strings crossing the ABI boundary are UTF-8
@@ -195,6 +227,7 @@ typedef struct {
 - Primitives (u8–u64, f32, f64, bool) are returned directly by value
 - All non-primitive return values use caller-provides-buffer pattern
 - Pointers passed across boundary always point into host allocator
+- `find_all_by_contract` uses caller-provides-buffer pattern — no allocation in runtime
 
 ---
 
@@ -214,40 +247,37 @@ Host builds HostVTable (its functions for plugins to call)
 Host calls init(registrar) passing HostVTable ptr
         │
         ▼
+Plugin resolves declared dependencies via find_by_contract / find_by_bundle
+Plugin stores PluginVTableGuard for each dependency (arc-swap read guard)
+        │
+        ▼
 Plugin builds PluginVTable (its functions for host to call)
         │
         ▼
 Plugin calls registrar->register() passing PluginVTable ptr
         │
         ▼
-Host stores PluginVTable ptr
+Host stores PluginVTable ptr in arc-swap slot
         │
         ▼
 Load complete. All future calls = one indirect call.
 ```
 
-This exchange is identical regardless of what language the plugin is written in. The native loader uses dlopen. The dotnet loader uses hostfxr. The python loader uses CPython embedding. The lua loader uses the Lua VM. All arrive at the same vtable exchange. The host never knows what language loaded the plugin.
+This exchange is identical regardless of what language the plugin is written in.
 
 **HostVTable — given to every plugin at init:**
 
 ```c
 typedef struct {
-    void*                (*alloc)(size_t size);
-    void                 (*free)(void* ptr);
-    const PluginVTable*  (*find_plugin)(uint64_t contract_id, uint32_t min_version);
-    const void*          (*get_extension)(uint32_t extension_id);
+    void*                    (*alloc)(size_t size);
+    void                     (*free)(void* ptr);
+    PluginHandle             (*find_by_contract)(uint64_t contract_id, uint32_t min_version);
+    PluginHandle             (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    size_t                   (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version,
+                                                      PluginHandle* out, size_t out_cap);
+    const PluginVTableGuard* (*resolve_plugin)(PluginHandle handle);
+    const void*              (*get_extension)(uint32_t extension_id);
 } HostVTable;
-```
-
-**Cross-plugin call — direct vtable dispatch, zero runtime involvement:**
-
-```c
-// Plugin A at init time (once):
-const PluginVTable* b = host->find_plugin(CONTRACT_B_ID, 1);
-
-// Plugin A on hot path:
-if (b) b->functions[fn_id](args, out);
-// = 1 load + 1 indirect call. Identical to host-to-plugin dispatch.
 ```
 
 **PluginVTable — one per contract implemented:**
@@ -280,6 +310,43 @@ typedef struct {
 void init(PluginRegistrar* registrar);
 ```
 
+**Registry storage — arc-swap slots for hot-reload safety:**
+
+Each registered plugin occupies one slot in the registry:
+
+```rust
+struct PluginSlot {
+    vtable:     ArcSwap<VTableSlot>,  // atomically swappable, arc-swap crate
+    generation: u32,                   // incremented on unload, detects stale handles
+}
+
+struct VTableSlot(pub *const PluginVTable);
+// SAFETY: PluginVTable is read-only after registration. Send+Sync by trust model.
+unsafe impl Send for VTableSlot {}
+unsafe impl Sync for VTableSlot {}
+```
+
+**Cross-plugin call — hot path with arc-swap guard:**
+
+Plugin resolves dependency once at init, stores the guard. On hot path loads vtable from guard directly — one pointer load, one indirect call.
+
+```rust
+// Generated guest code — at init (once per dependency):
+let handle = host.find_by_contract(IMAGE_PROCESSOR_CONTRACT_ID, 1)?;
+let guard = host.resolve_plugin(handle)?;   // arc-swap read guard
+self.image_processor = guard;               // stored for lifetime of plugin
+
+// Generated guest code — on hot path:
+let vtable = self.image_processor.vtable(); // one load from guard
+vtable.functions[PROCESS_FN_ID](args, out); // one indirect call
+```
+
+**Why arc-swap for hot-reload:**
+
+`ArcSwap<VTableSlot>` allows the runtime to atomically swap the vtable pointer during hot-reload without any locking on the reader path. Readers (callers) pay one atomic load per call sequence. The `Arc` refcount in the guard keeps the old vtable alive until all in-flight calls complete — automatic quiescence, no notification needed.
+
+Hot-reload implementation details are in Epic 17 (Hot-Reload).
+
 **Hot path call:**
 
 ```c
@@ -291,13 +358,13 @@ Stats stats;  // caller allocates on host allocator
 AbiError err = vtable->functions[COMPUTE_FN_ID](&image, &stats);
 ```
 
-One pointer dereference. One indirect call. Nothing else.
+One guard load. One pointer dereference. One indirect call. Nothing else.
 
 ---
 
 ## 8. Host Libraries
 
-**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the same three functions — `host_alloc/host_free`, `find_plugin`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
+**Host libs are idiomatic wrappers over the polyplug C ABI, one per language.** That is all they are. They wrap the ABI functions — `host_alloc/host_free`, `find_by_contract`, `find_by_bundle`, `find_all_by_contract`, `resolve_plugin`, `get_extension` — in the natural idiom of each language. Written once, stable forever because the C ABI is frozen.
 
 The generated host callers from `polyplugc` sit on top of the host lib. The host lib is contract-agnostic infrastructure; generated code is contract-specific.
 
@@ -746,18 +813,30 @@ api = "path/to/api.toml"
 # or
 api = "my_app_sdk"    # if installed as a package
 
+# Dependencies — explicit declaration required.
+# Runtime enforces this: undeclared contracts cannot be accessed.
+# polyplugc validates all names against api.toml at codegen time.
+# IDs (contract_id, bundle_id) are computed by polyplugc — never written by hand.
+
+[[dependency]]
+contract    = "image.decode"   # any bundle implementing this contract
+min_version = "1.0"
+
+[[dependency]]
+bundle      = "awesome_filter"  # specific bundle by name (from its bundle.toml [bundle].name)
+contract    = "image.decode"    # which contract from that bundle
+min_version = "1.0"
+
 [[plugin]]
 name       = "ImageDecoder"
 version    = "1.2.0"
 implements = ["image.decode@1.0"]
-requires   = []
 optional   = ["trace"]
 
 [[plugin]]
 name       = "ImageStats"
 version    = "1.0.0"
 implements = ["image.stats@1.0"]
-requires   = ["image.decode@1.0"]
 optional   = ["trace"]
 ```
 
@@ -765,32 +844,54 @@ optional   = ["trace"]
 
 ```
 generated/
-├── init.rs / init.cpp / Init.cs     bundle entry point
+├── init.rs / init.cpp / Init.cs     bundle entry point + dependency resolution
 ├── vtables.rs / vtables.cpp         vtable structs and registration
 ├── contracts.rs / contracts.cpp     traits / interfaces to implement
 ├── types.rs / types.cpp             domain types from api.toml
 └── manifest.toml                    discovery manifest (auto-generated)
 ```
 
+**What polyplugc bakes into generated init code (hidden from developer):**
+
+```rust
+// Generated constants — developer never writes these
+const IMAGE_DECODE_CONTRACT_ID: u64 = 0xA3F2...;   // fnv1a_64("image.decode@1")
+const AWESOME_FILTER_BUNDLE_ID: u64 = 0xB7C1...;   // fnv1a_64("awesome_filter")
+const MY_BUNDLE_ID:             u64 = 0xD4E9...;   // fnv1a_64("image_bundle")
+```
+
 ---
 
 ### manifest.toml — generated, not hand-written
 
-Auto-generated by polyplugc. Placed next to the compiled bundle. Runtime reads this for fast pre-load discovery without loading.
+Auto-generated by polyplugc. Placed next to the compiled bundle. Runtime reads this for fast pre-load discovery without loading. Contains resolved dependency information for graph building.
 
 ```toml
 # image_bundle.manifest.toml — GENERATED, never edit by hand
 
 name           = "image_bundle"
+bundle_id      = 0xD4E9...          # fnv1a_64("image_bundle") — baked by polyplugc
 version        = "1.0"
 runtime        = "native"
 file           = "image_bundle.so"
 provides       = ["image.decode@1.0", "image.stats@1.0"]
-requires       = ["image.decode@1.0"]
 function_count = { "image.decode@1.0" = 2, "image.stats@1.0" = 2 }
+
+# Resolved dependency list — consumed by Epic 12 graph builder and hot-reload
+[[dependency]]
+contract    = "image.decode"
+contract_id = 0xA3F2...             # baked by polyplugc
+min_version = "1.0"
+
+[[dependency]]
+bundle      = "awesome_filter"
+bundle_id   = 0xB7C1...             # baked by polyplugc
+contract    = "image.decode"
+contract_id = 0xA3F2...
+min_version = "1.0"
 ```
 
-The `runtime` field tells discovery which loader to dispatch to.
+The `runtime` field tells discovery which loader to dispatch to. The `[[dependency]]` array feeds the Epic 12 topological sort and the Epic 17 hot-reload notification graph.
 
 ---
 
@@ -891,13 +992,55 @@ runtime.load_bundle_with("./plugin.so", LoadOptions {
 
 ## 14. Cross-Plugin Communication
 
-Plugins never link to each other. All calls route through host dispatcher.
+Plugins never link to each other directly. All cross-plugin calls go through the runtime's arc-swap slots, which are the safety mechanism for hot-reload.
 
-```
-Plugin A → host->call_plugin(handle, fn_id, args, out) → Plugin B vtable
+**Plugin declares dependency in bundle.toml:**
+
+```toml
+[[dependency]]
+contract    = "image.decode"
+min_version = "1.0"
 ```
 
-Handle resolved once at init via `find_plugin`. Every subsequent call is one indirect call. Works identically regardless of what languages A and B are written in.
+**polyplugc generates resolution code in init (hidden from developer):**
+
+```rust
+// Generated — plugin developer never writes this
+let handle = host.find_by_contract(IMAGE_DECODE_CONTRACT_ID, 1)?;
+self.decoder_guard = host.resolve_plugin(handle)?;
+```
+
+**Hot path — one load, one indirect call:**
+
+```rust
+// Developer writes:
+let result = self.decoder.decode(raw);
+
+// Generated code does:
+let vtable = self.decoder_guard.vtable();           // one atomic load from arc-swap
+vtable.functions[DECODE_FN_ID](&raw, &mut result);  // one indirect call
+```
+
+**For specific bundle dependency:**
+
+```toml
+[[dependency]]
+bundle      = "awesome_filter"
+contract    = "image.decode"
+min_version = "1.0"
+```
+
+```rust
+// Generated — uses find_by_bundle with baked bundle_id constant
+let handle = host.find_by_bundle(AWESOME_FILTER_BUNDLE_ID, IMAGE_DECODE_CONTRACT_ID, 1)?;
+self.filter_guard = host.resolve_plugin(handle)?;
+```
+
+**Undeclared access — hard error:**
+
+If a plugin calls `find_by_contract` for a contract it did not declare in `bundle.toml`, the runtime returns an error immediately. No probing. No discovery beyond declared dependencies.
+
+**Works identically regardless of what languages plugin A and plugin B are written in.**
 
 ---
 
@@ -1248,10 +1391,12 @@ Lua
 ## 25. Future Work
 
 **Near term:**
-- Hot reload
 - Async plugin execution
 - WASM sandbox support
 - Plugin marketplace tooling (signing, verification, distribution)
+
+**Planned epics (already designed):**
+- Hot-reload — Epic 17 (arc-swap foundation in Epic 9.7, writer path + dlclose deferral in Epic 17)
 
 **Long term:**
 - Distributed plugins
@@ -1272,6 +1417,77 @@ Lua
 - Networking libraries
 - Serialization formats (beyond ABI needs)
 - Out-of-process plugin execution (IPC adds unacceptable overhead, violates performance goal)
+
+---
+
+## 27. Hot-Reload Architecture
+
+Hot-reload allows a running application to replace a plugin bundle with a new version without restarting. All callers transparently use the new vtable after reload with zero downtime and no stale pointer risk.
+
+**Foundation — arc-swap slots (in place since Epic 9.7):**
+
+Every plugin slot in the registry holds an `ArcSwap<VTableSlot>`. Readers (callers) hold an arc-swap read guard for the duration of exactly one call sequence. When the guard drops, the Arc refcount decrements. The old vtable is only freed when all in-flight guards drop — automatic quiescence, no coordination, no locking.
+
+**Hot-reload invariants:**
+
+1. Contract functions are synchronous and bounded — when a call returns, it is done. No background threads, no stored callbacks into the old vtable. This makes quiescence detection trivial.
+2. Plugins must declare all dependencies in `bundle.toml`. The runtime knows the complete dependency graph. When bundle B is reloaded, the runtime knows every bundle that depends on B.
+3. Plugins load their dependency guard once at init. On hot-reload the arc-swap slot is swapped atomically — dependents automatically use the new vtable on their next call with no notification.
+
+**Reload path (Epic 17):**
+
+```
+New version of bundle B detected (inotify / polling / explicit API)
+        │
+        ▼
+Runtime loads new_B.so (via correct loader), runs init, gets new PluginVTable*
+        │
+        ▼
+Runtime atomically swaps arc-swap slot: vtable_slot.store(Arc::new(VTableSlot(new_ptr)))
+        │
+        ▼
+Callers immediately see new vtable on next call (atomic load in arc-swap guard)
+        │
+        ▼
+Old Arc held alive until all in-flight guards drop (quiescence — automatic)
+        │
+        ▼
+old_arc strong_count == 1 → safe to dlclose old bundle
+```
+
+**Deferred dlclose:**
+
+```rust
+let old_arc = slot.vtable.swap(Arc::new(VTableSlot(new_ptr)));
+// Spin in reloader thread ONLY until all in-flight callers complete
+while Arc::strong_count(&old_arc) > 1 { std::hint::spin_loop(); }
+// NOW safe to dlclose
+drop(old_arc);
+dlclose(old_library_handle);
+```
+
+Callers never spin. Only the reloader thread waits. Caller overhead is zero.
+
+**Caller overhead in steady state:**
+
+| Operation | Cost on x86_64 |
+|---|---|
+| arc-swap guard load | 1 atomic load (acquire = free on x86, TSO) |
+| vtable pointer read from guard | 1 load |
+| indirect function call | 1 indirect call |
+| guard drop (Arc refcount dec) | 1 atomic decrement |
+| **Total vs raw pointer** | **~2-3 cycles** |
+
+**Dependency graph and reload ordering:**
+
+When bundle B is reloaded, bundles that depend on B (declared in their `[[dependency]]` sections and stored in the manifest dependency graph) must also be checked. If a dependent bundle cached a guard at init time, its guard remains valid — it points to the arc-swap slot, not a raw pointer. The slot update is transparent.
+
+If a dependent bundle itself needs re-initialization (e.g. it caches derived state from B's vtable at init time), the runtime triggers a cascading reload in topological order. This is opt-in via a `needs_reinit_on_dep_reload = true` field in `bundle.toml`.
+
+**Limitations:**
+- Recursive self-calls during reload are not supported — document clearly
+- Hot-reload adds ~2-3 cycles per cross-plugin call in steady state vs a raw pointer (unavoidable cost of safety)
+- Host-side direct vtable pointers (from `resolve_plugin` stored by host app) must be refreshed after reload via `runtime.refresh_handle(handle)` — generated host callers do this automatically
 
 ---
 
