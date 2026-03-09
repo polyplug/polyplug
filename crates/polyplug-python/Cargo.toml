@@ -12,6 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 polyplug = { path = "../polyplug" }
+pyo3 = { version = "0.28", features = [] }
 
 [lints]
 workspace = true
