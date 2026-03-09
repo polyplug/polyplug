@@ -95,6 +95,15 @@ pub enum LoaderError {
 
     #[error(".NET runtime version mismatch: required={required}, found={found}")]
     RuntimeVersionMismatch { required: String, found: String },
+
+    #[error("Python interpreter initialization failed: {reason}")]
+    PythonInitFailed { reason: String },
+
+    #[error("failed to import Python module at `{path}`: {reason}")]
+    PythonModuleImportFailed { path: String, reason: String },
+
+    #[error("Python init function raised exception in bundle `{bundle}`: {message}")]
+    PythonInitRaisedException { bundle: String, message: String },
 }
 
 /// Errors from the plugin registry.
