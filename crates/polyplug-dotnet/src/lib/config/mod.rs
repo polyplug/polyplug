@@ -29,16 +29,11 @@ impl Default for DotnetConfig {
 }
 
 /// Location strategy for the hostfxr library.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum HostfxrLocation {
     /// Automatically locate hostfxr using nethost.
+    #[default]
     Auto,
     /// Use the hostfxr library at the given path.
     Path(std::path::PathBuf),
-}
-
-impl Default for HostfxrLocation {
-    fn default() -> HostfxrLocation {
-        HostfxrLocation::Auto
-    }
 }

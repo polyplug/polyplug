@@ -135,6 +135,7 @@ fn duplicate_native_loader_detected_in_build() {
 fn dotnet_loader_load_nonexistent_dll_errors() {
     let loader: DotnetLoader = DotnetLoader::new(polyplug_dotnet::DotnetConfig {
         min_framework: String::from("net10.0"),
+        hostfxr: polyplug_dotnet::HostfxrLocation::Auto,
     });
     assert_eq!(loader.runtime_name(), "dotnet");
 
