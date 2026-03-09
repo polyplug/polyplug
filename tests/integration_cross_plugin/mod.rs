@@ -11,13 +11,8 @@
 #![allow(clippy::expect_used)]
 
 use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::bundle_id;
-use polyplug::abi::contract_id;
-use polyplug::error::RegistryError;
-use polyplug::registry::Registry;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

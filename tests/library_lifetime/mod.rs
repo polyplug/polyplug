@@ -9,7 +9,6 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
 use polyplug::abi::PluginHandle;
 use polyplug::allocator::polyplug_host_alloc;

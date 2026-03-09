@@ -145,7 +145,6 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         host: core::ptr::null(),
     };
     let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
-    let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
     match result {
         Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         Err(PolyplugError::Loader(LoaderError::ClrInitFailed { .. })) => {}
@@ -173,8 +172,8 @@ fn python_loader_loads_nonexistent_file_errors() {
 }
 
 #[test]
-fn lua_loader_returns_not_implemented() {
-    let loader: LuaLoader = LuaLoader::new();
+fn lua_loader_returns_error_for_missing_file() {
+    let loader: LuaLoader = LuaLoader::new(polyplug_lua::LuaConfig::default());
     assert_eq!(loader.runtime_name(), "lua");
 
     let dummy_path: &Path = Path::new("dummy.lua");
@@ -184,10 +183,8 @@ fn lua_loader_returns_not_implemented() {
     };
     let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
     match result {
-        Err(PolyplugError::Loader(LoaderError::RuntimeNotImplemented { runtime_name })) => {
-            assert_eq!(runtime_name, "lua");
-        }
-        other => panic!("expected RuntimeNotImplemented, got: {other:?}"),
+        Err(PolyplugError::Loader(LoaderError::LuaScriptLoadFailed { .. })) => {}
+        other => panic!("expected LuaScriptLoadFailed for missing file, got: {other:?}"),
     }
 }
 

@@ -101,9 +101,11 @@ polyplug-guest = {{ path = "{}" }}
 fn write_plugin_lib_rs(src_dir: &Path) {
     let content: &str = r#"// THIS FILE IS WRITTEN BY smoke TEST — DO NOT EDIT BY HAND
 
-mod types;
-mod contracts;
-mod vtables;
+mod guest {
+    pub mod types;
+    pub mod contracts;
+    pub mod vtables;
+}
 
 #[allow(unused_imports)]
 use polyplug_guest::ABI_ERROR_GENERIC;
@@ -112,10 +114,10 @@ use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginError;
 use polyplug_guest::PluginRegistrar;
 use polyplug_guest::StringView;
-use contracts::TestAddPlugin;
-use types::AddArgs;
-use vtables::TEST_ADD_IMPL;
-use vtables::TEST_ADD_VTABLE;
+use guest::contracts::TestAddPlugin;
+use guest::types::AddArgs;
+use guest::vtables::TEST_ADD_IMPL;
+use guest::vtables::TEST_ADD_VTABLE;
 
 struct MyPlugin;
 
