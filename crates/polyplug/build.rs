@@ -486,4 +486,16 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
     } else {
         println!("cargo:rustc-env=TEST_PYTHON_PLUGIN=PYTHON_NOT_AVAILABLE");
     }
+    // ─── Lua fixture ──────────────────────────────────────────────────────────────
+    println!(
+        "cargo:rerun-if-changed={}",
+        fixtures_dir.join("test_plugin.lua").display()
+    );
+    // mlua with `vendored` embeds LuaJIT — no system install required.
+    // Always emit the real fixture path.
+    // Tests can opt-out via SKIP_LUA=1 env var at runtime.
+    println!(
+        "cargo:rustc-env=TEST_LUA_PLUGIN={}",
+        fixtures_dir.join("test_plugin.lua").display()
+    );
 }

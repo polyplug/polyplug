@@ -88,6 +88,10 @@ path = "../../tests/library_lifetime/mod.rs"
 name = "integration_python"
 path = "../../tests/integration_python/mod.rs"
 
+[[test]]
+name = "integration_lua"
+path = "../../tests/integration_lua/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false
