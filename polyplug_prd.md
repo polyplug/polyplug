@@ -477,6 +477,7 @@ Language runtime adapters are separate crates that teach `polyplug` how to load 
 - If `polyplug-dotnet` is not in your `Cargo.toml`, .NET support is not compiled into your binary
 - If `polyplug-python` is not in your `Cargo.toml`, Python support is not compiled into your binary
 - If `polyplug-lua` is not in your `Cargo.toml`, Lua support is not compiled into your binary
+- If `polyplug-js` is not in your `Cargo.toml`, JS/TS support is not compiled into your binary
 
 This is not a feature flag. It is a missing dependency. True zero cost.
 
@@ -500,15 +501,16 @@ PluginRuntime::new()
     .loader(DotnetLoader::new())    // from polyplug-dotnet
     .loader(PythonLoader::new())    // from polyplug-python
     .loader(LuaLoader::new())       // from polyplug-lua
+    .loader(JsLoader::new())        // from polyplug-js
     .init()?;
 ```
 
-If a bundle's manifest declares `runtime = "lua"` but no Lua loader is registered:
+If a bundle's manifest declares `runtime = "ts-bun"` but no JS loader is registered:
 
 ```
-Error: bundle "my_lua_plugin" requires runtime "lua"
-but no loader is registered for runtime "lua".
-Add polyplug-lua as a dependency and register LuaLoader at init.
+Error: bundle "my_ts_plugin" requires runtime "ts-bun"
+but no loader is registered for runtime "ts-bun".
+Add polyplug-js as a dependency and register JsLoader at init.
 ```
 
 Native plugins (Rust, C++, C# NativeAOT) require no adapter. The built-in native loader in `polyplug` handles them via dlopen.
@@ -720,7 +722,73 @@ This cast happens once at init time. All subsequent vtable function pointer call
 
 ---
 
-## 11. Schema Files
+### polyplug-js
+
+Enables loading of JavaScript and TypeScript plugins. Supports three JS runtimes in a single adapter crate — the correct sub-loader is selected automatically based on the `runtime` field in `manifest.toml`.
+
+**Supported runtime values:**
+
+```
+ts-node   TypeScript plugin, loaded via Node.js N-API
+ts-bun    TypeScript plugin, loaded via Bun bun:ffi (fastest JS option)
+ts-deno   TypeScript plugin, loaded via Deno Deno.dlopen
+js-node   Plain JavaScript plugin, loaded via Node.js N-API
+js-bun    Plain JavaScript plugin, loaded via Bun bun:ffi
+js-deno   Plain JavaScript plugin, loaded via Deno Deno.dlopen
+```
+
+**Configuration:**
+
+```rust
+JsLoader::new(JsConfig {
+    node: Some(NodeConfig { bin: None }),   // None = auto-detect from PATH
+    bun:  Some(BunConfig  { bin: None }),   // None = auto-detect from PATH
+    deno: None,                              // deno not supported in this app
+})
+```
+
+`JsConfig` fields are optional per-runtime — set to `None` to disable that runtime variant. If a bundle requires `ts-bun` but `bun` is `None` and Bun is not in `PATH`:
+
+```
+Error: bundle "my_bun_plugin" requires runtime "ts-bun"
+but Bun is not configured and could not be found in PATH.
+Set JsConfig::bun in JsLoader::new() or install Bun.
+```
+
+**One loader, three sub-loaders internally:**
+
+```rust
+// polyplug-js internal dispatch
+match manifest.runtime.as_str() {
+    "ts-node" | "js-node" => self.load_via_node(path, registrar, config),
+    "ts-bun"  | "js-bun"  => self.load_via_bun(path, registrar, config),
+    "ts-deno" | "js-deno" => self.load_via_deno(path, registrar, config),
+    _ => unreachable!(), // Epic 12 only dispatches to JsLoader for js/* and ts/* runtimes
+}
+```
+
+**Loading mechanism per variant:**
+
+`ts-node` / `js-node` — N-API native addon (`.node` file). The generated guest bundle compiles to a `.node` shared library. `polyplug-js` loads it via `require()` called through the Node subprocess bridge. N-API is ABI-stable across Node major versions. Works in Node and Bun (Bun supports N-API natively — Bun users can use `ts-node` bundles without `ts-bun`).
+
+`ts-bun` / `js-bun` — `bun:ffi` direct C ABI call. Generated guest bundle is a `.js`/`.ts` file that uses `bun:ffi` to `dlopen` `polyplug.so` and call `init(registrar)` directly. No `.node` compilation needed. ~2ns FFI call overhead per call — fastest JS option.
+
+`ts-deno` / `js-deno` — `Deno.dlopen` direct C ABI call. Generated guest bundle is a `.ts`/`.js` file that uses `Deno.dlopen` to call `init(registrar)`. Requires `--allow-ffi` flag when running Deno.
+
+**Performance comparison:**
+
+```
+ts-bun    ~2ns per FFI call      bun:ffi JIT-compiled type conversion
+ts-node   ~50-200ns per call     N-API, stable, works on Node + Bun
+ts-deno   ~50-200ns per call     Deno.dlopen, similar to N-API
+```
+
+All variants: JS runtime itself is the bottleneck, not the FFI boundary. For primitive-only contracts (u32, f64, bool) overhead is lowest. For contracts passing Buffer or StringView, JS value boxing adds unavoidable overhead from the GC language side — same situation as Python.
+
+**Bundle name collision rule also applies to JS/TS:**
+Bundle names must not match any contract name in `api.toml`. `polyplugc` enforces this for all `--lang js-*` and `--lang ts-*` targets identically to other languages.
+
+---
 
 There are exactly **two schema files** in the entire system. Both are TOML.
 
@@ -808,6 +876,8 @@ Defines the contents of a plugin bundle. Written by plugin developer. Never dist
 name    = "image_bundle"
 version = "1.0"
 runtime = "native"    # native (default) | dotnet | python | lua
+                      # | ts-node | ts-bun | ts-deno
+                      # | js-node | js-bun | js-deno
 
 api = "path/to/api.toml"
 # or
@@ -839,6 +909,18 @@ version    = "1.0.0"
 implements = ["image.stats@1.0"]
 optional   = ["trace"]
 ```
+
+**Bundle name uniqueness rule:**
+
+Bundle names must not match any contract name defined in the referenced `api.toml`. `polyplugc validate` and `polyplugc generate` both enforce this as a hard error:
+
+```
+error: bundle name "image.decode" conflicts with contract name "image.decode" in api.toml.
+Bundle names and contract names must be unique across the ecosystem.
+Rename the bundle in bundle.toml or the contract in api.toml.
+```
+
+This guarantees generated accessor names are always unambiguous. No special-case syntax or disambiguation needed anywhere in the system.
 
 **What polyplugc generates from bundle.toml:**
 
@@ -969,7 +1051,7 @@ Four layers, worked through in order.
 Scans configured directories. Recognizes `.so/.dll/.dylib` for compiled bundles and directories for script bundles. Configured at runtime init in code, no config file.
 
 **Layer 2 — Manifest reading**
-Reads companion `manifest.toml` before any loading. Extracts: name, version, runtime, provides, requires, function_count. The `runtime` field determines which loader handles this bundle.
+Reads companion `libfoo.manifest.toml` before any loading. A compiled bundle with no companion manifest is **skipped entirely** — logged via `tracing::warn!` with the bundle path, not loaded. A bundle without a manifest is not a valid polyplug bundle. For script bundles (directories), `manifest.toml` inside the directory is required for the same reason. Extracts from valid manifests: name, bundle_id, version, runtime, provides, function_count, dependencies.
 
 **Layer 3 — Capability graph resolution**
 1. Collects all provided capabilities
@@ -1337,11 +1419,13 @@ cargo build --release
 ## 23. MVP Language Support
 
 ```
-Rust    host + guest    native, near zero overhead
-C++     host + guest    header-only libs, near zero overhead
-C#      host + guest    NativeAOT (native loader) or standard .NET (polyplug-dotnet)
-Python  host + guest    ctypes, via polyplug-python
-Lua     host + guest    LuaJIT recommended, via polyplug-lua
+Rust        host + guest    native, near zero overhead
+C++         host + guest    header-only libs, near zero overhead
+C#          host + guest    NativeAOT (native loader) or standard .NET (polyplug-dotnet)
+Python      host + guest    ctypes, via polyplug-python
+Lua         host + guest    LuaJIT recommended, via polyplug-lua
+JavaScript  host + guest    N-API / bun:ffi / Deno.dlopen, via polyplug-js
+TypeScript  host + guest    same as JS — TS is the recommended variant
 ```
 
 **C# — two modes, same generated code:**
@@ -1351,7 +1435,18 @@ NativeAOT       runtime = "native"    native loader, native performance, no adap
 standard .NET   runtime = "dotnet"    polyplug-dotnet required, CLR via hostfxr
 ```
 
-Plugin developer chooses in bundle.toml. App developer ensures the right adapter is registered.
+**JS/TS — six runtime variants, one adapter:**
+
+```
+ts-node    TypeScript, Node.js N-API     works on Node + Bun, ~50-200ns/call
+ts-bun     TypeScript, bun:ffi           Bun only, ~2ns/call, fastest JS option
+ts-deno    TypeScript, Deno.dlopen       Deno only, ~50-200ns/call
+js-node    JavaScript, Node.js N-API     same as ts-node, plain JS
+js-bun     JavaScript, bun:ffi           same as ts-bun, plain JS
+js-deno    JavaScript, Deno.dlopen       same as ts-deno, plain JS
+```
+
+Plugin developer chooses variant in `bundle.toml`. App developer registers `JsLoader` once — it handles all six variants internally based on which runtimes are configured.
 
 ---
 
@@ -1366,6 +1461,7 @@ RUST (crates.io)
 ├── polyplug-dotnet       standard .NET adapter
 ├── polyplug-python       Python adapter
 ├── polyplug-lua          Lua adapter
+├── polyplug-js           JS/TS adapter (Node, Bun, Deno)
 └── polyplugc             CLI codegen tool
 
 C++ (headers / vcpkg / conan)
@@ -1384,6 +1480,13 @@ Python (pip)
 Lua
 ├── polyplug.lua + .so    Lua host lib
 └── polyplug-guest.lua    Lua guest lib
+
+JS/TS (npm)
+├── polyplug              JS/TS host lib (wraps polyplug.so via N-API)
+└── polyplug-guest        JS/TS guest lib (base types, ABI helpers)
+    ├── for ts-node / js-node:  compiled .node + .d.ts
+    ├── for ts-bun / js-bun:    bun:ffi declarations + .d.ts
+    └── for ts-deno / js-deno:  Deno.dlopen declarations + .d.ts
 ```
 
 ---

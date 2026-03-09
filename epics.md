@@ -1137,6 +1137,9 @@ EPIC GOAL
        Dependency::ByContract { contract: String, min_version: String }
        Dependency::ByBundle { bundle: String, contract: String, min_version: String }
    - Validate contract names against api.toml schema — hard error if unknown
+   - Validate bundle name (from [bundle].name) does not match any contract name
+     in the referenced api.toml — hard error with clear message if it does
+   - This check runs in both `polyplugc validate` and `polyplugc generate`
    - Remove parsing of requires = [...] from [[plugin]] entries
    - Store parsed dependencies in ResolvedBundle IR node
 
@@ -1212,6 +1215,7 @@ EPIC GOAL
 
 VERIFICATION CHECKLIST
 
+- polyplugc hard-errors if bundle name matches any contract name in api.toml
 - call_plugin does not exist anywhere in codebase
 - find_plugin does not exist anywhere in codebase
 - find_by_contract, find_by_bundle, find_all_by_contract implemented and tested
@@ -1617,6 +1621,279 @@ VERIFICATION CHECKLIST
 
 ---
 
+## Epic 11.5 — polyplug-js: JavaScript and TypeScript Adapter
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 10 (polyplug-js subsection),
+  section 23 (MVP Language Support, JS/TS rows),
+  section 24 (Package Ecosystem, JS/TS npm packages)
+
+---
+
+PROJECT CONTEXT
+
+JS and TypeScript plugins run on three different runtimes: Node.js, Bun, and Deno.
+All three cross the same C ABI boundary — they call polyplug's init(registrar)
+and register vtables. The FFI mechanism differs per runtime:
+
+  ts-node / js-node  →  N-API native addon (.node file, ABI-stable)
+  ts-bun  / js-bun   →  bun:ffi dlopen (~2ns per call, fastest JS option)
+  ts-deno / js-deno  →  Deno.dlopen with --allow-ffi
+
+One adapter crate (polyplug-js) handles all six runtime variants.
+The crate scaffold exists from Epic 8 at crates/polyplug-js/.
+This epic fills it in completely, plus JS/TS guest lib, JS/TS host lib,
+and all JS/TS generators (ts-node, ts-bun, ts-deno; js-* share same
+generators as ts-* counterparts differing only in type annotation output).
+
+Start with ts-node only. ts-bun and ts-deno are scaffolded but stubbed
+with clear TODO comments and a runtime error:
+  PolyplugError::RuntimeNotYetImplemented { runtime: "ts-bun" }
+This lets the architecture exist and compile without full bun:ffi and
+Deno.dlopen implementation. They become follow-on sub-epics.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+JsConfig — mandatory, no defaults:
+  pub struct NodeConfig { pub bin: Option<PathBuf> }  // None = auto-detect PATH
+  pub struct BunConfig  { pub bin: Option<PathBuf> }  // None = auto-detect PATH
+  pub struct DenoConfig { pub bin: Option<PathBuf> }  // None = auto-detect PATH
+
+  pub struct JsConfig {
+      pub node: Option<NodeConfig>,   // None = ts-node/js-node not supported
+      pub bun:  Option<BunConfig>,    // None = ts-bun/js-bun not supported
+      pub deno: Option<DenoConfig>,   // None = ts-deno/js-deno not supported
+  }
+
+  JsLoader::new(JsConfig {
+      node: Some(NodeConfig { bin: None }),
+      bun:  None,
+      deno: None,
+  })
+  JsConfig is mandatory. Passing all None is a hard error at construction time:
+    PolyplugError::JsLoaderNoRuntimeConfigured
+
+BundleLoader::runtime_name():
+  JsLoader returns a slice of all configured runtime names:
+  ["ts-node", "js-node"] if only node configured
+  ["ts-node", "js-node", "ts-bun", "js-bun"] if node+bun configured
+  etc.
+  Epic 12 dispatcher checks manifest.runtime against this slice.
+
+Bundle format per variant:
+  ts-node / js-node:
+    Bundle is a directory containing:
+      manifest.toml
+      index.js (compiled from TS or plain JS — N-API entry point)
+      polyplug.node (compiled N-API addon — the guest lib bridge)
+    polyplugc generates index.ts (compiled to index.js by plugin dev's tsc/bun build)
+  ts-bun / js-bun (stubbed):
+    Bundle is a directory containing:
+      manifest.toml
+      index.ts / index.js (bun:ffi entry point)
+    polyplugc generates index.ts with bun:ffi declarations (stubbed, TODO comment)
+  ts-deno / js-deno (stubbed):
+    Bundle is a directory containing:
+      manifest.toml
+      index.ts / index.js (Deno.dlopen entry point)
+    polyplugc generates index.ts with Deno.dlopen declarations (stubbed, TODO comment)
+
+N-API loading path (ts-node / js-node — FULL IMPLEMENTATION):
+  JsLoader spawns node subprocess OR uses napi-rs to load the .node file.
+  The polyplug.node guest lib bridge exposes init(registrar_ptr: bigint) to JS.
+  registrar ptr passed as BigInt (64-bit safe in JS — Number only has 53-bit integers).
+  node subprocess calls: require('./polyplug.node').init(BigInt(registrar_ptr))
+  This triggers the vtable exchange via N-API back into the Rust runtime.
+
+Registrar pointer passing — ALL variants:
+  registrar ptr is uint64 — must be passed as BigInt in JS/TS.
+  Number type in JS has 53-bit integer precision — CANNOT hold a 64-bit pointer.
+  Generated init() always receives and passes registrar as BigInt.
+  This is enforced in generated code — never a raw number.
+
+Generated TypeScript — ts-node variant:
+  contracts.ts   — interfaces plugin dev implements
+  types.ts       — domain types as TypeScript interfaces with ctypes-style layout
+  vtables.ts     — vtable registration helpers
+  init.ts        — bundle entry point, dependency resolution, vtable registration
+  manifest.toml  — generated manifest with runtime = "ts-node"
+
+  All ABI types mapped to TypeScript:
+    u8/u16/u32    → number
+    u64           → bigint
+    i8/i16/i32    → number
+    i64           → bigint
+    f32/f64       → number
+    bool          → boolean
+    StringView    → { ptr: bigint, len: number }  (N-API Buffer view)
+    Buffer        → { ptr: bigint, len: number, cap: number }
+    void          → void
+
+  Dependency resolution in generated init.ts:
+    const handle = polyplug.findByContract(IMAGE_DECODE_CONTRACT_ID, 1n);
+    if (!handle) throw new DependencyNotFoundError("image.decode");
+    const guard = polyplug.resolvePlugin(handle);
+    // guard stored as module-level const, used on hot path
+
+  Hot path call in generated caller:
+    const vtable = guard.vtable();   // arc-swap guard load
+    vtable.decode(rawPtr, outPtr);   // direct C function call via N-API
+
+JS/TS host lib (host-libs/js/ or npm package polyplug):
+  TypeScript declarations wrapping polyplug.so via N-API.
+  Classes: Runtime, ContractHandle, VTableGuard.
+  Mirrors the Rust host lib surface — same concepts, TypeScript idioms.
+
+JS/TS guest lib (guest-libs/js/ or npm package polyplug-guest):
+  Base types: AbiError, StringView, Buffer as TypeScript interfaces.
+  DependencyNotFoundError class.
+  PluginRegistrar wrapper.
+  Re-exported by generated guest bundle code.
+
+polyplugc generators — new generators to add:
+  JsNodeGenerator  → emits ts-node bundles (TypeScript + N-API)
+  JsBunGenerator   → emits ts-bun bundles (stubbed with TODO)
+  JsDenoGenerator  → emits ts-deno bundles (stubbed with TODO)
+  js-* variants use same generators as ts-* but strip type annotations
+  from output and emit .js instead of .ts.
+  --lang ts-node → JsNodeGenerator with TypeScript output
+  --lang js-node → JsNodeGenerator with JS output (type annotations removed)
+  Same pattern for bun and deno.
+
+Bundle name collision rule applies here too:
+  polyplugc hard-errors if bundle name matches any contract name.
+  Already implemented in Epic 9.7 patch — no changes needed.
+
+---
+
+EPIC GOAL
+
+1. JsConfig, NodeConfig, BunConfig, DenoConfig types:
+   crates/polyplug-js/src/config/mod.rs
+   Hard error at JsLoader::new() if all three are None.
+
+2. JsLoader implementing BundleLoader:
+   crates/polyplug-js/src/loader/mod.rs
+   runtime_name() returns slice of all configured runtime strings.
+   load() dispatches by manifest.runtime to node/bun/deno sub-loader.
+   bun and deno sub-loaders return RuntimeNotYetImplemented error (stub).
+
+3. Node sub-loader (FULL IMPLEMENTATION):
+   crates/polyplug-js/src/loader/node/mod.rs
+   - Locate node binary: NodeConfig.bin → PATH scan → well-known paths
+   - Verify node version: >= 18 (N-API stability)
+   - Load bundle directory: spawn node subprocess with generated bootstrap
+   - Pass registrar ptr as BigInt to JS init() function
+   - Receive vtable registration via N-API callback back into Rust
+
+4. Bun sub-loader (STUB):
+   crates/polyplug-js/src/loader/bun/mod.rs
+   Returns PolyplugError::RuntimeNotYetImplemented { runtime: "ts-bun".into() }
+   Contains clear TODO comment explaining bun:ffi implementation approach.
+
+5. Deno sub-loader (STUB):
+   crates/polyplug-js/src/loader/deno/mod.rs
+   Returns PolyplugError::RuntimeNotYetImplemented { runtime: "ts-deno".into() }
+   Contains clear TODO comment explaining Deno.dlopen implementation approach.
+
+6. PolyplugError::RuntimeNotYetImplemented { runtime: String } — new variant
+   crates/polyplug/src/error/mod.rs
+   PolyplugError::JsLoaderNoRuntimeConfigured — new variant
+
+7. JS/TS host lib: host-libs/js/
+   polyplug.ts — TypeScript declarations for host-side N-API bindings
+   Classes: Runtime, ContractHandle, VTableGuard
+   Mirrors Rust host lib surface in TypeScript idioms.
+
+8. JS/TS guest lib: guest-libs/js/
+   polyplug-guest.ts — base types and helpers
+   AbiError, StringView, Buffer, PluginRegistrar, DependencyNotFoundError
+   Re-exported by generated init.ts.
+
+9. polyplugc — JsNodeGenerator (ts-node / js-node):
+   crates/polyplugc/src/generators/js_node/mod.rs
+   Generates from bundle.toml:
+     contracts.ts   — TypeScript interfaces for each contract
+     types.ts       — domain types as TypeScript interfaces
+     vtables.ts     — vtable registration helpers
+     init.ts        — entry point, dependency resolution (BigInt registrar ptr),
+                       vtable registration, guard storage
+     manifest.toml  — runtime = "ts-node" (or "js-node")
+   --lang js-node: same generator, strips TypeScript type annotations,
+                   emits .js instead of .ts files.
+
+10. polyplugc — JsBunGenerator stub (ts-bun / js-bun):
+    crates/polyplugc/src/generators/js_bun/mod.rs
+    Emits a valid directory structure with TODO comments in init.ts.
+    manifest.toml runtime = "ts-bun" or "js-bun".
+    Sufficient for Epic 12 discovery to recognise the bundle.
+
+11. polyplugc — JsDenoGenerator stub (ts-deno / js-deno):
+    Same as JsBunGenerator stub but for Deno.
+
+12. polyplugc CLI: wire --lang ts-node, --lang js-node,
+    --lang ts-bun, --lang js-bun, --lang ts-deno, --lang js-deno
+    into the generator dispatch.
+
+13. Integration tests:
+    a. ts-node guest loaded by Rust host: call two functions, assert results
+    b. Rust host loads ts-node plugin, ts-node plugin calls Rust plugin
+       via declared [[dependency]] — cross-plugin cross-language call
+    c. Registrar ptr BigInt: verify no precision loss on 64-bit addresses
+       (test with ptr value > 2^53 to confirm BigInt path)
+    d. ts-bun bundle: JsLoader returns RuntimeNotYetImplemented (not panic)
+    e. JsLoader with all None JsConfig: hard error at construction
+    f. Missing node binary: clear error naming the missing binary
+    g. Node version too old (< 18): clear error with version requirement
+
+14. Benchmarks (BENCHMARKS.md):
+    - ts-node cross-plugin call overhead vs Rust-to-Rust baseline
+    - Document JS runtime bottleneck clearly
+
+---
+
+VERIFICATION CHECKLIST
+
+- JsLoader registered once handles ts-node, ts-bun, ts-deno, js-node, js-bun, js-deno
+- ts-node full implementation: loads bundle, calls init, vtable exchange complete
+- ts-bun stub: returns RuntimeNotYetImplemented, does not panic
+- ts-deno stub: returns RuntimeNotYetImplemented, does not panic
+- JsConfig all None → JsLoaderNoRuntimeConfigured hard error at construction
+- Registrar ptr passed as BigInt in all generated JS/TS code — never as Number
+- contracts.ts, types.ts, vtables.ts, init.ts generated correctly for ts-node
+- manifest.toml runtime field set correctly for all six variants
+- Dependency resolution in generated init.ts: BigInt contract/bundle IDs,
+  hard error on missing dep, guard stored module-level
+- host-libs/js/ TypeScript declarations exist and are correct
+- guest-libs/js/ base types exist and re-exported correctly
+- polyplugc --lang ts-node, --lang js-node, --lang ts-bun,
+  --lang js-bun, --lang ts-deno, --lang js-deno all wired in CLI
+- Cross-plugin cross-language test passes (ts-node plugin calls Rust plugin)
+- BigInt precision test passes (ptr > 2^53)
+- All existing integration tests pass
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+---
+
 ## Epic 12 — Plugin Discovery and Manifest System
 
 ```
@@ -1642,13 +1919,18 @@ This epic makes discovery automatic: the runtime scans directories, reads
 manifests without loading anything, resolves the full capability graph across
 all discovered bundles, and dispatches each bundle to the correct loader.
 
-The BundleLoader trait and all five loader types (native + three adapters) exist.
+The BundleLoader trait and all loader types (native + four adapters) exist.
 The manifest.toml runtime field is read by the parser (from Epic 8).
 Epic 9.7 redesigned manifest.toml — it now has:
   - bundle_id: u64 (fnv1a_64 of bundle name)
   - [[dependency]] table array (replaces the old requires = [...] string array)
     each entry has: contract, contract_id, min_version
     or: bundle, bundle_id, contract, contract_id, min_version
+Epic 11.5 added polyplug-js. Valid runtime values are now:
+  native, dotnet, python, lua,
+  ts-node, ts-bun, ts-deno, js-node, js-bun, js-deno
+  All six JS/TS variants route to JsLoader. The manifest reader must
+  recognise all of them as valid — not treat them as unknown runtimes.
 This epic wires everything together into a complete discovery pipeline.
 The capability graph builder must consume [[dependency]] from manifest.toml,
 not the old requires = [...] field (which no longer exists).
@@ -1660,7 +1942,8 @@ EPIC GOAL
 1. Directory scanner in crates/polyplug/src/loader/ (new submodule or extend existing):
    - Scans configured directories for bundle files
    - Recognizes .so, .dll, .dylib for compiled native bundles
-   - Recognizes directories containing manifest.toml for script bundles (Python, Lua)
+   - Recognizes directories containing manifest.toml for script bundles
+     (Python, Lua, and JS/TS — all use directory format for script bundles)
    - Finds companion manifest.toml for each compiled bundle
    - NEVER calls any loader or dlopen during scanning phase
    - Returns Vec<(bundle_path, ManifestData)>
@@ -2013,7 +2296,9 @@ This is the final codegen hardening epic before the showcase.
 EPIC GOAL
 
 1. Generator audit:
-   For each of the five generators (Rust, C++, C#, Python, Lua):
+   For each of the eight generators (Rust, C++, C#, Python, Lua,
+   ts-node, ts-bun, ts-deno — js-* variants share generators with ts-* counterparts,
+   differing only in emitted file extension and type annotation stripping):
    - Verify host-side output: types, callers
    - Verify guest SDK output: types, contracts
    - Verify guest bundle output: types, contracts, vtables, init, manifest.toml
@@ -2042,21 +2327,24 @@ EPIC GOAL
    - Python: pip package directory (pyproject.toml, package dir)
    - Lua: module directory (.lua files + C ext if needed)
 
-5. The 25 cross-language combination tests:
-   For every pair (host_lang, guest_lang) in {Rust, C++, C#, Python, Lua}²:
+5. The cross-language combination tests:
+   Original 5 languages = 25 combinations (5×5).
+   With JS/TS (treating ts-node as the representative JS variant) = 36 combinations (6×6).
+   For every pair (host_lang, guest_lang) in {Rust, C++, C#, Python, Lua, ts-node}²:
    - Generate host callers for host_lang from test api.toml
    - Generate guest bundle for guest_lang from test bundle.toml
    - Build both (discuss build orchestration with me)
    - Rust host loads plugin: runtime.load_bundle(path)
    - Call at least two contract functions
    - Assert correct return values
-   All 25 combinations must pass.
+   All combinations must pass.
+   ts-bun and ts-deno variants tested separately (not all 36 — discuss with me).
 
 ---
 
 VERIFICATION CHECKLIST
 
-- All 25 cross-language combination tests pass
+- All 36 cross-language combination tests pass (ts-node as JS representative)
 - Generated code for all five languages compiles without warnings
 - All generated files have auto-generated header comment
 - manifest.toml always has all required fields for all five generators
@@ -2130,12 +2418,14 @@ Four contracts:
   Encoder:     encode(DataRecord) → Buffer
   Reporter:    report(DataRecord) → StringView
 
-Five plugins, one per language:
-  Rust:   Decoder    — parses CSV bytes into DataRecord
-  C++:    Transformer — uppercases all string fields
-  C#:     Encoder    — serializes DataRecord back to CSV bytes
-  Python: Reporter   — formats a human-readable summary string
-  Lua:    Transformer — reverses all string fields (alternative transformer)
+Five plugins, one per language (plus one JS/TS):
+  Rust:    Decoder    — parses CSV bytes into DataRecord
+  C++:     Transformer — uppercases all string fields
+  C#:      Encoder    — serializes DataRecord back to CSV bytes
+  Python:  Reporter   — formats a human-readable summary string
+  Lua:     Transformer — reverses all string fields (alternative transformer)
+  TS/JS:   Validator  — validates DataRecord fields, returns AbiError on invalid input
+           (runtime = "ts-node" — works on Node and Bun without extra config)
 
 Host application (language chosen with me):
   - Initializes runtime with all adapters
