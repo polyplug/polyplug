@@ -1398,6 +1398,7 @@ dependencies = [
  "libloading",
  "petgraph",
  "polyplug-dotnet",
+ "polyplug-js",
  "polyplug-lua",
  "polyplug-python",
  "serde",
@@ -1435,7 +1436,9 @@ dependencies = [
 name = "polyplug-js"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "polyplug",
+ "thiserror",
 ]
 
 [[package]]
@@ -1905,6 +1908,10 @@ dependencies = [
 
 [[package]]
 name = "test_plugin"
+version = "0.1.0"
+
+[[package]]
+name = "test_plugin_ts_node"
 version = "0.1.0"
 
 [[package]]

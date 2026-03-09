@@ -11,7 +11,9 @@ path       = "src/lib/mod.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-polyplug = { path = "../polyplug" }
+polyplug   = { path = "../polyplug" }
+libloading = { workspace = true }
+thiserror  = { workspace = true }
 
 [lints]
 workspace = true

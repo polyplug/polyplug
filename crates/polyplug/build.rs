@@ -503,11 +503,15 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
     // Use workspace_root-relative paths for rerun-if-changed.
     println!(
         "cargo:rerun-if-changed={}",
-        workspace_root.join("tests/fixtures/test_plugin_ts_node/src/lib.rs").display()
+        workspace_root
+            .join("tests/fixtures/test_plugin_ts_node/src/lib.rs")
+            .display()
     );
     println!(
         "cargo:rerun-if-changed={}",
-        workspace_root.join("tests/fixtures/test_plugin_ts_node/Cargo.toml").display()
+        workspace_root
+            .join("tests/fixtures/test_plugin_ts_node/Cargo.toml")
+            .display()
     );
 
     // Determine the platform-specific output filename for the .node fixture.
@@ -553,10 +557,6 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
         )
     });
 
-    println!(
-        "cargo:rustc-env=TEST_JS_PLUGIN={}",
-        dest_node.display()
-    );
+    println!("cargo:rustc-env=TEST_JS_PLUGIN={}", dest_node.display());
     println!("cargo:rustc-env=TEST_JS_PLUGIN_AVAILABLE=1");
-
 }

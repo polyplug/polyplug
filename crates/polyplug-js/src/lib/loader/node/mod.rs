@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginRegistrar;
 use polyplug::abi::ABI_OK;
+use polyplug::abi::AbiError;
 use polyplug::abi::POLYPLUG_ABI_VERSION;
+use polyplug::abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 

@@ -135,7 +135,11 @@ pub enum LoaderError {
         "JS runtime \"{runtime_name}\" is not configured: set JsConfig::{field_name} \
          or install {install_hint}"
     )]
-    JsBinaryNotConfigured { runtime_name: String, field_name: String, install_hint: String },
+    JsBinaryNotConfigured {
+        runtime_name: String,
+        field_name: String,
+        install_hint: String,
+    },
 
     #[error("js polyplug_init raised error: bundle={bundle}, message={message}")]
     JsInitRaisedError { bundle: String, message: String },
