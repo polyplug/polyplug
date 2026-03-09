@@ -54,15 +54,13 @@ unsafe extern "C" fn graph_register_callback(
     };
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| {
-        unsafe {
-            cell.borrow().register(
-                *desc,
-                vtable as *const PluginVTable,
-                contract_name_str.to_owned(),
-                vt.contract_id,
-            )
-        }
+    let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
+        cell.borrow().register(
+            *desc,
+            vtable as *const PluginVTable,
+            contract_name_str.to_owned(),
+            vt.contract_id,
+        )
     });
 
     match result {
@@ -190,15 +188,13 @@ fn test_duplicate_registration_is_rejected() {
     };
 
     // SAFETY: fake_vtable is a local static with 'static lifetime.
-    let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| {
-        unsafe {
-            cell.borrow().register(
-                fake_descriptor,
-                &fake_vtable as *const PluginVTable,
-                "test.add".to_owned(),
-                test_add_id,
-            )
-        }
+    let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
+        cell.borrow().register(
+            fake_descriptor,
+            &fake_vtable as *const PluginVTable,
+            "test.add".to_owned(),
+            test_add_id,
+        )
     });
 
     assert!(

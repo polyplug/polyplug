@@ -14,15 +14,15 @@ pub mod manifest;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::abi::ABI_OK;
 use crate::abi::AbiError;
 use crate::abi::AbiError as AbiErrorType;
 use crate::abi::HostVTable;
+use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::abi::PluginDescriptor;
 use crate::abi::PluginHandle;
 use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
-use crate::abi::ABI_OK;
-use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::error::LoaderError;
 use crate::registry::Registry;
 use std::sync::Arc;

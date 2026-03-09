@@ -112,7 +112,9 @@ unsafe extern "C" fn stub_find_all_by_contract(
 ///
 /// # Safety
 /// Always safe to call; returns null pointer.
-unsafe extern "C" fn stub_resolve_plugin(_handle: PluginHandle) -> *const polyplug::abi::PluginVTable {
+unsafe extern "C" fn stub_resolve_plugin(
+    _handle: PluginHandle,
+) -> *const polyplug::abi::PluginVTable {
     core::ptr::null()
 }
 

@@ -64,10 +64,7 @@ pub unsafe fn find_all_by_contract(
 ///
 /// # Safety
 /// The returned pointer is valid only while the plugin library remains loaded.
-pub unsafe fn resolve_plugin(
-    vtable: &HostVTable,
-    handle: PluginHandle,
-) -> *const PluginVTable {
+pub unsafe fn resolve_plugin(vtable: &HostVTable, handle: PluginHandle) -> *const PluginVTable {
     // SAFETY: caller guarantees vtable is valid and runtime is alive.
     unsafe { (vtable.resolve_plugin)(handle) }
 }

@@ -230,10 +230,7 @@ impl Registry {
         slot.vtable = Some(ArcSwap::new(Arc::new(VTableSlot(vtable_ptr))));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
-        index_map
-            .entry(contract_id)
-            .or_default()
-            .push(slot_idx);
+        index_map.entry(contract_id).or_default().push(slot_idx);
 
         // Update bundle_index: record first slot for this bundle_id
         bundle_idx_map.entry(bundle_id).or_insert(slot_idx);
@@ -296,25 +293,26 @@ impl Registry {
                 return Err(RegistryError::PluginNotFound {
                     contract_id,
                     min_version,
-                })
+                });
             }
         };
 
         for &slot_idx in indices.iter() {
             let slot: &RegistrySlot = &slots[slot_idx as usize];
             if slot.entry.is_some()
-                && let Some(ref arc_vtable) = slot.vtable {
-                    let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                    // SAFETY: VTableSlot.0 points to 'static PluginVTable, valid for Registry lifetime.
-                    // The pointer is written once at registration and never mutated.
-                    let version: u32 = unsafe { (*guard.0).contract_version };
-                    if version >= min_version {
-                        return Ok(PluginHandle {
-                            index: slot_idx,
-                            generation: slot.generation,
-                        });
-                    }
+                && let Some(ref arc_vtable) = slot.vtable
+            {
+                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
+                // SAFETY: VTableSlot.0 points to 'static PluginVTable, valid for Registry lifetime.
+                // The pointer is written once at registration and never mutated.
+                let version: u32 = unsafe { (*guard.0).contract_version };
+                if version >= min_version {
+                    return Ok(PluginHandle {
+                        index: slot_idx,
+                        generation: slot.generation,
+                    });
                 }
+            }
         }
         Err(RegistryError::PluginNotFound {
             contract_id,
@@ -340,27 +338,28 @@ impl Registry {
                 return Err(RegistryError::PluginNotFound {
                     contract_id,
                     min_version,
-                })
+                });
             }
         };
 
         let slot: &RegistrySlot = &slots[slot_idx as usize];
         if let Some(ref entry) = slot.entry
-            && let Some(ref arc_vtable) = slot.vtable {
-                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static PluginVTable valid for Registry lifetime.
-                // Written once at registration, never mutated.
-                let vtable_ref: &PluginVTable = unsafe { &*guard.0 };
-                if entry.bundle_id == bundle_id
-                    && vtable_ref.contract_id == contract_id
-                    && vtable_ref.contract_version >= min_version
-                {
-                    return Ok(PluginHandle {
-                        index: slot_idx,
-                        generation: slot.generation,
-                    });
-                }
+            && let Some(ref arc_vtable) = slot.vtable
+        {
+            let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
+            // SAFETY: VTableSlot.0 is 'static PluginVTable valid for Registry lifetime.
+            // Written once at registration, never mutated.
+            let vtable_ref: &PluginVTable = unsafe { &*guard.0 };
+            if entry.bundle_id == bundle_id
+                && vtable_ref.contract_id == contract_id
+                && vtable_ref.contract_version >= min_version
+            {
+                return Ok(PluginHandle {
+                    index: slot_idx,
+                    generation: slot.generation,
+                });
             }
+        }
         Err(RegistryError::PluginNotFound {
             contract_id,
             min_version,
@@ -387,19 +386,20 @@ impl Registry {
         for &slot_idx in indices.iter() {
             let slot: &RegistrySlot = &slots[slot_idx as usize];
             if slot.entry.is_some()
-                && let Some(ref arc_vtable) = slot.vtable {
-                    let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                    // SAFETY: VTableSlot.0 is 'static valid for Registry lifetime.
-                    // Read-only access after registration.
-                    let version: u32 = unsafe { (*guard.0).contract_version };
-                    if version >= min_version {
-                        result.push(PluginHandle {
-                            index: slot_idx,
-                            generation: slot.generation,
-                        });
-                    }
+                && let Some(ref arc_vtable) = slot.vtable
+            {
+                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
+                // SAFETY: VTableSlot.0 is 'static valid for Registry lifetime.
+                // Read-only access after registration.
+                let version: u32 = unsafe { (*guard.0).contract_version };
+                if version >= min_version {
+                    result.push(PluginHandle {
+                        index: slot_idx,
+                        generation: slot.generation,
+                    });
                 }
             }
+        }
         result
     }
 
@@ -470,9 +470,9 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::abi::ABI_OK;
     use crate::abi::PluginVTable;
     use crate::abi::StringView;
-    use crate::abi::ABI_OK;
 
     const MOCK_FNS: [*const (); 0] = [];
 
@@ -500,13 +500,12 @@ mod tests {
         // contract_id comes from MOCK_VTABLE.contract_id (0x1234_5678_9ABC_DEF0)
         // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry
-                .register(
-                    descriptor,
-                    &MOCK_VTABLE,
-                    "image.decode".to_owned(),
-                    0u64, // bundle_id
-                )
+            registry.register(
+                descriptor,
+                &MOCK_VTABLE,
+                "image.decode".to_owned(),
+                0u64, // bundle_id
+            )
         }
         .expect("registration should succeed");
         assert!(!handle.is_null());
@@ -527,13 +526,12 @@ mod tests {
         // since each test gets its own Registry instance.
         // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry
-                .register(
-                    descriptor,
-                    &MOCK_VTABLE,
-                    "image.decode".to_owned(),
-                    1u64, // bundle_id
-                )
+            registry.register(
+                descriptor,
+                &MOCK_VTABLE,
+                "image.decode".to_owned(),
+                1u64, // bundle_id
+            )
         }
         .expect("registration should succeed");
 
@@ -606,13 +604,12 @@ mod tests {
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "test.contract");
         // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry
-                .register(
-                    descriptor,
-                    &MOCK_VTABLE,
-                    "image.decode".to_owned(), // must match MOCK_VTABLE's implied contract name
-                    2u64,                      // bundle_id
-                )
+            registry.register(
+                descriptor,
+                &MOCK_VTABLE,
+                "image.decode".to_owned(), // must match MOCK_VTABLE's implied contract name
+                2u64,                      // bundle_id
+            )
         }
         .expect("registration should succeed");
 
@@ -647,17 +644,13 @@ mod tests {
         let d2: PluginDescriptor = make_descriptor("bundle_b_plugin", "multi.contract");
 
         // SAFETY: VTABLE_A is 'static, pointer is valid for Registry lifetime.
-        let handle_a: PluginHandle = unsafe {
-            registry
-                .register(d1, &VTABLE_A, "multi.contract".to_owned(), 100u64)
-        }
-        .expect("bundle_a registration should succeed");
+        let handle_a: PluginHandle =
+            unsafe { registry.register(d1, &VTABLE_A, "multi.contract".to_owned(), 100u64) }
+                .expect("bundle_a registration should succeed");
         // SAFETY: VTABLE_B is 'static, pointer is valid for Registry lifetime.
-        let handle_b: PluginHandle = unsafe {
-            registry
-                .register(d2, &VTABLE_B, "multi.contract".to_owned(), 200u64)
-        }
-        .expect("bundle_b registration should succeed");
+        let handle_b: PluginHandle =
+            unsafe { registry.register(d2, &VTABLE_B, "multi.contract".to_owned(), 200u64) }
+                .expect("bundle_b registration should succeed");
 
         assert_ne!(
             handle_a.index, handle_b.index,

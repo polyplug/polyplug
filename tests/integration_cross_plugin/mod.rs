@@ -10,12 +10,12 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::bundle_id;
-use polyplug::abi::contract_id;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::bundle_id;
+use polyplug::abi::contract_id;
 use polyplug::error::RegistryError;
 use polyplug::registry::Registry;
 
@@ -51,13 +51,13 @@ fn make_desc(plugin_name: &'static str, contract_name: &'static str) -> PluginDe
 mod tests {
     use super::make_desc;
     use super::make_static_vtable;
-    use polyplug::abi::bundle_id;
-    use polyplug::abi::contract_id;
+    use polyplug::abi::PluginDescriptor;
     use polyplug::abi::PluginHandle;
     use polyplug::abi::PluginVTable;
+    use polyplug::abi::bundle_id;
+    use polyplug::abi::contract_id;
     use polyplug::error::RegistryError;
     use polyplug::registry::Registry;
-    use polyplug::abi::PluginDescriptor;
 
     // ── Test a ───────────────────────────────────────────────────────────────
 

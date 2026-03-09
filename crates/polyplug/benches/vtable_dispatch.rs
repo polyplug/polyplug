@@ -148,11 +148,7 @@ unsafe extern "C" fn bench_find_all_by_contract(
 /// # Safety
 /// The returned pointer is valid and 'static — the library is kept alive via mem::forget.
 unsafe extern "C" fn bench_resolve_plugin(handle: PluginHandle) -> *const PluginVTable {
-    BENCH_REGISTRY.with(|cell| {
-        cell.borrow()
-            .resolve(handle)
-            .unwrap_or(core::ptr::null())
-    })
+    BENCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).unwrap_or(core::ptr::null()))
 }
 
 /// Returns a null extension pointer (extensions not used in benchmarks).
@@ -436,7 +432,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
             };
             black_box(result);
             black_box(sv_out);
-    });
+        });
     });
 
     group.finish();

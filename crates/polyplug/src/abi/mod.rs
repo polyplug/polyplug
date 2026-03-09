@@ -181,13 +181,19 @@ unsafe impl Sync for PluginVTable {}
 /// OWNERSHIP: `'static`, lives as long as the runtime.
 #[repr(C)]
 pub struct HostVTable {
-    pub alloc:                  unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    pub free:                   unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    pub find_by_contract:       unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
-    pub find_by_bundle:         unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
-    pub find_all_by_contract:   unsafe extern "C" fn(contract_id: u64, min_version: u32, out: *mut PluginHandle, out_cap: usize) -> usize,
-    pub resolve_plugin:         unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
-    pub get_extension:          unsafe extern "C" fn(extension_id: u32) -> *const (),
+    pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
+    pub free: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
+    pub find_by_contract: unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
+    pub find_by_bundle:
+        unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
+    pub find_all_by_contract: unsafe extern "C" fn(
+        contract_id: u64,
+        min_version: u32,
+        out: *mut PluginHandle,
+        out_cap: usize,
+    ) -> usize,
+    pub resolve_plugin: unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
+    pub get_extension: unsafe extern "C" fn(extension_id: u32) -> *const (),
 }
 
 // SAFETY: HostVTable contains only function pointers.

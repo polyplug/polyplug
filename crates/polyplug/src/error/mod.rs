@@ -17,14 +17,22 @@ pub enum RuntimeError {
     #[error(transparent)]
     Allocator(#[from] AllocatorError),
 
-    #[error("undeclared dependency: bundle_id={bundle_id:#x} attempted to resolve contract_id={contract_id:#x} without declaring it")]
+    #[error(
+        "undeclared dependency: bundle_id={bundle_id:#x} attempted to resolve contract_id={contract_id:#x} without declaring it"
+    )]
     UndeclaredDependency { bundle_id: u64, contract_id: u64 },
 
     #[error("dependency not found: contract={contract_name} min_version={min_version}")]
-    DependencyNotFound { contract_name: String, min_version: u32 },
+    DependencyNotFound {
+        contract_name: String,
+        min_version: u32,
+    },
 
     #[error("bundle not found for contract: bundle={bundle_name} contract={contract_name}")]
-    BundleNotFound { bundle_name: String, contract_name: String },
+    BundleNotFound {
+        bundle_name: String,
+        contract_name: String,
+    },
 }
 
 /// Convenience alias — the public API surface uses this name.

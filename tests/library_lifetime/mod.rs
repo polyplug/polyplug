@@ -49,7 +49,9 @@ unsafe extern "C" fn stub_find_all_by_contract(
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_resolve_plugin(_handle: PluginHandle) -> *const polyplug::abi::PluginVTable {
+unsafe extern "C" fn stub_resolve_plugin(
+    _handle: PluginHandle,
+) -> *const polyplug::abi::PluginVTable {
     core::ptr::null()
 }
 

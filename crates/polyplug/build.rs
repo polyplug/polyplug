@@ -463,19 +463,15 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
     let polyplug_so_dest: PathBuf = fixtures_dir.join(polyplug_lib_filename);
 
     if polyplug_so_src.exists() {
-        fs::copy(&polyplug_so_src, &polyplug_so_dest)
-            .unwrap_or_else(|e: std::io::Error| {
-                panic!(
-                    "failed to copy {} to {}: {}",
-                    polyplug_so_src.display(),
-                    polyplug_so_dest.display(),
-                    e
-                )
-            });
-        println!(
-            "cargo:rustc-env=POLYPLUG_SO={}",
-            polyplug_so_dest.display()
-        );
+        fs::copy(&polyplug_so_src, &polyplug_so_dest).unwrap_or_else(|e: std::io::Error| {
+            panic!(
+                "failed to copy {} to {}: {}",
+                polyplug_so_src.display(),
+                polyplug_so_dest.display(),
+                e
+            )
+        });
+        println!("cargo:rustc-env=POLYPLUG_SO={}", polyplug_so_dest.display());
     } else {
         // polyplug.so might not be built yet in the very first incremental build.
         // Emit empty env var; integration tests will skip if POLYPLUG_SO is empty.

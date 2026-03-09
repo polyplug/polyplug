@@ -215,7 +215,6 @@ impl Runtime {
         self.registry.resolve(handle)
     }
 
-
     /// Get the HostVTable for use in plugin registrars.
     pub fn host_vtable(&self) -> &'static HostVTable {
         self.host_vtable
@@ -324,7 +323,6 @@ unsafe extern "C" fn host_get_extension(_extension_id: u32) -> *const () {
     core::ptr::null()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,7 +333,8 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
         // Registry starts empty
-        let result: Result<PluginHandle, _> = runtime.find_by_contract(0x1234_5678_9ABC_DEF0_u64, 0);
+        let result: Result<PluginHandle, _> =
+            runtime.find_by_contract(0x1234_5678_9ABC_DEF0_u64, 0);
         assert!(result.is_err(), "empty registry should return not found");
     }
 
@@ -405,17 +404,20 @@ mod tests {
                 version_patch: 0,
             };
             // Use the existing global registry if already set; otherwise create and set one.
-            let registry: Arc<crate::registry::Registry> = global_registry()
-                .unwrap_or_else(|| {
-                    let r: Arc<crate::registry::Registry> =
-                        Arc::new(crate::registry::Registry::new());
-                    set_global_registry(Arc::clone(&r));
-                    r
-                });
+            let registry: Arc<crate::registry::Registry> = global_registry().unwrap_or_else(|| {
+                let r: Arc<crate::registry::Registry> = Arc::new(crate::registry::Registry::new());
+                set_global_registry(Arc::clone(&r));
+                r
+            });
             // SAFETY: vtable is 'static and valid for the registry lifetime.
             unsafe {
                 registry
-                    .register(desc, vtable, "test.dep.Contract".to_owned(), 0xBEEF_0001_u64)
+                    .register(
+                        desc,
+                        vtable,
+                        "test.dep.Contract".to_owned(),
+                        0xBEEF_0001_u64,
+                    )
                     .expect("setup: register test-dep-plugin");
             }
         });
@@ -452,7 +454,10 @@ mod tests {
         // Do NOT declare any deps for this bundle — enforcement would block find_by_contract.
         INIT_BUNDLE_ID.with(|c| c.set(caller_bid));
         // Use a local buffer for the out parameter.
-        let mut handles: [PluginHandle; 8] = [PluginHandle { index: 0, generation: 0 }; 8];
+        let mut handles: [PluginHandle; 8] = [PluginHandle {
+            index: 0,
+            generation: 0,
+        }; 8];
         // SAFETY: handles is a valid local array; out pointer and cap are consistent.
         let count: usize =
             unsafe { host_find_all_by_contract(dep_cid, 0_u32, handles.as_mut_ptr(), 8_usize) };
