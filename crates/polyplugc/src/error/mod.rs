@@ -21,4 +21,11 @@ pub(crate) enum CodegenError {
 
     #[error("IR validation failed: {message}")]
     ValidationFailed { message: String },
+
+    #[error(
+        "bundle name \"{bundle_name}\" conflicts with contract name \"{bundle_name}\" \
+         in api.toml. Bundle names and contract names must be unique across the \
+         ecosystem. Rename the bundle in bundle.toml or the contract in api.toml."
+    )]
+    BundleNameConflict { bundle_name: String },
 }

@@ -184,6 +184,7 @@ pub(crate) fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, CodegenE
             bundle: None,
         }
     };
+    check_bundle_name_conflict(&raw.bundle.name, &api_ir.contracts)?;
 
     let bundle_ir: ValidatedIr = lower_bundle(raw)?;
     Ok(ValidatedIr {
@@ -194,6 +195,24 @@ pub(crate) fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, CodegenE
 }
 
 // ─── IR Lowering ──────────────────────────────────────────────────────────────────
+
+/// Checks whether `bundle_name` matches any contract name in `contracts`.
+///
+/// Returns `Err(CodegenError::BundleNameConflict)` on the first match.
+/// Comparison is exact and case-sensitive — contract names are identity-bearing.
+fn check_bundle_name_conflict(
+    bundle_name: &str,
+    contracts: &[ResolvedContract],
+) -> Result<(), CodegenError> {
+    for contract in contracts {
+        if contract.name == bundle_name {
+            return Err(CodegenError::BundleNameConflict {
+                bundle_name: bundle_name.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
 
 fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
     // Step 1: Collect known type names for type resolution
@@ -340,6 +359,42 @@ mod tests {
         assert_eq!(bundle.name, "image-plugin");
         assert_eq!(bundle.plugins.len(), 1);
         assert_eq!(bundle.plugins[0].implements[0], "image.decode@1.0");
+    }
+
+    #[test]
+    fn bundle_name_conflicts_with_contract_name() {
+        let contracts: Vec<ResolvedContract> = vec![ResolvedContract {
+            name: "test.add".to_owned(),
+            contract_id: 0,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: Vec::new(),
+        }];
+        let result: Result<(), CodegenError> = check_bundle_name_conflict("test.add", &contracts);
+        assert!(
+            matches!(result, Err(CodegenError::BundleNameConflict { .. })),
+            "expected BundleNameConflict, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn bundle_name_no_conflict_with_contract_names() {
+        let contracts: Vec<ResolvedContract> = vec![ResolvedContract {
+            name: "test.add".to_owned(),
+            contract_id: 0,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: Vec::new(),
+        }];
+        let result: Result<(), CodegenError> =
+            check_bundle_name_conflict("image_bundle", &contracts);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 }
 
