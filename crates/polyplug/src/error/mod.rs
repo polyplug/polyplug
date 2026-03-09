@@ -124,6 +124,24 @@ pub enum LoaderError {
 
     #[error("lua polyplug_init raised error: bundle={bundle}, message={message}")]
     LuaInitRaisedError { bundle: String, message: String },
+
+    #[error("node binary not found; searched PATH (hint: install Node.js)")]
+    JsNodeNotFound,
+
+    #[error("node version too old: found={found}, required={required}")]
+    JsNodeVersionTooOld { found: String, required: String },
+
+    #[error(
+        "JS runtime \"{runtime_name}\" is not configured: set JsConfig::{field_name} \
+         or install {install_hint}"
+    )]
+    JsBinaryNotConfigured { runtime_name: String, field_name: String, install_hint: String },
+
+    #[error("js polyplug_init raised error: bundle={bundle}, message={message}")]
+    JsInitRaisedError { bundle: String, message: String },
+
+    #[error("js loader has no runtime configured: all JsConfig fields (node, bun, deno) are None")]
+    JsConfigEmpty,
 }
 
 /// Errors from the plugin registry.

@@ -1432,6 +1432,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyplug-js"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+]
+
+[[package]]
 name = "polyplug-lua"
 version = "0.1.0"
 dependencies = [

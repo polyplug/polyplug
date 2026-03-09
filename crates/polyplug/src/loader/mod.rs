@@ -65,6 +65,15 @@ pub trait BundleLoader: Send + Sync {
     /// The built-in native loader returns `"native"`.
     fn runtime_name(&self) -> &'static str;
 
+    /// All runtime identifiers this loader handles.
+    ///
+    /// Defaults to a single-element vec containing `runtime_name()`.
+    /// Override this method if your loader handles multiple runtime names.
+    /// `JsLoader` does NOT need to override this — each `JsLoader` instance handles exactly one name.
+    fn runtime_names(&self) -> Vec<String> {
+        vec![self.runtime_name().to_owned()]
+    }
+
     /// Load a plugin bundle at `path` and register its vtables via `registrar`.
     ///
     /// # Errors

@@ -150,13 +150,21 @@ impl RuntimeBuilder {
 
         // Register user-provided loaders, checking for duplicates.
         for loader in self.loaders {
-            let name: String = loader.runtime_name().to_owned();
-            if loader_map.contains_key(&name) {
-                return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
-                    runtime_name: name,
-                }));
+            let names: Vec<String> = loader.runtime_names();
+            // Check for duplicates across all runtime names this loader handles.
+            for name in &names {
+                if loader_map.contains_key(name.as_str()) {
+                    return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
+                        runtime_name: name.clone(),
+                    }));
+                }
             }
-            loader_map.insert(name, loader);
+            // Insert under the first name. Each JsLoader instance handles exactly ONE name
+            // (JsLoader::runtime_names() uses the default which returns vec![self.runtime_name()]).
+            // For all single-name loaders, this is semantically identical to the original code.
+            if let Some(primary_name) = names.into_iter().next() {
+                loader_map.insert(primary_name, loader);
+            }
         }
 
         let _ = &self.plugin_dirs;
