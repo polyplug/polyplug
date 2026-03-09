@@ -18,6 +18,8 @@
 //!     .build()?;
 //! ```
 
+pub mod config;
+
 use std::path::Path;
 
 use polyplug::abi::PluginRegistrar;
