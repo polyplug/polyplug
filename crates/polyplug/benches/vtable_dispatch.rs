@@ -439,6 +439,37 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     core::mem::forget(_memory_lib);
 }
 
+// ─── Benchmark 5 — absent extension null check ───────────────────────────────
+
+/// Measures host_get_extension overhead when the requested extension ID is not registered.
+fn bench_absent_extension_null_check(c: &mut Criterion) {
+    // Reset registry for a clean slate.
+    BENCH_REGISTRY.with(|cell| {
+        *cell.borrow_mut() = Registry::new();
+    });
+
+    let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
+
+    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
+        c.benchmark_group("dispatch");
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function(
+        BenchmarkId::new("absent_extension_null_check", "unknown_id"),
+        |b| {
+            b.iter(|| {
+                // SAFETY: bench_get_extension is a safe no-op stub that always returns null.
+                // No pointer preconditions; the argument is a plain integer.
+                let result: *const () = unsafe { bench_get_extension(black_box(0xDEAD_0000_u32)) };
+                black_box(result);
+            });
+        },
+    );
+
+    group.finish();
+    core::mem::forget(_library);
+}
+
 // ─── criterion_group / criterion_main ────────────────────────────────────────
 
 criterion_group!(
@@ -447,5 +478,6 @@ criterion_group!(
     bench_dispatch_buffer_arg,
     bench_dispatch_struct_arg_and_return,
     bench_dispatch_cross_plugin,
+    bench_absent_extension_null_check,
 );
 criterion_main!(benches);
