@@ -1,5 +1,6 @@
 //! Error — error type hierarchy for polyplug.
 
+use crate::version::Version;
 use thiserror::Error;
 
 /// Top-level runtime error — this is what the public API returns.
@@ -124,6 +125,22 @@ pub enum LoaderError {
 
     #[error("JS runtime \"{runtime}\" panicked during bundle load: {message}")]
     JsRuntimePanic { runtime: String, message: String },
+
+    #[error("version mismatch for contract `{contract}`: required={required}, found={found}")]
+    VersionMismatch {
+        contract: String,
+        required: Version,
+        found: Version,
+    },
+
+    #[error(
+        "function count mismatch for contract `{contract}`: expected={expected}, found={found}"
+    )]
+    FunctionCountMismatch {
+        contract: String,
+        expected: u32,
+        found: u32,
+    },
 }
 
 /// Errors from the plugin registry.
