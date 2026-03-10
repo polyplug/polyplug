@@ -310,12 +310,25 @@ impl RuntimeBuilder {
                         host_vtable,
                     );
 
+                // For directory bundles, resolve the actual file path from manifest.file.
+                // Loaders (Python, Lua, JS, dotnet) expect a direct file path — they
+                // call file_stem(), read_to_string(), canonicalize(), etc. on the path.
+                // The scanner passes the directory path for directory bundles; here we
+                // join manifest.file to get the real file inside the bundle directory.
+                let effective_path: PathBuf = if bundle_path.is_dir()
+                    && !manifest.file.is_empty()
+                {
+                    bundle_path.join(&manifest.file)
+                } else {
+                    bundle_path.clone()
+                };
+
                 loader
-                    .load(bundle_path, &mut registrar)
+                    .load(&effective_path, &mut registrar)
                     .map_err(|e: PolyplugError| match e {
                         PolyplugError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: bundle_path.display().to_string(),
+                            bundle: effective_path.display().to_string(),
                             error: other.to_string(),
                         }),
                     })?;

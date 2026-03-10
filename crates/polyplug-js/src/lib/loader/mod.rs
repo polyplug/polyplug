@@ -546,8 +546,14 @@ impl BundleLoader for JsLoader {
         // We store it in HOST_VTABLE for access from JS callback closures.
         let _ = HOST_VTABLE.get_or_init(|| HostVtablePtr(registrar.host));
 
-        // 2. Read bundle.js
-        let bundle_path: PathBuf = path.join("bundle.js");
+        // 2. Resolve bundle.js path.
+        // If path is a directory (directory bundle layout), join "bundle.js" inside it.
+        // If path is already a file (resolved from manifest.file by the runtime), use as-is.
+        let bundle_path: PathBuf = if path.is_dir() {
+            path.join("bundle.js")
+        } else {
+            path.to_path_buf()
+        };
         let bundle_js: String =
             std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
                 PolyplugError::Loader(LoaderError::ManifestParse {

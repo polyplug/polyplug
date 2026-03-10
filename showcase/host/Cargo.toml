@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name    = "showcase-host"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "showcase-host"
+path = "src/main.rs"
+
+[dependencies]
+polyplug        = { path = "../../crates/polyplug" }
+polyplug-python = { path = "../../crates/polyplug-python" }
+polyplug-lua    = { path = "../../crates/polyplug-lua" }
+polyplug-js     = { path = "../../crates/polyplug-js" }
+polyplug-dotnet = { path = "../../crates/polyplug-dotnet" }

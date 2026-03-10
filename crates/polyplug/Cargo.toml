@@ -136,6 +136,10 @@ path = "../../tests/cross_language/mod.rs"
 [[test]]
 name = "cross_language_deno"
 path = "../../tests/cross_language_deno/mod.rs"
+[[test]]
+name = "integration_showcase"
+path = "../../tests/showcase/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false
