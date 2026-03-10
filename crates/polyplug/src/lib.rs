@@ -12,6 +12,7 @@ pub mod graph;
 pub mod loader;
 pub mod registry;
 pub mod runtime;
+pub mod version;
 
 // Re-export the allocator functions at crate level for convenience.
 // These are also exported with #[unsafe(no_mangle)] from allocator/mod.rs.
