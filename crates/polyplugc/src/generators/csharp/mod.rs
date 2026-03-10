@@ -576,14 +576,17 @@ impl CodeGenerator for CSharpGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/Types.cs"),
             content: generate_cs_types_file(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/Callers.cs"),
             content: generate_cs_host_callers(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/manifest.toml"),
             content: generate_host_manifest(ir),
+            force_regenerate: true,
         });
         Ok(())
     }
@@ -596,27 +599,33 @@ impl CodeGenerator for CSharpGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Types.cs"),
             content: generate_cs_types_file(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Contracts.cs"),
             content: generate_cs_guest_contracts(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Vtables.cs"),
             content: generate_cs_guest_vtables(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Init.cs"),
             content: generate_cs_guest_init(ir),
+            force_regenerate: false,
         });
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("guest/BundleConstants.cs"),
                 content: generate_cs_bundle_constants(ir),
+                force_regenerate: false,
             });
             files.files.push(GeneratedFile {
                 path: PathBuf::from("manifest.toml"),
                 content: generate_bundle_manifest_csharp(ir),
+                force_regenerate: true,
             });
         }
         Ok(())

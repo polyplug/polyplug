@@ -95,6 +95,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("host/types.rs"),
             content: types_out,
+            force_regenerate: false,
         });
 
         // ── host_callers.rs ───────────────────────────────────────────────────
@@ -120,6 +121,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("host/host_callers.rs"),
             content: callers_out,
+            force_regenerate: false,
         });
 
         // ── manifest.toml ─────────────────────────────────────────────────────
@@ -135,6 +137,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("manifest.toml"),
             content: manifest_content,
+            force_regenerate: true,
         });
 
         Ok(())
@@ -169,6 +172,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/types.rs"),
             content: types_out,
+            force_regenerate: false,
         });
 
         // ── contracts.rs ──────────────────────────────────────────────────────
@@ -185,6 +189,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/contracts.rs"),
             content: contracts_out,
+            force_regenerate: false,
         });
 
         // ── vtables.rs ────────────────────────────────────────────────────────
@@ -195,6 +200,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/vtables.rs"),
             content: vtables_out,
+            force_regenerate: false,
         });
 
         // ── init.rs ───────────────────────────────────────────────────────────
@@ -205,6 +211,7 @@ impl CodeGenerator for RustGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/init.rs"),
             content: init_out,
+            force_regenerate: false,
         });
 
         // --api: manifest already emitted by generate_host(); --bundle: emit full discovery manifest
@@ -213,6 +220,7 @@ impl CodeGenerator for RustGenerator {
             files.files.push(GeneratedFile {
                 path: std::path::PathBuf::from("manifest.toml"),
                 content: manifest_content,
+                force_regenerate: true,
             });
         }
         // When ir.bundle.is_none() (--api mode): NO manifest emitted here.

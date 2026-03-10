@@ -41,10 +41,12 @@ impl CodeGenerator for JsQuickjsGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.ts"),
             content: generate_types_ts(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.ts"),
             content: generate_callers_ts(ir),
+            force_regenerate: false,
         });
         Ok(())
     }
@@ -57,28 +59,34 @@ impl CodeGenerator for JsQuickjsGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.ts"),
             content: generate_types_ts(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.ts"),
             content: generate_contracts_ts(ir),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/vtable.ts"),
             content: generate_vtable_ts(),
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/init.ts"),
             content: generate_init_ts(ir),
+            force_regenerate: false,
         });
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("manifest.toml"),
                 content: generate_manifest_toml(ir),
+                force_regenerate: true,
             });
         }
         files.files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             content: generate_readme_quickjs(ir),
+            force_regenerate: false,
         });
         Ok(())
     }

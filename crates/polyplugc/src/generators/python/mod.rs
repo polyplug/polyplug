@@ -41,18 +41,22 @@ impl CodeGenerator for PythonGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.py"),
             content: types_py,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.pyi"),
             content: types_pyi,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.py"),
             content: callers_py,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.pyi"),
             content: callers_pyi,
+            force_regenerate: false,
         });
 
         Ok(())
@@ -71,24 +75,29 @@ impl CodeGenerator for PythonGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.py"),
             content: types_py,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.pyi"),
             content: types_pyi,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.py"),
             content: contracts_py,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.pyi"),
             content: contracts_pyi,
+            force_regenerate: false,
         });
 
         let init_py: String = generate_init_py(ir);
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/init.py"),
             content: init_py,
+            force_regenerate: false,
         });
 
         if ir.bundle.is_some() {
@@ -96,6 +105,7 @@ impl CodeGenerator for PythonGenerator {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("manifest.toml"),
                 content: manifest_content,
+                force_regenerate: true,
             });
         }
 

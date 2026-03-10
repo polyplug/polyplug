@@ -37,6 +37,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("host/types.hpp"),
             content: types_hpp,
+            force_regenerate: false,
         });
 
         // ── File 2: host_callers.hpp ─────────────────────────────────────────
@@ -44,6 +45,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("host/host_callers.hpp"),
             content: host_callers_hpp,
+            force_regenerate: false,
         });
 
         // ── File 3: manifest.toml ────────────────────────────────────────────
@@ -51,6 +53,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("manifest.toml"),
             content: manifest_toml,
+            force_regenerate: true,
         });
 
         Ok(())
@@ -66,6 +69,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/types.hpp"),
             content: types_hpp,
+            force_regenerate: false,
         });
 
         // ── File 2: contracts.hpp ────────────────────────────────────────────
@@ -73,6 +77,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/contracts.hpp"),
             content: contracts_hpp,
+            force_regenerate: false,
         });
 
         // ── File 3: vtables.hpp ──────────────────────────────────────────────
@@ -80,6 +85,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/vtables.hpp"),
             content: vtables_hpp,
+            force_regenerate: false,
         });
 
         // ── File 4: init.hpp ─────────────────────────────────────────────────
@@ -87,6 +93,7 @@ impl CodeGenerator for CppGenerator {
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("guest/init.hpp"),
             content: init_hpp,
+            force_regenerate: false,
         });
 
         // --api: manifest emitted by generate_host(); --bundle: emit full discovery manifest
@@ -95,6 +102,7 @@ impl CodeGenerator for CppGenerator {
             files.files.push(GeneratedFile {
                 path: std::path::PathBuf::from("manifest.toml"),
                 content: manifest_toml,
+                force_regenerate: true,
             });
         }
         // When ir.bundle.is_none() (--api mode): NO manifest emitted here.

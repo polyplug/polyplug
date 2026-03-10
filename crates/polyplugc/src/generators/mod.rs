@@ -20,6 +20,9 @@ pub(crate) struct GeneratedFile {
     pub path: PathBuf,
     /// Generated source code.
     pub content: String,
+    /// If true, always write this file (skip cache check).
+    /// Used for manifest.toml which must always be regenerated.
+    pub force_regenerate: bool,
 }
 
 /// Collection of generated files.

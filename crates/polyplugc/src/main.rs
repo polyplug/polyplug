@@ -5,11 +5,13 @@ pub(crate) mod generators;
 pub(crate) mod ir;
 pub(crate) mod parser;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 use clap::Parser;
 use clap::Subcommand;
+
 
 use crate::error::CodegenError;
 use crate::generators::GeneratedFiles;
@@ -138,8 +140,44 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
     Ok(())
 }
 
-/// Write generated files to disk, only updating files that changed (idempotent).
+/// FNV-1a 64-bit hash — no allocations, no fallibility.
+fn fnv1a_64(data: &[u8]) -> u64 {
+    let mut hash: u64 = 14695981039346656037_u64;
+    for byte in data {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(1099511628211_u64);
+    }
+    hash
+}
+
+/// Write generated files to disk using FNV-1a hash cache for incremental generation.
+/// Files with `force_regenerate == true` are always written (manifest.toml).
+/// Prints: "regenerated N files, skipped M unchanged".
 fn write_files_if_changed(out_dir: &Path, files: &GeneratedFiles) -> Result<(), CodegenError> {
+    let cache_dir: PathBuf = out_dir.join(".polyplugc-cache");
+    let cache_path: PathBuf = cache_dir.join("hashes.toml");
+
+    // Load existing cache or start fresh.
+    let mut cache: HashMap<String, u64> = if cache_path.exists() {
+        let raw: String = std::fs::read_to_string(&cache_path).map_err(|e: std::io::Error| {
+            CodegenError::CacheReadFailed {
+                path: cache_path.to_string_lossy().into_owned(),
+                source: e,
+            }
+        })?;
+        toml::from_str::<HashMap<String, u64>>(&raw).map_err(|e: toml::de::Error| {
+            CodegenError::CacheDeserializeFailed {
+                path: cache_path.to_string_lossy().into_owned(),
+                source: e,
+            }
+        })?
+    } else {
+        HashMap::new()
+    };
+
+    let mut regenerated: u32 = 0_u32;
+    let mut skipped: u32 = 0_u32;
+
     for file in &files.files {
         let dest: PathBuf = out_dir.join(&file.path);
         if let Some(parent) = dest.parent() {
@@ -150,17 +188,58 @@ fn write_files_if_changed(out_dir: &Path, files: &GeneratedFiles) -> Result<(), 
                 }
             })?;
         }
-        // Check if file exists and content is identical (avoid unnecessary writes)
-        let needs_write: bool = match std::fs::read_to_string(&dest) {
-            Ok(existing) => existing != file.content,
-            Err(_) => true, // File doesn't exist or can't be read
-        };
-        if needs_write {
-            std::fs::write(&dest, &file.content).map_err(|e| CodegenError::WriteFailed {
-                path: dest.to_string_lossy().into_owned(),
-                source: e,
+
+        let cache_key: String = file.path.display().to_string();
+
+        if file.force_regenerate {
+            // Always write manifest files; update cache.
+            std::fs::write(&dest, &file.content).map_err(|e: std::io::Error| {
+                CodegenError::WriteFailed {
+                    path: dest.to_string_lossy().into_owned(),
+                    source: e,
+                }
             })?;
+            let hash: u64 = fnv1a_64(file.content.as_bytes());
+            cache.insert(cache_key, hash);
+            regenerated += 1;
+        } else {
+            let hash: u64 = fnv1a_64(file.content.as_bytes());
+            let cached_hash: Option<&u64> = cache.get(&cache_key);
+            let hash_matches: bool = cached_hash == Some(&hash);
+            if hash_matches && dest.exists() {
+                // Identical content in cache and file exists — skip.
+                skipped += 1;
+            } else {
+                // New or changed — write and update cache.
+                std::fs::write(&dest, &file.content).map_err(|e: std::io::Error| {
+                    CodegenError::WriteFailed {
+                        path: dest.to_string_lossy().into_owned(),
+                        source: e,
+                    }
+                })?;
+                cache.insert(cache_key, hash);
+                regenerated += 1;
+            }
         }
     }
+
+    // Save updated cache.
+    std::fs::create_dir_all(&cache_dir).map_err(|e: std::io::Error| {
+        CodegenError::CacheWriteFailed {
+            path: cache_dir.to_string_lossy().into_owned(),
+            source: e,
+        }
+    })?;
+    let cache_toml: String = toml::to_string(&cache).map_err(|e: toml::ser::Error| {
+        CodegenError::CacheSerializeFailed { source: e }
+    })?;
+    std::fs::write(&cache_path, cache_toml).map_err(|e: std::io::Error| {
+        CodegenError::CacheWriteFailed {
+            path: cache_path.to_string_lossy().into_owned(),
+            source: e,
+        }
+    })?;
+
+    println!("regenerated {regenerated} files, skipped {skipped} unchanged");
     Ok(())
 }

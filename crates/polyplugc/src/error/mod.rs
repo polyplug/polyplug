@@ -28,4 +28,31 @@ pub(crate) enum CodegenError {
          ecosystem. Rename the bundle in bundle.toml or the contract in api.toml."
     )]
     BundleNameConflict { bundle_name: String },
+
+    #[error("failed to read cache file `{path}`: {source}")]
+    CacheReadFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to write cache file `{path}`: {source}")]
+    CacheWriteFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to deserialize cache file `{path}`: {source}")]
+    CacheDeserializeFailed {
+        path: String,
+        #[source]
+        source: toml::de::Error,
+    },
+
+    #[error("failed to serialize cache: {source}")]
+    CacheSerializeFailed {
+        #[source]
+        source: toml::ser::Error,
+    },
 }
