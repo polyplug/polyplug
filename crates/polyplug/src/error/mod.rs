@@ -81,12 +81,6 @@ pub enum LoaderError {
         runtime_name: String,
     },
 
-    #[error(
-        "runtime \"{runtime_name}\" is not yet implemented \
-         (this adapter crate is a stub)"
-    )]
-    RuntimeNotImplemented { runtime_name: String },
-
     #[error("hostfxr not found: searched DOTNET_ROOT, PATH, and well-known paths")]
     HostfxrNotFound,
 
@@ -125,27 +119,13 @@ pub enum LoaderError {
     #[error("lua polyplug_init raised error: bundle={bundle}, message={message}")]
     LuaInitRaisedError { bundle: String, message: String },
 
-    #[error("node binary not found; searched PATH (hint: install Node.js)")]
-    JsNodeNotFound,
-
-    #[error("node version too old: found={found}, required={required}")]
-    JsNodeVersionTooOld { found: String, required: String },
-
     #[error(
-        "JS runtime \"{runtime_name}\" is not configured: set JsConfig::{field_name} \
-         or install {install_hint}"
+        "rolldown not found on PATH — js-quickjs pack requires rolldown. {hint}"
     )]
-    JsBinaryNotConfigured {
-        runtime_name: String,
-        field_name: String,
-        install_hint: String,
-    },
+    RolldownNotFound { hint: String },
 
-    #[error("js polyplug_init raised error: bundle={bundle}, message={message}")]
-    JsInitRaisedError { bundle: String, message: String },
-
-    #[error("js loader has no runtime configured: all JsConfig fields (node, bun, deno) are None")]
-    JsConfigEmpty,
+    #[error("JS runtime \"{runtime}\" panicked during bundle load: {message}")]
+    JsRuntimePanic { runtime: String, message: String },
 }
 
 /// Errors from the plugin registry.

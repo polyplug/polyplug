@@ -79,7 +79,7 @@ pub trait BundleLoader: Send + Sync {
     ///
     /// # Errors
     /// Returns `Err(PolyplugError::...)` on any failure. For stub loaders,
-    /// returns `Err(PolyplugError::Loader(LoaderError::RuntimeNotImplemented { .. }))`.
+    /// returns `Err(PolyplugError::Loader(LoaderError::JsRuntimePanic { .. }))`.
     fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError>;
 }
 

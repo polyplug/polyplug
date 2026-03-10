@@ -4,9 +4,8 @@ use std::path::PathBuf;
 
 pub(crate) mod cpp;
 pub(crate) mod csharp;
-pub(crate) mod js_bun;
 pub(crate) mod js_deno;
-pub(crate) mod js_node;
+pub(crate) mod js_quickjs;
 pub(crate) mod lua;
 pub(crate) mod python;
 pub(crate) mod rust;

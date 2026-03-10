@@ -38,7 +38,7 @@ enum Command {
         #[arg(long, conflicts_with = "api")]
         bundle: Option<PathBuf>,
 
-        /// Target language: rust, cpp, csharp, python, lua, ts-node, js-node, ts-bun, js-bun, ts-deno, js-deno.
+        /// Target language: rust, cpp, csharp, python, lua, js-quickjs, js-deno.
         #[arg(long, short = 'l')]
         lang: String,
 
@@ -92,28 +92,12 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
                 "csharp" | "c#" => Box::new(generators::csharp::CSharpGenerator),
                 "python" | "py" => Box::new(generators::python::PythonGenerator),
                 "lua" => Box::new(generators::lua::LuaGenerator),
-                "ts-node" => Box::new(generators::js_node::JsNodeGenerator {
-                    typescript_mode: true,
-                }),
-                "js-node" => Box::new(generators::js_node::JsNodeGenerator {
-                    typescript_mode: false,
-                }),
-                "ts-bun" => Box::new(generators::js_bun::JsBunGenerator {
-                    typescript_mode: true,
-                }),
-                "js-bun" => Box::new(generators::js_bun::JsBunGenerator {
-                    typescript_mode: false,
-                }),
-                "ts-deno" => Box::new(generators::js_deno::JsDenoGenerator {
-                    typescript_mode: true,
-                }),
-                "js-deno" => Box::new(generators::js_deno::JsDenoGenerator {
-                    typescript_mode: false,
-                }),
+                "js-quickjs" => Box::new(generators::js_quickjs::JsQuickjsGenerator),
+                "js-deno" => Box::new(generators::js_deno::JsDenoGenerator),
                 other => {
                     return Err(CodegenError::ValidationFailed {
                         message: format!(
-                            "Unknown language: `{other}`. Supported: rust, cpp, csharp, python, lua, ts-node, js-node, ts-bun, js-bun, ts-deno, js-deno"
+                            "Unknown language: `{other}`. Supported: rust, cpp, csharp, python, lua, js-quickjs, js-deno"
                         ),
                     });
                 }

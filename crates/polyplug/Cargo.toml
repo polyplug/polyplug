@@ -74,6 +74,7 @@ polyplug-dotnet    = { path = "../../crates/polyplug-dotnet" }
 polyplug-python    = { path = "../../crates/polyplug-python" }
 polyplug-lua       = { path = "../../crates/polyplug-lua" }
 polyplug-js       = { path = "../../crates/polyplug-js" }
+polyplug-js-deno  = { path = "../../crates/polyplug-js-deno" }
 tempfile           = "3"
 toml               = { workspace = true }
 
