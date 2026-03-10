@@ -39,6 +39,8 @@ use crate::loader::BundleInitGuard;
 use crate::loader::BundleLoader;
 use crate::loader::NativeBundleLoader;
 use crate::loader::manifest::ManifestData;
+use crate::version::Compatibility;
+use crate::version::Version;
 
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
@@ -47,6 +49,24 @@ static GLOBAL_REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
 /// Extension map: extension_id -> raw vtable pointer.
 /// Set once during RuntimeBuilder::build(). Immutable after that.
 static GLOBAL_EXTENSION_MAP: OnceLock<HashMap<u32, SendPtr>> = OnceLock::new();
+
+/// Type alias for the warning callback to avoid repetition.
+type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
+
+/// Global warning callback. Set once via `RuntimeBuilder::on_warning()`.
+///
+/// Only the first registered warning callback takes effect.
+/// Subsequent registrations are silently ignored (OnceLock semantics).
+/// Test binaries needing different callbacks must be separate test binaries.
+static GLOBAL_WARNING_CB: OnceLock<WarningCb> = OnceLock::new();
+
+/// Emit a warning through the registered callback, or fall back to stderr.
+pub(crate) fn emit_warning(msg: &str) {
+    match GLOBAL_WARNING_CB.get() {
+        Some(cb) => cb(msg),
+        None => eprintln!("[polyplug] warning: {msg}"),
+    }
+}
 
 // Thread-local bundle ID set during Phase 1 init to enforce declared-dependency checks.
 //
@@ -99,14 +119,20 @@ unsafe impl Sync for Runtime {}
 
 /// Options for `Runtime::load_bundle_with`.
 ///
-/// Currently empty — placeholder for future compatibility options (Epic 14).
-pub struct LoadOptions {}
+/// The `compatibility` field overrides the global `RuntimeBuilder::compatibility` setting
+/// for this specific bundle load only.
+pub struct LoadOptions {
+    pub compatibility: Compatibility,
+    pub ignore_function_count_mismatch: bool,
+}
 
 /// Builder for constructing a Runtime.
 pub struct RuntimeBuilder {
     plugin_dirs: Vec<PathBuf>,
     loaders: Vec<Box<dyn BundleLoader>>,
     extensions: Vec<Box<dyn Extension>>,
+    compatibility: Compatibility,
+    warning_cb: Option<WarningCb>,
 }
 
 impl RuntimeBuilder {
@@ -116,9 +142,12 @@ impl RuntimeBuilder {
             plugin_dirs: Vec::new(),
             loaders: Vec::new(),
             extensions: Vec::new(),
+            compatibility: Compatibility::default(),
+            warning_cb: None,
         }
     }
 
+    /// Add a directory to scan for plugin bundles during `build()`.
     pub fn plugin_dir(mut self, path: PathBuf) -> RuntimeBuilder {
         self.plugin_dirs.push(path);
         self
@@ -145,6 +174,22 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Set the global compatibility mode for version negotiation.
+    /// Defaults to `Compatibility::Strict`.
+    pub fn compatibility(mut self, c: Compatibility) -> RuntimeBuilder {
+        self.compatibility = c;
+        self
+    }
+
+    /// Register a warning callback.
+    ///
+    /// Only the first registered callback takes effect (OnceLock semantics).
+    /// The callback receives human-readable warning strings.
+    pub fn on_warning(mut self, cb: impl Fn(&str) + Send + Sync + 'static) -> RuntimeBuilder {
+        self.warning_cb = Some(Box::new(cb));
+        self
+    }
+
     /// Build the runtime.
     //
     //  For MVP: scans plugin_dirs for .so/.dll/.dylib files,
@@ -155,6 +200,11 @@ impl RuntimeBuilder {
 
         // Wire the global dispatcher before leaking the HostVTable.
         set_global_registry(Arc::clone(&registry));
+
+        // Install warning callback if provided (OnceLock::set returns Err when already set — expected).
+        if let Some(cb) = self.warning_cb {
+            let _: Result<(), WarningCb> = GLOBAL_WARNING_CB.set(cb);
+        }
 
         // Build extension map: extension_id -> vtable pointer.
         // If GLOBAL_EXTENSION_MAP is already set (e.g., second build() call in tests), silently skip.
@@ -218,6 +268,9 @@ impl RuntimeBuilder {
             // Phase 2: Build capability graph
             let graph: CapabilityGraph = CapabilityGraph::from_manifests(&discovered)
                 .map_err(|e: GraphError| RuntimeError::Graph(e))?;
+
+            // Phase 2.5: Validate version compatibility
+            validate_bundle_compatibility(&discovered, self.compatibility)?;
 
             // Phase 3: Get topological load order (providers first)
             let load_order: Vec<String> = graph
@@ -334,11 +387,17 @@ impl Runtime {
     /// Reads the companion manifest, finds the matching loader, and dispatches.
     /// Does NOT perform graph pre-validation — intended for programmatic loads.
     pub fn load_bundle(&self, path: &Path) -> Result<(), PolyplugError> {
-        self.load_bundle_with(path, LoadOptions {})
+        self.load_bundle_with(
+            path,
+            LoadOptions {
+                compatibility: Compatibility::default(),
+                ignore_function_count_mismatch: false,
+            },
+        )
     }
 
     /// Load a single plugin bundle explicitly with options.
-    pub fn load_bundle_with(&self, path: &Path, _opts: LoadOptions) -> Result<(), PolyplugError> {
+    pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), PolyplugError> {
         // Check companion manifest exists
         let manifest_path: PathBuf = path.with_extension("manifest.toml");
         if !manifest_path.exists() {
@@ -351,6 +410,34 @@ impl Runtime {
         let mut manifest: ManifestData = crate::loader::parse_manifest(path)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
         manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+        // Validate function_count entries for this explicit load
+        if !opts.ignore_function_count_mismatch {
+            for contract in &manifest.provides {
+                let major_str: &str = match manifest.version.split_once('.') {
+                    Some((maj, _)) => maj,
+                    None => "0",
+                };
+                let key: String = format!("{}@{}", contract, major_str);
+                if !manifest.function_count.contains_key(&key)
+                    && opts.compatibility != Compatibility::Yolo
+                {
+                    let msg: String = format!(
+                        "bundle {:?} provides {:?} but has no function_count entry for key {:?}",
+                        manifest.bundle_name, contract, key
+                    );
+                    if opts.compatibility == Compatibility::Strict {
+                        return Err(PolyplugError::Loader(LoaderError::FunctionCountMismatch {
+                            contract: contract.clone(),
+                            // sentinel 0/0: entry is missing entirely; actual count is unknown without loading the .so
+                            expected: 0,
+                            found: 0,
+                        }));
+                    } else {
+                        emit_warning(&msg);
+                    }
+                }
+            }
+        }
         // Find the loader for this runtime
         let runtime_name: &str = &manifest.runtime;
         let loader: &dyn BundleLoader = self
@@ -372,6 +459,127 @@ impl Runtime {
         let result: Result<(), PolyplugError> = loader.load(path, &mut registrar);
         crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0));
         result
+    }
+}
+
+// ─── Module-level validation helpers ────────────────────────────────────────
+
+/// Validate version compatibility for all discovered bundles.
+///
+/// Iterates each bundle's dependencies. For each dependency with a `min_version`,
+/// finds the provider bundle and compares versions.
+/// Also checks that each provided contract has a `function_count` entry.
+///
+/// Behaviour depends on `compatibility`:
+/// - `Strict`: returns `Err` on any mismatch
+/// - `Relaxed`: emits warning, continues
+/// - `Yolo`: silently ignores all mismatches
+pub(crate) fn validate_bundle_compatibility(
+    manifests: &[(PathBuf, ManifestData)],
+    compatibility: Compatibility,
+) -> Result<(), RuntimeError> {
+    // Build provider_map: contract_name -> &ManifestData
+    let mut provider_map: std::collections::HashMap<String, &ManifestData> =
+        std::collections::HashMap::new();
+    for (_path, manifest) in manifests {
+        for contract in &manifest.provides {
+            provider_map.insert(contract.clone(), manifest);
+        }
+    }
+
+    for (_path, manifest) in manifests {
+        // Check version compatibility for each dependency
+        let resolved: Vec<crate::loader::manifest::ManifestDependency> =
+            manifest.resolved_dependencies();
+        for dep in &resolved {
+            let (dep_contract, dep_min_version_str): (&str, &str) = match dep {
+                crate::loader::manifest::ManifestDependency::ByContract {
+                    contract,
+                    min_version,
+                    ..
+                } => (contract.as_str(), min_version.as_str()),
+                crate::loader::manifest::ManifestDependency::ByBundle {
+                    contract,
+                    min_version,
+                    ..
+                } => (contract.as_str(), min_version.as_str()),
+            };
+
+            if dep_min_version_str.is_empty() {
+                continue;
+            }
+
+            let provider: &ManifestData = match provider_map.get(dep_contract) {
+                Some(p) => p,
+                None => continue, // graph already validates this
+            };
+
+            let required: Version = match Version::parse(dep_min_version_str, &manifest.bundle_name)
+            {
+                Ok(v) => v,
+                Err(e) => return Err(RuntimeError::Loader(e)),
+            };
+
+            let provided: Version =
+                parse_manifest_version(&provider.version, &provider.bundle_name)?;
+
+            if !provided.is_compatible_with(&required) {
+                match compatibility {
+                    Compatibility::Strict => {
+                        return Err(RuntimeError::Loader(LoaderError::VersionMismatch {
+                            contract: dep_contract.to_owned(),
+                            required,
+                            found: provided,
+                        }));
+                    }
+                    Compatibility::Relaxed => {
+                        emit_warning(&format!(
+                            "version mismatch for contract `{}`: required={}, found={} (bundle `{}`)",
+                            dep_contract, required, provided, provider.bundle_name
+                        ));
+                    }
+                    Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all version checks
+                }
+            }
+        }
+
+        // Check function_count entries for provided contracts
+        for contract in &manifest.provides {
+            let major_str: &str = match manifest.version.split_once('.') {
+                Some((maj, _)) => maj,
+                None => "0",
+            };
+            let key: String = format!("{}@{}", contract, major_str);
+            if !manifest.function_count.contains_key(&key) {
+                match compatibility {
+                    Compatibility::Strict => {
+                        return Err(RuntimeError::Loader(LoaderError::FunctionCountMismatch {
+                            contract: contract.clone(),
+                            // sentinel 0/0: entry is missing entirely; actual count is unknown without loading the .so
+                            expected: 0,
+                            found: 0,
+                        }));
+                    }
+                    Compatibility::Relaxed => {
+                        emit_warning(&format!(
+                            "bundle `{}` provides `{}` but has no function_count entry for key `{}`",
+                            manifest.bundle_name, contract, key
+                        ));
+                    }
+                    Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all function_count checks
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parse_manifest_version(v: &str, bundle_name: &str) -> Result<Version, RuntimeError> {
+    if v.is_empty() {
+        Ok(Version { major: 0, minor: 0 })
+    } else {
+        Version::parse(v, bundle_name).map_err(RuntimeError::Loader)
     }
 }
 
