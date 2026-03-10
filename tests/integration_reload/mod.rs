@@ -20,6 +20,8 @@ use polyplug::ReloadEvent;
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug::abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
     let vtable: *const PluginVTable = rt.resolve_plugin(handle).ok()?;
+    // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
+    // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable).functions;
         std::mem::transmute(*fns)
@@ -58,6 +60,7 @@ fn test_b_in_flight_safety() {
                 let vt_result: Result<*const PluginVTable, polyplug::error::RegistryError> =
                     rt_clone.resolve_plugin(handle);
                 if let Ok(vt) = vt_result {
+                    // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
                     let _: u32 = unsafe {
                         let f: extern "C" fn() -> u32 = std::mem::transmute(*(*vt).functions);
                         f()
@@ -113,6 +116,7 @@ fn test_e_cascade_reload() {
             .find_by_contract(dep_contract_id, 0)
             .expect("find depender");
         let vt: *const PluginVTable = rt.resolve_plugin(handle).expect("resolve depender");
+        // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
             let f: extern "C" fn() -> u32 = std::mem::transmute(*(*vt).functions);
             f()
@@ -127,6 +131,7 @@ fn test_e_cascade_reload() {
         let vt: *const PluginVTable = rt
             .resolve_plugin(handle)
             .expect("resolve depender after reload");
+        // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
             let f: extern "C" fn() -> u32 = std::mem::transmute(*(*vt).functions);
             f()
@@ -170,7 +175,6 @@ fn test_g_file_watcher() {
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let so_dest: PathBuf = dir.path().join("reload_plugin.so");
     std::fs::copy(env!("RELOAD_PLUGIN_V1_SO"), &so_dest).expect("copy v1");
-    // Copy the manifest — parse_manifest looks for <stem>.manifest.toml
     let manifest_src: std::path::PathBuf =
         std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")).with_extension("manifest.toml");
     let manifest_dest: PathBuf = dir.path().join("reload_plugin.manifest.toml");
@@ -189,8 +193,6 @@ fn test_g_file_watcher() {
     rt.load_bundle(so_dest.as_path()).expect("load from tmpdir");
     Runtime::watch_plugin_dir(Arc::clone(&rt), dir.path()).expect("watch");
 
-    // Stage v2 to a temp name then atomically rename over the dest.
-    // Direct copy over a mapped .so causes SIGBUS on Linux — atomic rename avoids this.
     let so_staging: PathBuf = dir.path().join("reload_plugin_new.so");
     std::fs::copy(env!("RELOAD_PLUGIN_V2_SO"), &so_staging).expect("stage v2");
     std::fs::rename(&so_staging, &so_dest).expect("atomic rename v2 into place");
