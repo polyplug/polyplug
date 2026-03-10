@@ -49,6 +49,26 @@ name = "integration_codegen_cpp"
 path = "../../tests/integration_codegen_cpp/mod.rs"
 
 [[test]]
+name = "integration_codegen_csharp"
+path = "../../tests/integration_codegen_csharp/mod.rs"
+
+[[test]]
+name = "integration_codegen_python"
+path = "../../tests/integration_codegen_python/mod.rs"
+
+[[test]]
+name = "integration_codegen_lua"
+path = "../../tests/integration_codegen_lua/mod.rs"
+
+[[test]]
+name = "integration_codegen_js_quickjs"
+path = "../../tests/integration_codegen_js_quickjs/mod.rs"
+
+[[test]]
+name = "integration_codegen_js_deno"
+path = "../../tests/integration_codegen_js_deno/mod.rs"
+
+[[test]]
 name = "smoke"
 path = "../../tests/smoke/mod.rs"
 
