@@ -477,7 +477,8 @@ Language runtime adapters are separate crates that teach `polyplug` how to load 
 - If `polyplug-dotnet` is not in your `Cargo.toml`, .NET support is not compiled into your binary
 - If `polyplug-python` is not in your `Cargo.toml`, Python support is not compiled into your binary
 - If `polyplug-lua` is not in your `Cargo.toml`, Lua support is not compiled into your binary
-- If `polyplug-js` is not in your `Cargo.toml`, JS/TS support is not compiled into your binary
+- If `polyplug-js` is not in your `Cargo.toml`, QuickJS JS support is not compiled into your binary
+- If `polyplug-js-deno` is not in your `Cargo.toml`, V8/Deno JS support is not compiled into your binary
 
 This is not a feature flag. It is a missing dependency. True zero cost.
 
@@ -498,18 +499,19 @@ App developer registers adapters at init:
 
 ```rust
 PluginRuntime::new()
-    .loader(DotnetLoader::new())    // from polyplug-dotnet
-    .loader(PythonLoader::new())    // from polyplug-python
-    .loader(LuaLoader::new())       // from polyplug-lua
-    .loader(JsLoader::new())        // from polyplug-js
+    .loader(DotnetLoader::new())              // from polyplug-dotnet
+    .loader(PythonLoader::new())              // from polyplug-python
+    .loader(LuaLoader::new())                 // from polyplug-lua
+    .loader(JsLoader::new(JsConfig {}))       // from polyplug-js (QuickJS)
+    .loader(JsDenoLoader::new(JsDenoConfig {})) // from polyplug-js-deno (V8)
     .init()?;
 ```
 
-If a bundle's manifest declares `runtime = "ts-bun"` but no JS loader is registered:
+If a bundle's manifest declares `runtime = "js-quickjs"` but no JS loader is registered:
 
 ```
-Error: bundle "my_ts_plugin" requires runtime "ts-bun"
-but no loader is registered for runtime "ts-bun".
+Error: bundle "my_js_plugin" requires runtime "js-quickjs"
+but no loader is registered for runtime "js-quickjs".
 Add polyplug-js as a dependency and register JsLoader at init.
 ```
 
@@ -724,69 +726,198 @@ This cast happens once at init time. All subsequent vtable function pointer call
 
 ### polyplug-js
 
-Enables loading of JavaScript and TypeScript plugins. Supports three JS runtimes in a single adapter crate — the correct sub-loader is selected automatically based on the `runtime` field in `manifest.toml`.
+Enables loading of JavaScript and TypeScript plugins via embedded QuickJS.
+Runtime value: `js-quickjs`.
 
-**Supported runtime values:**
+**Embedding model:** QuickJS is embedded in-process via the `rquickjs` crate —
+identical model to `polyplug-lua`. One shared JS VM per process, mutex-protected.
+No subprocess. No IPC. No process boundary. Direct Rust function pointer calls.
 
-```
-ts-node   TypeScript plugin, loaded via Node.js N-API
-ts-bun    TypeScript plugin, loaded via Bun bun:ffi (fastest JS option)
-ts-deno   TypeScript plugin, loaded via Deno Deno.dlopen
-js-node   Plain JavaScript plugin, loaded via Node.js N-API
-js-bun    Plain JavaScript plugin, loaded via Bun bun:ffi
-js-deno   Plain JavaScript plugin, loaded via Deno Deno.dlopen
+**Cargo dependency:**
+
+```toml
+rquickjs = { version = "0.11.0", features = ["loader", "futures"] }
 ```
 
 **Configuration:**
 
 ```rust
-JsLoader::new(JsConfig {
-    node: Some(NodeConfig { bin: None }),   // None = auto-detect from PATH
-    bun:  Some(BunConfig  { bin: None }),   // None = auto-detect from PATH
-    deno: None,                              // deno not supported in this app
-})
+JsLoader::new(JsConfig {})  // no fields — QuickJS is fully embedded, no system deps
 ```
 
-`JsConfig` fields are optional per-runtime — set to `None` to disable that runtime variant. If a bundle requires `ts-bun` but `bun` is `None` and Bun is not in `PATH`:
+**Loading model:**
 
 ```
-Error: bundle "my_bun_plugin" requires runtime "ts-bun"
-but Bun is not configured and could not be found in PATH.
-Set JsConfig::bun in JsLoader::new() or install Bun.
+Host process
+├── rquickjs::Runtime::new()          ← embedded in-process, ~300μs startup
+├── ctx.globals().set("polyplug", {}) ← all HostVTable fns as direct Rust fn ptrs:
+│     findByContract(lo, hi, min_ver) → {index, generation} | null
+│     findByBundle(b_lo, b_hi, c_lo, c_hi, min_ver) → {index, generation} | null
+│     findAllByContract(lo, hi, min_ver) → [{index, generation}]
+│     resolvePlugin(index, generation) → guard_token
+│     getExtension(extension_id) → {lo, hi} | null
+│     registerVtable(contract_lo, contract_hi, vtable_obj) → void
+│     alloc(size) → {lo, hi}
+│     free(lo, hi) → void
+├── ctx.eval(bundle_js)               ← plugin runs, calls polyplug.*, registers vtable
+└── vtable registered — load complete
 ```
 
-**One loader, three sub-loaders internally:**
+**u64 lo/hi split:** QuickJS uses f64 internally — cannot hold 64-bit integers without
+precision loss. All u64 values (contract_id, bundle_id, pointers) are split into
+`{ lo: number, hi: number }` pairs. The JS side reassembles: `hi * 0x100000000 + lo`.
+Generated code handles this transparently — plugin developer never sees it.
+
+**Bundle format:**
+
+```
+my_plugin/
+├── manifest.toml    (runtime = "js-quickjs")
+└── bundle.js        (single flat file — produced by rolldown at pack time)
+```
+
+No `node_modules`. No imports at runtime. `bundle.js` is entirely self-contained.
+
+**Build step — Rolldown:**
+
+Plugin developer writes TypeScript. `polyplugc pack --lang js-quickjs` invokes:
+
+```
+rolldown index.ts --format iife --platform neutral --file bundle.js
+```
+
+Rolldown bundles TypeScript + all npm dependencies into one flat `bundle.js`.
+Plugin developer needs: `npm i -g rolldown`. No other toolchain required.
+
+**npm ecosystem support:**
+
+Pure-logic npm packages (lodash, zod, date-fns, etc.) work perfectly — bundled by Rolldown.
+Node.js API packages (`fs`, `http`, `net`, `crypto`) do NOT work — QuickJS has no Node APIs.
+`rolldown-plugin-node-polyfills` is NOT recommended — polyfills for I/O APIs throw at runtime,
+producing confusing errors. Plugin developers needing Node.js APIs must use `polyplug-js-deno`.
+
+**Performance:** JS value boxing/unboxing only — ~50-200ns per cross-plugin call.
+Same performance tier as Lua. No channel, no thread hop, no IPC.
+
+---
+
+### polyplug-js-deno
+
+Enables loading of JavaScript and TypeScript plugins via embedded V8 (deno_core).
+Runtime value: `js-deno`.
+
+**Embedding model:** V8 is embedded in-process via `deno_core`. Each bundle gets
+one dedicated `std::thread` with a `smol::LocalExecutor` (required by V8's
+thread-pinning constraint — V8 isolates are `!Send`). All calls are in-process
+via deno_core's `#[op2(fast)]` op system. No subprocess. No IPC.
+
+**Cargo dependencies:**
+
+```toml
+deno_core    = "0.311.0"
+smol         = "2.0.0"       # LocalExecutor satisfies V8 thread-pinning
+futures-lite = "2.3.0"
+# tokio is NOT used — smol is lighter and explicitly supported by deno_core
+```
+
+**Configuration:**
 
 ```rust
-// polyplug-js internal dispatch
-match manifest.runtime.as_str() {
-    "ts-node" | "js-node" => self.load_via_node(path, registrar, config),
-    "ts-bun"  | "js-bun"  => self.load_via_bun(path, registrar, config),
-    "ts-deno" | "js-deno" => self.load_via_deno(path, registrar, config),
-    _ => unreachable!(), // Epic 12 only dispatches to JsLoader for js/* and ts/* runtimes
-}
+JsDenoLoader::new(JsDenoConfig {})  // no fields — V8 is fully embedded, no system deps
 ```
 
-**Loading mechanism per variant:**
-
-`ts-node` / `js-node` — N-API native addon (`.node` file). The generated guest bundle compiles to a `.node` shared library. `polyplug-js` loads it via `require()` called through the Node subprocess bridge. N-API is ABI-stable across Node major versions. Works in Node and Bun (Bun supports N-API natively — Bun users can use `ts-node` bundles without `ts-bun`).
-
-`ts-bun` / `js-bun` — `bun:ffi` direct C ABI call. Generated guest bundle is a `.js`/`.ts` file that uses `bun:ffi` to `dlopen` `polyplug.so` and call `init(registrar)` directly. No `.node` compilation needed. ~2ns FFI call overhead per call — fastest JS option.
-
-`ts-deno` / `js-deno` — `Deno.dlopen` direct C ABI call. Generated guest bundle is a `.ts`/`.js` file that uses `Deno.dlopen` to call `init(registrar)`. Requires `--allow-ffi` flag when running Deno.
-
-**Performance comparison:**
+**Loading model:**
 
 ```
-ts-bun    ~2ns per FFI call      bun:ffi JIT-compiled type conversion
-ts-node   ~50-200ns per call     N-API, stable, works on Node + Bun
-ts-deno   ~50-200ns per call     Deno.dlopen, similar to N-API
+Host process
+├── std::thread::spawn (one per bundle — V8 isolate is thread-pinned)
+│   ├── smol::LocalExecutor::new()    ← thread-local, never moves
+│   ├── futures_lite::future::block_on(ex.run(async {
+│   │     set thread_local HostVTable*
+│   │     deno_core::JsRuntime::new(extensions: [polyplug_ops])
+│   │     polyplug_ops registers all HostVTable fns as #[op2(fast)] ops:
+│   │       op_find_by_contract(contract_id: u64, min_ver: u32) → u64
+│   │       op_find_by_bundle(bundle_id: u64, contract_id: u64, min_ver: u32) → u64
+│   │       op_find_all_by_contract(contract_id: u64, min_ver: u32) → Vec<u64>
+│   │       op_resolve_plugin(handle: u64) → u64
+│   │       op_get_extension(extension_id: u32) → u64
+│   │       op_register_vtable(contract_id: u64, vtable: VtableDesc)
+│   │       op_alloc(size: u32) → u64
+│   │       op_free(ptr: u64)
+│   │     load_main_es_module("index.ts" or "bundle.js")
+│   │     run_event_loop() → plugin runs, calls Deno.core.ops.op_register_vtable
+│   │     thread parks on mpsc Receiver — waiting for vtable call requests
+│   └── }))
+└── vtable registered via op_register_vtable → sent to loader via oneshot channel
 ```
 
-All variants: JS runtime itself is the bottleneck, not the FFI boundary. For primitive-only contracts (u32, f64, bool) overhead is lowest. For contracts passing Buffer or StringView, JS value boxing adds unavoidable overhead from the GC language side — same situation as Python.
+**TypeScript support:** deno_core loads `.ts` natively via `TsModuleLoader`.
+No separate transpilation step required. Plugin developer ships `index.ts` directly.
+Rolldown is optional — use it only to bundle npm dependencies.
 
-**Bundle name collision rule also applies to JS/TS:**
-Bundle names must not match any contract name in `api.toml`. `polyplugc` enforces this for all `--lang js-*` and `--lang ts-*` targets identically to other languages.
+**Bundle format:**
+
+```
+my_plugin/
+├── manifest.toml    (runtime = "js-deno")
+└── index.ts         (TypeScript — loaded natively by deno_core)
+  # OR
+└── bundle.js        (if npm deps bundled via rolldown)
+```
+
+**npm ecosystem support:**
+
+Broad npm ecosystem support via V8 + Node.js compatibility layer in deno_core.
+`fs`, `http`, `crypto`, and most Node.js built-ins available.
+Native addons (`.node` files) are still impossible — only pure-JS packages.
+
+**Performance:**
+
+deno_core `#[op2(fast)]` path: ~50-200ns per op call (direct in-process function call).
+Channel roundtrip for vtable calls: ~1-5μs (send to JS thread + receive result).
+Total cross-plugin call overhead: ~50-200ns + ~1-5μs ≈ ~1-5μs.
+~5-30x slower than `js-quickjs` for cross-plugin calls. Still fully in-process,
+no OS context switch, no serialization. Acceptable for plugins where npm ecosystem
+access matters more than per-call latency.
+
+V8 startup: ~50-200ms one-time cost at first `js-deno` bundle load.
+Binary size: +~30MB for embedded V8.
+
+---
+
+### When to pick js-quickjs vs js-deno
+
+```
+js-quickjs — pick this when:
+  ✓ Plugin logic is self-contained (validation, transformation, formatting)
+  ✓ npm dependencies are pure JS (lodash, zod, date-fns, etc.)
+  ✓ You want smallest possible binary footprint (+~1MB)
+  ✓ You want fastest startup (<300μs) and lowest per-call overhead (~50-200ns)
+  ✓ You want zero system dependencies — fully embedded, no installs required
+  ✗ Plugin needs Node.js APIs (fs, http, crypto, net)
+  ✗ Plugin needs native npm addons
+
+js-deno — pick this when:
+  ✓ Plugin needs Node.js-compatible APIs (fs, http, crypto, etc.)
+  ✓ npm packages depend on Node.js built-ins
+  ✓ You want first-class TypeScript without a separate compile step
+  ✓ npm ecosystem breadth matters more than per-call latency
+  ✗ You need the absolute lowest cross-plugin call overhead
+  ✗ Binary size is a constraint (+~30MB for V8)
+  ✗ You cannot afford 1 dedicated thread per js-deno bundle
+```
+
+Both adapters can be registered simultaneously. App developer registers one or both:
+
+```rust
+PluginRuntime::new()
+    .loader(JsLoader::new(JsConfig {}))          // enables js-quickjs
+    .loader(JsDenoLoader::new(JsDenoConfig {}))  // enables js-deno
+    .init()?;
+```
+
+Plugin developer picks their runtime by setting `runtime = "js-quickjs"` or
+`runtime = "js-deno"` in `bundle.toml`. The runtime dispatches automatically.
 
 ---
 
@@ -876,8 +1007,7 @@ Defines the contents of a plugin bundle. Written by plugin developer. Never dist
 name    = "image_bundle"
 version = "1.0"
 runtime = "native"    # native (default) | dotnet | python | lua
-                      # | ts-node | ts-bun | ts-deno
-                      # | js-node | js-bun | js-deno
+                      # | js-quickjs | js-deno
 
 api = "path/to/api.toml"
 # or
@@ -1424,8 +1554,8 @@ C++         host + guest    header-only libs, near zero overhead
 C#          host + guest    NativeAOT (native loader) or standard .NET (polyplug-dotnet)
 Python      host + guest    ctypes, via polyplug-python
 Lua         host + guest    LuaJIT recommended, via polyplug-lua
-JavaScript  host + guest    N-API / bun:ffi / Deno.dlopen, via polyplug-js
-TypeScript  host + guest    same as JS — TS is the recommended variant
+JavaScript  host + guest    QuickJS embedded (polyplug-js) or V8 embedded (polyplug-js-deno)
+TypeScript  host + guest    same as JS — TS compiled by Rolldown (js-quickjs) or native (js-deno)
 ```
 
 **C# — two modes, same generated code:**
@@ -1435,18 +1565,15 @@ NativeAOT       runtime = "native"    native loader, native performance, no adap
 standard .NET   runtime = "dotnet"    polyplug-dotnet required, CLR via hostfxr
 ```
 
-**JS/TS — six runtime variants, one adapter:**
+**JS/TS — two runtime variants, two adapter crates:**
 
 ```
-ts-node    TypeScript, Node.js N-API     works on Node + Bun, ~50-200ns/call
-ts-bun     TypeScript, bun:ffi           Bun only, ~2ns/call, fastest JS option
-ts-deno    TypeScript, Deno.dlopen       Deno only, ~50-200ns/call
-js-node    JavaScript, Node.js N-API     same as ts-node, plain JS
-js-bun     JavaScript, bun:ffi           same as ts-bun, plain JS
-js-deno    JavaScript, Deno.dlopen       same as ts-deno, plain JS
+js-quickjs    QuickJS embedded in-process    ~50-200ns/call, +~1MB binary, pure-JS npm
+js-deno       V8 embedded in-process         ~1-5μs/call,   +~30MB binary, Node.js npm APIs
 ```
 
-Plugin developer chooses variant in `bundle.toml`. App developer registers `JsLoader` once — it handles all six variants internally based on which runtimes are configured.
+Plugin developer picks variant in `bundle.toml`. App developer registers one or both adapters.
+See PRD §10 (polyplug-js and polyplug-js-deno) for when to pick which.
 
 ---
 
@@ -1461,8 +1588,9 @@ RUST (crates.io)
 ├── polyplug-dotnet       standard .NET adapter
 ├── polyplug-python       Python adapter
 ├── polyplug-lua          Lua adapter
-├── polyplug-js           JS/TS adapter (Node, Bun, Deno)
-└── polyplugc             CLI codegen tool
+├── polyplug-js           JS/TS adapter — QuickJS embedded (runtime = "js-quickjs")
+├── polyplug-js-deno      JS/TS adapter — V8 embedded via deno_core (runtime = "js-deno")
+└── polyplugc             CLI codegen tool (--lang js-quickjs, --lang js-deno)
 
 C++ (headers / vcpkg / conan)
 ├── host-libs/cpp/        polyplug.hpp
@@ -1481,12 +1609,15 @@ Lua
 ├── polyplug.lua + .so    Lua host lib
 └── polyplug-guest.lua    Lua guest lib
 
-JS/TS (npm)
-├── polyplug              JS/TS host lib (wraps polyplug.so via N-API)
-└── polyplug-guest        JS/TS guest lib (base types, ABI helpers)
-    ├── for ts-node / js-node:  compiled .node + .d.ts
-    ├── for ts-bun / js-bun:    bun:ffi declarations + .d.ts
-    └── for ts-deno / js-deno:  Deno.dlopen declarations + .d.ts
+JS/TS (guest-libs/js/ — shipped as part of polyplugc SDK output)
+└── polyplug-guest.ts     shared guest lib for both js-quickjs and js-deno
+    ├── AbiError, StringView, Buffer (lo/hi ptr fields for js-quickjs)
+    ├── DependencyNotFoundError
+    ├── EXT_TRACE_ID constant
+    └── TraceVTable interface
+    (re-exported in generated init.ts for both variants)
+
+NOTE: There is no JS host lib. The host is always a Rust binary.
 ```
 
 ---

@@ -1217,7 +1217,7 @@ VERIFICATION CHECKLIST
 
 - polyplugc hard-errors if bundle name matches any contract name in api.toml
 - call_plugin does not exist anywhere in codebase
-- find_plugin does not exist anywhere in codebase
+- find_plugin does not exist anywhere in codebase  
 - find_by_contract, find_by_bundle, find_all_by_contract implemented and tested
 - resolve_plugin returns PluginVTableGuard wrapping arc-swap guard
 - ArcSwap<VTableSlot> in every PluginSlot — no raw *const PluginVTable in slots
@@ -1621,7 +1621,7 @@ VERIFICATION CHECKLIST
 
 ---
 
-## Epic 11.5 — polyplug-js: JavaScript and TypeScript Adapter
+## Epic 11.5 — polyplug-js and polyplug-js-deno: JavaScript and TypeScript Adapters
 
 ```
 You are the PLANNER agent for the `polyplug` project.
@@ -1638,255 +1638,573 @@ genuinely contradictory or missing.
 
 READ FIRST
 - AGENTS.md — every rule applies
-- polyplug_prd.md — section 10 (polyplug-js subsection),
+- polyplug_prd.md — section 10 (polyplug-js and polyplug-js-deno subsections),
   section 23 (MVP Language Support, JS/TS rows),
-  section 24 (Package Ecosystem, JS/TS npm packages)
+  section 24 (Package Ecosystem, JS/TS packages)
 
 ---
 
 PROJECT CONTEXT
 
-JS and TypeScript plugins run on three different runtimes: Node.js, Bun, and Deno.
-All three cross the same C ABI boundary — they call polyplug's init(registrar)
-and register vtables. The FFI mechanism differs per runtime:
+Two separate adapter crates handle JS/TS plugins. App developer picks one or both:
 
-  ts-node / js-node  →  N-API native addon (.node file, ABI-stable)
-  ts-bun  / js-bun   →  bun:ffi dlopen (~2ns per call, fastest JS option)
-  ts-deno / js-deno  →  Deno.dlopen with --allow-ffi
+  polyplug-js        → QuickJS embedded via rquickjs, runtime = "js-quickjs"
+  polyplug-js-deno   → V8 embedded via deno_core, runtime = "js-deno"
 
-One adapter crate (polyplug-js) handles all six runtime variants.
-The crate scaffold exists from Epic 8 at crates/polyplug-js/.
-This epic fills it in completely, plus JS/TS guest lib, JS/TS host lib,
-and all JS/TS generators (ts-node, ts-bun, ts-deno; js-* share same
-generators as ts-* counterparts differing only in type annotation output).
+Both are fully IN-PROCESS. No subprocess. No IPC. No process boundary.
+Both use the same architecture as polyplug-lua: embed a JS VM in the host process,
+register HostVTable functions as callable JS globals, load the plugin script,
+vtable exchange happens entirely in-process via direct Rust function pointers.
 
-Start with ts-node only. ts-bun and ts-deno are scaffolded but stubbed
-with clear TODO comments and a runtime error:
-  PolyplugError::RuntimeNotYetImplemented { runtime: "ts-bun" }
-This lets the architecture exist and compile without full bun:ffi and
-Deno.dlopen implementation. They become follow-on sub-epics.
+Plugin bundles are single flat JS files produced by Rolldown at pack time.
+Rolldown (invoked by polyplugc pack) bundles TypeScript + npm dependencies
+into one self-contained bundle.js. The loader sees only bundle.js — no imports,
+no npm at runtime, no node_modules.
+
+The crate scaffolds exist from Epic 8:
+  crates/polyplug-js/
+  crates/polyplug-js-deno/
+This epic fills both in completely, plus shared JS/TS guest lib and generators.
 
 ---
 
 PRE-ANSWERED DECISIONS
 
-JsConfig — mandatory, no defaults:
-  pub struct NodeConfig { pub bin: Option<PathBuf> }  // None = auto-detect PATH
-  pub struct BunConfig  { pub bin: Option<PathBuf> }  // None = auto-detect PATH
-  pub struct DenoConfig { pub bin: Option<PathBuf> }  // None = auto-detect PATH
+RUNTIME NAMES (manifest.toml runtime field):
+  js-quickjs   → polyplug-js (QuickJS via rquickjs)
+  js-deno      → polyplug-js-deno (V8 via deno_core)
+  No other JS runtime variants exist. ts-node, ts-bun, ts-deno, js-node,
+  js-bun are NOT part of this system — they were rejected due to subprocess
+  requirements violating the zero-overhead constraint.
 
+CARGO DEPENDENCIES:
+  crates/polyplug-js/Cargo.toml:
+    rquickjs = { version = "0.11.0", features = ["loader", "futures"] }
+
+  crates/polyplug-js-deno/Cargo.toml:
+    deno_core    = "0.311.0"
+    smol         = "2.0.0"
+    futures-lite = "2.3.0"
+  NOTE: tokio is NOT used. smol LocalExecutor satisfies V8 thread-pinning
+  requirement identically to tokio current_thread, at 1/10th the weight.
+  deno_core explicitly supports smol as an executor.
+
+BUNDLE FORMAT — BOTH VARIANTS:
+  Bundle is a directory containing:
+    manifest.toml          (runtime = "js-quickjs" or "js-deno")
+    bundle.js              (single flat file, produced by rolldown at pack time)
+  No index.ts, no node_modules, no polyplug.node, no .node addon.
+  The loader loads bundle.js directly — that's it.
+
+  bundle.js is produced by plugin developer running:
+    rolldown index.ts --format iife --platform neutral --file bundle.js
+  polyplugc pack --lang js-quickjs shells out to rolldown automatically.
+  Plugin developer needs rolldown installed: npm i -g rolldown
+  polyplugc documents this requirement clearly in error messages.
+
+polyplug-js LOADING MODEL — QuickJS in-process:
+  1. rquickjs::Runtime::new()        ← one shared JS VM, mutex-protected (like mlua)
+  2. ctx.globals().set("polyplug", host_object)
+     host_object exposes ALL HostVTable functions as direct Rust fn ptrs:
+       polyplug.findByContract(contract_id_lo, contract_id_hi, min_version)
+       polyplug.findByBundle(bundle_id_lo, bundle_id_hi, contract_id_lo, contract_id_hi, min_version)
+       polyplug.findAllByContract(contract_id_lo, contract_id_hi, min_version)
+       polyplug.resolvePlugin(handle_index, handle_generation)
+       polyplug.getExtension(extension_id)
+       polyplug.registerVtable(contract_id_lo, contract_id_hi, vtable_obj)
+       polyplug.alloc(size)
+       polyplug.free(ptr_lo, ptr_hi)
+     NOTE: u64 values split into lo/hi u32 pairs because QuickJS numbers
+     are f64 — cannot hold 64-bit integers without precision loss.
+     JS side reassembles: const id = (hi * 0x100000000) + lo
+     This is safer than BigInt in QuickJS (BigInt support varies by version).
+  3. ctx.eval(bundle_js_string)      ← plugin runs, calls polyplug.*, registers vtable
+  4. Extract registered vtable from ctx globals → register in PluginRegistry
+  5. Load complete. VM mutex released.
+
+  Hot-path vtable call: host calls registered Rust fn ptr → rquickjs
+  calls the JS function → direct Rust function pointer return.
+  Overhead: JS value boxing/unboxing only (~50-200ns). Same tier as Lua.
+
+polyplug-js-deno LOADING MODEL — V8 in-process, one thread per bundle:
+  1. std::thread::spawn for this bundle
+  2. Inside thread: smol::LocalExecutor::new()
+     futures_lite::future::block_on(ex.run(async move { ... }))
+  3. deno_core::JsRuntime::new(RuntimeOptions {
+         extensions: vec![polyplug_extension()],
+         ...
+     })
+     polyplug_extension() registers ALL HostVTable ops via deno_core::extension! macro:
+       #[op2(fast)] op_find_by_contract(contract_id: u64, min_version: u32) → u64
+       #[op2(fast)] op_find_by_bundle(bundle_id: u64, contract_id: u64, min_version: u32) → u64
+       #[op2(fast)] op_find_all_by_contract(contract_id: u64, min_version: u32) → Vec<u64>
+       #[op2(fast)] op_resolve_plugin(handle: u64) → u64   (returns guard token)
+       #[op2(fast)] op_get_extension(extension_id: u32) → u64  (returns ptr as u64)
+       #[op2(fast)] op_register_vtable(contract_id: u64, #[serde] vtable: VtableDesc)
+       #[op2(fast)] op_alloc(size: u32) → u64
+       #[op2(fast)] op_free(ptr: u64)
+     deno_core ops are direct in-process function calls — NOT IPC.
+     #[op2(fast)] uses V8 fast calls — ~50-200ns overhead.
+     u64 values pass natively in deno_core ops (V8 BigInt handled automatically).
+  4. TypeScript is loaded natively — deno_core TsModuleLoader handles .ts directly.
+     No separate transpilation step needed for js-deno bundles.
+     Plugin developer can ship index.ts directly (no rolldown required for js-deno).
+     Rolldown is optional for js-deno — use it only to bundle npm dependencies.
+  5. runtime.load_main_es_module(&module_url).await
+  6. runtime.run_event_loop(Default::default()).await
+     → plugin's top-level code runs, calls Deno.core.ops.op_register_vtable(...)
+     → vtable registered back into host via op
+  7. Thread parks on std::sync::mpsc::Receiver, waiting for vtable call requests.
+  8. Each vtable fn ptr (stored in PluginRegistry) sends call request + args
+     over channel → thread wakes → deno_core executes JS fn → result sent back.
+
+  Hot-path vtable call overhead: deno_core #[op2(fast)] (~50-200ns) +
+  channel roundtrip (~1-5μs). Still fully in-process, no OS context switch.
+  ~5-30x slower than QuickJS per cross-plugin call. Documented in BENCHMARKS.md.
+
+HostVTable pointer access in ops:
+  HostVTable* stored in a thread-local static inside polyplug-js-deno,
+  set before the JsRuntime is created on that thread.
+  ops read it via thread_local! — safe because ops always execute on the
+  same thread as the JsRuntime (V8 isolate constraint guarantees this).
+  No mutex needed — single-threaded access by design.
+
+  For QuickJS (polyplug-js):
+  HostVTable* stored in a OnceLock<*const HostVTable> set once during
+  JsLoader::new() from the HostVTable passed via the registrar.
+  SAFETY: HostVTable* is valid for the lifetime of PluginRuntime.
+  All QuickJS Rust callbacks read this OnceLock — no mutex needed on reads.
+
+JsConfig and JsDenoConfig:
   pub struct JsConfig {
-      pub node: Option<NodeConfig>,   // None = ts-node/js-node not supported
-      pub bun:  Option<BunConfig>,    // None = ts-bun/js-bun not supported
-      pub deno: Option<DenoConfig>,   // None = ts-deno/js-deno not supported
+      // No fields — QuickJS is always available, no system deps
   }
+  pub struct JsDenoConfig {
+      // No fields — V8 is embedded, no system deps
+  }
+  JsLoader::new(JsConfig {})        // always works, no configuration needed
+  JsDenoLoader::new(JsDenoConfig {}) // always works, no configuration needed
 
-  JsLoader::new(JsConfig {
-      node: Some(NodeConfig { bin: None }),
-      bun:  None,
-      deno: None,
-  })
-  JsConfig is mandatory. Passing all None is a hard error at construction time:
-    PolyplugError::JsLoaderNoRuntimeConfigured
+  App developer registers one or both:
+    runtime_builder
+        .loader(JsLoader::new(JsConfig {}))         // enables js-quickjs
+        .loader(JsDenoLoader::new(JsDenoConfig {})) // enables js-deno
 
 BundleLoader::runtime_name():
-  JsLoader returns a slice of all configured runtime names:
-  ["ts-node", "js-node"] if only node configured
-  ["ts-node", "js-node", "ts-bun", "js-bun"] if node+bun configured
-  etc.
-  Epic 12 dispatcher checks manifest.runtime against this slice.
+  JsLoader returns    &["js-quickjs"]
+  JsDenoLoader returns &["js-deno"]
 
-Bundle format per variant:
-  ts-node / js-node:
-    Bundle is a directory containing:
-      manifest.toml
-      index.js (compiled from TS or plain JS — N-API entry point)
-      polyplug.node (compiled N-API addon — the guest lib bridge)
-    polyplugc generates index.ts (compiled to index.js by plugin dev's tsc/bun build)
-  ts-bun / js-bun (stubbed):
-    Bundle is a directory containing:
-      manifest.toml
-      index.ts / index.js (bun:ffi entry point)
-    polyplugc generates index.ts with bun:ffi declarations (stubbed, TODO comment)
-  ts-deno / js-deno (stubbed):
-    Bundle is a directory containing:
-      manifest.toml
-      index.ts / index.js (Deno.dlopen entry point)
-    polyplugc generates index.ts with Deno.dlopen declarations (stubbed, TODO comment)
+GENERATED FILES — polyplugc --lang js-quickjs:
+  contracts.ts   — TypeScript interfaces for each contract
+  types.ts        — domain types as TypeScript interfaces
+  vtable.ts       — vtable registration helpers, calls polyplug.registerVtable()
+  init.ts         — entry point: dependency resolution, extension queries,
+                     vtable registration
+  manifest.toml   — runtime = "js-quickjs"
+  README.md       — build instructions: how to run rolldown, what bundle.js is
 
-N-API loading path (ts-node / js-node — FULL IMPLEMENTATION):
-  JsLoader spawns node subprocess OR uses napi-rs to load the .node file.
-  The polyplug.node guest lib bridge exposes init(registrar_ptr: bigint) to JS.
-  registrar ptr passed as BigInt (64-bit safe in JS — Number only has 53-bit integers).
-  node subprocess calls: require('./polyplug.node').init(BigInt(registrar_ptr))
-  This triggers the vtable exchange via N-API back into the Rust runtime.
+  Dependency resolution in generated init.ts (js-quickjs):
+    // u64 split into lo/hi because QuickJS uses f64
+    const handle = polyplug.findByContract(
+        CONTRACT_ID_LO, CONTRACT_ID_HI, 1);
+    if (!handle) throw new Error("dependency not found: image.decode");
+    const guard = polyplug.resolvePlugin(handle.index, handle.generation);
 
-Registrar pointer passing — ALL variants:
-  registrar ptr is uint64 — must be passed as BigInt in JS/TS.
-  Number type in JS has 53-bit integer precision — CANNOT hold a 64-bit pointer.
-  Generated init() always receives and passes registrar as BigInt.
-  This is enforced in generated code — never a raw number.
+  Extension query in generated init.ts (when optional includes "trace"):
+    const tracePtr = polyplug.getExtension(EXT_TRACE_ID);
+    const trace = tracePtr ? new TraceVTable(tracePtr) : null;
 
-Generated TypeScript — ts-node variant:
-  contracts.ts   — interfaces plugin dev implements
-  types.ts       — domain types as TypeScript interfaces with ctypes-style layout
-  vtables.ts     — vtable registration helpers
-  init.ts        — bundle entry point, dependency resolution, vtable registration
-  manifest.toml  — generated manifest with runtime = "ts-node"
+GENERATED FILES — polyplugc --lang js-deno:
+  Same structure as js-quickjs EXCEPT:
+    init.ts uses Deno.core.ops.op_find_by_contract(contract_id_bigint, min_ver)
+    u64 values passed as BigInt natively (V8 supports BigInt properly)
+    manifest.toml runtime = "js-deno"
+  No rolldown required at build time (deno_core handles .ts natively).
+  README.md documents optional rolldown usage for npm dependencies.
 
-  All ABI types mapped to TypeScript:
-    u8/u16/u32    → number
-    u64           → bigint
-    i8/i16/i32    → number
-    i64           → bigint
-    f32/f64       → number
-    bool          → boolean
-    StringView    → { ptr: bigint, len: number }  (N-API Buffer view)
-    Buffer        → { ptr: bigint, len: number, cap: number }
-    void          → void
+ABI TYPE MAPPING — TypeScript (both variants):
+  u8/u16/u32  → number
+  u64         → { lo: number, hi: number } for js-quickjs
+                BigInt for js-deno (V8 BigInt is safe)
+  i8/i16/i32  → number
+  i64         → { lo: number, hi: number } for js-quickjs
+                BigInt for js-deno
+  f32/f64     → number
+  bool        → boolean
+  StringView  → { ptr_lo: number, ptr_hi: number, len: number }
+  Buffer      → { ptr_lo: number, ptr_hi: number, len: number, cap: number }
+  void        → void
 
-  Dependency resolution in generated init.ts:
-    const handle = polyplug.findByContract(IMAGE_DECODE_CONTRACT_ID, 1n);
-    if (!handle) throw new DependencyNotFoundError("image.decode");
-    const guard = polyplug.resolvePlugin(handle);
-    // guard stored as module-level const, used on hot path
+JS/TS GUEST LIB — guest-libs/js/:
+  polyplug-guest.ts:
+    AbiError enum
+    StringView, Buffer interfaces (with lo/hi ptr fields)
+    DependencyNotFoundError class
+    TraceVTable interface (emitted when trace in optional[])
+    EXT_TRACE_ID constant = 0xC4EB9AEE
+  Shared between js-quickjs and js-deno generators.
+  Re-exported in generated init.ts.
 
-  Hot path call in generated caller:
-    const vtable = guard.vtable();   // arc-swap guard load
-    vtable.decode(rawPtr, outPtr);   // direct C function call via N-API
+JS/TS HOST LIB — host-libs/js/:
+  Not in scope for this epic. Host-side JS is not a supported use case.
+  The host is always a Rust binary. Skip this entirely.
 
-JS/TS host lib (host-libs/js/ or npm package polyplug):
-  TypeScript declarations wrapping polyplug.so via N-API.
-  Classes: Runtime, ContractHandle, VTableGuard.
-  Mirrors the Rust host lib surface — same concepts, TypeScript idioms.
+ROLLDOWN REQUIREMENT:
+  polyplugc pack --lang js-quickjs:
+    Shells out to: rolldown index.ts --format iife --platform neutral --file bundle.js
+    If rolldown not found on PATH: hard error with message:
+      "rolldown is required for js-quickjs pack. Install with: npm i -g rolldown"
+  polyplugc pack --lang js-deno:
+    Rolldown optional. If index.ts present and no bundle.js:
+      Warn: "Tip: run rolldown to bundle npm dependencies into bundle.js"
+      Skip rolldown, ship index.ts directly.
+    If bundle.js present: ship bundle.js (npm deps bundled).
+  polyplugc generate --lang js-quickjs and --lang js-deno:
+    Generates source files only. Does NOT invoke rolldown.
+    pack is the command that invokes rolldown.
 
-JS/TS guest lib (guest-libs/js/ or npm package polyplug-guest):
-  Base types: AbiError, StringView, Buffer as TypeScript interfaces.
-  DependencyNotFoundError class.
-  PluginRegistrar wrapper.
-  Re-exported by generated guest bundle code.
-
-polyplugc generators — new generators to add:
-  JsNodeGenerator  → emits ts-node bundles (TypeScript + N-API)
-  JsBunGenerator   → emits ts-bun bundles (stubbed with TODO)
-  JsDenoGenerator  → emits ts-deno bundles (stubbed with TODO)
-  js-* variants use same generators as ts-* but strip type annotations
-  from output and emit .js instead of .ts.
-  --lang ts-node → JsNodeGenerator with TypeScript output
-  --lang js-node → JsNodeGenerator with JS output (type annotations removed)
-  Same pattern for bun and deno.
-
-Bundle name collision rule applies here too:
-  polyplugc hard-errors if bundle name matches any contract name.
-  Already implemented in Epic 9.7 patch — no changes needed.
+node-polyfills:
+  NOT included. rolldown-plugin-node-polyfills is NOT used.
+  Plugins needing Node.js APIs (fs, http, net) must use js-deno.
+  This boundary is documented clearly in generated README.md and PRD.
 
 ---
 
 EPIC GOAL
 
-1. JsConfig, NodeConfig, BunConfig, DenoConfig types:
-   crates/polyplug-js/src/config/mod.rs
-   Hard error at JsLoader::new() if all three are None.
+1. crates/polyplug-js/src/config/mod.rs:
+   pub struct JsConfig {}  // no fields
+   JsLoader::new(JsConfig {})
 
-2. JsLoader implementing BundleLoader:
-   crates/polyplug-js/src/loader/mod.rs
-   runtime_name() returns slice of all configured runtime strings.
-   load() dispatches by manifest.runtime to node/bun/deno sub-loader.
-   bun and deno sub-loaders return RuntimeNotYetImplemented error (stub).
+2. crates/polyplug-js/src/loader/mod.rs:
+   JsLoader implementing BundleLoader
+   runtime_name() → &["js-quickjs"]
+   load(path, registrar):
+     a. Read bundle.js from bundle directory
+     b. Create rquickjs::Runtime + Context (or reuse shared Runtime from OnceLock)
+     c. Set HostVTable* in OnceLock (first load only)
+     d. Register polyplug global object with all HostVTable wrapper functions
+     e. ctx.eval(bundle_js) — plugin runs, calls polyplug.registerVtable(...)
+     f. Extract registered vtable from ctx, store in PluginRegistry
 
-3. Node sub-loader (FULL IMPLEMENTATION):
-   crates/polyplug-js/src/loader/node/mod.rs
-   - Locate node binary: NodeConfig.bin → PATH scan → well-known paths
-   - Verify node version: >= 18 (N-API stability)
-   - Load bundle directory: spawn node subprocess with generated bootstrap
-   - Pass registrar ptr as BigInt to JS init() function
-   - Receive vtable registration via N-API callback back into Rust
+3. rquickjs HostVTable wrappers — all 8 functions registered on polyplug global:
+   findByContract(lo, hi, min_version) → {index, generation} | null
+   findByBundle(bundle_lo, bundle_hi, contract_lo, contract_hi, min_version) → {index,gen}|null
+   findAllByContract(lo, hi, min_version) → [{index,generation}]
+   resolvePlugin(index, generation) → guard_token (u32, opaque)
+   getExtension(extension_id) → {lo, hi} | null   (ptr as lo/hi pair)
+   registerVtable(contract_lo, contract_hi, vtable_obj) → void
+   alloc(size) → {lo, hi}
+   free(lo, hi) → void
+   SAFETY comment required on every wrapper: HostVTable* lifetime = Runtime lifetime.
 
-4. Bun sub-loader (STUB):
-   crates/polyplug-js/src/loader/bun/mod.rs
-   Returns PolyplugError::RuntimeNotYetImplemented { runtime: "ts-bun".into() }
-   Contains clear TODO comment explaining bun:ffi implementation approach.
+4. crates/polyplug-js-deno/src/config/mod.rs:
+   pub struct JsDenoConfig {}  // no fields
+   JsDenoLoader::new(JsDenoConfig {})
 
-5. Deno sub-loader (STUB):
-   crates/polyplug-js/src/loader/deno/mod.rs
-   Returns PolyplugError::RuntimeNotYetImplemented { runtime: "ts-deno".into() }
-   Contains clear TODO comment explaining Deno.dlopen implementation approach.
+5. crates/polyplug-js-deno/src/loader/mod.rs:
+   JsDenoLoader implementing BundleLoader
+   runtime_name() → &["js-deno"]
+   load(path, registrar):
+     a. Capture HostVTable* in thread-local before spawning thread
+     b. std::thread::spawn
+     c. Inside thread: smol::LocalExecutor + futures_lite::future::block_on
+     d. Set thread-local HostVTable* (now on correct thread)
+     e. deno_core::JsRuntime::new with polyplug_ops extension
+     f. load_main_es_module (index.ts or bundle.js — whichever exists)
+     g. run_event_loop → plugin runs, calls Deno.core.ops.op_register_vtable
+     h. Extract vtable from op call result, send back to loader via oneshot channel
+     i. Thread parks on mpsc Receiver for vtable call requests
+     j. Loader receives vtable, stores in PluginRegistry
 
-6. PolyplugError::RuntimeNotYetImplemented { runtime: String } — new variant
-   crates/polyplug/src/error/mod.rs
-   PolyplugError::JsLoaderNoRuntimeConfigured — new variant
+6. deno_core ops — polyplug_extension() via deno_core::extension! macro:
+   All 8 HostVTable functions as #[op2(fast)] ops.
+   Thread-local HostVTable* read inside each op — safe (same thread as V8 isolate).
+   op_register_vtable: receives vtable description, sends to loader via oneshot.
 
-7. JS/TS host lib: host-libs/js/
-   polyplug.ts — TypeScript declarations for host-side N-API bindings
-   Classes: Runtime, ContractHandle, VTableGuard
-   Mirrors Rust host lib surface in TypeScript idioms.
+7. Channel architecture for js-deno vtable calls:
+   Each js-deno bundle slot has:
+     call_tx: std::sync::mpsc::SyncSender<JsCallRequest>
+     result_rx: (managed per-call via oneshot)
+   JsCallRequest { fn_index: u32, args: Vec<JsValue>, result_tx: oneshot::Sender<JsValue> }
+   Generated vtable fn ptrs: pack args → send to call_tx → block on result_rx.
+   JS thread: loop on call_rx → execute JS fn → send result.
+   oneshot channel: smol::channel::oneshot or std::sync::mpsc one-shot pattern.
 
-8. JS/TS guest lib: guest-libs/js/
-   polyplug-guest.ts — base types and helpers
-   AbiError, StringView, Buffer, PluginRegistrar, DependencyNotFoundError
-   Re-exported by generated init.ts.
+8. PolyplugError new variants (crates/polyplug/src/error/mod.rs):
+   RolldownNotFound { hint: String }   — rolldown not on PATH during pack
+   JsRuntimePanic { runtime: String, message: String }  — JS exception during load
 
-9. polyplugc — JsNodeGenerator (ts-node / js-node):
-   crates/polyplugc/src/generators/js_node/mod.rs
-   Generates from bundle.toml:
-     contracts.ts   — TypeScript interfaces for each contract
-     types.ts       — domain types as TypeScript interfaces
-     vtables.ts     — vtable registration helpers
-     init.ts        — entry point, dependency resolution (BigInt registrar ptr),
-                       vtable registration, guard storage
-     manifest.toml  — runtime = "ts-node" (or "js-node")
-   --lang js-node: same generator, strips TypeScript type annotations,
-                   emits .js instead of .ts files.
+9. polyplugc — JsQuickjsGenerator:
+   crates/polyplugc/src/generators/js_quickjs/mod.rs
+   Generates from bundle.toml + api.toml:
+     contracts.ts  — TypeScript interfaces
+     types.ts      — domain types with lo/hi ptr representation
+     vtable.ts     — registerVtable() helper
+     init.ts       — dependency resolution (lo/hi), extension query, vtable reg
+     manifest.toml — runtime = "js-quickjs"
+     README.md     — rolldown build instructions, js-quickjs vs js-deno guidance
+   --lang js-quickjs routes to this generator.
 
-10. polyplugc — JsBunGenerator stub (ts-bun / js-bun):
-    crates/polyplugc/src/generators/js_bun/mod.rs
-    Emits a valid directory structure with TODO comments in init.ts.
-    manifest.toml runtime = "ts-bun" or "js-bun".
-    Sufficient for Epic 12 discovery to recognise the bundle.
+10. polyplugc — JsDenoGenerator:
+    crates/polyplugc/src/generators/js_deno/mod.rs
+    Same structure as JsQuickjsGenerator EXCEPT:
+      u64 values use BigInt (not lo/hi)
+      init.ts uses Deno.core.ops.op_*() for all polyplug calls
+      manifest.toml runtime = "js-deno"
+      README.md — deno guidance, optional rolldown for npm deps
+    --lang js-deno routes to this generator.
 
-11. polyplugc — JsDenoGenerator stub (ts-deno / js-deno):
-    Same as JsBunGenerator stub but for Deno.
+11. polyplugc pack command updates:
+    --lang js-quickjs: shell out to rolldown. Error if not found.
+    --lang js-deno:    rolldown optional. Warn if index.ts present and no bundle.js.
 
-12. polyplugc CLI: wire --lang ts-node, --lang js-node,
-    --lang ts-bun, --lang js-bun, --lang ts-deno, --lang js-deno
-    into the generator dispatch.
+12. polyplugc CLI: wire --lang js-quickjs and --lang js-deno into generator dispatch.
 
-13. Integration tests:
-    a. ts-node guest loaded by Rust host: call two functions, assert results
-    b. Rust host loads ts-node plugin, ts-node plugin calls Rust plugin
-       via declared [[dependency]] — cross-plugin cross-language call
-    c. Registrar ptr BigInt: verify no precision loss on 64-bit addresses
-       (test with ptr value > 2^53 to confirm BigInt path)
-    d. ts-bun bundle: JsLoader returns RuntimeNotYetImplemented (not panic)
-    e. JsLoader with all None JsConfig: hard error at construction
-    f. Missing node binary: clear error naming the missing binary
-    g. Node version too old (< 18): clear error with version requirement
+13. guest-libs/js/polyplug-guest.ts:
+    AbiError, StringView, Buffer (lo/hi ptr fields), DependencyNotFoundError,
+    EXT_TRACE_ID = 0xC4EB9AEE
+    TraceVTable interface with emit(ptr_lo, ptr_hi, len) signature.
+    Re-exported in generated init.ts for both variants.
 
-14. Benchmarks (BENCHMARKS.md):
-    - ts-node cross-plugin call overhead vs Rust-to-Rust baseline
-    - Document JS runtime bottleneck clearly
+14. Integration tests — tests/integration_js/mod.rs (new):
+    a. js-quickjs: load plugin, call two contract functions, assert results
+    b. js-deno: load plugin, call two contract functions, assert results
+    c. js-quickjs: plugin calls polyplug.findByContract → gets valid handle
+    d. js-deno: plugin calls op_find_by_contract → gets valid handle
+    e. js-quickjs: plugin calls polyplug.getExtension → null when absent, no crash
+    f. js-deno: plugin calls op_get_extension → null when absent, no crash
+    g. js-quickjs: full dependency chain — JS plugin depends on Rust plugin,
+       resolves via findByContract, calls dependency vtable fn, asserts result
+    h. js-deno: same dependency chain test
+    i. js-quickjs: alloc/free — no leak (ASAN)
+    j. js-deno: alloc/free — no leak (ASAN)
+    k. rolldown not found: polyplugc pack --lang js-quickjs → RolldownNotFound error
+    l. js-deno thread isolation: two js-deno bundles loaded → each has own thread,
+       concurrent calls don't interfere
+
+15. Benchmarks (BENCHMARKS.md):
+    - js-quickjs cross-plugin call vs Rust-to-Rust baseline
+    - js-deno cross-plugin call vs Rust-to-Rust baseline
+    - js-deno channel roundtrip latency documented explicitly
+    - "When to pick which" section in BENCHMARKS.md referencing PRD guidance
 
 ---
 
 VERIFICATION CHECKLIST
 
-- JsLoader registered once handles ts-node, ts-bun, ts-deno, js-node, js-bun, js-deno
-- ts-node full implementation: loads bundle, calls init, vtable exchange complete
-- ts-bun stub: returns RuntimeNotYetImplemented, does not panic
-- ts-deno stub: returns RuntimeNotYetImplemented, does not panic
-- JsConfig all None → JsLoaderNoRuntimeConfigured hard error at construction
-- Registrar ptr passed as BigInt in all generated JS/TS code — never as Number
-- contracts.ts, types.ts, vtables.ts, init.ts generated correctly for ts-node
-- manifest.toml runtime field set correctly for all six variants
-- Dependency resolution in generated init.ts: BigInt contract/bundle IDs,
-  hard error on missing dep, guard stored module-level
-- host-libs/js/ TypeScript declarations exist and are correct
-- guest-libs/js/ base types exist and re-exported correctly
-- polyplugc --lang ts-node, --lang js-node, --lang ts-bun,
-  --lang js-bun, --lang ts-deno, --lang js-deno all wired in CLI
-- Cross-plugin cross-language test passes (ts-node plugin calls Rust plugin)
-- BigInt precision test passes (ptr > 2^53)
+- JsLoader runtime_name() = ["js-quickjs"] — verified
+- JsDenoLoader runtime_name() = ["js-deno"] — verified
+- js-quickjs load: in-process, no subprocess, no IPC — verified by test
+- js-deno load: in-process, dedicated thread, smol LocalExecutor — verified
+- No tokio dependency anywhere in polyplug-js-deno — clippy check
+- All 8 HostVTable functions accessible from JS in both variants — each tested
+- u64 lo/hi split correct in js-quickjs — no precision loss test
+- BigInt correct in js-deno — no precision loss test
+- js-quickjs dependency resolution works end-to-end (JS calls Rust plugin)
+- js-deno dependency resolution works end-to-end (JS calls Rust plugin)
+- getExtension returns null for unregistered ID — both variants, no crash
+- alloc/free no leak — ASAN, both variants
+- rolldown invoked by polyplugc pack --lang js-quickjs — verified
+- rolldown not found → RolldownNotFound error with install hint
+- js-deno: TS loaded natively without rolldown — verified
+- js-deno: two bundles → two threads, concurrent calls correct — verified
+- EXT_TRACE_ID = 0xC4EB9AEE in guest-libs/js/polyplug-guest.ts
+- generated init.ts: extension query code only when optional includes "trace"
+- BENCHMARKS.md updated with js-quickjs and js-deno numbers
 - All existing integration tests pass
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+---
+
+## Epic 11.6 — Patch: Fix JS Architecture (polyplug-js and polyplug-js-deno)
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this patch are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+This is a PATCH prompt — it corrects what was implemented in Epic 11.5.
+The original implementation was fundamentally wrong. Read the WHAT IS WRONG
+section carefully before planning anything.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 10 (polyplug-js and polyplug-js-deno subsections)
+- Epic 11.5 in epic_prompts.md — the full corrected spec is there
+- Epic 12 context in epic_prompts.md — it is already implemented and must keep working
+
+---
+
+WHAT IS WRONG — THE ORIGINAL EPIC 11.5 IMPLEMENTATION
+
+The original implementation used:
+  - Node.js subprocess spawning
+  - N-API / polyplug.node bridge
+  - ts-node, ts-bun, ts-deno, js-node, js-bun, js-deno runtime variants
+  - Env-var or dlsym to pass HostVTable* across a process boundary
+
+ALL OF THIS IS WRONG. It violates the core polyplug design principle:
+zero overhead, maximum performance, in-process only.
+
+Subprocesses create a process boundary. Raw pointers cannot cross process
+boundaries. Any pointer-passing scheme across processes (env-var, IPC,
+shared memory) is fundamentally broken and was never acceptable.
+
+The CORRECT architecture has been fully designed. See below.
+
+---
+
+WHAT THE CORRECT ARCHITECTURE IS
+
+TWO separate adapter crates. App developer picks one or both:
+
+  polyplug-js        QuickJS via rquickjs, runtime = "js-quickjs"
+  polyplug-js-deno   V8 via deno_core + smol, runtime = "js-deno"
+
+Both are IN-PROCESS. No subprocess. No IPC. No process boundary.
+Same model as polyplug-lua: embed a VM, register HostVTable fns as JS globals,
+eval the plugin script, vtable exchange in-process via direct fn ptrs.
+
+Plugin bundles are single flat JS files (bundle.js) produced by Rolldown.
+Rolldown is invoked by polyplugc pack at build time — not at runtime.
+At runtime the loader sees only bundle.js. No imports. No npm. No node_modules.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+See Epic 11.5 full spec in epic_prompts.md for complete details.
+Key decisions summarised here:
+
+CRATE STRUCTURE:
+  crates/polyplug-js/          QuickJS adapter (rquickjs 0.11.0)
+  crates/polyplug-js-deno/     V8 adapter (deno_core 0.311.0 + smol 2.0.0)
+  DELETE or gut: any polyplug-js-napi crate, any polyplug.node artifact,
+  any subprocess spawning code, any env-var pointer passing code.
+
+RUNTIME NAMES:
+  "js-quickjs"   handled by JsLoader (polyplug-js)
+  "js-deno"      handled by JsDenoLoader (polyplug-js-deno)
+  ALL OLD NAMES REMOVED: ts-node, ts-bun, ts-deno, js-node, js-bun
+  Epic 12 manifest runtime field parsing must be updated to recognise
+  "js-quickjs" and "js-deno" and reject the old names.
+
+POLYPLUG-JS (QuickJS) LOADING:
+  rquickjs::Runtime::new() — one shared VM, mutex-protected (like mlua)
+  HostVTable* stored in OnceLock<*const HostVTable> set at JsLoader::new()
+  SAFETY: HostVTable* is valid for lifetime of PluginRuntime.
+  Register polyplug global on ctx with 8 wrapper functions:
+    findByContract, findByBundle, findAllByContract, resolvePlugin,
+    getExtension, registerVtable, alloc, free
+  u64 values split into lo/hi u32 pairs (QuickJS uses f64 internally,
+  cannot hold 64-bit integers — split is the correct solution).
+  ctx.eval(bundle_js) → plugin runs → registerVtable called → vtable extracted.
+
+POLYPLUG-JS-DENO (V8) LOADING:
+  std::thread::spawn per bundle (V8 isolate is thread-pinned, !Send)
+  smol::LocalExecutor — NOT tokio. smol is explicitly supported by deno_core.
+  HostVTable* stored in thread_local! set before JsRuntime creation.
+  deno_core::extension! macro registers 8 #[op2(fast)] ops.
+  deno_core TsModuleLoader handles .ts natively — rolldown optional for js-deno.
+  vtable received from plugin via op_register_vtable → sent to loader via oneshot.
+  Thread parks on mpsc Receiver after load — woken for each vtable call.
+  Call channel: JsCallRequest { fn_index, args, result_tx } per call.
+
+CONFIGS (both empty — no system deps):
+  pub struct JsConfig {}
+  pub struct JsDenoConfig {}
+  JsLoader::new(JsConfig {})
+  JsDenoLoader::new(JsDenoConfig {})
+
+ROLLDOWN:
+  polyplugc pack --lang js-quickjs: REQUIRED, shells out to rolldown CLI.
+    rolldown index.ts --format iife --platform neutral --file bundle.js
+    If not found: PolyplugError::RolldownNotFound with install hint.
+  polyplugc pack --lang js-deno: OPTIONAL. deno_core loads .ts natively.
+    If index.ts present and no bundle.js: warn about rolldown for npm deps.
+  node-polyfills: NOT used. Documented clearly.
+
+NEW ERROR VARIANTS (crates/polyplug/src/error/mod.rs):
+  RolldownNotFound { hint: String }
+  JsRuntimePanic { runtime: String, message: String }
+  REMOVE: RuntimeNotYetImplemented, JsLoaderNoRuntimeConfigured
+
+GENERATORS (polyplugc):
+  REMOVE: JsNodeGenerator, JsBunGenerator, JsDenoGenerator (old stubs)
+  ADD: JsQuickjsGenerator   → --lang js-quickjs
+  ADD: JsDenoGenerator (new, correct) → --lang js-deno
+  See Epic 11.5 spec for exact generated file structure.
+
+EPIC 12 COMPATIBILITY:
+  Epic 12 is already implemented. It reads manifest.toml runtime field
+  and dispatches to registered loaders by runtime_name().
+  After this patch:
+    - JsLoader.runtime_name() = ["js-quickjs"]
+    - JsDenoLoader.runtime_name() = ["js-deno"]
+  Epic 12 dispatch requires no changes — it matches runtime field to
+  runtime_name() dynamically. As long as loader is registered and
+  runtime field matches, it works. Verify this still holds after patch.
+  Any existing test fixtures with old runtime names (ts-node etc.) must
+  be regenerated with js-quickjs or js-deno runtime.
+
+---
+
+PATCH SCOPE
+
+This patch replaces the entire JS/TS adapter implementation.
+The scope is:
+  1. Delete/gut old polyplug-js implementation (subprocess, N-API, old configs)
+  2. Implement polyplug-js correctly (QuickJS, in-process)
+  3. Implement polyplug-js-deno correctly (V8, in-process, smol, dedicated thread)
+  4. Update polyplugc generators (remove old, add correct two)
+  5. Update guest-libs/js/ (remove N-API types, add correct lo/hi types)
+  6. Remove host-libs/js/ entirely (host is always Rust, not needed)
+  7. Update error variants
+  8. Update Epic 12 test fixtures that use old runtime names
+  9. All integration tests pass
+
+The EXECUTER must NOT attempt to salvage the old implementation.
+Start fresh on polyplug-js and polyplug-js-deno. Keep all other crates untouched.
+
+---
+
+VERIFICATION CHECKLIST
+
+- No subprocess code anywhere in polyplug-js or polyplug-js-deno
+- No N-API, no polyplug.node, no .node files anywhere
+- No ts-node, ts-bun, ts-deno, js-node, js-bun references in any source file
+- No tokio dependency in polyplug-js-deno
+- No env-var pointer passing anywhere
+- JsLoader.runtime_name() = ["js-quickjs"]
+- JsDenoLoader.runtime_name() = ["js-deno"]
+- js-quickjs: load bundle.js in-process via rquickjs, vtable registered
+- js-deno: load index.ts or bundle.js in-process via deno_core + smol thread
+- All 8 HostVTable functions accessible from JS — both variants
+- u64 lo/hi split in js-quickjs — no precision loss
+- BigInt in js-deno — no precision loss
+- js-quickjs: getExtension null for unregistered ID — no crash
+- js-deno: getExtension null for unregistered ID — no crash
+- Full dependency chain test: JS plugin depends on Rust plugin — both variants
+- rolldown invoked by polyplugc pack --lang js-quickjs
+- rolldown not found → RolldownNotFound error with install hint
+- js-deno: .ts loaded natively without rolldown
+- Epic 12 discovery still works: js-quickjs and js-deno bundles discovered
+  and dispatched correctly
+- All Epic 12 existing tests still pass
+- EXT_TRACE_ID = 0xC4EB9AEE in guest-libs/js/polyplug-guest.ts
+- All existing integration tests (non-JS) pass
 - No .unwrap() in production code
 - clippy passes with zero warnings
 - cargo test --workspace passes
@@ -1926,11 +2244,11 @@ Epic 9.7 redesigned manifest.toml — it now has:
   - [[dependency]] table array (replaces the old requires = [...] string array)
     each entry has: contract, contract_id, min_version
     or: bundle, bundle_id, contract, contract_id, min_version
-Epic 11.5 added polyplug-js. Valid runtime values are now:
-  native, dotnet, python, lua,
-  ts-node, ts-bun, ts-deno, js-node, js-bun, js-deno
-  All six JS/TS variants route to JsLoader. The manifest reader must
-  recognise all of them as valid — not treat them as unknown runtimes.
+Epic 11.5 added polyplug-js and polyplug-js-deno. Valid runtime values are now:
+  native, dotnet, python, lua, js-quickjs, js-deno
+  js-quickjs routes to JsLoader (polyplug-js, QuickJS embedded in-process).
+  js-deno routes to JsDenoLoader (polyplug-js-deno, V8 embedded in-process).
+  The manifest reader must recognise all six as valid — not treat them as unknown.
 This epic wires everything together into a complete discovery pipeline.
 The capability graph builder must consume [[dependency]] from manifest.toml,
 not the old requires = [...] field (which no longer exists).
@@ -2037,7 +2355,10 @@ You are the PLANNER agent for the `polyplug` project.
 Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
 The plan must be granular enough that the executer can implement each step without
 making any architectural decisions. Every ambiguity must be resolved in the plan.
-Do not write the plan until you have interviewed me and I have answered your questions.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
 
 ---
 
@@ -2056,86 +2377,178 @@ because no extension registry has been implemented.
 This epic implements the extension registry, the Extension trait,
 and the trace extension as the reference implementation.
 
-All five language generators must be updated to emit extension query code
-in generated guest init() when the bundle.toml optional list includes extensions.
+All six language generators (Rust, C++, C#, Python, Lua, js-quickjs/js-deno)
+must be updated to emit extension query code in generated guest init()
+when the bundle.toml optional list includes extensions.
+
+Note: js-quickjs and js-deno are both full implementations.
+js-quickjs: polyplug.getExtension(EXT_TRACE_ID) — lo/hi pair result.
+js-deno: Deno.core.ops.op_get_extension(EXT_TRACE_ID) — BigInt result.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+Extension ID assignment:
+  fnv1a_32("extension_name") — consistent with contract_id and bundle_id.
+  The fnv1a_32 function already exists in crates/polyplug/src/abi/mod.rs.
+  EXT_TRACE_ID: u32 = fnv1a_32("trace") = 0xC4EB9AEE
+  This constant is generated by polyplugc and emitted into generated guest code
+  for all six languages — never hand-written by plugin developers.
+
+Versioning:
+  No versioning in this epic. Extensions are unversioned.
+  Vtable evolution is handled by adding new fields (not new extension IDs).
+  The frozen ABI (ExtensionEntry = extension_id + vtable ptr) is unchanged.
+
+Thread safety:
+  Extension trait requires Send + Sync.
+  Extension vtable function pointers may be called concurrently from any thread.
+  TraceExtension callback must be: impl Fn(&str) + Send + Sync + 'static
+  Extension registry reads use RwLock (consistent with registry pattern).
+
+TraceExtension callback:
+  Raw callback — zero new dependencies.
+  TraceExtension::new(callback: impl Fn(&str) + Send + Sync + 'static)
+  App developer wires it to tracing/log/eprintln as they prefer.
+  No tracing crate dependency added to polyplug.
+
+Extension query code emission:
+  ONLY when the extension name is listed in the plugin's optional[] in bundle.toml.
+  Empty optional list → no extension query code emitted.
+  "trace" in optional list → emit getExtension(EXT_TRACE_ID) query in generated init().
+  This matches the PRD pattern exactly.
+
+Language generators to update:
+  ALL SIX: Rust, C++, C#, Python, Lua, js-quickjs, js-deno.
+  js-quickjs: polyplug.getExtension(EXT_TRACE_ID) returns {lo,hi}|null.
+  js-deno:    Deno.core.ops.op_get_extension(EXT_TRACE_ID) returns BigInt|null.
+  Full query code emitted for both JS variants — not just a constant.
+
+Built-in extensions in scope:
+  Trace only. async and sandbox are future (PRD §18).
+  CounterExtension is TEST-ONLY — demonstrates custom extension pattern.
+
+TraceVTable:
+  #[repr(C)]
+  pub struct TraceVTable {
+      pub emit: unsafe extern "C" fn(msg: StringView),
+  }
+  StringView — consistent with all other ABI string passing.
+
+Extension registry storage:
+  RuntimeBuilder collects Vec<Box<dyn Extension>>.
+  build() converts to HashMap<u32, Box<dyn Extension>> stored in Runtime.
+  Ownership kept alive in Runtime for the process lifetime.
+
+host_get_extension access pattern:
+  GLOBAL_EXTENSION_MAP: OnceLock<HashMap<u32, *const ()>>
+  Set during RuntimeBuilder::build() after all extensions are registered.
+  host_get_extension reads from this global — matches GLOBAL_REGISTRY pattern.
+  The raw *const () pointers are stable for the lifetime of the Runtime
+  (Box<dyn Extension> in Runtime keeps vtable memory alive).
 
 ---
 
 EPIC GOAL
 
-1. Extension trait in crates/polyplug/src/ (new module extensions/mod.rs):
+1. Extension trait — crates/polyplug/src/extensions/mod.rs (new module):
    pub trait Extension: Send + Sync {
        fn extension_id(&self) -> u32;
        fn as_vtable_ptr(&self) -> *const ();
    }
 
-2. Extension registry in PluginRuntime:
-   - Stores Box<dyn Extension> entries indexed by extension_id
-   - PluginRuntime::builder().extension(impl Extension) registration
-   - get_extension(id) implementation returns stored ptr or null if absent
-   - Thread-safe reads (RwLock or equivalent)
+2. Extension registry:
+   - RuntimeBuilder::extension(impl Extension + 'static) registration method
+   - RuntimeBuilder stores Vec<Box<dyn Extension>>
+   - build() converts to HashMap<u32, Box<dyn Extension>> in Runtime
+   - GLOBAL_EXTENSION_MAP: OnceLock<HashMap<u32, *const ()>> set during build()
+   - host_get_extension(id: u32) → *const (): reads GLOBAL_EXTENSION_MAP
+     returns stored ptr if found, null ptr if absent
+   - RwLock for concurrent read safety on GLOBAL_EXTENSION_MAP reads
+     (or OnceLock is sufficient if map is immutable after build — prefer OnceLock)
 
-3. Trace extension (built-in reference implementation) in crates/polyplug/:
-   - EXT_TRACE_ID: u32 = 1  (or discuss constant value with me)
-   - TraceVTable as #[repr(C)] struct:
-     pub struct TraceVTable {
-         pub emit: unsafe extern "C" fn(msg: StringView),
-     }
-   - TraceExtension { vtable: TraceVTable } implementing Extension
-   - Constructor takes callback: TraceExtension::new(callback: impl Fn(&str) + Send + Sync)
-   - as_vtable_ptr() returns &self.vtable as *const _ as *const ()
+3. Trace extension — crates/polyplug/src/extensions/trace/mod.rs:
+   pub const EXT_TRACE_ID: u32 = 0xC4EB9AEE;  // fnv1a_32("trace")
+   #[repr(C)]
+   pub struct TraceVTable {
+       pub emit: unsafe extern "C" fn(msg: StringView),
+   }
+   pub struct TraceExtension {
+       vtable: TraceVTable,
+       // callback kept alive here
+   }
+   impl TraceExtension {
+       pub fn new(callback: impl Fn(&str) + Send + Sync + 'static) -> Self
+   }
+   impl Extension for TraceExtension {
+       fn extension_id(&self) -> u32 { EXT_TRACE_ID }
+       fn as_vtable_ptr(&self) -> *const () { &self.vtable as *const _ as *const () }
+   }
 
-4. Custom extension support demonstrated in tests:
-   - CounterExtension with get_count() → u64 and increment()
-   - Shows app developer can define arbitrary extensions
+4. Custom extension pattern — test-only CounterExtension:
+   CounterExtension with vtable: get_count() → u64, increment()
+   Lives in integration test file, NOT in production code.
+   Demonstrates that app developers can define arbitrary extensions.
 
-5. Generator updates — all five languages emit extension query code:
-   When bundle.toml plugin optional list includes "trace":
-   Generated init() queries EXT_TRACE_ID and stores ptr if present.
-   Null check pattern per language (idiomatic, not verbose):
-     Rust:   if let Some(trace) = ...
-     C++:    if (trace_ptr != nullptr)
-     C#:     if (tracePtr != IntPtr.Zero)
-     Python: if trace_ctypes_ptr:
-     Lua:    if trace_ptr ~= nil then
+5. Generator updates — six generators emit extension query code:
+   Condition: bundle.toml [[plugin]] optional list includes "trace"
+   Null check pattern per language (idiomatic):
+     Rust:       let trace_vtable: Option<&TraceVTable> = ...
+     C++:        const TraceVTable* trace = ...; if (trace != nullptr)
+     C#:         IntPtr tracePtr = ...; if (tracePtr != IntPtr.Zero)
+     Python:     trace_ptr = ...; if trace_ptr:
+     Lua:        local trace = ...; if trace ~= nil then
+     js-quickjs: const tracePtr = polyplug.getExtension(EXT_TRACE_ID); if (tracePtr)
+     js-deno:    const tracePtr = Deno.core.ops.op_get_extension(EXT_TRACE_ID); if (tracePtr !== null)
+   EXT_TRACE_ID constant emitted as generated code in all languages —
+   never hand-written by plugin developers.
+   polyplugc emits: Rust const, C++ constexpr, C# const, Python constant,
+   Lua local, TypeScript const — all equal to 0xC4EB9AEE.
 
-6. Tests across all five languages:
-   - Trace: plugin emits messages, host callback receives them in order
-   - Absent trace: plugin with trace in optional list but no TraceExtension
-     registered → plugin loads and runs correctly, no crash
-   - Custom: CounterExtension passes data from host to plugin correctly
-   - Unregistered ID: get_extension for unknown ID returns null safely
-   - Benchmark: compare call with absent extension vs baseline — confirms zero overhead
+6. Integration tests — tests/integration_extension/mod.rs (new):
+   a. Trace present: plugin emits messages via trace extension,
+      host callback receives them in correct order — tested for all six languages
+      (Rust, C++, C#, Python, Lua, js-quickjs — js-deno also if time permits)
+   b. Absent trace: plugin declares optional = ["trace"] but host registers
+      no TraceExtension → plugin loads and runs correctly, zero crash — all six
+   c. Custom: CounterExtension — host registers it, plugin increments,
+      host reads correct count
+   d. Unregistered ID: host calls get_extension with unknown ID → null ptr,
+      no panic, no crash
+   e. TraceExtension + concurrent calls: spawn 4 threads all calling emit()
+      simultaneously → no crash, no data race (ASAN + TSAN)
+
+7. Criterion benchmark — crates/polyplug/benches/vtable_dispatch.rs:
+   Add benchmark: absent extension null check overhead.
+   Scenario A: plugin has trace in optional[], extension NOT registered.
+     Generated null check runs, takes the absent branch.
+   Scenario B: baseline, no optional[] at all.
+   Delta must be statistically indistinguishable from noise.
+   Document result in BENCHMARKS.md.
 
 ---
 
 VERIFICATION CHECKLIST
 
-- All extension tests pass across all five languages
-- Absent extension never causes crash in any language
-- Trace extension test passes for all five languages
+- EXT_TRACE_ID = 0xC4EB9AEE (fnv1a_32("trace")) — verified in test
+- Extension trait: Send + Sync — verified by compiler
+- TraceExtension callback: Fn(&str) + Send + Sync + 'static — verified by compiler
+- GLOBAL_EXTENSION_MAP set during build(), stable for Runtime lifetime
+- host_get_extension returns null for unregistered ID — not panic, not crash
+- Trace test passes for all six languages (Rust, C++, C#, Python, Lua, js-quickjs)
+- Absent trace test passes for all six languages — no crash
 - CounterExtension custom test passes
-- Benchmark confirms absent extension overhead is zero
+- Concurrent trace emit test passes under TSAN — no data race
+- Criterion benchmark: absent extension overhead statistically zero
+- Extension query code emitted ONLY when "trace" in optional[] — confirmed
+  by generating bundle without optional and verifying no query code present
+- js-quickjs: polyplug.getExtension(EXT_TRACE_ID) emitted in init.ts when optional
+- js-deno: Deno.core.ops.op_get_extension(EXT_TRACE_ID) emitted in init.ts when optional
+- All existing integration tests still pass
 - No .unwrap() in production code
 - clippy passes with zero warnings
-- All existing integration tests still pass
-
----
-
-QUESTIONS TO ASK ME BEFORE PLANNING
-
-Ask me about:
-- How extension IDs are assigned: hardcoded constants, hash of name, or sequential
-- EXT_TRACE_ID value: 1, or some other convention
-- Whether extensions need versioning at this stage
-- Thread safety requirements: can plugins call extension functions concurrently
-- Whether trace should integrate with the Rust tracing crate or use a raw callback
-- Whether extension query code is always generated or only when listed in optional
-- Whether all five language generators need updating in this epic or only some
-  are ready (check which generators are complete from previous epics)
-- Any other built-in extensions beyond trace in scope for this epic
-
-Do not write the plan until I have answered all questions.
+- cargo test --workspace passes
 ```
 
 ---
@@ -2243,19 +2656,49 @@ VERIFICATION CHECKLIST
 
 ---
 
+PRE-ANSWERED DECISIONS
+
+Version struct:
+  Version is new in this epic — not previously defined in the IR or runtime.
+  pub struct Version { pub major: u32, pub minor: u32 }
+  major.minor only — no patch. Matches PRD §17 exactly.
+  Parsing from "major.minor" string. Error on malformed: "1" or "1.2.3" both error.
+
+Error variants:
+  Separate variants — already specified in EPIC GOAL above:
+    PolyplugError::VersionMismatch { contract: String, required: Version, found: Version }
+    PolyplugError::FunctionCountMismatch { contract: String, expected: u32, found: u32 }
+
+Warning mechanism for Relaxed mode:
+  The trace extension callback is available after Epic 13.
+  However, version warnings are a RUNTIME concern — not a plugin concern.
+  Warning goes to a dedicated warning callback on RuntimeBuilder:
+    builder.on_warning(impl Fn(&str) + Send + Sync + 'static)
+  If no warning callback is registered: warnings go to eprintln! as fallback.
+  This avoids a tracing/log dependency and matches the raw callback pattern
+  established by TraceExtension.
+
+Host-side api.toml version availability:
+  Contract versions are defined in api.toml and parsed into the IR during
+  polyplugc code generation. They are NOT available at runtime load time
+  unless threaded through explicitly.
+  Solution: polyplugc embeds the required contract versions into the generated
+  host-side Rust code as constants, e.g.:
+    pub const IMAGE_DECODE_REQUIRED_VERSION: Version = Version { major: 1, minor: 0 };
+  These constants are read at load time by the runtime for version negotiation.
+  The planner must confirm this approach is consistent with the existing
+  generated host-side code structure from prior epics.
+
+---
+
 QUESTIONS TO ASK ME BEFORE PLANNING
 
 Ask me about:
-- Whether Version is already defined in the IR or runtime, or new here
-- Exact semver subset: major.minor only, or full major.minor.patch
-- Warning mechanism for Relaxed mode
-- Whether VersionMismatch and FunctionCountMismatch should be separate
-  error variants or combined
-- Whether host-side api.toml version is stored in the IR and available
-  at load time, or needs threading through
-- Any versioning edge cases from your specific use cases
+- Any versioning edge cases specific to your use cases
+  (e.g. do you need per-bundle LoadOptions overrides in practice,
+  or is the global Compatibility mode sufficient for now?)
 
-Do not write the plan until I have answered all questions.
+Do not write the plan until I have answered remaining questions.
 ```
 
 ---
@@ -2296,9 +2739,7 @@ This is the final codegen hardening epic before the showcase.
 EPIC GOAL
 
 1. Generator audit:
-   For each of the eight generators (Rust, C++, C#, Python, Lua,
-   ts-node, ts-bun, ts-deno — js-* variants share generators with ts-* counterparts,
-   differing only in emitted file extension and type annotation stripping):
+   For each of the six generators (Rust, C++, C#, Python, Lua, js-quickjs, js-deno):
    - Verify host-side output: types, callers
    - Verify guest SDK output: types, contracts
    - Verify guest bundle output: types, contracts, vtables, init, manifest.toml
@@ -2308,7 +2749,7 @@ EPIC GOAL
 2. Consistent output conventions across all generators:
    - All generated files have "THIS FILE IS AUTO-GENERATED BY polyplugc" header
    - manifest.toml always has: name, version, runtime, file, provides,
-     requires, function_count
+     requires, function_count, needs_reinit_on_dep_reload
    - Naming conventions consistent per language idioms
    The planner documents any convention decisions in the plan.
 
@@ -2321,54 +2762,101 @@ EPIC GOAL
 4. polyplugc pack command:
    polyplugc pack --api api.toml --lang <lang> --out <dir>
    Produces properly structured package ready for distribution:
-   - Rust: crate directory (Cargo.toml, src/, ready for cargo publish)
-   - C++: header directory with single-include entry point
-   - C#: NuGet package directory structure
-   - Python: pip package directory (pyproject.toml, package dir)
-   - Lua: module directory (.lua files + C ext if needed)
+   - Rust:       crate directory (Cargo.toml, src/, ready for cargo publish)
+   - C++:        header directory with single-include entry point
+   - C#:         NuGet package directory structure
+   - Python:     pip package directory (pyproject.toml, package dir)
+   - Lua:        module directory (.lua files + C ext if needed)
+   - js-quickjs: npm package directory + rolldown invocation → bundle.js
+   - js-deno:    directory with index.ts + optional rolldown for npm deps
 
 5. The cross-language combination tests:
-   Original 5 languages = 25 combinations (5×5).
-   With JS/TS (treating ts-node as the representative JS variant) = 36 combinations (6×6).
-   For every pair (host_lang, guest_lang) in {Rust, C++, C#, Python, Lua, ts-node}²:
+   Matrix: {Rust, C++, C#, Python, Lua, js-quickjs}² = 36 combinations (6×6).
+   js-deno tested separately — dedicated thread model needs separate scaffolding.
+   For every pair (host_lang, guest_lang) in the 6×6 matrix:
    - Generate host callers for host_lang from test api.toml
    - Generate guest bundle for guest_lang from test bundle.toml
-   - Build both (discuss build orchestration with me)
+   - Build both (pre-built fixtures from tests/fixtures/ for non-Rust)
    - Rust host loads plugin: runtime.load_bundle(path)
    - Call at least two contract functions
    - Assert correct return values
-   All combinations must pass.
-   ts-bun and ts-deno variants tested separately (not all 36 — discuss with me).
+   All 36 combinations must pass.
 
 ---
 
 VERIFICATION CHECKLIST
 
-- All 36 cross-language combination tests pass (ts-node as JS representative)
-- Generated code for all five languages compiles without warnings
+- All 36 cross-language combination tests pass (js-quickjs as JS representative)
+- js-deno separate combination tests pass (at least Rust↔js-deno pair)
+- Generated code for all six generators compiles without warnings
 - All generated files have auto-generated header comment
-- manifest.toml always has all required fields for all five generators
+- manifest.toml always has all required fields for all six generators
 - Incremental: schema change → regeneration; no change → skip
-- polyplugc pack produces valid package structure for all five languages
+- polyplugc pack produces valid package structure for all six generators
+- js-quickjs pack: rolldown invoked, bundle.js produced
+- js-deno pack: index.ts shipped, rolldown optional
 - No .unwrap() in polyplugc production code
 - clippy passes with zero warnings
 - cargo test --workspace passes
 
 ---
 
-QUESTIONS TO ASK ME BEFORE PLANNING
+PRE-ANSWERED DECISIONS
+
+Generator count:
+  Six generators: Rust, C++, C#, Python, Lua, js-quickjs, js-deno.
+  js-quickjs is full implementation. js-deno is full implementation.
+  No stubs. Audit checks both for correctness.
+
+Known gaps to audit (planner must verify each before writing plan):
+  - All generators: confirm EXT_TRACE_ID constant emitted correctly after Epic 13
+  - js-quickjs: confirm polyplug.getExtension emitted when optional includes "trace"
+  - js-deno: confirm Deno.core.ops.op_get_extension emitted when optional includes "trace"
+  - All generators: confirm manifest.toml has function_count field after Epic 14
+  - All generators: confirm needs_reinit_on_dep_reload in manifest.toml
+  - C#: confirm [SuppressGCTransition] on hot-path generated callers
+  - Python: confirm ctypes function objects cached at module level (not per-call)
+  - Lua: confirm ffi.metatype used, no lightuserdata
+  - js-quickjs: confirm u64 lo/hi split in all generated types — no BigInt
+  - js-deno: confirm BigInt used for u64 in all generated types — no lo/hi
+
+Cross-language combination test organisation:
+  One parameterized test file: tests/cross_language/mod.rs
+  Matrix: {Rust, C++, C#, Python, Lua, js-quickjs} × {Rust, C++, C#, Python, Lua, js-quickjs}
+  = 36 combinations. Each combination is one test function, named:
+    test_host_<lang>_guest_<lang>()
+  js-deno tested separately — not included in 36-combination matrix
+  (dedicated thread model requires separate test scaffolding).
+  Pre-built fixtures approach for non-Rust plugins:
+    Non-Rust plugins are pre-built and committed to tests/fixtures/
+    as compiled .so/.dll/bundle.js files.
+    The test suite does NOT trigger non-Rust builds at test time.
+    CI builds fixtures separately before running cargo test.
+    A build script (tests/fixtures/build_all.sh) documents how to rebuild fixtures.
+    js-quickjs fixtures: rolldown-bundled bundle.js files committed to fixtures/.
+
+polyplugc pack command:
+  In scope for this epic — final codegen hardening before showcase.
+  Pack output structures per language:
+    Rust:       crate directory (Cargo.toml, src/, ready for cargo publish)
+    C++:        header directory with single-include entry point
+    C#:         NuGet package directory structure
+    Python:     pip package directory (pyproject.toml, package dir)
+    Lua:        module directory (.lua files + C ext if needed)
+    js-quickjs: npm package directory + rolldown invocation → bundle.js
+    js-deno:    directory with index.ts + optional rolldown for npm deps
+
+---
+
+REMAINING QUESTIONS TO ASK ME BEFORE PLANNING
 
 Ask me about:
-- Known generator gaps or failing tests from each language's epic
-- File naming conventions that differ between languages (confirm per language)
-- How the 25 combination tests are organized in the test suite
-  (one test file, parameterized, or per-combination files)
-- How non-Rust plugin compilation is handled in the test suite
-  (pre-built fixtures? build script triggered by build.rs? CI only?)
-- Whether polyplugc pack is in scope for this epic or deferred to post-showcase
-- Any generator output inconsistencies already noticed
+- Any generator output inconsistencies you noticed while running Epics 9-13
+  not covered by the known gap list above
+- Whether js-deno combination tests should be in a separate test file
+  or integrated into the main cross-language matrix with special scaffolding
 
-Do not write the plan until I have answered all questions.
+Do not write the plan until I have answered remaining questions.
 ```
 
 ---
@@ -2425,7 +2913,7 @@ Five plugins, one per language (plus one JS/TS):
   Python:  Reporter   — formats a human-readable summary string
   Lua:     Transformer — reverses all string fields (alternative transformer)
   TS/JS:   Validator  — validates DataRecord fields, returns AbiError on invalid input
-           (runtime = "ts-node" — works on Node and Bun without extra config)
+           (runtime = "js-quickjs" — lightest footprint, pure-logic validation)
 
 Host application (language chosen with me):
   - Initializes runtime with all adapters
@@ -2501,6 +2989,49 @@ Ask me about:
 - Whether showcase has its own README.md or content goes into root README.md
 
 Do not write the plan until I have answered all questions.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+Host application language:
+  Rust. The showcase host is a Rust binary in showcase/host/.
+  Reasons: no additional runtime dependency, most complete API surface,
+  demonstrates the primary use case cleanly, cargo run just works.
+
+System context:
+  The full system at showcase time includes polyplug-js (QuickJS) and
+  polyplug-js-deno (V8). The showcase uses js-quickjs for the TS/JS Validator
+  plugin — lightest footprint, sufficient for pure-logic validation.
+  Six plugins total (Rust, C++, C#, Python, Lua, js-quickjs) — already
+  reflected in THE SHOWCASE above.
+
+Automated test / non-Rust plugin build:
+  Pre-built fixtures: all non-Rust plugins are pre-built and committed to
+  showcase/fixtures/ as compiled artifacts (.so/.dll/.node files).
+  The cargo test showcase test loads from showcase/fixtures/.
+  A showcase/build_plugins.sh script documents how to rebuild all plugins.
+  CI runs build_plugins.sh before cargo test.
+  Matches the fixtures approach established in Epic 15.
+
+showcase/README.md:
+  Separate showcase/README.md — not folded into root README.md.
+  Root README.md links to it.
+
+---
+
+REMAINING QUESTIONS TO ASK ME BEFORE PLANNING
+
+Ask me about:
+- DataRecord: fixed fields (name: StringView, value: StringView, count: u32)
+  or dynamic key-value structure?
+  (Recommendation: fixed 3-field struct — simpler ABI, demonstrates all
+  primitive and StringView types without requiring dynamic allocation)
+- Showcase run mode: CLI with arguments selecting transformer, or two
+  hardcoded sequential runs (C++ transform then Lua transform)?
+- Any additional scenarios beyond those listed above
+
+Do not write the plan until I have answered remaining questions.
 ```
 
 ---
@@ -2694,8 +3225,9 @@ EPIC GOAL
    h. Multiple reloads: reload same bundle 50 times.
       No memory leak (check RSS or use valgrind/ASAN).
       No leaked library handles (check /proc/self/maps or equivalent).
-   i. All 5 languages: reload native, dotnet, python, lua bundles — each passes
-      basic reload test.
+   i. All languages: reload native, dotnet, python, lua, js-quickjs bundles —
+      each passes basic reload test. js-deno reload: dedicated thread re-spawned,
+      new JsRuntime initialized with new bundle.js.
 
 9. Benchmarks (BENCHMARKS.md update):
    - Steady-state call overhead: hot-reload feature enabled vs disabled.
@@ -2715,7 +3247,7 @@ VERIFICATION CHECKLIST
 - Callback fires after swap, before dlclose — timing verified in test
 - File watcher test passes (hot-reload feature)
 - Multiple reload test: no memory leak, no leaked handles
-- All 5 language bundles hot-reloadable
+- All language bundles hot-reloadable (native, dotnet, python, lua, js-quickjs, js-deno)
 - hot-reload Cargo feature gates file watcher only — arc-swap always compiled
 - Steady-state benchmark: feature on/off = identical overhead
 - needs_reinit_on_dep_reload in bundle.toml, manifest.toml, ManifestData
