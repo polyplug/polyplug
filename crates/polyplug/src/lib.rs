@@ -7,6 +7,7 @@
 pub mod abi;
 pub mod allocator;
 pub mod error;
+pub mod extensions;
 pub mod graph;
 pub mod loader;
 pub mod registry;
@@ -118,8 +119,8 @@ pub unsafe extern "C" fn polyplug_resolve_plugin(
 
 /// Retrieve an extension vtable by extension_id.
 ///
-/// For MVP: always returns null (no extensions registered).
-/// Full implementation looks up extensions registered in RuntimeConfig.
+/// Full implementation looks up extensions registered via RuntimeBuilder::extension().
+/// Returns null if the extension is not registered.
 ///
 /// # Safety
 /// `runtime` must be a valid non-null pointer to a live Runtime.
@@ -128,6 +129,7 @@ pub unsafe extern "C" fn polyplug_get_extension(
     _runtime: *const runtime::Runtime,
     _extension_id: u32,
 ) -> *const () {
-    // MVP: no extension registry
-    core::ptr::null()
+    // SAFETY: host_get_extension reads from GLOBAL_EXTENSION_MAP (OnceLock, read-only after init).
+    // No pointer dereferences; safe to call from any thread.
+    unsafe { crate::runtime::host_get_extension(_extension_id) }
 }

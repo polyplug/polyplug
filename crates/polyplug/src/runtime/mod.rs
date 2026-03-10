@@ -32,6 +32,8 @@ use crate::abi::PluginRegistrar;
 use crate::error::GraphError;
 use crate::error::LoaderError;
 use crate::error::PolyplugError;
+use crate::extensions::Extension;
+use crate::extensions::SendPtr;
 use crate::graph::CapabilityGraph;
 use crate::loader::BundleInitGuard;
 use crate::loader::BundleLoader;
@@ -41,6 +43,10 @@ use crate::loader::manifest::ManifestData;
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
 static GLOBAL_REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
+
+/// Extension map: extension_id -> raw vtable pointer.
+/// Set once during RuntimeBuilder::build(). Immutable after that.
+static GLOBAL_EXTENSION_MAP: OnceLock<HashMap<u32, SendPtr>> = OnceLock::new();
 
 // Thread-local bundle ID set during Phase 1 init to enforce declared-dependency checks.
 //
@@ -72,6 +78,8 @@ pub struct Runtime {
     registry: Arc<Registry>,
     /// Loaded bundles, never dropped.
     _bundles: Vec<LoadedBundle>,
+    /// Extension impls. Never dropped — keeps vtable memory alive for the Runtime's lifetime.
+    _extensions: Vec<Box<dyn Extension>>,
     /// The static HostVTable given to plugins. Must be 'static.
     host_vtable: &'static HostVTable,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
@@ -83,8 +91,10 @@ pub struct Runtime {
 // but libraries are stored in `Registry::loaded_libraries` and never shared
 // as references — only vtable pointers (which are valid for the Registry's
 // lifetime) are accessed concurrently. The Runtime is effectively immutable after init.
+// _extensions: all Extension impls are required to be Send+Sync by trait bound.
 unsafe impl Send for Runtime {}
 // SAFETY: See above — Runtime is immutable after init. All mutable state is behind Arc<RwLock>.
+// _extensions are Send+Sync by Extension trait bound.
 unsafe impl Sync for Runtime {}
 
 /// Options for `Runtime::load_bundle_with`.
@@ -96,6 +106,7 @@ pub struct LoadOptions {}
 pub struct RuntimeBuilder {
     plugin_dirs: Vec<PathBuf>,
     loaders: Vec<Box<dyn BundleLoader>>,
+    extensions: Vec<Box<dyn Extension>>,
 }
 
 impl RuntimeBuilder {
@@ -104,10 +115,10 @@ impl RuntimeBuilder {
         RuntimeBuilder {
             plugin_dirs: Vec::new(),
             loaders: Vec::new(),
+            extensions: Vec::new(),
         }
     }
 
-    /// Add a directory to scan for plugin bundles.
     pub fn plugin_dir(mut self, path: PathBuf) -> RuntimeBuilder {
         self.plugin_dirs.push(path);
         self
@@ -126,6 +137,14 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Register an extension. If two extensions share the same extension_id, the last one wins.
+    ///
+    /// Extensions provide optional host-side vtables queryable by plugins at init time.
+    pub fn extension(mut self, ext: Box<dyn Extension>) -> RuntimeBuilder {
+        self.extensions.push(ext);
+        self
+    }
+
     /// Build the runtime.
     //
     //  For MVP: scans plugin_dirs for .so/.dll/.dylib files,
@@ -136,6 +155,17 @@ impl RuntimeBuilder {
 
         // Wire the global dispatcher before leaking the HostVTable.
         set_global_registry(Arc::clone(&registry));
+
+        // Build extension map: extension_id -> vtable pointer.
+        // If GLOBAL_EXTENSION_MAP is already set (e.g., second build() call in tests), silently skip.
+        let mut ext_map: HashMap<u32, SendPtr> = HashMap::new();
+        for ext in &self.extensions {
+            let id: u32 = ext.extension_id();
+            let ptr: *const () = ext.vtable_ptr();
+            ext_map.insert(id, SendPtr(ptr));
+        }
+        // OnceLock::set returns Err(value) when already set — expected after first build().
+        let _: Result<(), HashMap<u32, SendPtr>> = GLOBAL_EXTENSION_MAP.set(ext_map);
 
         let bundles: Vec<LoadedBundle> = Vec::new();
 
@@ -244,6 +274,7 @@ impl RuntimeBuilder {
             _bundles: bundles,
             host_vtable,
             loaders: loader_map,
+            _extensions: self.extensions,
         })
     }
 }
@@ -436,14 +467,19 @@ pub(crate) unsafe extern "C" fn host_resolve_plugin(handle: PluginHandle) -> *co
     }
 }
 
-/// HostVTable.get_extension callback.
+/// HostVTable.get_extension callback — returns the vtable pointer for a registered extension.
 //
-// SAFETY: This function is called by plugin code through the HostVTable function
-// pointer. The caller ensures the calling convention matches the extern "C" ABI.
-// The function body is entirely safe — returns a null pointer constant.
-unsafe extern "C" fn host_get_extension(_extension_id: u32) -> *const () {
-    // For MVP: no extensions registered.
-    core::ptr::null()
+// SAFETY: GLOBAL_EXTENSION_MAP is initialized during RuntimeBuilder::build() and
+// never mutated after that. Reading from OnceLock::get() is lock-free and safe
+// from any thread. SendPtr wraps a *const () to a 'static extension vtable.
+pub(crate) unsafe extern "C" fn host_get_extension(extension_id: u32) -> *const () {
+    match GLOBAL_EXTENSION_MAP.get() {
+        Some(map) => match map.get(&extension_id) {
+            Some(ptr) => ptr.0,
+            None => core::ptr::null(),
+        },
+        None => core::ptr::null(),
+    }
 }
 
 #[cfg(test)]
@@ -498,6 +534,13 @@ mod tests {
             handle.is_null(),
             "dep enforcement must return null for undeclared contract during init phase"
         );
+    }
+
+    #[test]
+    fn host_get_extension_returns_null_for_unknown_id() {
+        // SAFETY: host_get_extension reads from OnceLock; no pointer preconditions.
+        let ptr: *const () = unsafe { host_get_extension(0xDEAD_BEEF_u32) };
+        assert!(ptr.is_null(), "unknown extension_id must return null");
     }
 
     // ── Tests f/g: dep enforcement with a registered plugin ─────────────────
