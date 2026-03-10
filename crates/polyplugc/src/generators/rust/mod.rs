@@ -77,6 +77,21 @@ impl CodeGenerator for RustGenerator {
             types_out.push('\n');
         }
 
+        for contract in &ir.contracts {
+            let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+            types_out.push_str(&format!(
+                "pub const {contract_upper}_REQUIRED_VERSION: polyplug::version::Version = \
+                 polyplug::version::Version {{ major: {major}, minor: {minor} }};\n",
+                major = contract.version.major,
+                minor = contract.version.minor,
+            ));
+            types_out.push_str(&format!(
+                "pub const {contract_upper}_REQUIRED_FUNCTION_COUNT: u32 = {};\n",
+                contract.functions.len()
+            ));
+        }
+        types_out.push('\n');
+
         files.files.push(GeneratedFile {
             path: std::path::PathBuf::from("host/types.rs"),
             content: types_out,
