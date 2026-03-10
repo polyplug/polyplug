@@ -1,0 +1,12 @@
+# THIS FILE IS PART OF THE POLYPLUG TEST FIXTURES
+# DO NOT EDIT BY HAND
+name = "test_bundle"
+bundle_name = "test_bundle"
+version = "1.0.0"
+runtime = "js-deno"
+file = "index.ts"
+provides = ["test.add@1"]
+needs_reinit_on_dep_reload = false
+
+[function_count]
+"test.add@1" = 4

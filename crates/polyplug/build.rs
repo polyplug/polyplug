@@ -510,4 +510,12 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
         "cargo:rustc-env=TEST_JS_PLUGIN={}",
         fixtures_dir.join("test_plugin_js").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        fixtures_dir.join("test_plugin_js_deno").join("index.ts").display()
+    );
+    println!(
+        "cargo:rustc-env=TEST_JS_DENO_PLUGIN={}",
+        fixtures_dir.join("test_plugin_js_deno").display()
+    );
 }
