@@ -3,19 +3,19 @@
 
 #[cfg(feature = "hot-reload")]
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 #[cfg(feature = "hot-reload")]
 use std::sync::atomic::AtomicBool;
 #[cfg(feature = "hot-reload")]
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::sync::Mutex;
 #[cfg(feature = "hot-reload")]
 use std::time::Duration;
 
+use polyplug::ReloadEvent;
 use polyplug::abi::PluginVTable;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
-use polyplug::ReloadEvent;
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug::abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;

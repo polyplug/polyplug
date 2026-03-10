@@ -231,8 +231,9 @@ fn main() {
         "libreload_plugin_v1.so"
     };
 
-    let built_reload_v1_so: PathBuf =
-        plugin_target_dir.join("release").join(reload_v1_lib_filename);
+    let built_reload_v1_so: PathBuf = plugin_target_dir
+        .join("release")
+        .join(reload_v1_lib_filename);
     let dest_reload_v1_so: PathBuf = fixtures_dir.join(reload_v1_lib_filename);
     fs::copy(&built_reload_v1_so, &dest_reload_v1_so)
         .unwrap_or_else(|e| panic!("failed to copy reload_plugin_v1 .so: {}", e));
@@ -275,8 +276,9 @@ fn main() {
         "libreload_plugin_v2.so"
     };
 
-    let built_reload_v2_so: PathBuf =
-        plugin_target_dir.join("release").join(reload_v2_lib_filename);
+    let built_reload_v2_so: PathBuf = plugin_target_dir
+        .join("release")
+        .join(reload_v2_lib_filename);
     let dest_reload_v2_so: PathBuf = fixtures_dir.join(reload_v2_lib_filename);
     fs::copy(&built_reload_v2_so, &dest_reload_v2_so)
         .unwrap_or_else(|e| panic!("failed to copy reload_plugin_v2 .so: {}", e));
@@ -319,8 +321,9 @@ fn main() {
         "libdepender_plugin.so"
     };
 
-    let built_depender_so: PathBuf =
-        plugin_target_dir.join("release").join(depender_lib_filename);
+    let built_depender_so: PathBuf = plugin_target_dir
+        .join("release")
+        .join(depender_lib_filename);
     let dest_depender_so: PathBuf = fixtures_dir.join(depender_lib_filename);
     fs::copy(&built_depender_so, &dest_depender_so)
         .unwrap_or_else(|e| panic!("failed to copy depender_plugin .so: {}", e));

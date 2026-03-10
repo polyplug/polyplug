@@ -764,12 +764,7 @@ mod tests {
         let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.contract");
         // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry.register(
-                descriptor,
-                &MOCK_VTABLE,
-                "swap.contract".to_owned(),
-                50u64,
-            )
+            registry.register(descriptor, &MOCK_VTABLE, "swap.contract".to_owned(), 50u64)
         }
         .expect("registration should succeed");
 

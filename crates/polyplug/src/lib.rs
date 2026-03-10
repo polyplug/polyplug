@@ -11,8 +11,8 @@ pub mod extensions;
 pub mod graph;
 pub mod loader;
 pub mod registry;
-pub mod runtime;
 pub mod reload;
+pub mod runtime;
 pub use reload::ReloadEvent;
 
 pub mod version;

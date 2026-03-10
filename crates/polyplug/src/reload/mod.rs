@@ -35,9 +35,11 @@ pub(crate) unsafe extern "C" fn reload_registrar_callback(
 ) -> crate::abi::AbiError {
     // SAFETY: vtable ptr comes from plugin init. Null check required before capture.
     if !vtable.is_null() {
-        RELOAD_CAPTURED_VTABLES.with(|v: &core::cell::RefCell<Vec<*const crate::abi::PluginVTable>>| {
-            v.borrow_mut().push(vtable);
-        });
+        RELOAD_CAPTURED_VTABLES.with(
+            |v: &core::cell::RefCell<Vec<*const crate::abi::PluginVTable>>| {
+                v.borrow_mut().push(vtable);
+            },
+        );
     }
     crate::abi::AbiError::ok()
 }

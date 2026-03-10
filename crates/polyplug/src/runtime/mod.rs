@@ -35,17 +35,17 @@ use crate::error::PolyplugError;
 use crate::extensions::Extension;
 use crate::extensions::SendPtr;
 use crate::graph::CapabilityGraph;
-use crate::loader::manifest::ManifestData;
 use crate::loader::BundleInitGuard;
 use crate::loader::BundleLoader;
 use crate::loader::NativeBundleLoader;
+use crate::loader::manifest::ManifestData;
 use crate::version::Compatibility;
 use crate::version::Version;
 
 #[cfg(feature = "hot-reload")]
-use notify::Watcher;
-#[cfg(feature = "hot-reload")]
 use core::sync::atomic::Ordering;
+#[cfg(feature = "hot-reload")]
+use notify::Watcher;
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
 static GLOBAL_REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
@@ -554,13 +554,15 @@ impl Drop for Runtime {
         #[cfg(feature = "hot-reload")]
         {
             if let Ok(mut guard) = self.watcher_stop.lock()
-                && let Some(flag) = guard.take() {
-                    flag.store(true, core::sync::atomic::Ordering::Relaxed);
-                }
+                && let Some(flag) = guard.take()
+            {
+                flag.store(true, core::sync::atomic::Ordering::Relaxed);
+            }
             if let Ok(mut guard) = self.watcher_thread.lock()
-                && let Some(handle) = guard.take() {
-                    let _: std::thread::Result<()> = handle.join();
-                }
+                && let Some(handle) = guard.take()
+            {
+                let _: std::thread::Result<()> = handle.join();
+            }
         }
     }
 }
@@ -621,10 +623,8 @@ impl Runtime {
                         '_,
                         HashMap<PathBuf, std::time::Instant>,
                     > = debounce_cb.lock().unwrap_or_else(|e| e.into_inner());
-                    let last: std::time::Instant = debounce_map
-                        .get(path)
-                        .copied()
-                        .unwrap_or_else(|| {
+                    let last: std::time::Instant =
+                        debounce_map.get(path).copied().unwrap_or_else(|| {
                             now.checked_sub(core::time::Duration::from_secs(1_u64))
                                 .unwrap_or(now)
                         });
@@ -650,15 +650,19 @@ impl Runtime {
                     }
                 }
             })
-            .map_err(|e: notify::Error| crate::error::PolyplugError::WatcherFailed {
-                reason: e.to_string(),
+            .map_err(|e: notify::Error| {
+                crate::error::PolyplugError::WatcherFailed {
+                    reason: e.to_string(),
+                }
             })?;
 
         watcher
             .watch(&canonical_dir, notify::RecursiveMode::NonRecursive)
-            .map_err(|e: notify::Error| crate::error::PolyplugError::WatcherFailed {
-                reason: e.to_string(),
-            })?;
+            .map_err(
+                |e: notify::Error| crate::error::PolyplugError::WatcherFailed {
+                    reason: e.to_string(),
+                },
+            )?;
 
         let handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             // Keep watcher alive for the thread lifetime.
