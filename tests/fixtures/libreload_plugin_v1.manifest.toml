@@ -3,7 +3,7 @@ version                    = "1.0"
 runtime                    = "native"
 file                       = "libreload_plugin_v1.so"
 needs_reinit_on_dep_reload = false
-provides                   = ["reload.test@1"]
+provides                   = ["reload.test"]
 
 [function_count]
 "reload.test@1" = 1

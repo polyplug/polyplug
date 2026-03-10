@@ -3,7 +3,7 @@ version                    = "1.0"
 runtime                    = "native"
 file                       = "libdepender_plugin.so"
 needs_reinit_on_dep_reload = true
-provides                   = ["depender.test@1"]
+provides                   = ["depender.test"]
 
 [function_count]
 "depender.test@1" = 1

@@ -89,8 +89,8 @@ pub(crate) fn reload_bundle_impl(
             }
         })?
     };
-    // SAFETY: Symbol lookup returns a valid pointer on success; error handled otherwise.
-    let abi_version_sym: libloading::Symbol<'_, *const u32> = unsafe {
+    // SAFETY: Symbol lookup returns a valid function pointer for polyplug_abi_version.
+    let abi_version_sym: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
         new_library
             .get(b"polyplug_abi_version\0")
             .map_err(|_| PolyplugError::ReloadFailed {
@@ -98,8 +98,8 @@ pub(crate) fn reload_bundle_impl(
                 reason: "missing symbol polyplug_abi_version".to_owned(),
             })?
     };
-    // SAFETY: abi_version_sym is a valid pointer to a u32 ABI sentinel.
-    let found_version: u32 = unsafe { **abi_version_sym };
+    // SAFETY: abi_version_sym is a valid function pointer just resolved from the library.
+    let found_version: u32 = unsafe { abi_version_sym() };
     if found_version != crate::abi::POLYPLUG_ABI_VERSION {
         return Err(PolyplugError::ReloadFailed {
             bundle: path_str.clone(),

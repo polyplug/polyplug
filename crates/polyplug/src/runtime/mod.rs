@@ -446,7 +446,7 @@ impl Runtime {
         self.host_vtable
     }
 
-    pub(crate) fn registry(&self) -> &std::sync::Arc<crate::registry::Registry> {
+    pub fn registry(&self) -> &std::sync::Arc<crate::registry::Registry> {
         &self.registry
     }
 
