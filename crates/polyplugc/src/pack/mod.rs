@@ -122,7 +122,7 @@ target_include_directories({bundle_name} PUBLIC include)\n"
 fn to_pascal_case(name: &str) -> String {
     name.split('-')
         .map(|part: &str| {
-            let mut chars: std::str::Chars<'_> = part.chars();
+            let mut chars: core::str::Chars<'_> = part.chars();
             match chars.next() {
                 None => String::new(),
                 Some(first) => {
