@@ -90,11 +90,13 @@ fn test_generate_csharp_files_exist() {
         if version_out.status.success() {
             let guest_dir: PathBuf = out_dir.join("guest");
             let has_csproj: bool = std::fs::read_dir(&guest_dir)
-                .map(|mut rd| rd.any(|e| {
-                    e.ok()
-                        .and_then(|de| de.path().extension().map(|ext| ext == "csproj"))
-                        .unwrap_or(false)
-                }))
+                .map(|mut rd| {
+                    rd.any(|e| {
+                        e.ok()
+                            .and_then(|de| de.path().extension().map(|ext| ext == "csproj"))
+                            .unwrap_or(false)
+                    })
+                })
                 .unwrap_or(false);
 
             if has_csproj {

@@ -7,13 +7,13 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
 use polyplug_js_deno::JsDenoConfig;

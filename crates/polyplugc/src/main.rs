@@ -3,8 +3,8 @@
 pub(crate) mod error;
 pub(crate) mod generators;
 pub(crate) mod ir;
-pub(crate) mod parser;
 pub(crate) mod pack;
+pub(crate) mod parser;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use clap::Subcommand;
-
 
 use crate::error::CodegenError;
 use crate::generators::GeneratedFiles;
@@ -265,9 +264,8 @@ fn write_files_if_changed(out_dir: &Path, files: &GeneratedFiles) -> Result<(), 
             source: e,
         }
     })?;
-    let cache_toml: String = toml::to_string(&cache).map_err(|e: toml::ser::Error| {
-        CodegenError::CacheSerializeFailed { source: e }
-    })?;
+    let cache_toml: String = toml::to_string(&cache)
+        .map_err(|e: toml::ser::Error| CodegenError::CacheSerializeFailed { source: e })?;
     std::fs::write(&cache_path, cache_toml).map_err(|e: std::io::Error| {
         CodegenError::CacheWriteFailed {
             path: cache_path.to_string_lossy().into_owned(),

@@ -7,8 +7,8 @@ use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
-use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
@@ -89,7 +89,10 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
     };
 
     let name: &str = &bundle.name;
-    let version: String = format!("{}.{}.{}", bundle.version.major, bundle.version.minor, bundle.version.patch);
+    let version: String = format!(
+        "{}.{}.{}",
+        bundle.version.major, bundle.version.minor, bundle.version.patch
+    );
     let file: String = format!("{}.lua", bundle.name);
 
     let mut provides: Vec<String> = bundle

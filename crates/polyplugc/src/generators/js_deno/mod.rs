@@ -248,7 +248,7 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
             "[{}]",
             provides
                 .iter()
-                .map(|s: &String| format!("\"{}\"" , s))
+                .map(|s: &String| format!("\"{}\"", s))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
