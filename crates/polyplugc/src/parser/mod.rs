@@ -88,6 +88,8 @@ pub(crate) struct RawBundleMeta {
     /// Path or package name to the api.toml for this bundle.
     #[serde(default)]
     pub api: Option<String>,
+    #[serde(default)]
+    pub needs_reinit_on_dep_reload: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,6 +331,7 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, CodegenError> {
             bundle_id: dep_bundle_id,
             plugins,
             dependencies: resolved_deps,
+            needs_reinit_on_dep_reload: raw.bundle.needs_reinit_on_dep_reload,
         }),
     })
 }

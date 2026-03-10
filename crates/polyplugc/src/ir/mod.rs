@@ -216,6 +216,8 @@ pub(crate) struct ResolvedBundle {
     pub bundle_id: u64,
     #[allow(dead_code)]
     pub dependencies: Vec<ResolvedDependency>,
+    #[allow(dead_code)]
+    pub needs_reinit_on_dep_reload: bool,
 }
 
 /// A resolved bundle dependency — either by contract (any provider) or by bundle (specific provider).

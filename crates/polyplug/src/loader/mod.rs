@@ -176,6 +176,7 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
             file: String::new(),
             provides: Vec::new(),
             function_count: std::collections::HashMap::new(),
+            needs_reinit_on_dep_reload: false,
         });
     }
 
@@ -211,6 +212,7 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
         file: data.file,
         provides: data.provides,
         function_count: data.function_count,
+        needs_reinit_on_dep_reload: data.needs_reinit_on_dep_reload,
     })
 }
 

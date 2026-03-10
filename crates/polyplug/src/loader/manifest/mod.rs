@@ -106,6 +106,10 @@ pub struct ManifestData {
     /// Map from contract name to number of exported functions
     #[serde(default)]
     pub function_count: HashMap<String, u32>,
+    /// Whether this bundle needs re-initialization when a dependency is hot-reloaded.
+    /// Defaults to false. Most bundles do not need it.
+    #[serde(default)]
+    pub needs_reinit_on_dep_reload: bool,
 }
 
 impl ManifestData {
