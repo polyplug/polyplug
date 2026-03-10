@@ -34,10 +34,12 @@ impl CodeGenerator for LuaGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/types.lua"),
             content: types_lua,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/callers.lua"),
             content: callers_lua,
+            force_regenerate: false,
         });
 
         Ok(())
@@ -54,21 +56,25 @@ impl CodeGenerator for LuaGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/types.lua"),
             content: types_lua,
+            force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/contracts.lua"),
             content: contracts_lua,
+            force_regenerate: false,
         });
         let init_lua: String = generate_init_lua(ir);
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/init.lua"),
             content: init_lua,
+            force_regenerate: false,
         });
 
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("manifest.toml"),
                 content: generate_bundle_manifest_lua(ir),
+                force_regenerate: true,
             });
         }
 
@@ -179,7 +185,10 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> String {
             }
         }
     }
-    out.push_str("]])\n");
+    out.push_str("]]) \n");
+    for ty in &ir.types {
+        out.push_str(&format!("ffi.metatype(\"{}\", {{}})\n", ty.name));
+    }
     out
 }
 
