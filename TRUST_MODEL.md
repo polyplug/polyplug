@@ -189,6 +189,14 @@ The following structures have fixed layouts and sizes. Any modification to these
 ### Extensibility via `get_extension`
 To support future features without breaking the ABI, the `HostVTable` includes `get_extension(extension_id)`. This allows the host to expose new capability-specific VTables to plugins that know how to ask for them.
 
+## Hot-Reload Safety Guarantees
+
+- vtable swaps are atomic at the ArcSwap level — readers always see a consistent VTableSlot
+- old library handles are held alive by Arc reference counting until all in-flight calls release their PluginVTableGuard
+- the quiescence spin is bounded to 5 seconds; if the bound is exceeded the reload fails with QuiescenceTimeout without touching the live vtable
+- cascade reload depth is capped at 16 levels; deeper cascades fail with ReloadFailed and leave all plugins in their pre-reload state
+- non-native language bundles (Python, Lua, JS, .NET) are explicitly not reloadable in this version; reload_bundle() returns ReloadFailed with a clear reason string
+
 ## 8. Future Work
 
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
