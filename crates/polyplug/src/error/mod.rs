@@ -119,9 +119,7 @@ pub enum LoaderError {
     #[error("lua polyplug_init raised error: bundle={bundle}, message={message}")]
     LuaInitRaisedError { bundle: String, message: String },
 
-    #[error(
-        "rolldown not found on PATH — js-quickjs pack requires rolldown. {hint}"
-    )]
+    #[error("rolldown not found on PATH — js-quickjs pack requires rolldown. {hint}")]
     RolldownNotFound { hint: String },
 
     #[error("JS runtime \"{runtime}\" panicked during bundle load: {message}")]

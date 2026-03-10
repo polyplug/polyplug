@@ -305,6 +305,14 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
 /// Generate `guest/Init.cs` — the [UnmanagedCallersOnly] PolyplugInit entry point.
 fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
+    let has_trace: bool = ir
+        .bundle
+        .as_ref()
+        .is_some_and(|b: &crate::ir::ResolvedBundle| {
+            b.plugins
+                .iter()
+                .any(|p: &crate::ir::ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
+        });
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n");
@@ -316,6 +324,16 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("        if (registrar == null) return AbiConstants.ABI_ERROR_GENERIC;\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
+    if has_trace {
+        out.push_str("            const uint ExtTraceId = 0xC4EB9AEEu;\n");
+        out.push_str("            // Optional: trace extension\n");
+        out.push_str(
+            "            IntPtr traceVtablePtr = PolyplugHost.GetExtension(ExtTraceId);\n",
+        );
+        out.push_str(
+            "            // traceVtablePtr is IntPtr.Zero if trace extension not available\n\n",
+        );
+    }
 
     for contract in &ir.contracts {
         let lower: String = contract.name.replace('.', "_");

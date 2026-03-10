@@ -628,6 +628,14 @@ fn emit_guest_wrapper_call(out: &mut String, func: &ResolvedFunction, contract_s
 
 /// Generate the init.rs file content.
 fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
+    let has_trace: bool = ir
+        .bundle
+        .as_ref()
+        .is_some_and(|b: &crate::ir::ResolvedBundle| {
+            b.plugins
+                .iter()
+                .any(|p: &crate::ir::ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
+        });
     out.push_str("use polyplug_guest::AbiError;\n");
     out.push_str("use polyplug_guest::ABI_OK;\n");
     out.push_str("use polyplug_guest::ABI_ERROR_GENERIC;\n");
@@ -660,6 +668,15 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("    }\n");
     out.push_str("    // SAFETY: registrar is non-null and valid per ABI contract.\n");
     out.push_str("    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };\n\n");
+    if has_trace {
+        out.push_str("    // Optional: trace extension\n");
+        out.push_str("    const EXT_TRACE_ID: u32 = 0xC4EB9AEE_u32;\n");
+        out.push_str("    // SAFETY: reg.host is a valid HostVTable pointer set by the host.\n");
+        out.push_str("    let trace_vtable_ptr: *const () = unsafe { ((*reg.host).get_extension)(EXT_TRACE_ID) };\n");
+        out.push_str("    if trace_vtable_ptr.is_null() {\n");
+        out.push_str("        // Trace extension not available — continue without tracing.\n");
+        out.push_str("    }\n\n");
+    }
 
     for contract in &ir.contracts {
         let upper: String = contract_name_to_upper_snake(&contract.name);

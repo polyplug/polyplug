@@ -9,14 +9,14 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
-use deno_core::op2;
 use deno_core::FastString;
 use deno_core::ModuleLoader;
 use deno_core::ModuleSource;
 use deno_core::ModuleSourceCode;
 use deno_core::ModuleType;
-use deno_core::ResolutionKind;
 use deno_core::RequestedModuleType;
+use deno_core::ResolutionKind;
+use deno_core::op2;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
@@ -83,9 +83,13 @@ fn deno_function_registry() -> &'static Mutex<Vec<Option<DenoFunctionSlot>>> {
 
 fn dispatch_deno_call(slot: usize, args_ptr: *const (), out_ptr: *mut ()) -> AbiError {
     let reg: &Mutex<Vec<Option<DenoFunctionSlot>>> = deno_function_registry();
-    let guard: MutexGuard<'_, Vec<Option<DenoFunctionSlot>>> =
-        reg.lock().unwrap_or_else(|e: std::sync::PoisonError<MutexGuard<'_, Vec<Option<DenoFunctionSlot>>>>| e.into_inner());
-    let slot_ref: &DenoFunctionSlot = match guard.get(slot).and_then(|s: &Option<DenoFunctionSlot>| s.as_ref()) {
+    let guard: MutexGuard<'_, Vec<Option<DenoFunctionSlot>>> = reg.lock().unwrap_or_else(
+        |e: std::sync::PoisonError<MutexGuard<'_, Vec<Option<DenoFunctionSlot>>>>| e.into_inner(),
+    );
+    let slot_ref: &DenoFunctionSlot = match guard
+        .get(slot)
+        .and_then(|s: &Option<DenoFunctionSlot>| s.as_ref())
+    {
         Some(s) => s,
         None => {
             return AbiError {
@@ -94,18 +98,26 @@ fn dispatch_deno_call(slot: usize, args_ptr: *const (), out_ptr: *mut ()) -> Abi
             };
         }
     };
-    let (result_tx, result_rx): (std::sync::mpsc::SyncSender<AbiError>, std::sync::mpsc::Receiver<AbiError>) =
-        std::sync::mpsc::sync_channel::<AbiError>(0);
+    let (result_tx, result_rx): (
+        std::sync::mpsc::SyncSender<AbiError>,
+        std::sync::mpsc::Receiver<AbiError>,
+    ) = std::sync::mpsc::sync_channel::<AbiError>(0);
     let req: JsCallRequest = JsCallRequest {
         args_ptr: args_ptr as usize,
         out_ptr: out_ptr as usize,
         result_tx,
     };
     if slot_ref.call_tx.send(req).is_err() {
-        return AbiError { code: 1, message: StringView::null() };
+        return AbiError {
+            code: 1,
+            message: StringView::null(),
+        };
     }
     drop(guard);
-    result_rx.recv().unwrap_or(AbiError { code: 1, message: StringView::null() })
+    result_rx.recv().unwrap_or(AbiError {
+        code: 1,
+        message: StringView::null(),
+    })
 }
 
 // Pre-generated static extern "C" trampolines (slots 0..63).
@@ -264,7 +276,8 @@ static TRAMPOLINES: [unsafe extern "C" fn(*const (), *mut ()) -> AbiError; MAX_T
 #[op2(fast)]
 #[bigint]
 fn op_find_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return u64::MAX;
     }
@@ -280,13 +293,15 @@ fn op_find_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
 #[op2(fast)]
 #[bigint]
 fn op_find_by_bundle(#[bigint] bundle_id: u64, #[bigint] contract_id: u64, min_ver: u32) -> u64 {
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return u64::MAX;
     }
     // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
     // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    let handle: PluginHandle = unsafe { ((*vtable).find_by_bundle)(bundle_id, contract_id, min_ver) };
+    let handle: PluginHandle =
+        unsafe { ((*vtable).find_by_bundle)(bundle_id, contract_id, min_ver) };
     if handle.is_null() {
         u64::MAX
     } else {
@@ -298,7 +313,8 @@ fn op_find_by_bundle(#[bigint] bundle_id: u64, #[bigint] contract_id: u64, min_v
 #[bigint]
 fn op_find_all_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
     // Simplified: return just the first handle as u64, u64::MAX for none.
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return u64::MAX;
     }
@@ -306,7 +322,8 @@ fn op_find_all_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
     // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
     // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
     // buf is stack-allocated; buf.as_mut_ptr() and capacity 1 are valid.
-    let count: usize = unsafe { ((*vtable).find_all_by_contract)(contract_id, min_ver, buf.as_mut_ptr(), 1) };
+    let count: usize =
+        unsafe { ((*vtable).find_all_by_contract)(contract_id, min_ver, buf.as_mut_ptr(), 1) };
     if count == 0 || buf[0].is_null() {
         u64::MAX
     } else {
@@ -317,7 +334,8 @@ fn op_find_all_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
 #[op2(fast)]
 #[bigint]
 fn op_resolve_plugin(#[bigint] handle_packed: u64) -> u64 {
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return 0;
     }
@@ -334,7 +352,8 @@ fn op_resolve_plugin(#[bigint] handle_packed: u64) -> u64 {
 #[op2(fast)]
 #[bigint]
 fn op_get_extension(extension_id: u32) -> u64 {
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return 0;
     }
@@ -362,7 +381,8 @@ fn op_register_vtable(#[bigint] contract_id: u64, #[bigint] vtable_ptr: u64, fn_
 #[op2(fast)]
 #[bigint]
 fn op_alloc(size: u32) -> u64 {
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return 0;
     }
@@ -375,7 +395,8 @@ fn op_alloc(size: u32) -> u64 {
 
 #[op2(fast)]
 fn op_free(#[bigint] ptr: u64) {
-    let vtable: *const HostVTable = DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
+    let vtable: *const HostVTable =
+        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
     if vtable.is_null() {
         return;
     }
@@ -412,8 +433,7 @@ impl ModuleLoader for InMemoryModuleLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> Result<deno_core::ModuleSpecifier, deno_core::error::AnyError> {
-        let resolved: deno_core::ModuleSpecifier =
-            deno_core::resolve_import(specifier, referrer)?;
+        let resolved: deno_core::ModuleSpecifier = deno_core::resolve_import(specifier, referrer)?;
         Ok(resolved)
     }
 
@@ -433,9 +453,8 @@ impl ModuleLoader for InMemoryModuleLoader {
             );
             return deno_core::ModuleLoadResponse::Sync(Ok(source));
         }
-        let error: deno_core::error::AnyError = deno_core::error::generic_error(
-            "only the main JS fixture module is supported",
-        );
+        let error: deno_core::error::AnyError =
+            deno_core::error::generic_error("only the main JS fixture module is supported");
         deno_core::ModuleLoadResponse::Sync(Err(error))
     }
 }
@@ -511,7 +530,11 @@ impl BundleLoader for JsDenoLoader {
                 // Determine module file: prefer bundle.js, fallback to index.ts
                 let bundle_js: PathBuf = bundle_path.join("bundle.js");
                 let index_ts: PathBuf = bundle_path.join("index.ts");
-                let module_path: PathBuf = if bundle_js.exists() { bundle_js } else { index_ts };
+                let module_path: PathBuf = if bundle_js.exists() {
+                    bundle_js
+                } else {
+                    index_ts
+                };
                 let module_source: String = std::fs::read_to_string(&module_path)
                     .unwrap_or_else(|e: std::io::Error| panic!("failed to read module: {e}"));
 
@@ -530,20 +553,20 @@ impl BundleLoader for JsDenoLoader {
                     source: module_source,
                 };
 
-                let mut runtime: deno_core::JsRuntime = deno_core::JsRuntime::new(
-                    deno_core::RuntimeOptions {
+                let mut runtime: deno_core::JsRuntime =
+                    deno_core::JsRuntime::new(deno_core::RuntimeOptions {
                         extensions: vec![polyplug_ops::init_ops()],
                         module_loader: Some(std::rc::Rc::new(module_loader)),
                         ..Default::default()
-                    },
-                );
+                    });
 
-                let mod_id: deno_core::ModuleId = match runtime.load_main_es_module(&module_url).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        panic!("failed to load module: {e}");
-                    }
-                };
+                let mod_id: deno_core::ModuleId =
+                    match runtime.load_main_es_module(&module_url).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            panic!("failed to load module: {e}");
+                        }
+                    };
                 // Evaluate the module — triggers top-level execution including op_register_vtable
                 let evaluate_future = runtime.mod_evaluate(mod_id);
                 if let Err(e) = runtime.run_event_loop(Default::default()).await {
@@ -574,13 +597,13 @@ impl BundleLoader for JsDenoLoader {
         // 6. Receive the registered vtable ptr from the bundle thread (30s timeout)
         let (raw_vtable_wrapped, contract_id_val, fn_count): (SendPluginVTable, u64, usize) =
             vtable_rx
-            .recv_timeout(core::time::Duration::from_secs(30))
-            .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
-                PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                    runtime: "js-deno".to_owned(),
-                    message: "vtable registration timed out after 30s".to_owned(),
-                })
-            })?;
+                .recv_timeout(core::time::Duration::from_secs(30))
+                .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
+                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                        runtime: "js-deno".to_owned(),
+                        message: "vtable registration timed out after 30s".to_owned(),
+                    })
+                })?;
         let raw_vtable: *const PluginVTable = raw_vtable_wrapped.0;
 
         if raw_vtable.is_null() {
@@ -595,16 +618,25 @@ impl BundleLoader for JsDenoLoader {
         let base_slot: usize = {
             let reg: &Mutex<Vec<Option<DenoFunctionSlot>>> = deno_function_registry();
             let mut guard: MutexGuard<'_, Vec<Option<DenoFunctionSlot>>> =
-                reg.lock().unwrap_or_else(|e: std::sync::PoisonError<MutexGuard<'_, Vec<Option<DenoFunctionSlot>>>>| e.into_inner());
+                reg.lock().unwrap_or_else(
+                    |e: std::sync::PoisonError<MutexGuard<'_, Vec<Option<DenoFunctionSlot>>>>| {
+                        e.into_inner()
+                    },
+                );
             let slot: usize = guard.len();
             if slot + fn_count > MAX_TRAMPOLINES {
                 return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {
                     runtime: "js-deno".to_owned(),
-                    message: format!("too many function slots: {} + {} > {}", slot, fn_count, MAX_TRAMPOLINES),
+                    message: format!(
+                        "too many function slots: {} + {} > {}",
+                        slot, fn_count, MAX_TRAMPOLINES
+                    ),
                 }));
             }
             for _ in 0..fn_count {
-                guard.push(Some(DenoFunctionSlot { call_tx: call_tx.clone() }));
+                guard.push(Some(DenoFunctionSlot {
+                    call_tx: call_tx.clone(),
+                }));
             }
             slot
         };
