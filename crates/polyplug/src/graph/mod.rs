@@ -15,14 +15,7 @@ use crate::abi::contract_id as compute_contract_id;
 use crate::error::GraphError;
 use crate::loader::manifest::ManifestData;
 use crate::loader::manifest::ManifestDependency;
-
-/// Version with major.minor.patch components.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Version {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
+use crate::version::Version;
 
 /// A contract capability (either provided or required).
 #[derive(Debug, Clone)]
@@ -206,14 +199,7 @@ impl CapabilityGraph {
                 .provides
                 .iter()
                 .map(|name: &String| {
-                    ContractCapability::new(
-                        name.clone(),
-                        Version {
-                            major: 1,
-                            minor: 0,
-                            patch: 0,
-                        },
-                    )
+                    ContractCapability::new(name.clone(), Version { major: 1, minor: 0 })
                 })
                 .collect::<Vec<ContractCapability>>();
 
@@ -230,11 +216,7 @@ impl CapabilityGraph {
                         let cap: ContractCapability = ContractCapability {
                             contract_name: contract.clone(),
                             contract_id: *contract_id,
-                            version: Version {
-                                major: 1,
-                                minor: 0,
-                                patch: 0,
-                            },
+                            version: Version { major: 1, minor: 0 },
                         };
                         requires_caps.push(cap);
                     }
@@ -269,11 +251,7 @@ impl CapabilityGraph {
                         let cap: ContractCapability = ContractCapability {
                             contract_name: contract.clone(),
                             contract_id: *contract_id,
-                            version: Version {
-                                major: 1,
-                                minor: 0,
-                                patch: 0,
-                            },
+                            version: Version { major: 1, minor: 0 },
                         };
                         requires_caps.push(cap);
                     }
@@ -304,14 +282,7 @@ mod tests {
     use super::*;
 
     fn make_capability(name: &str, major: u32, minor: u32) -> ContractCapability {
-        ContractCapability::new(
-            name.to_owned(),
-            Version {
-                major,
-                minor,
-                patch: 0,
-            },
-        )
+        ContractCapability::new(name.to_owned(), Version { major, minor })
     }
 
     #[test]
