@@ -10,6 +10,13 @@ use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
 use deno_core::op2;
+use deno_core::FastString;
+use deno_core::ModuleLoader;
+use deno_core::ModuleSource;
+use deno_core::ModuleSourceCode;
+use deno_core::ModuleType;
+use deno_core::ResolutionKind;
+use deno_core::RequestedModuleType;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
@@ -34,7 +41,7 @@ thread_local! {
 // Channel sender for vtable registration result.
 // VtableSenderInner uses a type alias so the thread_local! macro can parse the angle brackets
 // without hitting the type_complexity lint.
-type VtableSenderInner = std::sync::mpsc::SyncSender<(SendPluginVTable, u64)>;
+type VtableSenderInner = std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize)>;
 
 thread_local! {
     static VTABLE_SENDER: core::cell::RefCell<Option<VtableSenderInner>> =
@@ -338,11 +345,16 @@ fn op_get_extension(extension_id: u32) -> u64 {
 }
 
 #[op2(fast)]
-fn op_register_vtable(#[bigint] contract_id: u64, #[bigint] vtable_ptr: u64) {
+fn op_register_vtable(#[bigint] contract_id: u64, #[bigint] vtable_ptr: u64, fn_count: u32) {
     VTABLE_SENDER.with(|c: &core::cell::RefCell<Option<VtableSenderInner>>| {
         let borrow: core::cell::Ref<'_, Option<VtableSenderInner>> = c.borrow();
         if let Some(tx) = borrow.as_ref() {
-            let _ = tx.send((SendPluginVTable(vtable_ptr as *const PluginVTable), contract_id));
+            let fn_count_usize: usize = fn_count as usize;
+            let _ = tx.send((
+                SendPluginVTable(vtable_ptr as *const PluginVTable),
+                contract_id,
+                fn_count_usize,
+            ));
         }
     });
 }
@@ -388,12 +400,52 @@ deno_core::extension!(
     ]
 );
 
+struct InMemoryModuleLoader {
+    specifier: deno_core::ModuleSpecifier,
+    source: String,
+}
+
+impl ModuleLoader for InMemoryModuleLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+        _kind: ResolutionKind,
+    ) -> Result<deno_core::ModuleSpecifier, deno_core::error::AnyError> {
+        let resolved: deno_core::ModuleSpecifier =
+            deno_core::resolve_import(specifier, referrer)?;
+        Ok(resolved)
+    }
+
+    fn load(
+        &self,
+        specifier: &deno_core::ModuleSpecifier,
+        _maybe_referrer: Option<&deno_core::ModuleSpecifier>,
+        _is_dynamic: bool,
+        _requested_module_type: RequestedModuleType,
+    ) -> deno_core::ModuleLoadResponse {
+        if *specifier == self.specifier {
+            let source: ModuleSource = ModuleSource::new(
+                ModuleType::JavaScript,
+                ModuleSourceCode::String(FastString::from(self.source.clone())),
+                &self.specifier,
+                None,
+            );
+            return deno_core::ModuleLoadResponse::Sync(Ok(source));
+        }
+        let error: deno_core::error::AnyError = deno_core::error::generic_error(
+            "only the main JS fixture module is supported",
+        );
+        deno_core::ModuleLoadResponse::Sync(Err(error))
+    }
+}
+
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 // Type alias for the vtable channel pair to avoid the type_complexity lint.
 type VtableChannelPair = (
-    std::sync::mpsc::SyncSender<(SendPluginVTable, u64)>,
-    std::sync::mpsc::Receiver<(SendPluginVTable, u64)>,
+    std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize)>,
+    std::sync::mpsc::Receiver<(SendPluginVTable, u64, usize)>,
 );
 
 /// Loader for V8 in-process JS plugin bundles using deno_core.
@@ -422,7 +474,7 @@ impl BundleLoader for JsDenoLoader {
 
         // 2. Create channel for vtable registration (bounded 1 = oneshot)
         let (vtable_tx, vtable_rx): VtableChannelPair =
-            std::sync::mpsc::sync_channel::<(SendPluginVTable, u64)>(1);
+            std::sync::mpsc::sync_channel::<(SendPluginVTable, u64, usize)>(1);
 
         // 3. Create channel for vtable call dispatch
         let (call_tx, call_rx): (
@@ -456,28 +508,35 @@ impl BundleLoader for JsDenoLoader {
 
             tokio_rt.block_on(async move {
                 // Create deno_core JsRuntime
-                let mut runtime: deno_core::JsRuntime = deno_core::JsRuntime::new(
-                    deno_core::RuntimeOptions {
-                        extensions: vec![polyplug_ops::init_ops()],
-                        ..Default::default()
-                    },
-                );
-
                 // Determine module file: prefer bundle.js, fallback to index.ts
                 let bundle_js: PathBuf = bundle_path.join("bundle.js");
                 let index_ts: PathBuf = bundle_path.join("index.ts");
                 let module_path: PathBuf = if bundle_js.exists() { bundle_js } else { index_ts };
+                let module_source: String = std::fs::read_to_string(&module_path)
+                    .unwrap_or_else(|e: std::io::Error| panic!("failed to read module: {e}"));
 
-                let module_url: deno_core::ModuleSpecifier =
-                    match deno_core::resolve_path(
-                        module_path.to_str().unwrap_or("bundle.js"),
-                        &std::env::current_dir().unwrap_or_else(|_: std::io::Error| PathBuf::from(".")),
-                    ) {
-                        Ok(url) => url,
-                        Err(e) => {
-                            panic!("failed to resolve module URL: {e}");
-                        }
-                    };
+                let module_url: deno_core::ModuleSpecifier = match deno_core::resolve_path(
+                    module_path.to_str().unwrap_or("bundle.js"),
+                    &std::env::current_dir().unwrap_or_else(|_: std::io::Error| PathBuf::from(".")),
+                ) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        panic!("failed to resolve module URL: {e}");
+                    }
+                };
+
+                let module_loader: InMemoryModuleLoader = InMemoryModuleLoader {
+                    specifier: module_url.clone(),
+                    source: module_source,
+                };
+
+                let mut runtime: deno_core::JsRuntime = deno_core::JsRuntime::new(
+                    deno_core::RuntimeOptions {
+                        extensions: vec![polyplug_ops::init_ops()],
+                        module_loader: Some(std::rc::Rc::new(module_loader)),
+                        ..Default::default()
+                    },
+                );
 
                 let mod_id: deno_core::ModuleId = match runtime.load_main_es_module(&module_url).await {
                     Ok(id) => id,
@@ -513,7 +572,8 @@ impl BundleLoader for JsDenoLoader {
         let _leaked: &'static std::thread::JoinHandle<()> = Box::leak(Box::new(thread_handle));
 
         // 6. Receive the registered vtable ptr from the bundle thread (30s timeout)
-        let (raw_vtable_wrapped, contract_id_val): (SendPluginVTable, u64) = vtable_rx
+        let (raw_vtable_wrapped, contract_id_val, fn_count): (SendPluginVTable, u64, usize) =
+            vtable_rx
             .recv_timeout(core::time::Duration::from_secs(30))
             .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
                 PolyplugError::Loader(LoaderError::JsRuntimePanic {
@@ -523,11 +583,14 @@ impl BundleLoader for JsDenoLoader {
             })?;
         let raw_vtable: *const PluginVTable = raw_vtable_wrapped.0;
 
-        // 7. Build function pointer array using trampolines
-        // SAFETY: raw_vtable came from op_register_vtable — 'static pointer from JS plugin.
-        // The JS plugin called op_register_vtable with a vtable_ptr that it owns statically.
-        let vtable_ref: &PluginVTable = unsafe { &*raw_vtable };
-        let fn_count: usize = vtable_ref.function_count as usize;
+        if raw_vtable.is_null() {
+            return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-deno".to_owned(),
+                message: "registerVtable() received null vtable pointer".to_owned(),
+            }));
+        }
+
+        let contract_version: u32 = 0_u32;
 
         let base_slot: usize = {
             let reg: &Mutex<Vec<Option<DenoFunctionSlot>>> = deno_function_registry();
@@ -563,7 +626,7 @@ impl BundleLoader for JsDenoLoader {
         // 8. Build new vtable
         let new_vtable: PluginVTable = PluginVTable {
             contract_id: contract_id_val,
-            contract_version: vtable_ref.contract_version,
+            contract_version,
             function_count: fn_count as u32,
             functions: functions_ptr,
         };
@@ -579,8 +642,8 @@ impl BundleLoader for JsDenoLoader {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version_major: vtable_ref.contract_version >> 16,
-            version_minor: vtable_ref.contract_version & 0xFFFF,
+            version_major: contract_version >> 16,
+            version_minor: contract_version & 0xFFFF,
             version_patch: 0_u32,
         };
 

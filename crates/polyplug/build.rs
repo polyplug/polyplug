@@ -499,4 +499,15 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
         fixtures_dir.join("test_plugin.lua").display()
     );
 
+    println!(
+        "cargo:rerun-if-changed={}",
+        fixtures_dir
+            .join("test_plugin_js")
+            .join("bundle.js")
+            .display()
+    );
+    println!(
+        "cargo:rustc-env=TEST_JS_PLUGIN={}",
+        fixtures_dir.join("test_plugin_js").display()
+    );
 }

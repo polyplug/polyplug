@@ -42,7 +42,7 @@ static QJS_RUNTIME: OnceLock<Runtime> = OnceLock::new();
 thread_local! {
     /// Set by the registerVtable() JS callback during bundle eval.
     /// Cleared before each eval; read after eval completes.
-    static PENDING_VTABLE: RefCell<Option<(u64, *const PluginVTable)>> =
+    static PENDING_VTABLE: RefCell<Option<(u64, *const PluginVTable, usize)>> =
         const { RefCell::new(None) };
 }
 
@@ -425,16 +425,16 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    // registerVtable(contract_lo: u32, contract_hi: u32, vtable_lo: u32, vtable_hi: u32) → void
     let register_vtable_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |contract_lo: u32, contract_hi: u32, vtable_lo: u32, vtable_hi: u32| {
+        |contract_lo: u32, contract_hi: u32, vtable_lo: u32, vtable_hi: u32, fn_count: u32| {
             let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
             let vtable_addr: u64 = (vtable_hi as u64) << 32 | vtable_lo as u64;
             let vtable_ptr: *const PluginVTable = vtable_addr as usize as *const PluginVTable;
+            let fn_count_usize: usize = fn_count as usize;
             PENDING_VTABLE.with(
-                |cell: &RefCell<Option<(u64, *const PluginVTable)>>| {
-                    *cell.borrow_mut() = Some((contract_id, vtable_ptr));
+                |cell: &RefCell<Option<(u64, *const PluginVTable, usize)>>| {
+                    *cell.borrow_mut() = Some((contract_id, vtable_ptr, fn_count_usize));
                 },
             );
         },
@@ -571,11 +571,9 @@ impl BundleLoader for JsLoader {
         })?;
 
         // 5. Clear PENDING_VTABLE before eval.
-        PENDING_VTABLE.with(
-            |c: &RefCell<Option<(u64, *const PluginVTable)>>| {
-                *c.borrow_mut() = None;
-            },
-        );
+        PENDING_VTABLE.with(|c: &RefCell<Option<(u64, *const PluginVTable, usize)>>| {
+            *c.borrow_mut() = None;
+        });
 
         // 6. Set up polyplug global and eval bundle.
         let eval_result: Result<(), PolyplugError> =
@@ -610,20 +608,24 @@ impl BundleLoader for JsLoader {
         eval_result?;
 
         // 7. Extract registered vtable from PENDING_VTABLE.
-        let (contract_id_val, vtable_ptr): (u64, *const PluginVTable) = PENDING_VTABLE
-            .with(|c: &RefCell<Option<(u64, *const PluginVTable)>>| *c.borrow())
-            .ok_or_else(|| {
-                PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                    runtime: "js-quickjs".to_owned(),
-                    message: "bundle did not call polyplug.registerVtable()".to_owned(),
-                })
-            })?;
+        let (contract_id_val, vtable_ptr, fn_count): (u64, *const PluginVTable, usize) =
+            PENDING_VTABLE
+                .with(|c: &RefCell<Option<(u64, *const PluginVTable, usize)>>| *c.borrow())
+                .ok_or_else(|| {
+                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                        runtime: "js-quickjs".to_owned(),
+                        message: "bundle did not call polyplug.registerVtable()".to_owned(),
+                    })
+                })?;
 
-        // 8. Read vtable metadata.
-        // SAFETY: vtable_ptr came from registerVtable — it is a pointer to a PluginVTable
-        // provided by the JS bundle. The bundle is responsible for keeping it valid.
-        let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
-        let fn_count: usize = vtable_ref.function_count as usize;
+        if vtable_ptr.is_null() {
+            return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: "registerVtable() received null vtable pointer".to_owned(),
+            }));
+        }
+
+        let contract_version: u32 = 0_u32;
 
         // 9. Allocate trampoline slots.
         let base_slot: usize = {
@@ -667,7 +669,7 @@ impl BundleLoader for JsLoader {
         // 11. Build vtable.
         let new_vtable: PluginVTable = PluginVTable {
             contract_id: contract_id_val,
-            contract_version: vtable_ref.contract_version,
+            contract_version,
             function_count: fn_count as u32,
             functions: functions_ptr,
         };
@@ -685,8 +687,8 @@ impl BundleLoader for JsLoader {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version_major: vtable_ref.contract_version >> 16,
-            version_minor: vtable_ref.contract_version & 0xFFFF,
+            version_major: contract_version >> 16,
+            version_minor: contract_version & 0xFFFF,
             version_patch: 0_u32,
         };
 
