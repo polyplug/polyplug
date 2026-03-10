@@ -35,10 +35,10 @@ use crate::error::PolyplugError;
 use crate::extensions::Extension;
 use crate::extensions::SendPtr;
 use crate::graph::CapabilityGraph;
+use crate::loader::manifest::ManifestData;
 use crate::loader::BundleInitGuard;
 use crate::loader::BundleLoader;
 use crate::loader::NativeBundleLoader;
-use crate::loader::manifest::ManifestData;
 use crate::version::Compatibility;
 use crate::version::Version;
 
@@ -52,6 +52,9 @@ static GLOBAL_EXTENSION_MAP: OnceLock<HashMap<u32, SendPtr>> = OnceLock::new();
 
 /// Type alias for the warning callback to avoid repetition.
 type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
+
+/// Type alias for the reload callback.
+type ReloadCb = std::sync::Arc<dyn Fn(crate::reload::ReloadEvent) + Send + Sync>;
 
 /// Global warning callback. Set once via `RuntimeBuilder::on_warning()`.
 ///
@@ -104,6 +107,16 @@ pub struct Runtime {
     host_vtable: &'static HostVTable,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
     loaders: HashMap<String, Box<dyn BundleLoader>>,
+    /// ManifestData for all loaded bundles, keyed by bundle_name.
+    /// Used by reload_bundle() for cascade detection.
+    pub(crate) bundle_manifests:
+        std::sync::Mutex<std::collections::HashMap<String, crate::loader::manifest::ManifestData>>,
+    /// Library handles for reloaded native bundles — these ARE droppable (unlike loaded_libraries).
+    /// Keyed by bundle_id. On each reload the old handle is removed and dropped after quiescence.
+    pub(crate) reload_libraries:
+        std::sync::Mutex<std::collections::HashMap<u64, libloading::Library>>,
+    /// Optional callback fired after vtable swap, before dlclose.
+    pub(crate) on_reload_cb: Option<ReloadCb>,
 }
 
 // SAFETY: Runtime wraps Arc<Registry> (Send+Sync) and Vec<LoadedBundle>.
@@ -133,6 +146,7 @@ pub struct RuntimeBuilder {
     extensions: Vec<Box<dyn Extension>>,
     compatibility: Compatibility,
     warning_cb: Option<WarningCb>,
+    on_reload_cb: Option<ReloadCb>,
 }
 
 impl RuntimeBuilder {
@@ -144,6 +158,7 @@ impl RuntimeBuilder {
             extensions: Vec::new(),
             compatibility: Compatibility::default(),
             warning_cb: None,
+            on_reload_cb: None,
         }
     }
 
@@ -187,6 +202,17 @@ impl RuntimeBuilder {
     /// The callback receives human-readable warning strings.
     pub fn on_warning(mut self, cb: impl Fn(&str) + Send + Sync + 'static) -> RuntimeBuilder {
         self.warning_cb = Some(Box::new(cb));
+        self
+    }
+
+    /// Register a callback fired after each successful vtable swap, before dlclose.
+    ///
+    /// The callback receives a `ReloadEvent` describing the reloaded bundle.
+    pub fn on_reload(
+        mut self,
+        cb: impl Fn(crate::reload::ReloadEvent) + Send + Sync + 'static,
+    ) -> RuntimeBuilder {
+        self.on_reload_cb = Some(std::sync::Arc::new(cb));
         self
     }
 
@@ -263,6 +289,16 @@ impl RuntimeBuilder {
         let discovered: Vec<(PathBuf, ManifestData)> =
             crate::loader::scanner::scan_dirs(&self.plugin_dirs);
 
+        // Snapshot manifests for hot-reload cascade detection.
+        let mut manifests_map: std::collections::HashMap<
+            String,
+            crate::loader::manifest::ManifestData,
+        > = std::collections::HashMap::new();
+        for (path, manifest) in &discovered {
+            let mut stored_manifest: ManifestData = manifest.clone();
+            stored_manifest.path = path.clone();
+            manifests_map.insert(stored_manifest.bundle_name.clone(), stored_manifest);
+        }
         // If nothing discovered, build Runtime with empty bundles (no graph needed)
         if !discovered.is_empty() {
             // Phase 2: Build capability graph
@@ -315,23 +351,21 @@ impl RuntimeBuilder {
                 // call file_stem(), read_to_string(), canonicalize(), etc. on the path.
                 // The scanner passes the directory path for directory bundles; here we
                 // join manifest.file to get the real file inside the bundle directory.
-                let effective_path: PathBuf = if bundle_path.is_dir()
-                    && !manifest.file.is_empty()
-                {
+                let effective_path: PathBuf = if bundle_path.is_dir() && !manifest.file.is_empty() {
                     bundle_path.join(&manifest.file)
                 } else {
                     bundle_path.clone()
                 };
 
-                loader
-                    .load(&effective_path, &mut registrar)
-                    .map_err(|e: PolyplugError| match e {
+                loader.load(&effective_path, &mut registrar).map_err(
+                    |e: PolyplugError| match e {
                         PolyplugError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: effective_path.display().to_string(),
                             error: other.to_string(),
                         }),
-                    })?;
+                    },
+                )?;
             }
         }
 
@@ -341,6 +375,9 @@ impl RuntimeBuilder {
             host_vtable,
             loaders: loader_map,
             _extensions: self.extensions,
+            bundle_manifests: std::sync::Mutex::new(manifests_map),
+            reload_libraries: std::sync::Mutex::new(std::collections::HashMap::new()),
+            on_reload_cb: self.on_reload_cb,
         })
     }
 }
@@ -395,6 +432,29 @@ impl Runtime {
         self.host_vtable
     }
 
+    pub(crate) fn registry(&self) -> &std::sync::Arc<crate::registry::Registry> {
+        &self.registry
+    }
+
+    pub(crate) fn host_vtable_ref(&self) -> &'static crate::abi::HostVTable {
+        self.host_vtable
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn loaders(
+        &self,
+    ) -> &std::collections::HashMap<String, Box<dyn crate::loader::BundleLoader>> {
+        &self.loaders
+    }
+
+    /// Test-only accessor for reload_libraries count. Used by integration tests.
+    #[cfg(test)]
+    pub fn test_reload_libraries_count(&self) -> usize {
+        self.reload_libraries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
     /// Load a single plugin bundle explicitly by path.
     ///
     /// Reads the companion manifest, finds the matching loader, and dispatches.

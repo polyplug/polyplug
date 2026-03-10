@@ -410,6 +410,7 @@ mod tests {
             provides: vec!["contract.X".to_owned()],
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            path: PathBuf::new(),
         };
 
         let manifest_b: ManifestData = ManifestData {
@@ -423,6 +424,7 @@ mod tests {
             provides: vec!["contract.Y".to_owned()],
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            path: PathBuf::new(),
         };
 
         let manifest_c: ManifestData = ManifestData {
@@ -436,6 +438,7 @@ mod tests {
             provides: Vec::new(),
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            path: PathBuf::new(),
         };
 
         let manifests: Vec<(PathBuf, ManifestData)> = vec![
@@ -495,6 +498,7 @@ mod tests {
             provides: Vec::new(),
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            path: PathBuf::new(),
         };
 
         let manifests: Vec<(PathBuf, ManifestData)> =

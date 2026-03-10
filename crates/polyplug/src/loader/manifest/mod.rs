@@ -5,6 +5,7 @@
 //! If absent, defaults to `"native"`.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 fn default_runtime() -> String {
     "native".to_owned()
@@ -110,6 +111,8 @@ pub struct ManifestData {
     /// Defaults to false. Most bundles do not need it.
     #[serde(default)]
     pub needs_reinit_on_dep_reload: bool,
+    #[serde(skip)]
+    pub path: PathBuf,
 }
 
 impl ManifestData {

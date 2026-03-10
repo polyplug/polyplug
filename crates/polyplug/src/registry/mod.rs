@@ -509,10 +509,10 @@ impl Registry {
             self.slots.read().unwrap_or_else(|e| e.into_inner());
         let mut result: Vec<u32> = Vec::new();
         for (i, slot) in slots.iter().enumerate() {
-            if let Some(ref entry) = slot.entry {
-                if entry.bundle_id == bundle_id {
-                    result.push(i as u32);
-                }
+            if let Some(ref entry) = slot.entry
+                && entry.bundle_id == bundle_id
+            {
+                result.push(i as u32);
             }
         }
         result
@@ -825,4 +825,3 @@ mod tests {
         assert_eq!(slots.len(), 2, "both slots should be found for the bundle");
     }
 }
-

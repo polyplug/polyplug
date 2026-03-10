@@ -12,6 +12,9 @@ pub mod graph;
 pub mod loader;
 pub mod registry;
 pub mod runtime;
+pub mod reload;
+pub use reload::ReloadEvent;
+
 pub mod version;
 
 // Re-export the allocator functions at crate level for convenience.

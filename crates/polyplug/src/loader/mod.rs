@@ -15,15 +15,15 @@ pub mod scanner;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::abi::ABI_OK;
 use crate::abi::AbiError;
 use crate::abi::AbiError as AbiErrorType;
 use crate::abi::HostVTable;
-use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::abi::PluginDescriptor;
 use crate::abi::PluginHandle;
 use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
+use crate::abi::ABI_OK;
+use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::error::LoaderError;
 use crate::registry::Registry;
 use std::sync::Arc;
@@ -177,6 +177,7 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
             provides: Vec::new(),
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            path: PathBuf::new(),
         });
     }
 
@@ -202,7 +203,7 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
         });
     }
 
-    Ok(ManifestData {
+    let mut manifest: ManifestData = ManifestData {
         runtime: trimmed.to_owned(),
         bundle_name: data.bundle_name,
         dependencies: data.dependencies,
@@ -213,7 +214,10 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
         provides: data.provides,
         function_count: data.function_count,
         needs_reinit_on_dep_reload: data.needs_reinit_on_dep_reload,
-    })
+        path: PathBuf::new(),
+    };
+    manifest.path = bundle_path.to_path_buf();
+    Ok(manifest)
 }
 
 /// Load a single native plugin bundle.
