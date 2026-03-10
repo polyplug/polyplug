@@ -173,7 +173,7 @@ pub(crate) fn reload_bundle_impl(
     }
 
     let old_version: String = {
-        let manifests_guard = runtime
+        let manifests_guard: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = runtime
             .bundle_manifests
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -229,7 +229,7 @@ pub(crate) fn reload_bundle_impl(
         .insert(manifest.bundle_name.clone(), manifest.clone());
 
     let dependents: Vec<(String, PathBuf)> = {
-        let manifests_guard = runtime
+        let manifests_guard: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = runtime
             .bundle_manifests
             .lock()
             .unwrap_or_else(|e| e.into_inner());
