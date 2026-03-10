@@ -42,6 +42,10 @@ use crate::loader::NativeBundleLoader;
 use crate::version::Compatibility;
 use crate::version::Version;
 
+#[cfg(feature = "hot-reload")]
+use notify::Watcher;
+#[cfg(feature = "hot-reload")]
+use core::sync::atomic::Ordering;
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
 static GLOBAL_REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
@@ -117,6 +121,12 @@ pub struct Runtime {
         std::sync::Mutex<std::collections::HashMap<u64, libloading::Library>>,
     /// Optional callback fired after vtable swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCb>,
+    /// Background watcher thread handle. Feature-gated. Joined on Drop.
+    #[cfg(feature = "hot-reload")]
+    watcher_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Stop flag sent to watcher thread. Feature-gated.
+    #[cfg(feature = "hot-reload")]
+    watcher_stop: std::sync::Mutex<Option<std::sync::Arc<core::sync::atomic::AtomicBool>>>,
 }
 
 // SAFETY: Runtime wraps Arc<Registry> (Send+Sync) and Vec<LoadedBundle>.
@@ -378,6 +388,10 @@ impl RuntimeBuilder {
             bundle_manifests: std::sync::Mutex::new(manifests_map),
             reload_libraries: std::sync::Mutex::new(std::collections::HashMap::new()),
             on_reload_cb: self.on_reload_cb,
+            #[cfg(feature = "hot-reload")]
+            watcher_thread: std::sync::Mutex::new(None),
+            #[cfg(feature = "hot-reload")]
+            watcher_stop: std::sync::Mutex::new(None),
         })
     }
 }
@@ -532,6 +546,139 @@ impl Runtime {
         let result: Result<(), PolyplugError> = loader.load(path, &mut registrar);
         crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0));
         result
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        #[cfg(feature = "hot-reload")]
+        {
+            if let Ok(mut guard) = self.watcher_stop.lock()
+                && let Some(flag) = guard.take() {
+                    flag.store(true, core::sync::atomic::Ordering::Relaxed);
+                }
+            if let Ok(mut guard) = self.watcher_thread.lock()
+                && let Some(handle) = guard.take() {
+                    let _: std::thread::Result<()> = handle.join();
+                }
+        }
+    }
+}
+
+#[cfg(feature = "hot-reload")]
+impl Runtime {
+    /// Start a background file watcher on `dir`.
+    ///
+    /// Automatically calls `reload_bundle()` when a `.so` / `.dll` / `.dylib`
+    /// file in the watched directory is modified or created.
+    /// Uses a 100ms debounce to suppress duplicate events.
+    ///
+    /// The caller must hold this `Runtime` in an `Arc`. Pass `Arc::clone(&rt)`
+    /// as `self_arc` — e.g. `Runtime::watch_plugin_dir(Arc::clone(&rt), dir)`.
+    pub fn watch_plugin_dir(
+        self_arc: std::sync::Arc<Runtime>,
+        dir: &std::path::Path,
+    ) -> Result<(), crate::error::PolyplugError> {
+        let canonical_dir: PathBuf = dir.canonicalize().map_err(|e: std::io::Error| {
+            crate::error::PolyplugError::WatcherFailed {
+                reason: e.to_string(),
+            }
+        })?;
+
+        let stop_flag: Arc<core::sync::atomic::AtomicBool> =
+            Arc::new(core::sync::atomic::AtomicBool::new(false));
+        let stop_flag_thread: Arc<core::sync::atomic::AtomicBool> = Arc::clone(&stop_flag);
+
+        let debounce: Arc<std::sync::Mutex<HashMap<PathBuf, std::time::Instant>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let debounce_cb: Arc<std::sync::Mutex<HashMap<PathBuf, std::time::Instant>>> =
+            Arc::clone(&debounce);
+
+        let runtime_weak: std::sync::Weak<Runtime> = Arc::downgrade(&self_arc);
+
+        let mut watcher: notify::RecommendedWatcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                let event: notify::Event = match res {
+                    Ok(e) => e,
+                    Err(_) => return,
+                };
+                if !matches!(
+                    event.kind,
+                    notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                ) {
+                    return;
+                }
+                for path in &event.paths {
+                    let ext: &str = path
+                        .extension()
+                        .and_then(|s: &std::ffi::OsStr| s.to_str())
+                        .unwrap_or("");
+                    if !matches!(ext, "so" | "dll" | "dylib") {
+                        continue;
+                    }
+                    let now: std::time::Instant = std::time::Instant::now();
+                    let mut debounce_map: std::sync::MutexGuard<
+                        '_,
+                        HashMap<PathBuf, std::time::Instant>,
+                    > = debounce_cb.lock().unwrap_or_else(|e| e.into_inner());
+                    let last: std::time::Instant = debounce_map
+                        .get(path)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            now.checked_sub(core::time::Duration::from_secs(1_u64))
+                                .unwrap_or(now)
+                        });
+                    if now.duration_since(last) < core::time::Duration::from_millis(100_u64) {
+                        continue;
+                    }
+                    debounce_map.insert(path.clone(), now);
+                    drop(debounce_map);
+                    let bundle_path_str: String = path.to_string_lossy().into_owned();
+                    if let Some(rt) = runtime_weak.upgrade() {
+                        match crate::reload::reload_bundle_impl(
+                            &rt,
+                            std::path::Path::new(&bundle_path_str),
+                            0_usize,
+                        ) {
+                            Ok(()) => {}
+                            Err(e) => {
+                                crate::runtime::emit_warning(&format!(
+                                    "hot-reload: auto-reload failed for {bundle_path_str}: {e}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            })
+            .map_err(|e: notify::Error| crate::error::PolyplugError::WatcherFailed {
+                reason: e.to_string(),
+            })?;
+
+        watcher
+            .watch(&canonical_dir, notify::RecursiveMode::NonRecursive)
+            .map_err(|e: notify::Error| crate::error::PolyplugError::WatcherFailed {
+                reason: e.to_string(),
+            })?;
+
+        let handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
+            // Keep watcher alive for the thread lifetime.
+            let _watcher: notify::RecommendedWatcher = watcher;
+            while !stop_flag_thread.load(Ordering::Relaxed) {
+                std::thread::sleep(core::time::Duration::from_millis(10_u64));
+            }
+        });
+
+        self_arc
+            .watcher_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(stop_flag);
+        self_arc
+            .watcher_thread
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(handle);
+        Ok(())
     }
 }
 
