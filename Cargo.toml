@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members  = ["crates/*", "tests/fixtures/test_plugin", "tests/fixtures/memory_plugin", "tests/fixtures/error_plugin", "host-libs/rust", "guest-libs/rust"]
+members  = ["crates/*", "tests/fixtures/test_plugin", "tests/fixtures/memory_plugin", "tests/fixtures/error_plugin", "tests/fixtures/reload_plugin_v1", "tests/fixtures/reload_plugin_v2", "tests/fixtures/depender_plugin", "host-libs/rust", "guest-libs/rust"]
 
 [workspace.package]
 edition      = "2024"

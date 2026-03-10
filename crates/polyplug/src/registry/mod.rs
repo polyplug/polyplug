@@ -459,6 +459,76 @@ impl Registry {
         let guard: PluginVTableGuard = self.resolve_guard(handle)?;
         Ok(guard.vtable())
     }
+
+    /// Atomically swap the vtable in slot `slot_index` with `new_vtable`.
+    ///
+    /// Returns the old `Arc<VTableSlot>` — the caller holds it alive during quiescence
+    /// then drops it after `Arc::strong_count` reaches 1 (all in-flight calls done).
+    /// Bumps `slot.generation` so stale `PluginHandle`s from before reload are detected.
+    ///
+    /// # Errors
+    /// Returns `Err(RegistryError::StaleHandle)` if `slot_index` is out of bounds
+    /// or the slot has no vtable.
+    pub fn swap_vtable(
+        &self,
+        slot_index: u32,
+        new_vtable: Arc<VTableSlot>,
+    ) -> Result<Arc<VTableSlot>, RegistryError> {
+        let mut slots: std::sync::RwLockWriteGuard<'_, Vec<RegistrySlot>> =
+            self.slots.write().unwrap_or_else(|e| e.into_inner());
+        let slot_idx: usize = slot_index as usize;
+        if slot_idx >= slots.len() {
+            return Err(RegistryError::StaleHandle {
+                index: slot_index,
+                expected: 0_u32,
+                found: 0_u32,
+            });
+        }
+        let slot: &mut RegistrySlot = &mut slots[slot_idx];
+        match slot.vtable {
+            Some(ref arc_swap) => {
+                let old_arc: Arc<VTableSlot> = arc_swap.swap(new_vtable);
+                // Bump generation so stale PluginHandles from before reload are detected.
+                slot.generation = slot.generation.wrapping_add(1_u32);
+                Ok(old_arc)
+            }
+            None => Err(RegistryError::StaleHandle {
+                index: slot_index,
+                expected: 0_u32,
+                found: slot.generation,
+            }),
+        }
+    }
+
+    /// Find all slot indices that were registered by `bundle_id`.
+    ///
+    /// Returns an empty `Vec` if the bundle has no registered slots.
+    /// Used by `reload_bundle()` to locate every vtable slot to swap.
+    pub fn find_slots_by_bundle(&self, bundle_id: u64) -> Vec<u32> {
+        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
+            self.slots.read().unwrap_or_else(|e| e.into_inner());
+        let mut result: Vec<u32> = Vec::new();
+        for (i, slot) in slots.iter().enumerate() {
+            if let Some(ref entry) = slot.entry {
+                if entry.bundle_id == bundle_id {
+                    result.push(i as u32);
+                }
+            }
+        }
+        result
+    }
+
+    /// Get the contract_id for the vtable currently stored in `slot_index`.
+    /// Returns None if the slot is empty or has no vtable.
+    pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<u64> {
+        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
+            self.slots.read().unwrap_or_else(|e| e.into_inner());
+        let slot: &RegistrySlot = slots.get(slot_index as usize)?;
+        let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
+        let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
+        // SAFETY: VTableSlot.0 is a valid 'static PluginVTable written at registration.
+        Some(unsafe { (*guard.0).contract_id })
+    }
 }
 
 impl Default for Registry {
@@ -681,4 +751,78 @@ mod tests {
             "undeclared dep should not be found"
         );
     }
+    #[test]
+    fn swap_vtable_returns_old_arc_and_bumps_generation() {
+        static NEW_VTABLE: PluginVTable = PluginVTable {
+            contract_id: 0x1234_5678_9ABC_DEF0,
+            contract_version: (2 << 16) | 0,
+            function_count: 0,
+            functions: MOCK_FNS.as_ptr(),
+        };
+
+        let registry: Registry = Registry::new();
+        let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.contract");
+        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        let handle: PluginHandle = unsafe {
+            registry.register(
+                descriptor,
+                &MOCK_VTABLE,
+                "swap.contract".to_owned(),
+                50u64,
+            )
+        }
+        .expect("registration should succeed");
+
+        let gen_before: u32 = handle.generation;
+        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_VTABLE));
+        let old_arc: Arc<VTableSlot> = registry
+            .swap_vtable(handle.index, new_arc)
+            .expect("swap_vtable should succeed");
+
+        // old_arc should point to the original MOCK_VTABLE
+        // SAFETY: old_arc.0 is MOCK_VTABLE which is 'static.
+        let old_contract_id: u64 = unsafe { (*old_arc.0).contract_id };
+        assert_eq!(old_contract_id, MOCK_VTABLE.contract_id);
+
+        // Verify generation was bumped
+        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
+            registry.slots.read().unwrap_or_else(|e| e.into_inner());
+        let new_gen: u32 = slots[handle.index as usize].generation;
+        assert_eq!(new_gen, gen_before.wrapping_add(1_u32));
+    }
+
+    #[test]
+    fn find_slots_by_bundle_returns_all_slots() {
+        static VTABLE_X: PluginVTable = PluginVTable {
+            contract_id: 0xDEAD_BEEF_0000_0001,
+            contract_version: (1 << 16) | 0,
+            function_count: 0,
+            functions: MOCK_FNS.as_ptr(),
+        };
+        static VTABLE_Y: PluginVTable = PluginVTable {
+            contract_id: 0xDEAD_BEEF_0000_0002,
+            contract_version: (1 << 16) | 0,
+            function_count: 0,
+            functions: MOCK_FNS.as_ptr(),
+        };
+
+        let registry: Registry = Registry::new();
+        let bundle_id: u64 = 999u64;
+        let d1: PluginDescriptor = make_descriptor("bundle_plugin_x", "bundle.contract.x");
+        let d2: PluginDescriptor = make_descriptor("bundle_plugin_y", "bundle.contract.y");
+
+        // SAFETY: VTABLE_X and VTABLE_Y are 'static, pointers are valid for Registry lifetime.
+        unsafe {
+            registry
+                .register(d1, &VTABLE_X, "bundle.contract.x".to_owned(), bundle_id)
+                .expect("first registration should succeed");
+            registry
+                .register(d2, &VTABLE_Y, "bundle.contract.y".to_owned(), bundle_id)
+                .expect("second registration should succeed");
+        }
+
+        let slots: Vec<u32> = registry.find_slots_by_bundle(bundle_id);
+        assert_eq!(slots.len(), 2, "both slots should be found for the bundle");
+    }
 }
+

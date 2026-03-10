@@ -198,6 +198,138 @@ fn main() {
         dest_error_so.display()
     );
 
+    // ─── reload_plugin_v1 build ───────────────────────────────────────────────
+    // Re-run if reload_plugin_v1 sources change.
+    println!("cargo:rerun-if-changed=tests/fixtures/reload_plugin_v1/src/lib.rs");
+    println!("cargo:rerun-if-changed=tests/fixtures/reload_plugin_v1/Cargo.toml");
+
+    // Build reload_plugin_v1 as a release cdylib via cargo.
+    let reload_v1_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--package")
+        .arg("reload_plugin_v1")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&plugin_target_dir)
+        .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
+        .status()
+        .expect("failed to run cargo build for reload_plugin_v1");
+
+    if !reload_v1_status.success() {
+        panic!(
+            "cargo build -p reload_plugin_v1 failed with status: {}",
+            reload_v1_status
+        );
+    }
+
+    let reload_v1_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v1.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v1.dll"
+    } else {
+        "libreload_plugin_v1.so"
+    };
+
+    let built_reload_v1_so: PathBuf =
+        plugin_target_dir.join("release").join(reload_v1_lib_filename);
+    let dest_reload_v1_so: PathBuf = fixtures_dir.join(reload_v1_lib_filename);
+    fs::copy(&built_reload_v1_so, &dest_reload_v1_so)
+        .unwrap_or_else(|e| panic!("failed to copy reload_plugin_v1 .so: {}", e));
+
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V1_SO={}",
+        dest_reload_v1_so.display()
+    );
+
+    // ─── reload_plugin_v2 build ───────────────────────────────────────────────
+    // Re-run if reload_plugin_v2 sources change.
+    println!("cargo:rerun-if-changed=tests/fixtures/reload_plugin_v2/src/lib.rs");
+    println!("cargo:rerun-if-changed=tests/fixtures/reload_plugin_v2/Cargo.toml");
+
+    // Build reload_plugin_v2 as a release cdylib via cargo.
+    let reload_v2_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--package")
+        .arg("reload_plugin_v2")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&plugin_target_dir)
+        .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
+        .status()
+        .expect("failed to run cargo build for reload_plugin_v2");
+
+    if !reload_v2_status.success() {
+        panic!(
+            "cargo build -p reload_plugin_v2 failed with status: {}",
+            reload_v2_status
+        );
+    }
+
+    let reload_v2_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v2.dylib"
+    } else if cfg!(target_os = "windows") {
+        "reload_plugin_v2.dll"
+    } else {
+        "libreload_plugin_v2.so"
+    };
+
+    let built_reload_v2_so: PathBuf =
+        plugin_target_dir.join("release").join(reload_v2_lib_filename);
+    let dest_reload_v2_so: PathBuf = fixtures_dir.join(reload_v2_lib_filename);
+    fs::copy(&built_reload_v2_so, &dest_reload_v2_so)
+        .unwrap_or_else(|e| panic!("failed to copy reload_plugin_v2 .so: {}", e));
+
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V2_SO={}",
+        dest_reload_v2_so.display()
+    );
+
+    // ─── depender_plugin build ───────────────────────────────────────────────
+    // Re-run if depender_plugin sources change.
+    println!("cargo:rerun-if-changed=tests/fixtures/depender_plugin/src/lib.rs");
+    println!("cargo:rerun-if-changed=tests/fixtures/depender_plugin/Cargo.toml");
+
+    // Build depender_plugin as a release cdylib via cargo.
+    let depender_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--package")
+        .arg("depender_plugin")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&plugin_target_dir)
+        .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
+        .status()
+        .expect("failed to run cargo build for depender_plugin");
+
+    if !depender_status.success() {
+        panic!(
+            "cargo build -p depender_plugin failed with status: {}",
+            depender_status
+        );
+    }
+
+    let depender_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libdepender_plugin.dylib"
+    } else if cfg!(target_os = "windows") {
+        "depender_plugin.dll"
+    } else {
+        "libdepender_plugin.so"
+    };
+
+    let built_depender_so: PathBuf =
+        plugin_target_dir.join("release").join(depender_lib_filename);
+    let dest_depender_so: PathBuf = fixtures_dir.join(depender_lib_filename);
+    fs::copy(&built_depender_so, &dest_depender_so)
+        .unwrap_or_else(|e| panic!("failed to copy depender_plugin .so: {}", e));
+
+    println!(
+        "cargo:rustc-env=DEPENDER_PLUGIN_SO={}",
+        dest_depender_so.display()
+    );
+
     // Emit polyplugc binary path so integration tests can use env!("CARGO_BIN_EXE_polyplugc").
     // polyplugc lives in the same workspace target directory.
     let polyplugc_filename: &str = if cfg!(target_os = "windows") {

@@ -1,0 +1,9 @@
+bundle_name                = "reload_plugin_v2"
+version                    = "2.0"
+runtime                    = "native"
+file                       = "libreload_plugin_v2.so"
+needs_reinit_on_dep_reload = false
+provides                   = ["reload.test@1"]
+
+[function_count]
+"reload.test@1" = 1

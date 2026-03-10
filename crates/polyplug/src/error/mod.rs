@@ -34,6 +34,16 @@ pub enum RuntimeError {
         bundle_name: String,
         contract_name: String,
     },
+
+    #[error("reload failed for bundle `{bundle}`: {reason}")]
+    ReloadFailed { bundle: String, reason: String },
+
+    #[error("quiescence timeout waiting for in-flight calls to complete for bundle `{bundle}`")]
+    QuiescenceTimeout { bundle: String },
+
+    #[cfg(feature = "hot-reload")]
+    #[error("file watcher error: {reason}")]
+    WatcherFailed { reason: String },
 }
 
 /// Convenience alias — the public API surface uses this name.

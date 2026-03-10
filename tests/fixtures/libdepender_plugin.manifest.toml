@@ -1,0 +1,17 @@
+bundle_name                = "depender_plugin"
+version                    = "1.0"
+runtime                    = "native"
+file                       = "libdepender_plugin.so"
+needs_reinit_on_dep_reload = true
+provides                   = ["depender.test@1"]
+
+[function_count]
+"depender.test@1" = 1
+
+[[dependency]]
+kind        = "bundle"
+contract    = "reload.test@1"
+min_version = "1.0"
+bundle      = "reload_plugin_v1"
+contract_id = 16526955377754357857
+bundle_id   = 16808897324254478442

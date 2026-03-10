@@ -16,6 +16,11 @@ libloading = { workspace = true }
 petgraph   = { workspace = true }
 serde      = { workspace = true }
 toml       = { workspace = true }
+notify     = { version = "6", optional = true }
+
+[features]
+default    = []
+hot-reload = ["dep:notify"]
 
 [lints]
 workspace = true
@@ -139,6 +144,10 @@ path = "../../tests/cross_language_deno/mod.rs"
 [[test]]
 name = "integration_showcase"
 path = "../../tests/showcase/mod.rs"
+
+[[test]]
+name = "integration_reload"
+path = "../../tests/integration_reload.rs"
 
 [[bench]]
 name    = "vtable_dispatch"
