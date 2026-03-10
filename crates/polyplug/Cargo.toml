@@ -106,6 +106,10 @@ path = "../../tests/integration_discovery/mod.rs"
 name = "integration_extension"
 path = "../../tests/integration_extension/mod.rs"
 
+[[test]]
+name = "integration_version"
+path = "../../tests/integration_version/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false
