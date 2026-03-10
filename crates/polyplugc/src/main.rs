@@ -4,6 +4,7 @@ pub(crate) mod error;
 pub(crate) mod generators;
 pub(crate) mod ir;
 pub(crate) mod parser;
+pub(crate) mod pack;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,6 +59,22 @@ enum Command {
         /// Path to bundle.toml to validate.
         #[arg(long, conflicts_with = "api")]
         bundle: Option<PathBuf>,
+    },
+
+    /// Generates scaffold metadata for packaging (no build execution)
+    Pack {
+        /// Path to the api.toml file
+        #[arg(short, long)]
+        api: Option<PathBuf>,
+        /// Path to the bundle.toml file
+        #[arg(short, long)]
+        bundle: Option<PathBuf>,
+        /// Target language (rust, cpp, csharp, python, lua, js-quickjs, js-deno)
+        #[arg(short, long)]
+        lang: String,
+        /// Output directory for scaffold files
+        #[arg(short, long)]
+        out: PathBuf,
     },
 }
 
@@ -135,6 +152,24 @@ fn run(cli: Cli) -> Result<(), CodegenError> {
                     message: "Must specify --api or --bundle".to_owned(),
                 });
             }
+        }
+
+        Command::Pack {
+            api,
+            bundle,
+            lang,
+            out,
+        } => {
+            let ir: crate::ir::ValidatedIr = if let Some(api_path) = api {
+                parser::parse_api(&api_path)?
+            } else if let Some(bundle_path) = bundle {
+                parser::parse_bundle_with_api(&bundle_path)?
+            } else {
+                return Err(CodegenError::ValidationFailed {
+                    message: "Must specify --api or --bundle".to_owned(),
+                });
+            };
+            pack::run(&ir, &out, &lang)?;
         }
     }
     Ok(())
