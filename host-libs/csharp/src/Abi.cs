@@ -11,6 +11,11 @@ public unsafe struct StringView {
 }
 
 [StructLayout(LayoutKind.Sequential)]
+public unsafe struct PluginContext {
+    public StringView BundlePath;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 public unsafe struct Buffer {
     public byte* Ptr;
     public nuint Len;

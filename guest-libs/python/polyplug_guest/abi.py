@@ -27,6 +27,11 @@ class StringView(ctypes.Structure):
         ("len", ctypes.c_size_t),  # usize
     ]
 
+    def to_str(self) -> str:
+        """Decode this StringView as a UTF-8 Python string (copies the bytes)."""
+        raw: bytes = ctypes.string_at(self.ptr, self.len)
+        return raw.decode("utf-8")
+
 
 class Buffer(ctypes.Structure):
     """Owning byte buffer allocated via host_alloc. 24 bytes."""
@@ -36,6 +41,21 @@ class Buffer(ctypes.Structure):
         ("len", ctypes.c_size_t),  # usize (used)
         ("cap", ctypes.c_size_t),  # usize (allocated)
     ]
+
+
+class PluginContext(ctypes.Structure):
+    """Context passed to polyplug_init. bundle_path is runtime-owned; copy if you need persistence."""
+
+    _fields_: ClassVar = [
+        ("bundle_path", StringView),
+    ]
+
+    def bundle_path_str(self) -> str:
+        """Return bundle_path as a Python str (copies the bytes)."""
+        ptr: int = self.bundle_path.ptr
+        length: int = self.bundle_path.len
+        raw: bytes = ctypes.string_at(ptr, length)
+        return raw.decode("utf-8")
 
 
 class AbiError(ctypes.Structure):

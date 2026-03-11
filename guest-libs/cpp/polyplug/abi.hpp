@@ -113,6 +113,13 @@ struct RuntimeConfig {
     size_t               extension_count;
 };
 
+/// Context passed to every guest polyplug_init() function.
+/// bundle_path.ptr is runtime-owned and valid for the PluginRuntime lifetime.
+/// Do NOT store the raw pointer — copy the string if persistence is needed.
+struct PluginContext {
+    StringView bundle_path;  ///< Absolute canonical path to bundle directory
+};
+
 // ─── Allocator (available to guest code) ─────────────────────────────────────
 
 /// Allocate memory via the host allocator.
@@ -125,3 +132,22 @@ void polyplug_host_free(void* ptr, size_t size, size_t align);
 uint32_t polyplug_abi_version();
 
 }  // extern "C"
+
+#ifdef __cplusplus
+#include <string>
+#include <string_view>
+#include <span>
+
+inline std::string_view StringView_as_string_view(const StringView& sv) noexcept {
+    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
+}
+inline std::string StringView_to_string(const StringView& sv) {
+    return std::string(reinterpret_cast<const char*>(sv.ptr), sv.len);
+}
+inline std::span<const uint8_t> Buffer_as_span(const Buffer& b) noexcept {
+    return {static_cast<const uint8_t*>(b.ptr), b.len};
+}
+inline std::span<uint8_t> Buffer_as_mut_span(Buffer& b) noexcept {
+    return {static_cast<uint8_t*>(b.ptr), b.cap};
+}
+#endif // __cplusplus

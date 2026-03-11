@@ -39,6 +39,7 @@ cdef_guarded([[
         register_plugin_fn_t register_plugin;
         const void* host;
     } PluginRegistrar;
+    typedef struct { StringView bundle_path; } PluginContext;
 ]])
 
 local M = {}
@@ -73,6 +74,22 @@ end
 --- @return cdata          An AbiError cdata.
 function M.err(code, message)
     return ffi.new("AbiError", { code = code, message = M.string_view(message) })
+end
+
+
+--- Extract the bundle path from a PluginContext as a Lua string.
+--- @param ctx cdata  A PluginContext pointer.
+--- @return string    The bundle path as a UTF-8 Lua string.
+function M.bundle_path_str(ctx)
+    local sv = ctx.bundle_path
+    return ffi.string(sv.ptr, sv.len)
+end
+
+--- Reconstruct a PluginContext pointer from the integer passed by the host.
+--- @param ptr number  The context pointer as a LuaJIT integer (int64_t).
+--- @return cdata      A typed PluginContext pointer.
+function M.cast_context(ptr)
+    return ffi.cast("PluginContext*", ptr)
 end
 
 return M

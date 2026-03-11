@@ -13,6 +13,7 @@ ABI_FUNCTION_NOT_AVAIL: int
 class StringView(ctypes.Structure):
     ptr: bytes | None
     len: int
+    def to_str(self) -> str: ...
     _fields_: ClassVar[list[tuple[str, type]]]
 
 class Buffer(ctypes.Structure):
@@ -20,6 +21,11 @@ class Buffer(ctypes.Structure):
     len: int
     cap: int
     _fields_: ClassVar[list[tuple[str, type]]]
+
+class PluginContext(ctypes.Structure):
+    bundle_path: StringView
+    _fields_: ClassVar[list[tuple[str, type]]]
+    def bundle_path_str(self) -> str: ...
 
 class AbiError(ctypes.Structure):
     code: int

@@ -73,4 +73,19 @@ export interface TraceVTable {
  *   Buffer       -> {ptr_lo,ptr_hi,len,cap} Buffer    -> {ptr:bigint,len:number,cap:number}
  *   void         -> void                 void         -> void
  */
+/** Context passed to every guest init() function. */
+export interface PluginContext {
+    /** Absolute canonical path to the directory containing the loaded bundle. */
+    bundlePath: string;
+}
+
+export type InitFn = (bundlePath: string) => void;
+
+export class StringViewHelper {
+    static toString(ptr: number, len: number): string {
+        // Host provides memory accessor; actual impl depends on host integration.
+        return "";
+    }
+}
+
 export {}; // treat this as a module

@@ -14,6 +14,14 @@ public unsafe struct StringView
     public static StringView Null => new StringView { Ptr = null, Len = 0 };
 }
 
+/// <summary>Context passed to every guest PolyplugInit function.</summary>
+/// <remarks>BundlePath.Ptr is runtime-owned. Do not store the raw pointer — copy the string.</remarks>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct PluginContext
+{
+    public StringView BundlePath;
+}
+
 /// <summary>Owning byte buffer. ptr(8) + len(8) + cap(8) = 24 bytes. Matches Rust Buffer.</summary>
 [StructLayout(LayoutKind.Sequential)]
 public unsafe struct Buffer
