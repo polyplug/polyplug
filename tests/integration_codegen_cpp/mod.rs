@@ -179,7 +179,7 @@ fn test_cpp_codegen_files_exist() {
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_vtables.o");
 
             let compile_result: std::process::Output = Command::new("g++")
-                .arg("-std=c++17")
+                .arg("-std=c++20")
                 .arg(format!("-I{}", out_dir.join("guest").display()))
                 .arg(format!("-I{}", out_dir.join("host").display()))
                 .arg(format!("-I{}", host_libs_cpp.display()))
