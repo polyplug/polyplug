@@ -19,12 +19,12 @@ public sealed class PinnedStringView : IDisposable
         _handle = GCHandle.Alloc(_bytes, GCHandleType.Pinned);
     }
 
-    public unsafe StringView View
+    public StringView View
     {
         get => new StringView
         {
-            Ptr = (byte*)_handle.AddrOfPinnedObject().ToPointer(),
-            Len = (nuint)_bytes.Length,
+            Ptr = _handle.AddrOfPinnedObject(),
+            Len = (ulong)_bytes.Length,
         };
     }
 

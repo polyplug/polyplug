@@ -44,7 +44,7 @@ fn cs_type_name(ty: &ResolvedTypeRef) -> String {
         ResolvedTypeRef::AbiType(abi) => match abi {
             AbiBuiltin::StringView => "Polyplug.Guest.StringView".to_owned(),
             AbiBuiltin::Buffer => "Polyplug.Guest.Buffer".to_owned(),
-            AbiBuiltin::Ptr => "void*".to_owned(),
+            AbiBuiltin::Ptr => "IntPtr".to_owned(),
             AbiBuiltin::Void => "void".to_owned(),
         },
         ResolvedTypeRef::UserDefined(name) => name.clone(),
@@ -55,7 +55,7 @@ fn cs_type_name(ty: &ResolvedTypeRef) -> String {
 fn generate_cs_user_type(ty: &ResolvedType) -> String {
     let mut out: String = String::new();
     out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
-    out.push_str(&format!("public unsafe struct {} {{\n", ty.name));
+    out.push_str(&format!("public struct {} {{\n", ty.name));
     for field in &ty.fields {
         let cs_ty: String = cs_type_name(&field.ty);
         out.push_str(&format!("    public {} {};\n", cs_ty, field.name));
@@ -90,7 +90,7 @@ fn emit_cs_arg_pack(contract_struct: &str, func: &crate::ir::ResolvedFunction) -
     let mut out: String = String::new();
     out.push_str("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]\n");
     out.push_str(&format!(
-        "public unsafe struct {}{}Args {{\n",
+        "public struct {}{}Args {{\n",
         contract_struct,
         pascal_case(&func.name)
     ));
@@ -242,9 +242,11 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
         let iface_name: String = contract_name_to_cs_interface(&contract.name);
         let contract_id: u64 = contract.contract_id;
         let fn_count: usize = contract.functions.len();
+        let minor: u32 = contract.version.minor;
+        let patch: u32 = contract.version.patch;
 
         out.push_str(&format!(
-            "public static unsafe class {}Vtables {{\n",
+            "public static class {}Vtables {{\n",
             class_name
         ));
         out.push_str(&format!(
@@ -265,7 +267,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
             );
             out.push_str(&format!(
-                "    private static AbiError {}(void* args, void* out_ptr) {{\n",
+                "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
                 abi_method
             ));
             out.push_str("        try {\n");
@@ -286,40 +288,50 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
 
         // Function pointer array
         out.push_str(&format!(
-            "    private static readonly void*[] {upper}_FNS = new void*[] {{\n"
+            "    private static readonly IntPtr[] {upper}_FNS;\n"
+        ));
+
+        // VTable field and static constructor (GCHandle pinning)
+        out.push_str(&format!(
+            "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
+        ));
+        out.push_str(&format!(
+            "    public static PluginVTable {upper}_VTABLE;\n\n"
+        ));
+        // Static constructor instead of Init method
+        out.push_str(&format!(
+            "    static {class_name}Vtables() {{\n"
+        ));
+        out.push_str("        unsafe {\n");
+        out.push_str(&format!(
+            "            {upper}_FNS = new IntPtr[] {{\n"
         ));
         for func in &contract.functions {
             let fn_name: String = func.name.replace('-', "_");
             let abi_method: String = format!("{lower}_{fn_name}_abi");
             out.push_str(&format!(
-                "        (void*)(delegate* unmanaged[Cdecl]<void*, void*, AbiError>)&{abi_method},\n"
+                "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&{abi_method},\n"
             ));
         }
-        out.push_str("    };\n\n");
-
-        // VTable field
-        let minor: u32 = contract.version.minor;
-        let patch: u32 = contract.version.patch;
-        out.push_str(&format!(
-            "    public static PluginVTable {upper}_VTABLE;\n\n"
-        ));
-        out.push_str(&format!(
-            "    public static unsafe void Init{class_name}Vtable() {{\n"
-        ));
-        out.push_str(&format!("        fixed (void** fns = {upper}_FNS) {{\n"));
-        out.push_str(&format!(
-            "            {upper}_VTABLE = new PluginVTable {{\n"
-        ));
-        out.push_str(&format!(
-            "                ContractId = {upper}_CONTRACT_ID,\n"
-        ));
-        out.push_str(&format!(
-            "                ContractVersion = {minor}u << 16 | {patch}u,\n"
-        ));
-        out.push_str(&format!("                FunctionCount = {fn_count}u,\n"));
-        out.push_str("                Functions = fns,\n");
         out.push_str("            };\n");
         out.push_str("        }\n");
+        out.push_str(&format!(
+            "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
+        ));
+        out.push_str(&format!(
+            "        {upper}_VTABLE = new PluginVTable {{\n"
+        ));
+        out.push_str(&format!(
+            "            ContractId = {upper}_CONTRACT_ID,\n"
+        ));
+        out.push_str(&format!(
+            "            ContractVersion = {minor}u << 16 | {patch}u,\n"
+        ));
+        out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+        out.push_str(&format!(
+            "            FunctionsPtr = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
+        ));
+        out.push_str("        };\n");
         out.push_str("    }\n");
         out.push_str("}\n\n");
     }
@@ -342,13 +354,15 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("using System.Runtime.InteropServices;\n");
     out.push_str("using Polyplug.Guest;\n\n");
 
-    out.push_str("public static unsafe class PolyplugInitializer {\n");
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str("public static class Plugin {\n");
     out.push_str(
-        "    public static uint PolyplugInit(PluginRegistrar* registrar, PluginContext* ctx) {\n",
+        "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
     );
     out.push_str(
-        "        if (registrar == null || ctx == null) return AbiConstants.ABI_ERROR_GENERIC;\n",
+        "    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {\n",
+    );
+    out.push_str(
+        "        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n",
     );
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
@@ -371,11 +385,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         let minor: u32 = contract.version.minor;
         let patch: u32 = contract.version.patch;
 
+
         out.push_str(&format!("            // Register {}\n", contract.name));
-        out.push_str(&format!(
-            "            {}Vtables.Init{}Vtable();\n",
-            class_name, class_name
-        ));
 
         out.push_str(&format!(
             "            var plugin_name_{lower} = System.Text.Encoding.UTF8.GetBytes(\"{lower}_plugin\");\n"
@@ -384,31 +395,37 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             "            var contract_name_{lower} = System.Text.Encoding.UTF8.GetBytes(\"{}\");\n",
             contract.name
         ));
-
         out.push_str(&format!(
-            "            fixed (byte* namePtr_{lower} = plugin_name_{lower})\n"
+            "            var nameHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
         ));
         out.push_str(&format!(
-            "            fixed (byte* contractPtr_{lower} = contract_name_{lower})\n"
+            "            var contractHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
         ));
+        out.push_str("            try {\n");
         out.push_str(&format!("            fixed (PluginVTable* vtablePtr_{lower} = &{class_name}Vtables.{upper}_VTABLE) {{\n"));
         out.push_str(&format!(
             "                var desc_{lower} = new PluginDescriptor {{\n"
         ));
         out.push_str(&format!(
-            "                    Name = new StringView {{ Ptr = namePtr_{lower}, Len = (nuint)plugin_name_{lower}.Length }},\n"
+            "                    Name = new StringView {{ Ptr = nameHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)plugin_name_{lower}.Length }},\n"
         ));
         out.push_str(&format!(
-            "                    ContractName = new StringView {{ Ptr = contractPtr_{lower}, Len = (nuint)contract_name_{lower}.Length }},\n"
+            "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)contract_name_{lower}.Length }},\n"
         ));
         out.push_str(&format!("                    VersionMajor = {major}u,\n"));
         out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
         out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
         out.push_str("                };\n");
+        out.push_str("                var registrar = (PluginRegistrar*)registrarPtr;\n");
+        out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;\n");
         out.push_str(&format!(
-            "                var err_{lower} = registrar->RegisterPlugin(registrar, &desc_{lower}, vtablePtr_{lower});\n"
+            "                var err_{lower} = registerFn(registrar, &desc_{lower}, vtablePtr_{lower});\n"
         ));
         out.push_str(&format!("                if (err_{lower}.Code != AbiConstants.ABI_OK) return err_{lower}.Code;\n"));
+        out.push_str("            }\n");
+        out.push_str("            } finally {\n");
+        out.push_str(&format!("                nameHandle_{lower}.Free();\n"));
+        out.push_str(&format!("                contractHandle_{lower}.Free();\n"));
         out.push_str("            }\n");
     }
 
@@ -433,7 +450,7 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         let class_name: String = contract_name_to_cs_class(&contract.name);
         let caller_name: String = format!("{class_name}Caller");
 
-        out.push_str(&format!("public sealed unsafe class {caller_name} {{\n"));
+        out.push_str(&format!("public sealed class {caller_name} {{\n"));
         out.push_str("    private readonly PluginHandle _handle;\n");
         out.push_str(&format!(
             "    public {caller_name}(PluginHandle handle) {{ _handle = handle; }}\n\n"
@@ -720,6 +737,56 @@ mod tests {
         assert!(
             out.contains("public enum ImageFlags : uint"),
             "missing enum def: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cs_guest_init_uses_plugin_class() {
+        use crate::ir::*;
+        let ir: ValidatedIr = ValidatedIr {
+            contracts: vec![ResolvedContract {
+                name: "test.check".to_owned(),
+                contract_id: 0x1234567890ABCDEFu64,
+                version: Version { major: 1, minor: 0, patch: 0 },
+                functions: vec![],
+            }],
+            types: vec![],
+            enums: vec![],
+            bundle: None,
+        };
+        let out: String = generate_cs_guest_init(&ir);
+        assert!(
+            out.contains("public static class Plugin"),
+            "Init.cs must use 'Plugin' class name: {out}"
+        );
+        assert!(
+            !out.contains("PolyplugInitializer"),
+            "Init.cs must NOT use 'PolyplugInitializer': {out}"
+        );
+        assert!(
+            !out.contains("void* args"),
+            "Init.cs must not have void* params: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cs_guest_vtables_no_unsafe_struct() {
+        use crate::ir::*;
+        let ir: ValidatedIr = ValidatedIr {
+            contracts: vec![ResolvedContract {
+                name: "test.check".to_owned(),
+                contract_id: 0x1234567890ABCDEFu64,
+                version: Version { major: 1, minor: 0, patch: 0 },
+                functions: vec![],
+            }],
+            types: vec![],
+            enums: vec![],
+            bundle: None,
+        };
+        let out: String = generate_cs_guest_vtables(&ir);
+        assert!(
+            !out.contains("unsafe struct"),
+            "Vtables.cs must not contain 'unsafe struct': {out}"
         );
     }
 }

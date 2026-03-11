@@ -6,29 +6,38 @@ namespace Polyplug.Guest;
 
 /// <summary>Non-owning UTF-8 string view. ptr(8) + len(8) = 16 bytes. Matches Rust StringView.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct StringView
+public struct StringView
 {
-    public byte* Ptr;   // 8 bytes — UTF-8 bytes, NOT null-terminated
-    public nuint Len;   // 8 bytes — byte count — total: 16 bytes
+    public IntPtr Ptr;  // 8 bytes — UTF-8 bytes, NOT null-terminated (IntPtr = pointer-sized = 8 bytes on 64-bit)
+    public ulong  Len;  // 8 bytes — byte count — total: 16 bytes
 
-    public static StringView Null => new StringView { Ptr = null, Len = 0 };
+    public static readonly StringView Empty = default;
+    public bool IsEmpty => Len == 0;
+
+    public override string ToString() =>
+        Ptr == IntPtr.Zero ? string.Empty
+        : Marshal.PtrToStringUTF8(Ptr, (int)Len) ?? string.Empty;
+
+    public static explicit operator string(StringView sv) => sv.ToString();
 }
 
 /// <summary>Context passed to every guest PolyplugInit function.</summary>
 /// <remarks>BundlePath.Ptr is runtime-owned. Do not store the raw pointer — copy the string.</remarks>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PluginContext
+public struct PluginContext
 {
     public StringView BundlePath;
 }
 
 /// <summary>Owning byte buffer. ptr(8) + len(8) + cap(8) = 24 bytes. Matches Rust Buffer.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct Buffer
+public struct Buffer
 {
-    public byte* Ptr;   // 8 bytes — always host-allocated
-    public nuint Len;   // 8 bytes — bytes currently used
-    public nuint Cap;   // 8 bytes — bytes allocated — total: 24 bytes
+    public IntPtr Ptr;  // 8 bytes — always host-allocated
+    public ulong  Len;  // 8 bytes — bytes currently used
+    public ulong  Cap;  // 8 bytes — bytes allocated — total: 24 bytes
+
+    public bool IsEmpty => Len == 0;
 }
 
 /// <summary>
@@ -36,13 +45,16 @@ public unsafe struct Buffer
 /// code(4) + _pad(4) + message(StringView=16) = 24 bytes. Matches Rust AbiError.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct AbiError
+public struct AbiError
 {
     public uint Code;       // 4 bytes — 0 = success, non-zero = error
     private uint _pad;      // 4 bytes explicit padding — aligns message to offset 8, matches Rust layout
     public StringView Message;  // 16 bytes — total: 24 bytes
 
-    public static AbiError Ok => new AbiError { Code = 0, Message = StringView.Null };
+    public static AbiError Ok => new AbiError { Code = 0, Message = StringView.Empty };
+
+    public static AbiError FromException(Exception ex) =>
+        new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = StringView.Empty };
 }
 
 /// <summary>Opaque handle to a loaded plugin. index(4) + generation(4) = 8 bytes. Matches Rust PluginHandle.</summary>
@@ -51,37 +63,41 @@ public struct PluginHandle
 {
     public uint Index;       // 4 bytes — slot in the registry array
     public uint Generation;  // 4 bytes — generation counter — total: 8 bytes
+
+    public static readonly PluginHandle Null =
+        new PluginHandle { Index = uint.MaxValue, Generation = 0 };
+    public bool IsNull => Index == uint.MaxValue;
 }
 
 /// <summary>
 /// Plugin VTable — one per contract implemented by a plugin.
-/// contract_id(8) + contract_version(4) + function_count(4) + functions(8) = 24 bytes.
+/// contract_id(8) + contract_version(4) + function_count(4) + functions_ptr(8) = 24 bytes.
 /// Matches Rust PluginVTable.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PluginVTable
+public struct PluginVTable
 {
-    public ulong ContractId;       // 8 bytes — FNV-1a hash of "contract_name@major_version"
-    public uint  ContractVersion;  // 4 bytes — minor.patch encoded as (minor << 16 | patch)
-    public uint  FunctionCount;    // 4 bytes — number of valid entries in Functions
-    public void** Functions;       // 8 bytes — pointer to static array of fn ptrs — total: 24 bytes
+    public ulong  ContractId;       // 8 bytes — FNV-1a hash of "contract_name@major_version"
+    public uint   ContractVersion;  // 4 bytes — minor.patch encoded as (minor << 16 | patch)
+    public uint   FunctionCount;    // 4 bytes — number of valid entries in FunctionsPtr
+    public IntPtr FunctionsPtr;     // 8 bytes — pointer to static array of fn ptrs — total: 24 bytes
 }
 
 /// <summary>
 /// Host capabilities passed to every plugin at init time.
-/// 7 × fn-ptr(8) = 56 bytes. Matches Rust HostVTable.
+/// 7 × IntPtr(8) = 56 bytes. Matches Rust HostVTable.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct HostVTable
+public struct HostVTable
 {
-    public delegate* unmanaged[Cdecl]<nuint, nuint, byte*>                                                     Alloc;            // host_alloc(size, align) → ptr
-    public delegate* unmanaged[Cdecl]<byte*, nuint, nuint, void>                                               Free;             // host_free(ptr, size, align)
+    public IntPtr AllocPtr;             // delegate* unmanaged[Cdecl]<nuint,nuint,byte*> — host_alloc(size, align) → ptr
+    public IntPtr FreePtr;              // delegate* unmanaged[Cdecl]<byte*,nuint,nuint,void> — host_free(ptr, size, align)
     // SuppressGCTransition: safe because these are short non-blocking Rust calls that never call back into managed code
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle>                        FindByContract;    // find_by_contract(contract_id, min_version) → handle
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, ulong, uint, PluginHandle>                 FindByBundle;      // find_by_bundle(bundle_id, contract_id, min_version) → handle
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle*, nuint, nuint>         FindAllByContract; // find_all_by_contract(contract_id, min_version, out, out_cap) → count
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<PluginHandle, PluginVTable*>                      ResolvePlugin;     // resolve_plugin(handle) → vtable ptr
-    public delegate* unmanaged[Cdecl, SuppressGCTransition]<uint, void*>                                      GetExtension;      // get_extension(extension_id) → vtable ptr
+    public IntPtr FindByContractPtr;    // delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle>
+    public IntPtr FindByBundlePtr;      // delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, ulong, uint, PluginHandle>
+    public IntPtr FindAllByContractPtr; // delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle*, nuint, nuint>
+    public IntPtr ResolvePluginPtr;     // delegate* unmanaged[Cdecl, SuppressGCTransition]<PluginHandle, PluginVTable*>
+    public IntPtr GetExtensionPtr;      // delegate* unmanaged[Cdecl, SuppressGCTransition]<uint, void*>
 }
 
 /// <summary>
@@ -90,7 +106,7 @@ public unsafe struct HostVTable
 /// Matches Rust PluginDescriptor.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PluginDescriptor
+public struct PluginDescriptor
 {
     public StringView Name;          // 16 bytes — human-readable plugin name
     public StringView ContractName;  // 16 bytes — full contract name for collision detection
@@ -105,10 +121,10 @@ public unsafe struct PluginDescriptor
 /// register_plugin fn-ptr(8) + host ptr(8) = 16 bytes. Matches Rust PluginRegistrar.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PluginRegistrar
+public struct PluginRegistrar
 {
-    public delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError> RegisterPlugin; // 8 bytes
-    public HostVTable* Host;  // 8 bytes — total: 16 bytes
+    public IntPtr RegisterPluginPtr; // delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError> — 8 bytes
+    public IntPtr HostPtr;           // HostVTable* — 8 bytes — total: 16 bytes
 }
 
 /// <summary>ABI error code constants. Must match Rust ABI constants exactly.</summary>

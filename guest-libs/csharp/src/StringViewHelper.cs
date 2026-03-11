@@ -1,37 +1,22 @@
-using System.Text;
+using System.Runtime.InteropServices;
 
 namespace Polyplug.Guest;
 
 /// <summary>
-/// Helpers for transcoding C# strings to UTF-8 StringViews at the ABI boundary.
-/// Per AGENTS.md §9: all strings at the ABI boundary are UTF-8 StringView.
+/// Helpers for constructing StringViews at the ABI boundary.
 /// </summary>
-public static unsafe class StringViewHelper
+public static class StringViewHelper
 {
     /// <summary>
-    /// Transcodes a C# string to UTF-8 in a host-allocated buffer.
-    /// The returned StringView's memory is owned by the host allocator.
-    /// Caller must free via host->Free(sv.Ptr, sv.Len, 1) when done.
+    /// Returns a StringView pointing at the pinned byte array via a GCHandle.
+    /// Caller owns the GCHandle and must keep it alive while the StringView is in use.
     /// </summary>
-    public static StringView FromString(string s, HostVTable* host)
-    {
-        int byteCount = Encoding.UTF8.GetByteCount(s);
-        byte* buf = host->Alloc((nuint)byteCount, 1);
-        if (buf == null)
-        {
-            throw new OutOfMemoryException("host_alloc returned null");
-        }
-        int written = Encoding.UTF8.GetBytes(s.AsSpan(), new Span<byte>(buf, byteCount));
-        return new StringView { Ptr = buf, Len = (nuint)written };
-    }
+    public static StringView FromPinnedHandle(GCHandle handle, int length) =>
+        new StringView { Ptr = handle.AddrOfPinnedObject(), Len = (ulong)length };
 
     /// <summary>
-    /// Returns a StringView pointing to a static ASCII byte literal.
-    /// Only safe for compile-time ASCII string literals pinned in a <c>fixed</c> block.
-    /// The caller is responsible for ensuring ptr remains valid for the duration of the call.
+    /// Returns a StringView pointing at a pre-pinned IntPtr. Caller ensures ptr validity.
     /// </summary>
-    public static StringView FromStaticAscii(byte* ptr, int len)
-    {
-        return new StringView { Ptr = ptr, Len = (nuint)len };
-    }
+    public static StringView FromPtr(IntPtr ptr, int length) =>
+        new StringView { Ptr = ptr, Len = (ulong)length };
 }
