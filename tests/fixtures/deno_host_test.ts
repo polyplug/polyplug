@@ -1,0 +1,107 @@
+import { openPolyplug, runtimeNew, NULL_HANDLE } from "../../host-libs/js/polyplug.ts";
+
+const POLYPLUG_SO = Deno.env.get("POLYPLUG_SO") ?? "";
+const TEST_PLUGIN_DIR = Deno.env.get("TEST_PLUGIN_DIR") ?? "";
+const TEST_ADD_CONTRACT_ID = 0xCC4232FAB0410D2Bn;
+
+let passed = 0;
+let failed = 0;
+
+function runTest(name: string, fn: () => void): void {
+    try {
+        fn();
+        console.log(`  ok: ${name}`);
+        passed++;
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`  FAILED: ${name}: ${msg}`);
+        failed++;
+    }
+}
+
+runTest("runtime_new_succeeds", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        rt[Symbol.dispose]();
+    } finally {
+        lib.close();
+    }
+});
+
+runTest("load_bundle_succeeds", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try { rt.loadBundle(TEST_PLUGIN_DIR); }
+        finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+runTest("find_by_contract_returns_valid_handle", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try {
+            rt.loadBundle(TEST_PLUGIN_DIR);
+            const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
+            if (handle === NULL_HANDLE) throw new Error("Got NULL_HANDLE");
+        } finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+runTest("resolve_plugin_returns_guard", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try {
+            rt.loadBundle(TEST_PLUGIN_DIR);
+            const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
+            const guard = rt.resolvePlugin(handle);
+            guard[Symbol.dispose]();
+        } finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+runTest("guard_vtable_nonnull", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try {
+            rt.loadBundle(TEST_PLUGIN_DIR);
+            const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
+            const guard = rt.resolvePlugin(handle);
+            try {
+                const vt = guard.vtable();
+                if (vt === null) throw new Error("vtable is null");
+            } finally { guard[Symbol.dispose](); }
+        } finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+runTest("null_handle_for_missing_contract", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try {
+            const handle = rt.findByContract(0n);
+            if (handle !== NULL_HANDLE) throw new Error(`Expected NULL_HANDLE, got ${handle}`);
+        } finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+runTest("last_error_after_failed_load", () => {
+    const lib = openPolyplug(POLYPLUG_SO);
+    try {
+        const rt = runtimeNew(lib);
+        try {
+            let threw = false;
+            try { rt.loadBundle("/does/not/exist"); }
+            catch (_e) { threw = true; }
+            if (!threw) throw new Error("Expected loadBundle to throw for invalid path");
+        } finally { rt[Symbol.dispose](); }
+    } finally { lib.close(); }
+});
+
+console.log(`\nResults: ${passed} passed, ${failed} failed`);
+if (failed > 0) Deno.exit(1);
