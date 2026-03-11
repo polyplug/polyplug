@@ -4885,3 +4885,510 @@ VERIFICATION CHECKLIST
 - clippy passes with zero warnings
 - cargo test --workspace passes
 ```
+
+
+---
+
+## Epic 21 — Lua Host Lib, Deno Host Lib, and C Facade
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+All architectural questions for this epic are pre-answered below.
+
+---
+
+READ FIRST
+- AGENTS.md
+- polyplug_prd.md — section 6 (ABI Layer), section 8 (Host Libraries),
+  section 25 (C Facade)
+- host-libs/python/runtime.py — reference implementation to mirror in Lua
+- host-libs/csharp/src/Runtime.cs — reference for host API surface
+- crates/polyplug/src/ffi/mod.rs — C facade (must be written first)
+
+---
+
+EPIC GOAL
+
+Enable Lua apps and Deno apps to be polyplug hosts — loading plugins, calling
+vtable functions, and driving the full runtime — with near-native or native
+performance and no compilation step beyond building libpolyplug.so.
+
+Three deliverables:
+
+1. C facade — crates/polyplug/src/ffi/mod.rs
+   Stable extern "C" symbols exported from libpolyplug.so.
+   Foundation that both Lua and Deno host libs depend on.
+
+2. host-libs/lua/ — LuaJIT FFI host lib
+   polyplug.lua + polyplug.d.lua + README.md
+
+3. host-libs/js/ — Deno.dlopen host lib
+   polyplug.ts + polyplug_test.ts + deno.json + README.md
+
+---
+
+PRE-ANSWERED DECISIONS
+
+─────────────────────────────────────────────────────────────
+PART 1 — C FACADE (crates/polyplug/src/ffi/mod.rs)
+─────────────────────────────────────────────────────────────
+
+Exported symbols — all #[no_mangle] pub unsafe extern "C":
+
+  OpaqueRuntime* polyplug_runtime_new()
+  void           polyplug_runtime_free(OpaqueRuntime* rt)
+  uint32_t       polyplug_load_bundle(OpaqueRuntime* rt,
+                     const uint8_t* path, size_t path_len)
+  uint32_t       polyplug_load_bundle_opts(OpaqueRuntime* rt,
+                     const uint8_t* path, size_t path_len,
+                     uint8_t compatibility)
+  uint64_t       polyplug_find_by_contract(OpaqueRuntime* rt,
+                     uint64_t contract_id, uint32_t min_version)
+  uint64_t       polyplug_find_by_bundle(OpaqueRuntime* rt,
+                     uint64_t bundle_id, uint64_t contract_id,
+                     uint32_t min_version)
+  size_t         polyplug_find_all_by_contract(OpaqueRuntime* rt,
+                     uint64_t contract_id, uint32_t min_version,
+                     uint64_t* out, size_t out_cap)
+  const void*    polyplug_resolve_plugin(OpaqueRuntime* rt, uint64_t handle)
+  void           polyplug_guard_free(const void* guard)
+  const void*    polyplug_get_vtable(const void* guard)
+  uint32_t       polyplug_reload_bundle(OpaqueRuntime* rt,
+                     const uint8_t* path, size_t path_len)
+  size_t         polyplug_last_error(OpaqueRuntime* rt,
+                     uint8_t* out, size_t out_cap)
+
+PluginHandle packing: u64 = (generation as u64) << 32 | index as u64
+Null handle = u64::MAX (maps to PluginHandle { index: U32_MAX, generation: 0 })
+
+OpaqueRuntime: opaque Rust struct — only ever used as a pointer by FFI callers.
+polyplug_last_error: writes UTF-8 error string into caller-provided buffer,
+returns bytes written. Thread-local last error, set on any non-zero return code.
+Returns 0 bytes if no error pending.
+
+All functions are zero-overhead shims — direct calls into existing Rust runtime,
+no extra allocation, no extra logic.
+
+─────────────────────────────────────────────────────────────
+PART 2 — host-libs/lua/polyplug.lua
+─────────────────────────────────────────────────────────────
+
+Pure LuaJIT FFI module. No Lua/C API bindings. No compilation step.
+Requires libpolyplug.so on LD_LIBRARY_PATH (or explicit path).
+
+ffi.cdef declares all C facade symbols.
+ffi.load("polyplug") loads the shared library.
+
+Exposed Lua API:
+
+  polyplug.Runtime.new() → Runtime userdata
+  runtime:load_bundle(path: string) → nil or error()
+  runtime:load_bundle_opts(path: string, compatibility: number) → nil or error()
+  runtime:find_by_contract(contract_id: uint64_cdata, min_version: number) → uint64_cdata
+  runtime:find_by_bundle(bundle_id: uint64_cdata, contract_id: uint64_cdata,
+                          min_version: number) → uint64_cdata
+  runtime:find_all_by_contract(contract_id: uint64_cdata, min_version: number,
+                                cap: number?) → table of uint64_cdata
+  runtime:resolve_plugin(handle: uint64_cdata) → Guard userdata
+  runtime:reload_bundle(path: string) → nil or error()
+  runtime:free() → nil   -- explicit free, also called by __gc
+
+  guard:vtable() → cdata pointer (const void*)
+  guard:free()   → nil   -- explicit free, also called by __gc
+
+  polyplug.NULL_HANDLE = ffi.cast("uint64_t", 2^64 - 1)  -- u64::MAX
+
+contract_id and bundle_id are uint64 cdata — LuaJIT native 64-bit integers.
+Returned from ffi calls as cdata uint64_t directly.
+Null handle detection: handle == polyplug.NULL_HANDLE
+
+Error handling: all non-zero return codes call polyplug_last_error, then error()
+with the message. Lua stack unwinding is fine — OpaqueRuntime is GC'd via __gc.
+
+__gc metamethod on Runtime calls polyplug_runtime_free.
+__gc metamethod on Guard calls polyplug_guard_free.
+Both also have explicit :free() methods for deterministic cleanup.
+
+ffi.metatype used for Runtime and Guard ctypes.
+LuaJIT JIT-compiles all FFI calls to direct indirect calls — near-native speed.
+
+host-libs/lua/polyplug.d.lua:
+  EmmyLua/LuaLS annotation file. Documents all types and methods.
+  ---@class Runtime
+  ---@class Guard
+  etc.
+
+host-libs/lua/README.md:
+  Installation (copy polyplug.lua, set LD_LIBRARY_PATH).
+  Basic usage example.
+  Note on --allow-ffi equivalent (none needed — LuaJIT FFI is always available).
+
+─────────────────────────────────────────────────────────────
+PART 3 — host-libs/js/polyplug.ts
+─────────────────────────────────────────────────────────────
+
+Deno.dlopen based. TypeScript. Requires --allow-ffi at runtime.
+No compilation step — import polyplug.ts directly.
+
+Deno.dlopen("libpolyplug.so", { ... }) with full symbol table matching C facade.
+
+All u64 parameters/returns use Deno "u64" type → BigInt in TypeScript.
+All pointer parameters use Deno "pointer" type → Deno.PointerValue in TypeScript.
+All size_t parameters use Deno "usize" type → bigint in TypeScript (Deno maps usize to bigint).
+
+Exposed TypeScript API:
+
+  class Runtime {
+    static build(): Runtime
+    loadBundle(path: string): void
+    loadBundleOpts(path: string, compatibility: number): void
+    findByContract(contractId: bigint, minVersion: number): bigint
+    findByBundle(bundleId: bigint, contractId: bigint, minVersion: number): bigint
+    findAllByContract(contractId: bigint, minVersion: number): bigint[]
+    resolvePlugin(handle: bigint): Guard
+    reloadBundle(path: string): void
+    free(): void
+    [Symbol.dispose](): void   // using declaration support
+  }
+
+  class Guard {
+    vtable(): Deno.PointerValue
+    free(): void
+    [Symbol.dispose](): void
+  }
+
+  export const NULL_HANDLE: bigint = 0xFFFFFFFFFFFFFFFFn
+
+Error handling: non-zero return codes → polyplug_last_error → throw new Error(msg).
+[Symbol.dispose] calls free() — supports TypeScript 5.2 "using" declarations.
+
+host-libs/js/deno.json:
+  { "name": "polyplug", "version": "0.1.0" }
+
+host-libs/js/polyplug_test.ts:
+  Deno test file. Loads a test plugin, calls find_by_contract, resolve_plugin.
+  Uses test fixtures from tests/fixtures/.
+  Graceful skip if libpolyplug.so not found.
+
+host-libs/js/README.md:
+  Usage: deno run --allow-ffi my_host_app.ts
+  Import: import { Runtime } from "./polyplug.ts"
+  Note on BigInt for contract IDs.
+  Note on vtable usage (raw pointer — cast via Deno.UnsafePointer).
+
+─────────────────────────────────────────────────────────────
+TESTS
+─────────────────────────────────────────────────────────────
+
+tests/integration_host_lua/mod.rs (new):
+  a. Runtime::new() returns non-null
+  b. load_bundle() loads test_plugin_dir fixture
+  c. find_by_contract() returns valid handle (not NULL_HANDLE)
+  d. resolve_plugin() returns non-null guard
+  e. guard:vtable() returns non-null pointer
+  f. reload_bundle() works without crash
+  g. free() / __gc called — no memory errors under valgrind
+  Graceful skip if luajit not found (same skip pattern as other Lua tests).
+
+tests/integration_host_deno/mod.rs (new):
+  Rust test that shells out to: deno run --allow-ffi tests/fixtures/deno_host_test.ts
+  deno_host_test.ts does the same checks as integration_host_lua above but in TS.
+  Graceful skip if deno not found.
+
+tests/fixtures/deno_host_test.ts (new):
+  Standalone Deno test script exercising the full host lib surface.
+
+---
+
+VERIFICATION CHECKLIST
+
+- C facade: all symbols present in libpolyplug.so (verified via nm -D) — verified
+- C facade: PluginHandle pack/unpack round-trips correctly — verified
+- C facade: polyplug_last_error returns correct message on error — verified
+- C facade: __gc / free double-free protection — verified
+- Lua: require("polyplug") works with luajit — verified
+- Lua: all Runtime methods work against test fixture — verified
+- Lua: __gc called on GC — verified (no leak under valgrind)
+- Deno: import polyplug.ts works with --allow-ffi — verified
+- Deno: all Runtime methods work against test fixture — verified
+- Deno: [Symbol.dispose] calls free() — verified
+- Deno: BigInt u64 round-trips correctly — verified
+- No .unwrap() in ffi/mod.rs
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+
+---
+
+## Epic 22 — Eliminate `unsafe` from C# Guest Lib, Host Lib, and Showcase
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+All architectural decisions for this epic are fully pre-answered below.
+Do not investigate or ask questions — implement the plan exactly as specified.
+
+---
+
+READ FIRST
+- AGENTS.md
+- polyplug_prd.md — section 3 (C# unsafe policy), section 10 (C# adapter,
+  generated C# performance requirements, C# unsafe boundary table)
+- guest-libs/csharp/src/Abi.cs
+- guest-libs/csharp/src/PinnedStringView.cs
+- guest-libs/csharp/src/StringViewHelper.cs
+- host-libs/csharp/src/Abi.cs
+- host-libs/csharp/src/Runtime.cs
+- showcase/plugins/csv_encoder/Plugin.cs
+- tests/fixtures/csharp_plugin/Plugin.cs
+- crates/polyplugc/src/generators/csharp/mod.rs
+
+---
+
+GOAL
+
+Remove every `unsafe` keyword and raw pointer type from:
+- guest-libs/csharp/  (zero unsafe, no <AllowUnsafeBlocks> required)
+- host-libs/csharp/   (zero unsafe, no <AllowUnsafeBlocks> required)
+- showcase/           (zero unsafe)
+- tests/fixtures/csharp_plugin/ (zero unsafe)
+
+Confine ALL unsafe to generated Init.cs only, inside an isolated unsafe { }
+block. The generated .csproj (polyplugc-controlled) keeps
+<AllowUnsafeBlocks>true</AllowUnsafeBlocks>. No other .csproj has it.
+
+---
+
+PRE-ANSWERED DECISIONS — implement exactly as specified
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 1 — StringView struct (guest-libs and host-libs Abi.cs)
+─────────────────────────────────────────────────────────────
+
+BEFORE:
+  public unsafe struct StringView {
+      public byte* Ptr;
+      public nuint  Len;
+  }
+
+AFTER:
+  [StructLayout(LayoutKind.Sequential)]
+  public struct StringView {
+      public IntPtr Ptr;    // byte* → IntPtr, pointer-sized, ABI-identical
+      public ulong  Len;    // nuint → ulong, polyplug is 64-bit only
+
+      public static readonly StringView Empty = default;
+      public bool IsEmpty => Len == 0;
+
+      public override string ToString() =>
+          Ptr == IntPtr.Zero ? string.Empty
+          : Marshal.PtrToStringUTF8(Ptr, (int)Len) ?? string.Empty;
+
+      public static explicit operator string(StringView sv) => sv.ToString();
+  }
+
+nuint → ulong rationale: polyplug explicitly targets 64-bit only.
+ulong is always 8 bytes. nuint is 4 bytes on 32-bit — not a concern.
+Add a test assertion: Marshal.SizeOf<StringView>() == 16
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 2 — Buffer struct (guest-libs and host-libs Abi.cs)
+─────────────────────────────────────────────────────────────
+
+BEFORE:
+  public unsafe struct Buffer {
+      public void*  Ptr;
+      public nuint  Len;
+      public nuint  Cap;
+  }
+
+AFTER:
+  [StructLayout(LayoutKind.Sequential)]
+  public struct Buffer {
+      public IntPtr Ptr;
+      public ulong  Len;
+      public ulong  Cap;
+
+      public bool IsEmpty => Len == 0;
+  }
+
+Add test assertion: Marshal.SizeOf<Buffer>() == 24
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 3 — PluginHandle (if unsafe, guest-libs and host-libs Abi.cs)
+─────────────────────────────────────────────────────────────
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct PluginHandle {
+      public uint Index;
+      public uint Generation;
+      public static readonly PluginHandle Null =
+          new PluginHandle { Index = uint.MaxValue, Generation = 0 };
+      public bool IsNull => Index == uint.MaxValue;
+  }
+
+No unsafe. Pure uint fields. Marshal.SizeOf<PluginHandle>() == 8
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 4 — AbiError (if unsafe, guest-libs and host-libs Abi.cs)
+─────────────────────────────────────────────────────────────
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct AbiError {
+      public uint       Code;
+      public StringView Message;   // safe StringView from Replacement 1
+      public static readonly AbiError Ok = default;
+      public bool IsOk => Code == 0;
+      public static AbiError FromException(Exception ex) { ... }
+  }
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 5 — PluginContext (guest-libs Abi.cs)
+─────────────────────────────────────────────────────────────
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct PluginContext {
+      public StringView BundlePath;
+      public string BundlePathString => BundlePath.ToString();
+  }
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 6 — DataRecord and all other domain structs with padding
+─────────────────────────────────────────────────────────────
+
+Remove unsafe keyword from any domain struct that was unsafe only because
+it contained StringView or Buffer fields. With safe StringView/Buffer,
+these structs need only [StructLayout(LayoutKind.Sequential)].
+
+Example:
+  BEFORE: public unsafe struct DataRecord { ... }
+  AFTER:  [StructLayout(LayoutKind.Sequential)]
+          public struct DataRecord {
+              public StringView Name;
+              public StringView Value;
+              public uint       Count;
+              private uint      _pad;   // explicit padding — keep as-is
+          }
+
+Add test assertion: Marshal.SizeOf<DataRecord>() == 40
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 7 — PluginRegistrar and HostVTable structs (guest-libs Abi.cs)
+─────────────────────────────────────────────────────────────
+
+Function pointer fields become IntPtr. Generated code casts to delegate* at
+call site inside an unsafe block (generated file only).
+
+BEFORE:
+  public unsafe struct PluginRegistrar {
+      public delegate* unmanaged[Cdecl]<...> RegisterPlugin;
+      public HostVTable* Host;
+  }
+
+AFTER:
+  [StructLayout(LayoutKind.Sequential)]
+  public struct PluginRegistrar {
+      public IntPtr RegisterPluginPtr;   // delegate* → IntPtr
+      public IntPtr HostPtr;             // HostVTable* → IntPtr
+  }
+
+Same pattern for HostVTable — all function pointer fields become IntPtr.
+Names: append "Ptr" suffix to each field to make intent clear.
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 8 — [UnmanagedCallersOnly] Init method (generator output)
+─────────────────────────────────────────────────────────────
+
+Update crates/polyplugc/src/generators/csharp/mod.rs to generate:
+
+  // No unsafe on the method itself — IntPtr parameters are blittable
+  [UnmanagedCallersOnly(EntryPoint = "init",
+      CallConvs = new[] { typeof(CallConvCdecl) })]
+  public static AbiError Init(IntPtr registrarPtr, IntPtr ctxPtr) {
+      Thread.BeginThreadAffinity();
+      try {
+          unsafe {
+              // isolated unsafe block — only in generated file
+              var registrar = (PluginRegistrar*)registrarPtr.ToPointer();
+              var ctx       = (PluginContext*)ctxPtr.ToPointer();
+              // delegate* casts and vtable registration here
+              var registerFn =
+                  (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*,
+                      PluginVTable*, void>)registrar->RegisterPluginPtr;
+              // ... register each contract vtable
+          }
+          return AbiError.Ok;
+      } catch (Exception ex) {
+          return AbiError.FromException(ex);
+      } finally {
+          Thread.EndThreadAffinity();
+      }
+  }
+
+The generated .csproj must have <AllowUnsafeBlocks>true</AllowUnsafeBlocks>.
+No other .csproj in the repo has this setting.
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 9 — P/Invoke in host-libs/csharp/src/Runtime.cs
+─────────────────────────────────────────────────────────────
+
+Replace all void* parameters with IntPtr. Replace nuint with ulong.
+Keep [SuppressGCTransition] on hot-path calls exactly as before.
+
+  BEFORE:
+    [DllImport("polyplug"), SuppressGCTransition]
+    public static extern AbiError call_plugin(
+        PluginHandle handle, uint fn_id, void* args, void* out);
+
+  AFTER:
+    [DllImport("polyplug"), SuppressGCTransition]
+    public static extern AbiError call_plugin(
+        PluginHandle handle, uint fn_id, IntPtr args, IntPtr outPtr);
+
+Audit ALL P/Invoke declarations in Runtime.cs — apply this pattern to every
+one that uses void*, byte*, nuint, or nint as pointer types.
+
+─────────────────────────────────────────────────────────────
+REPLACEMENT 10 — showcase and test fixtures
+─────────────────────────────────────────────────────────────
+
+showcase/plugins/csv_encoder/Plugin.cs and tests/fixtures/csharp_plugin/Plugin.cs
+are plugin developer code. They must compile with zero unsafe and no
+<AllowUnsafeBlocks>. Apply the same struct replacements — these files use
+StringView, Buffer, and generated Init. After Replacements 1–9 are applied
+to the libs and generator, these files should compile clean automatically.
+Verify and fix any remaining issues.
+
+Remove <AllowUnsafeBlocks>true</AllowUnsafeBlocks> from:
+- showcase/plugins/csv_encoder/CsvEncoder.csproj
+- tests/fixtures/csharp_plugin/CsharpPlugin.csproj
+- guest-libs/csharp/Polyplug.Guest.csproj
+- host-libs/csharp/Polyplug.csproj
+Only the polyplugc-generated plugin project keeps it.
+
+---
+
+VERIFICATION CHECKLIST
+
+- Marshal.SizeOf<StringView>() == 16 — verified in new test
+- Marshal.SizeOf<Buffer>() == 24 — verified in new test
+- Marshal.SizeOf<PluginHandle>() == 8 — verified in new test
+- Marshal.SizeOf<DataRecord>() == 40 — verified in new test
+- grep -r "unsafe" guest-libs/csharp/ → zero results
+- grep -r "unsafe" host-libs/csharp/ → zero results
+- grep -r "unsafe" showcase/ → zero results
+- grep -r "unsafe" tests/fixtures/csharp_plugin/ → zero results
+- grep "AllowUnsafeBlocks" guest-libs/csharp/Polyplug.Guest.csproj → not present
+- grep "AllowUnsafeBlocks" host-libs/csharp/Polyplug.csproj → not present
+- grep "AllowUnsafeBlocks" showcase/plugins/csv_encoder/CsvEncoder.csproj → not present
+- Generated Init.cs contains exactly one unsafe { } block — verified
+- Generated .csproj has <AllowUnsafeBlocks>true</AllowUnsafeBlocks> — verified
+- All existing C# integration tests pass — verified
+- cargo test --workspace passes
+- dotnet build succeeds on guest-libs/csharp/ with zero warnings
+- dotnet build succeeds on host-libs/csharp/ with zero warnings
+```

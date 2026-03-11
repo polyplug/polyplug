@@ -1,4 +1,4 @@
-# polyplug — PRD v3
+# polyplug — PRD v4
 
 ## Table of Contents
 
@@ -73,8 +73,20 @@ Every supported language can be a host and a guest. No language is a first-class
 **Pay only for what you use**
 Language runtime adapters (dotnet, python, lua) are separate crates following the serde model. If you do not depend on `polyplug-dotnet`, .NET support does not exist in your binary. Not a feature flag — a missing dependency. True zero cost for unused languages.
 
-**Generated code can be unsafe — tests confirm safety**
-Since all glue code is generated and not hand-written, it can use maximally unsafe patterns to achieve maximum performance. The test suite confirms correctness.
+**C# unsafe is confined to generated code only — never in libs or app code**
+
+`unsafe` in C# requires `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` in the project file, or the `unsafe` keyword on a specific type or method. Neither is acceptable in `guest-libs/csharp/`, `host-libs/csharp/`, plugin developer projects, or host app developer projects — they must compile with zero unsafe.
+
+`unsafe` IS used in generated `Init.cs` (produced by `polyplugc generate`), which lives in an isolated generated project that polyplugc controls. This is where `delegate*` unmanaged function pointers are used to call vtable functions via the `calli` IL instruction — a genuine ~4–6x performance advantage over `Marshal.GetDelegateForFunctionPointer` (which heap-allocates a delegate and routes through `Delegate.Invoke`). Plugin developers never edit generated files and never enable unsafe in their own project.
+
+All hand-written C# — structs, host lib, guest lib — uses safe equivalents:
+- `byte*` → `IntPtr` (pointer-sized, ABI-identical, no unsafe)
+- `void*` → `IntPtr` (same)
+- `nuint` as pointer → `ulong` (polyplug is 64-bit only — always 8 bytes)
+- `delegate*` in struct fields → `IntPtr` fields; generated code casts at call site
+- `[UnmanagedCallersOnly]` init parameters → `IntPtr` (blittable, ABI-correct)
+
+The result: app developers and plugin developers never interact with `unsafe` in any form.
 
 **Creator-owns memory**
 The caller allocates memory for return values. The callee fills it. All cross-boundary memory lives in the host allocator. No GC language puts cross-boundary data on its managed heap.
@@ -450,6 +462,28 @@ var runtime = Polyplug.Runtime.Builder()
     .Init();
 ```
 
+```lua
+-- Lua (LuaJIT FFI — requires libpolyplug.so on LD_LIBRARY_PATH)
+local polyplug = require("polyplug")
+
+local runtime = polyplug.Runtime.new()
+runtime:load_bundle("./plugins/my_plugin")
+local handle = runtime:find_by_contract(IMAGE_DECODE_CONTRACT_ID, 1)
+local guard  = runtime:resolve_plugin(handle)
+local vtable = guard:vtable()
+```
+
+```typescript
+// Deno (Deno.dlopen — requires --allow-ffi)
+import { Runtime } from "./host-libs/js/polyplug.ts";
+
+const runtime = Runtime.build();
+runtime.loadBundle("./plugins/my_plugin");
+const handle = runtime.findByContract(IMAGE_DECODE_CONTRACT_ID, 1n);
+const guard  = runtime.resolvePlugin(handle);
+const vtable = guard.vtable();
+```
+
 ---
 
 ## 9. Guest Libraries
@@ -621,15 +655,25 @@ Each .NET bundle:
 
 **Generated C# — performance requirements:**
 
+> **unsafe policy:** `guest-libs/csharp/` and `host-libs/csharp/` have zero `unsafe` and require no `<AllowUnsafeBlocks>` in the plugin developer's or host app developer's project. All `unsafe` is confined to generated `Init.cs` only, in the polyplugc-controlled generated project. Plugin developers never edit or enable unsafe anywhere.
+
 ```csharp
-// Init must declare explicit calling convention — never leave it implicit
+// Generated Init.cs — polyplugc output, plugin developer never edits this.
+// <AllowUnsafeBlocks>true</AllowUnsafeBlocks> is set ONLY in the generated .csproj.
+
+// Init receives IntPtr parameters — blittable, ABI-correct, no unsafe on method.
 [UnmanagedCallersOnly(EntryPoint = "init",
     CallConvs = new[] { typeof(CallConvCdecl) })]
-public static unsafe AbiError Init(PluginRegistrar* registrar) {
+public static AbiError Init(IntPtr registrarPtr, IntPtr ctxPtr) {
     // Called from a Rust (foreign) thread — CLR thread affinity required
     Thread.BeginThreadAffinity();
     try {
-        // register vtables
+        // Generated code casts IntPtr → delegate* here (unsafe block, generated only)
+        unsafe {
+            var registrar = (PluginRegistrar*)registrarPtr;
+            var ctx       = (PluginContext*)ctxPtr;
+            // register vtables via delegate* — calli IL, zero allocation
+        }
         return AbiError.Ok;
     } catch (Exception ex) {
         return AbiError.FromException(ex);  // blittable uint, no marshalling
@@ -640,15 +684,17 @@ public static unsafe AbiError Init(PluginRegistrar* registrar) {
 
 // Every ABI function generated in Init.cs must also declare CallConvCdecl
 // All parameters and return types must be blittable — no managed references
+// delegate* unmanaged used for vtable calls: calli IL = ~4-6x faster than
+// Marshal.GetDelegateForFunctionPointer (no heap alloc, no Delegate.Invoke)
 ```
 
 **C# host lib P/Invoke — `[SuppressGCTransition]` on hot path:**
 
 ```csharp
-// host-libs/csharp/ — P/Invoke for call_plugin on the hot path
+// host-libs/csharp/ — zero unsafe. void* → IntPtr, ABI-identical.
 [DllImport("polyplug"), SuppressGCTransition]
 public static extern AbiError call_plugin(
-    PluginHandle handle, uint fn_id, void* args, void* out);
+    PluginHandle handle, uint fn_id, IntPtr args, IntPtr outPtr);
 
 // find_plugin and get_extension also get [SuppressGCTransition]
 // host_alloc / host_free do NOT — they may trigger GC
@@ -656,12 +702,23 @@ public static extern AbiError call_plugin(
 
 `[SuppressGCTransition]` eliminates the GC transition overhead on short, non-blocking native calls. Only safe when the native function is guaranteed short and does not block or call back into managed code directly.
 
+**C# unsafe boundary — complete summary:**
+
+| Location | `unsafe`? | `<AllowUnsafeBlocks>`? | Reason |
+|---|---|---|---|
+| `guest-libs/csharp/` | ❌ None | ❌ Not required | IntPtr/ulong replace raw pointers |
+| `host-libs/csharp/` | ❌ None | ❌ Not required | IntPtr replaces void* in P/Invoke |
+| Plugin developer project | ❌ None | ❌ Not required | Writes only business logic |
+| Host app developer project | ❌ None | ❌ Not required | Uses safe Runtime class only |
+| Generated `Init.cs` | ✅ Isolated block | ✅ Generated .csproj only | `delegate*` for `calli` perf gain |
+
 **Performance:**
 - CLR startup: one-time cost at first .NET plugin load (~100–500ms)
 - Per-call managed/unmanaged transition with `[SuppressGCTransition]`: ~5–15ns
 - Per-call without: ~50–200ns
 - `DelegateLoader` cached: assembly function pointer lookup is ~0.1ms, not ~30ms
 - Subsequent .NET plugins share the already-running CLR — fast load
+- `delegate*` in generated code: `calli` IL — ~4–6x faster than delegate allocation path
 
 **C# bundle manifest — plugin ships only `.dll`:**
 
@@ -1802,7 +1859,9 @@ size_t polyplug_last_error(uint8_t* out, size_t out_cap);
 - Plugin marketplace tooling (signing, verification, distribution)
 
 **Planned epics (already designed):**
-- Hot-reload — Epic 17 (arc-swap foundation in Epic 9.7, writer path + dlclose deferral in Epic 17)
+- Hot-reload — Epic 17 ✅ done
+- PluginContext + ABI type helpers — Epic 20 ✅ done
+- Lua host lib + Deno host lib + C facade — Epic 21 ✅ done
 
 **Long term:**
 - Distributed plugins
