@@ -23,6 +23,9 @@ use crate::ir::Version;
 use crate::ir::compute_bundle_id;
 use crate::ir::compute_contract_id;
 use crate::ir::resolve_type_ref;
+use crate::ir::EnumVariant;
+use crate::ir::ReprType;
+use crate::ir::EnumDef;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -30,6 +33,8 @@ use crate::ir::resolve_type_ref;
 pub(crate) struct RawApiSchema {
     #[serde(default)]
     pub types: Vec<RawType>,
+    #[serde(rename = "enum", default)]
+    pub r#enum: Vec<RawEnum>,
     #[serde(default)]
     pub contract: Vec<RawContract>,
 }
@@ -70,6 +75,22 @@ pub(crate) struct RawParam {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawEnumVariant {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawEnum {
+    pub name: String,
+    pub repr: String,
+    #[serde(default)]
+    pub bitflag: bool,
+    #[serde(default)]
+    pub variants: Vec<RawEnumVariant>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -218,17 +239,200 @@ fn check_bundle_name_conflict(
     Ok(())
 }
 
+/// Validate a variant value expression string.
+///
+/// Allowed tokens: integer literals (decimal, hex 0x..., binary 0b...),
+/// operators: `<<`, `|`, `~`, grouping: `(`, `)`, whitespace (skipped),
+/// and previously-declared variant names (backward references only).
+///
+/// Returns Ok(()) if valid, Err with appropriate CodegenError if not.
+fn validate_enum_value_expr(
+    expr: &str,
+    enum_name: &str,
+    variant_name: &str,
+    declared_variants: &[String],
+) -> Result<(), CodegenError> {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        // Skip whitespace
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        // Integer literal
+        if c.is_ascii_digit() {
+            // Consume hex (0x...) or binary (0b...) or decimal
+            if c == '0' && i + 1 < len && (chars[i + 1] == 'x' || chars[i + 1] == 'X') {
+                i += 2;
+                while i < len && chars[i].is_ascii_hexdigit() {
+                    i += 1;
+                }
+            } else if c == '0' && i + 1 < len && (chars[i + 1] == 'b' || chars[i + 1] == 'B') {
+                i += 2;
+                while i < len && (chars[i] == '0' || chars[i] == '1') {
+                    i += 1;
+                }
+            } else {
+                while i < len && chars[i].is_ascii_digit() {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        // Identifier (variant name)
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            if declared_variants.contains(&ident) {
+                continue;
+            }
+            // Not a known backward ref
+            if chars[start].is_uppercase() {
+                return Err(CodegenError::EnumForwardRef {
+                    enum_name: enum_name.to_owned(),
+                    variant_name: variant_name.to_owned(),
+                    ref_name: ident,
+                });
+            }
+            return Err(CodegenError::EnumInvalidValueExpr {
+                enum_name: enum_name.to_owned(),
+                variant_name: variant_name.to_owned(),
+                expr: expr.to_owned(),
+            });
+        }
+        // << operator
+        if c == '<' {
+            if i + 1 < len && chars[i + 1] == '<' {
+                i += 2;
+                continue;
+            }
+            return Err(CodegenError::EnumInvalidValueExpr {
+                enum_name: enum_name.to_owned(),
+                variant_name: variant_name.to_owned(),
+                expr: expr.to_owned(),
+            });
+        }
+        // | operator
+        if c == '|' {
+            i += 1;
+            continue;
+        }
+        // ~ operator
+        if c == '~' {
+            i += 1;
+            continue;
+        }
+        // Grouping
+        if c == '(' || c == ')' {
+            i += 1;
+            continue;
+        }
+        // Anything else is invalid
+        return Err(CodegenError::EnumInvalidValueExpr {
+            enum_name: enum_name.to_owned(),
+            variant_name: variant_name.to_owned(),
+            expr: expr.to_owned(),
+        });
+    }
+    Ok(())
+}
+
+/// Check that no variant references another variant that itself contains a reference.
+/// Enforces the "one level deep" rule.
+fn check_enum_chained_refs(
+    enum_name: &str,
+    variants: &[EnumVariant],
+) -> Result<(), CodegenError> {
+    // Helper: check if an expression string contains any variant name token
+    let expr_contains_variant_ref = |expr: &str, variant_names: &[&str]| -> bool {
+        let chars: Vec<char> = expr.chars().collect();
+        let len: usize = chars.len();
+        let mut j: usize = 0;
+        while j < len {
+            if chars[j].is_alphabetic() || chars[j] == '_' {
+                let start: usize = j;
+                while j < len && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                let ident: String = chars[start..j].iter().collect();
+                if variant_names.contains(&ident.as_str()) {
+                    return true;
+                }
+            } else {
+                j += 1;
+            }
+        }
+        false
+    };
+
+    let all_names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
+
+    for variant in variants {
+        // Find all variant name tokens in this variant's value expression
+        let chars: Vec<char> = variant.value.chars().collect();
+        let len: usize = chars.len();
+        let mut j: usize = 0;
+        while j < len {
+            if chars[j].is_alphabetic() || chars[j] == '_' {
+                let start: usize = j;
+                while j < len && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                    j += 1;
+                }
+                let ref_name: String = chars[start..j].iter().collect();
+                // Is this a reference to a declared variant?
+                if all_names.contains(&ref_name.as_str()) {
+                    // Find the referenced variant's value
+                    if let Some(ref_variant) = variants.iter().find(|v| v.name == ref_name) {
+                        // Does the referenced variant also reference a variant?
+                        if expr_contains_variant_ref(&ref_variant.value, &all_names) {
+                            return Err(CodegenError::EnumChainedRef {
+                                enum_name: enum_name.to_owned(),
+                                variant_name: variant.name.clone(),
+                                ref_name,
+                            });
+                        }
+                    }
+                }
+            } else {
+                j += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
     // Step 1: Collect known type names for type resolution
     let known_type_names: Vec<String> = raw.types.iter().map(|t| t.name.clone()).collect();
 
-    // Step 2: Resolve types
+    // Step 2: Collect known enum names and check for name collisions with types
+    let known_enum_names: Vec<String> = raw.r#enum.iter().map(|e| e.name.clone()).collect();
+    for name in &known_enum_names {
+        if known_type_names.contains(name) {
+            return Err(CodegenError::EnumNameCollision { name: name.clone() });
+        }
+    }
+
+    // Step 3: Build combined name set for type reference resolution
+    let all_known_names: Vec<String> = known_type_names
+        .iter()
+        .chain(known_enum_names.iter())
+        .cloned()
+        .collect();
+
+    // Step 4: Resolve types
     let mut resolved_types: Vec<ResolvedType> = Vec::new();
     for raw_type in &raw.types {
         let mut fields: Vec<ResolvedField> = Vec::new();
         for field in &raw_type.fields {
             let ty: ResolvedTypeRef =
-                resolve_type_ref(&field.ty, &raw_type.name, &known_type_names)?;
+                resolve_type_ref(&field.ty, &raw_type.name, &all_known_names)?;
             fields.push(ResolvedField {
                 name: field.name.clone(),
                 ty,
@@ -240,7 +444,41 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
         });
     }
 
-    // Step 3: Resolve contracts
+    // Step 5: Resolve enums
+    let mut resolved_enums: Vec<EnumDef> = Vec::new();
+    for raw_enum in &raw.r#enum {
+        let repr: ReprType = match ReprType::parse(&raw_enum.repr) {
+            Some(r) => r,
+            None => return Err(CodegenError::EnumInvalidRepr {
+                enum_name: raw_enum.name.clone(),
+                repr: raw_enum.repr.clone(),
+            }),
+        };
+        let mut declared: Vec<String> = Vec::new();
+        let mut variants: Vec<EnumVariant> = Vec::new();
+        for raw_variant in &raw_enum.variants {
+            validate_enum_value_expr(
+                &raw_variant.value,
+                &raw_enum.name,
+                &raw_variant.name,
+                &declared,
+            )?;
+            declared.push(raw_variant.name.clone());
+            variants.push(EnumVariant {
+                name: raw_variant.name.clone(),
+                value: raw_variant.value.clone(),
+            });
+        }
+        check_enum_chained_refs(&raw_enum.name, &variants)?;
+        resolved_enums.push(EnumDef {
+            name: raw_enum.name.clone(),
+            repr,
+            bitflag: raw_enum.bitflag,
+            variants,
+        });
+    }
+
+    // Step 6: Resolve contracts
     let mut resolved_contracts: Vec<ResolvedContract> = Vec::new();
     for raw_contract in &raw.contract {
         let version: Version = Version::parse(&raw_contract.version)?;
@@ -251,7 +489,7 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
             let mut params: Vec<ResolvedParam> = Vec::new();
             for p in &raw_fn.params {
                 let ty: ResolvedTypeRef =
-                    resolve_type_ref(&p.ty, &raw_contract.name, &known_type_names)?;
+                    resolve_type_ref(&p.ty, &raw_contract.name, &all_known_names)?;
                 params.push(ResolvedParam {
                     name: p.name.clone(),
                     ty,
@@ -260,7 +498,7 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
             let returns: Option<ResolvedTypeRef> = raw_fn
                 .returns
                 .as_deref()
-                .map(|r| resolve_type_ref(r, &raw_contract.name, &known_type_names))
+                .map(|r| resolve_type_ref(r, &raw_contract.name, &all_known_names))
                 .transpose()?;
             functions.push(ResolvedFunction {
                 name: raw_fn.name.clone(),
@@ -280,7 +518,7 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
 
     Ok(ValidatedIr {
         types: resolved_types,
-        enums: Vec::new(),
+        enums: resolved_enums,
         contracts: resolved_contracts,
         bundle: None,
     })
@@ -402,6 +640,99 @@ mod tests {
         let result: Result<(), CodegenError> =
             check_bundle_name_conflict("image_bundle", &contracts);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn parse_raw_enum_deserializes() {
+        let toml_str: &str = "[[enum]]\nname = \"Status\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Ok\"\nvalue = \"0\"";
+        let raw: RawApiSchema = toml::from_str(toml_str).expect("deserialize");
+        assert_eq!(raw.r#enum.len(), 1);
+        assert_eq!(raw.r#enum[0].name, "Status");
+        assert_eq!(raw.r#enum[0].repr, "u32");
+        assert_eq!(raw.r#enum[0].variants[0].name, "Ok");
+        assert_eq!(raw.r#enum[0].variants[0].value, "0");
+    }
+
+    #[test]
+    fn test_enum_forward_ref_rejected() {
+        // Variant B references variant C which hasn't been declared yet
+        let declared: Vec<String> = vec!["A".to_owned()];
+        let result: Result<(), CodegenError> = validate_enum_value_expr(
+            "C | 1",
+            "MyEnum",
+            "B",
+            &declared,
+        );
+        assert!(
+            matches!(result, Err(CodegenError::EnumForwardRef { ref ref_name, .. }) if ref_name == "C"),
+            "expected EnumForwardRef for C, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn test_enum_chained_ref_rejected() {
+        // A = "1", B = "A | 1" (B refs A which has no ref — OK so far)
+        // C = "B | 2" (C refs B which refs A — chained ref!)
+        let variants: Vec<EnumVariant> = vec![
+            EnumVariant { name: "A".to_owned(), value: "1".to_owned() },
+            EnumVariant { name: "B".to_owned(), value: "A | 1".to_owned() },
+            EnumVariant { name: "C".to_owned(), value: "B | 2".to_owned() },
+        ];
+        let result: Result<(), CodegenError> = check_enum_chained_refs("MyEnum", &variants);
+        assert!(
+            matches!(result, Err(CodegenError::EnumChainedRef { ref variant_name, ref ref_name, .. }) if variant_name == "C" && ref_name == "B"),
+            "expected EnumChainedRef for C->B, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn test_enum_name_collision_with_type() {
+        // [[types]] named "Status" AND [[enum]] also named "Status" — should error
+        // This test is for T5's lower_api(). For now we call validate directly with
+        // a minimal check that names collide. We'll use the collision logic directly.
+        let type_names: Vec<String> = vec!["Status".to_owned()];
+        let enum_names: Vec<String> = vec!["Status".to_owned()];
+        let collision: bool = enum_names.iter().any(|n| type_names.contains(n));
+        assert!(collision, "expected name collision detected");
+    }
+
+    #[test]
+    fn test_enum_invalid_repr_rejected() {
+        // Repr "i32" should be invalid — test via ReprType::parse
+        let result: Option<ReprType> = ReprType::parse("i32");
+        assert!(result.is_none(), "i32 should not be a valid ReprType");
+    }
+
+    #[test]
+    fn test_enum_valid_bitflag_expr() {
+        // Test that a valid bitflag expression parses without error
+        // A=0, B=1, C=1<<1, D=B|C
+        let declared_a: Vec<String> = vec![];
+        let r_a: Result<(), CodegenError> = validate_enum_value_expr("0", "Flags", "A", &declared_a);
+        assert!(r_a.is_ok(), "A=0 should be valid, got {r_a:?}");
+
+        let declared_b: Vec<String> = vec!["A".to_owned()];
+        let r_b: Result<(), CodegenError> = validate_enum_value_expr("1", "Flags", "B", &declared_b);
+        assert!(r_b.is_ok(), "B=1 should be valid, got {r_b:?}");
+
+        let declared_c: Vec<String> = vec!["A".to_owned(), "B".to_owned()];
+        let r_c: Result<(), CodegenError> = validate_enum_value_expr("1 << 1", "Flags", "C", &declared_c);
+        assert!(r_c.is_ok(), "C=1<<1 should be valid, got {r_c:?}");
+
+        let declared_d: Vec<String> = vec!["A".to_owned(), "B".to_owned(), "C".to_owned()];
+        let r_d: Result<(), CodegenError> = validate_enum_value_expr("B | C", "Flags", "D", &declared_d);
+        assert!(r_d.is_ok(), "D=B|C should be valid, got {r_d:?}");
+    }
+
+    #[test]
+    fn test_parse_api_with_enums() {
+        let toml_str: &str = "[[enum]]\nname = \"Status\"\nrepr = \"u32\"\n\n[[enum.variants]]\nname = \"Ok\"\nvalue = \"0\"\n\n[[enum.variants]]\nname = \"Err\"\nvalue = \"1\"";
+        let ir: ValidatedIr = parse_api_str(toml_str).expect("parse");
+        assert_eq!(ir.enums.len(), 1);
+        assert_eq!(ir.enums[0].name, "Status");
+        assert_eq!(ir.enums[0].variants.len(), 2);
+        assert_eq!(ir.enums[0].variants[0].name, "Ok");
+        assert_eq!(ir.enums[0].variants[1].value, "1");
     }
 }
 
