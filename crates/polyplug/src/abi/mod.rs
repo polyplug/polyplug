@@ -1,5 +1,5 @@
 // =============================================================================
-// ABI FROZEN AS OF EPIC 9.7
+// ABI FROZEN AS OF EPIC 9.7 — EXCEPTION: PluginContext added in PluginContext epic (pre-v1 breaking change)
 // =============================================================================
 //
 // The following types and function signatures constitute the frozen polyplug ABI.
@@ -52,6 +52,50 @@ impl StringView {
             ptr: core::ptr::null(),
             len: 0,
         }
+    }
+}
+
+impl StringView {
+    /// Returns the contents as a `&str`.
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
+    pub unsafe fn as_str(&self) -> &str {
+        // SAFETY: Caller guarantees ptr is valid, non-null, UTF-8, and live for 'self lifetime.
+        unsafe {
+            let slice: &[u8] = core::slice::from_raw_parts(self.ptr, self.len);
+            core::str::from_utf8_unchecked(slice)
+        }
+    }
+
+    /// Copies the StringView contents into a new owned `String`.
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
+    pub unsafe fn to_string_owned(&self) -> String {
+        // SAFETY: Caller guarantees ptr is valid, non-null, UTF-8, and live.
+        unsafe { self.as_str().to_owned() }
+    }
+}
+
+impl Buffer {
+    /// Returns the buffer contents as a byte slice.
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is valid for `len` bytes and the memory is live.
+    pub unsafe fn as_slice(&self) -> &[u8] {
+        // SAFETY: Caller guarantees ptr is non-null and valid for len bytes.
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    /// Returns the buffer contents as a mutable byte slice.
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is valid for `cap` bytes, the memory is live, and no
+    /// other reference to the buffer exists.
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: Caller guarantees ptr is non-null, valid for cap bytes, and exclusively owned.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.cap) }
     }
 }
 
@@ -228,6 +272,16 @@ unsafe impl Send for PluginDescriptor {}
 // SAFETY: PluginDescriptor contains only StringViews (which are Send+Sync)
 // and u32 values. All safe to share across threads.
 unsafe impl Sync for PluginDescriptor {}
+
+/// Context passed to every guest `polyplug_init()` function.
+/// The `bundle_path` pointer is runtime-owned and valid for the lifetime of the `PluginRuntime`.
+/// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PluginContext {
+    /// Absolute canonical path to the directory containing the loaded bundle.
+    pub bundle_path: StringView,
+}
 
 /// Bridge used during `polyplug_init` only — not stored long-term.
 ///
@@ -498,5 +552,14 @@ mod tests {
         assert_eq!(offset_of!(RuntimeConfig, compatibility), 16);
         assert_eq!(offset_of!(RuntimeConfig, extensions), 24);
         assert_eq!(offset_of!(RuntimeConfig, extension_count), 32);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn plugin_context_layout() {
+        use std::mem::{size_of, align_of, offset_of};
+        assert_eq!(size_of::<PluginContext>(), 16);
+        assert_eq!(align_of::<PluginContext>(), 8);
+        assert_eq!(offset_of!(PluginContext, bundle_path), 0);
     }
 }
