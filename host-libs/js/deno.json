@@ -1,0 +1,6 @@
+{
+  "name": "@polyplug/host-js",
+  "version": "0.1.0",
+  "exports": "./polyplug.ts",
+  "license": "MIT"
+}
