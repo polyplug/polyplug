@@ -581,6 +581,12 @@ impl BundleLoader for JsLoader {
             *c.borrow_mut() = None;
         });
 
+        // Extract bundle directory for globalThis.bundlePath injection.
+        let bundle_dir: std::path::PathBuf = bundle_path
+            .parent()
+            .unwrap_or(&bundle_path)
+            .to_path_buf();
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         // 6. Set up polyplug global and eval bundle.
         let eval_result: Result<(), PolyplugError> =
             ctx.with(|ctx_ref: Ctx<'_>| -> Result<(), PolyplugError> {
@@ -601,6 +607,16 @@ impl BundleLoader for JsLoader {
                             message: format!("global set failed: {e}"),
                         })
                     })?;
+                // Inject bundlePath global before bundle eval, so init(globalThis.bundlePath) works at top-level.
+                let set_bundle: String = format!("globalThis.bundlePath = {:?};", bundle_dir_str);
+                ctx_ref.eval::<Value<'_>, _>(set_bundle.as_str()).map_err(
+                    |e: rquickjs::Error| {
+                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                            runtime: "js-quickjs".to_owned(),
+                            message: format!("bundlePath injection failed: {e}"),
+                        })
+                    },
+                )?;
                 ctx_ref.eval::<Value<'_>, _>(bundle_js.as_str()).map_err(
                     |e: rquickjs::Error| {
                         PolyplugError::Loader(LoaderError::JsRuntimePanic {

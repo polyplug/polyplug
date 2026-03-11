@@ -24,7 +24,7 @@ use crate::config::HostfxrLocation;
 /// InitFn: the [UnmanagedCallersOnly] entry point signature.
 /// Uses `extern "system"` because `netcorehost::ManagedFunction<F>` requires `F: ManagedFnPtr`
 /// which requires `<F as FnPtr>::Abi == System`. On Linux/macOS `"system"` is identical to `"C"`.
-pub(crate) type InitFn = unsafe extern "system" fn(*mut PluginRegistrar) -> u32;
+pub(crate) type InitFn = unsafe extern "system" fn(*mut PluginRegistrar, *const polyplug::abi::PluginContext) -> u32;
 
 /// DotnetContext holds the live CLR runtime and per-assembly loader cache.
 /// Created exactly once per process via CLR_CONTEXT.
@@ -58,7 +58,7 @@ pub(crate) static CLR_CONTEXT: OnceCell<Arc<DotnetContext>> = OnceCell::new();
 /// Generates a `runtimeconfig.json` in a temp file, initializes hostfxr, and returns
 /// an `Arc<DotnetContext>`. The caller is responsible for storing the result in `CLR_CONTEXT`
 /// via `OnceCell::get_or_try_init`.
-pub(crate) fn init_context(config: &DotnetConfig) -> Result<Arc<DotnetContext>, PolyplugError> {
+pub(crate) fn init_context(config: &DotnetConfig, bundle_dir: &std::path::Path) -> Result<Arc<DotnetContext>, PolyplugError> {
     // Step 1: Parse version from "net10.0" → "10.0" → "10.0.0"
     let ver_str: &str = config
         .min_framework
@@ -71,9 +71,10 @@ pub(crate) fn init_context(config: &DotnetConfig) -> Result<Arc<DotnetContext>, 
     };
 
     // Step 2: Generate runtimeconfig.json content and write to a temp file.
+    // NOTE: additionalProbingPaths set from first-loaded bundle dir only (CLR_CONTEXT is OnceCell).
     let json: String = format!(
-        r#"{{"runtimeOptions":{{"tfm":"{}","framework":{{"name":"Microsoft.NETCore.App","version":"{}"}}}}}}"#,
-        config.min_framework, full_version
+        "{{\"runtimeOptions\":{{\"tfm\":\"{}\",\"framework\":{{\"name\":\"Microsoft.NETCore.App\",\"version\":\"{}\"}},\"additionalProbingPaths\":[\"{}\"]}}}}",
+        config.min_framework, full_version, bundle_dir.to_string_lossy()
     );
     // hostfxr requires the runtimeconfig file to have a ".json" extension —
     // it uses the filename to detect the file type. tempfile::NamedTempFile::new()

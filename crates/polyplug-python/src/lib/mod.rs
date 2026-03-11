@@ -23,7 +23,9 @@ use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
 
+use polyplug::abi::PluginContext;
 use polyplug::abi::PluginRegistrar;
+use polyplug::abi::StringView;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -74,9 +76,51 @@ impl BundleLoader for PythonLoader {
             .to_string_lossy()
             .into_owned();
 
+        // Compute bundle directory for sys.path injection.
+        let bundle_dir: std::path::PathBuf = abs_path
+            .parent()
+            .unwrap_or(abs_path.as_path())
+            .to_path_buf();
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+
         // Step 3: Load the Python module and call polyplug_init.
         Python::attach(|py| {
-            // Step 3a: Import via importlib (no sys.path mutation).
+            // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
+            let sys_mod: pyo3::Bound<'_, PyModule> =
+                PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
+                    PolyplugError::Loader(LoaderError::PythonInitRaisedException {
+                        bundle: bundle_name.clone(),
+                        message: e.to_string(),
+                    })
+                })?;
+            let sys_path: pyo3::Bound<'_, pyo3::PyAny> =
+                sys_mod.getattr("path").map_err(|e: pyo3::PyErr| {
+                    PolyplugError::Loader(LoaderError::PythonInitRaisedException {
+                        bundle: bundle_name.clone(),
+                        message: e.to_string(),
+                    })
+                })?;
+            sys_path
+                .call_method1("insert", (0usize, bundle_dir_str.as_str()))
+                .map_err(|e: pyo3::PyErr| {
+                    PolyplugError::Loader(LoaderError::PythonInitRaisedException {
+                        bundle: bundle_name.clone(),
+                        message: e.to_string(),
+                    })
+                })?;
+            let site_pkgs: std::path::PathBuf = bundle_dir.join("site-packages");
+            if site_pkgs.exists() {
+                let sp: String = site_pkgs.to_string_lossy().into_owned();
+                sys_path
+                    .call_method1("insert", (0usize, sp.as_str()))
+                    .map_err(|e: pyo3::PyErr| {
+                        PolyplugError::Loader(LoaderError::PythonInitRaisedException {
+                            bundle: bundle_name.clone(),
+                            message: e.to_string(),
+                        })
+                    })?;
+            }
+            // Step 3b: Import via importlib (no further sys.path mutation).
             let importlib_util: pyo3::Bound<'_, PyModule> = PyModule::import(py, "importlib.util")
                 .map_err(|e| {
                     PolyplugError::Loader(LoaderError::PythonModuleImportFailed {
@@ -142,12 +186,24 @@ impl BundleLoader for PythonLoader {
             // The registrar lifetime extends for the duration of this call.
             let registrar_addr: usize = registrar as *mut PluginRegistrar as usize;
 
-            init_fn.call1((registrar_addr,)).map_err(|e| {
-                PolyplugError::Loader(LoaderError::PythonInitRaisedException {
-                    bundle: bundle_name.clone(),
-                    message: e.to_string(),
-                })
-            })?;
+            // SAFETY: bundle_path_static outlives this call; leaked intentionally so StringView ptr is 'static.
+            let bundle_path_static: &'static str =
+                Box::leak(bundle_dir_str.clone().into_boxed_str());
+            let ctx: PluginContext = PluginContext {
+                bundle_path: StringView {
+                    ptr: bundle_path_static.as_ptr(),
+                    len: bundle_path_static.len(),
+                },
+            };
+            let ctx_addr: usize = &ctx as *const PluginContext as usize;
+            init_fn
+                .call((registrar_addr, ctx_addr), None)
+                .map_err(|e: pyo3::PyErr| {
+                    PolyplugError::Loader(LoaderError::PythonInitRaisedException {
+                        bundle: bundle_name.clone(),
+                        message: e.to_string(),
+                    })
+                })?;
 
             Ok(())
         })

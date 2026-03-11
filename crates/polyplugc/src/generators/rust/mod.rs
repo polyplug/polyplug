@@ -682,6 +682,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::PluginRegistrar;\n");
     out.push_str("use polyplug_guest::PluginVTable;\n");
     out.push_str("use polyplug_guest::StringView;\n");
+    out.push_str("use polyplug_guest::PluginContext;\n");
     for contract in &ir.contracts {
         let upper: String = contract_name_to_upper_snake(&contract.name);
         out.push_str(&format!("use super::vtables::{upper}_CONTRACT_ID;\n"));
@@ -697,14 +698,21 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("/// # Safety\n");
     out.push_str("/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n");
     out.push_str("#[unsafe(no_mangle)]\n");
-    out.push_str(
-        "pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n",
-    );
+    out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
+    out.push_str("    registrar: *mut PluginRegistrar,\n");
+    out.push_str("    ctx: *const PluginContext,\n");
+    out.push_str(") -> AbiError {\n");
     out.push_str("    if registrar.is_null() {\n");
     out.push_str(
         "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
     );
     out.push_str("    }\n");
+    out.push_str("    if ctx.is_null() {\n");
+    out.push_str("        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n");
+    out.push_str("    }\n");
+    out.push_str("    // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.\n");
+    out.push_str("    let ctx: &PluginContext = unsafe { &*ctx };\n");
+    out.push_str("    let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated\n");
     out.push_str("    // SAFETY: registrar is non-null and valid per ABI contract.\n");
     out.push_str("    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };\n\n");
     if has_trace {

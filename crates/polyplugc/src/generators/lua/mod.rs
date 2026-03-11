@@ -260,6 +260,11 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
     } else {
         out.push_str("-- No optional extensions requested.\n");
     }
+    out.push_str("\nlocal function polyplug_init(registrar_ptr, ctx_ptr)\n");
+    out.push_str("    if registrar_ptr == nil then return end\n");
+    out.push_str("    if ctx_ptr == nil then return end\n");
+    out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
+    out.push_str("end\n");
     out
 }
 

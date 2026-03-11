@@ -344,8 +344,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 
     out.push_str("public static unsafe class PolyplugInitializer {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str("    public static uint PolyplugInit(PluginRegistrar* registrar) {\n");
-    out.push_str("        if (registrar == null) return AbiConstants.ABI_ERROR_GENERIC;\n");
+    out.push_str("    public static uint PolyplugInit(PluginRegistrar* registrar, PluginContext* ctx) {\n");
+    out.push_str("        if (registrar == null || ctx == null) return AbiConstants.ABI_ERROR_GENERIC;\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     if has_trace {

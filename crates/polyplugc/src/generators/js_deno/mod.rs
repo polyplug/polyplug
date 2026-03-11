@@ -283,7 +283,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-deno\n\n",
     );
-    out.push_str("function init(): void {\n");
+    out.push_str("function init(bundlePath: string): void {\n");
     out.push_str("    // Dependency resolution via Deno.core.ops.op_find_by_contract(...)\n");
     out.push_str("    // and vtable registration via Deno.core.ops.op_register_vtable(...)\n");
     out.push_str("    // would go here. Replace with generated values from bundle.toml.\n");
@@ -297,7 +297,9 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         out.push_str("    // traceVtablePtr is 0n if extension not available\n");
         out.push_str("    void traceVtablePtr;\n");
     }
-    out.push_str("}\n\ninit();\n");
+    out.push_str("}\n\n");
+    out.push_str("// bundlePath injected as global by polyplug host loader\n");
+    out.push_str("init(globalThis.bundlePath);\n");
     out
 }
 

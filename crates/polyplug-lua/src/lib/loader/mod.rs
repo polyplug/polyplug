@@ -321,6 +321,32 @@ impl BundleLoader for LuaLoader {
             })
         })?;
 
+        // Extract bundle directory for package.path / package.cpath injection.
+        let bundle_dir: std::path::PathBuf = path
+            .parent()
+            .unwrap_or(path)
+            .to_path_buf();
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+        let bundle_dir_fwd: String = bundle_dir_str.replace('\\', "/");
+        let path_code: String = format!(
+            "package.path = \"{}/?.lua;{}/?.init.lua;\" .. package.path",
+            bundle_dir_fwd, bundle_dir_fwd
+        );
+        lua.load(&path_code).exec().map_err(|e: mlua::Error| {
+            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
+                reason: format!("package.path injection failed: {e}"),
+            })
+        })?;
+        let cpath_ext: &str = if cfg!(windows) { "dll" } else { "so" };
+        let cpath_code: String = format!(
+            "package.cpath = \"{}/?.{};\" .. package.cpath",
+            bundle_dir_fwd, cpath_ext
+        );
+        lua.load(&cpath_code).exec().map_err(|e: mlua::Error| {
+            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
+                reason: format!("package.cpath injection failed: {e}"),
+            })
+        })?;
         // Execute the script. This defines polyplug_init in the global environment.
         lua.load(&source).exec().map_err(|e: mlua::Error| {
             PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
@@ -351,8 +377,19 @@ impl BundleLoader for LuaLoader {
         let registrar_ptr: i64 = registrar as *mut PluginRegistrar as usize as i64;
 
         // Call polyplug_init — it populates _G._polyplug_handlers.
+        // Pass registrar pointer as first arg and PluginContext pointer as second arg.
+        // SAFETY: bundle_path_static outlives this call; leaked intentionally.
+        let bundle_path_static: &'static str =
+            Box::leak(bundle_dir_str.clone().into_boxed_str());
+        let ctx: polyplug::abi::PluginContext = polyplug::abi::PluginContext {
+            bundle_path: polyplug::abi::StringView {
+                ptr: bundle_path_static.as_ptr(),
+                len: bundle_path_static.len(),
+            },
+        };
+        let ctx_ptr: i64 = &ctx as *const polyplug::abi::PluginContext as i64;
         init_fn
-            .call::<()>(registrar_ptr)
+            .call::<()>((registrar_ptr, ctx_ptr))
             .map_err(|e: mlua::Error| {
                 PolyplugError::Loader(LoaderError::LuaInitRaisedError {
                     bundle: bundle_name.clone(),

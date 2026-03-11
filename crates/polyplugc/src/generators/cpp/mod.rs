@@ -439,8 +439,8 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, CodegenError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(PluginRegistrar* registrar) {\n");
-    out.push_str("    if (!registrar) return AbiError{1U, StringView{nullptr, 0}};\n\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {\n");
+    out.push_str("    if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};\n\n");
     if has_trace {
         out.push_str("    static constexpr uint32_t EXT_TRACE_ID = 0xC4EB9AEEu;\n");
         out.push_str("    // Optional: trace extension — query via host vtable at init time\n");

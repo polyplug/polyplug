@@ -504,6 +504,18 @@ impl BundleLoader for JsDenoLoader {
         // 4. Clone path for thread (path is &Path, must be owned to move into thread)
         let bundle_path: PathBuf = path.to_owned();
 
+        // 4b. Extract bundle directory for globalThis.bundlePath injection.
+        // If path is a file, take its parent; if it is already a dir, use it directly.
+        let bundle_dir_str: String = path
+            .parent()
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        // SAFETY: bundle_path_static is intentionally leaked. It is never freed.
+        // The PluginRuntime's lifetime guarantees no dangling reference during use.
+        let bundle_path_static: &'static str =
+            Box::leak(bundle_dir_str.into_boxed_str());
+
         // 5. Spawn dedicated thread for this bundle's V8 isolate
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             // SAFETY: host_vtable_addr encodes a *const HostVTable that is Box::leak'd
@@ -563,6 +575,22 @@ impl BundleLoader for JsDenoLoader {
                         extensions: vec![polyplug_ops::init_ops()],
                         module_loader: Some(std::rc::Rc::new(module_loader)),
                         ..Default::default()
+                    });
+
+                // Inject globalThis.bundlePath before the bundle module is evaluated.
+                // This allows JS code to locate sibling resources relative to the bundle.
+                let inject_script: deno_core::FastString = deno_core::FastString::from_static(
+                    Box::leak(
+                        format!("globalThis.bundlePath = {:?};", bundle_path_static)
+                            .into_boxed_str(),
+                    ),
+                );
+                // SAFETY: inject_script is a valid JS snippet. execute_script panics only on
+                // V8 internal errors which are non-recoverable; panic is appropriate here.
+                runtime
+                    .execute_script("<bundlePath>", inject_script)
+                    .unwrap_or_else(|e: deno_core::anyhow::Error| {
+                        panic!("failed to inject globalThis.bundlePath: {e}");
                     });
 
                 let mod_id: deno_core::ModuleId =

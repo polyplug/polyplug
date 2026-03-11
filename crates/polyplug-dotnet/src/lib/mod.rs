@@ -84,8 +84,16 @@ impl BundleLoader for DotnetLoader {
             })
         })?;
 
+        let bundle_dir: std::path::PathBuf = path.parent()
+            .unwrap_or(path)
+            .canonicalize()
+            .map_err(|_| {
+                PolyplugError::Loader(LoaderError::AssemblyNotFound {
+                    path: path.to_string_lossy().into_owned(),
+                })
+            })?;
         let context: std::sync::Arc<crate::context::DotnetContext> = CLR_CONTEXT
-            .get_or_try_init(|| init_context(&self.config))?
+            .get_or_try_init(|| init_context(&self.config, &bundle_dir))?
             .clone();
 
         let stem: std::borrow::Cow<'_, str> =
@@ -112,11 +120,20 @@ impl BundleLoader for DotnetLoader {
             method_name_pdc.as_ref(),
         )?;
 
-        // SAFETY: registrar is a valid non-null mutable reference per BundleLoader contract.
-        // The plugin's PolyplugInit function receives a pointer to the registrar and registers
-        // its plugins. The registrar lifetime extends for the duration of this call.
-        // managed_init is a valid function pointer obtained from the CLR hosting API.
-        let result: u32 = unsafe { (*managed_init)(registrar as *mut PluginRegistrar) };
+        // SAFETY: bundle_path_static outlives this call; leaked intentionally.
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+        let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
+        let ctx: polyplug::abi::PluginContext = polyplug::abi::PluginContext {
+            bundle_path: polyplug::abi::StringView {
+                ptr: bundle_path_static.as_ptr(),
+                len: bundle_path_static.len(),
+            },
+        };
+        // SAFETY: managed_init is a valid fn ptr from CLR. registrar and ctx are non-null and valid.
+        let result: u32 = unsafe { (*managed_init)(
+            registrar as *mut PluginRegistrar,
+            &ctx as *const polyplug::abi::PluginContext,
+        ) };
         if result != 0 {
             return Err(PolyplugError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,

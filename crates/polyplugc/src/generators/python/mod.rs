@@ -254,7 +254,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, PluginDescriptor, PluginRegistrar, PluginVTable, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, PluginContext, PluginDescriptor, PluginRegistrar, PluginVTable, StringView\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -281,9 +281,12 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
 
     out.push_str("def polyplug_abi_version() -> int:\n");
     out.push_str("    return 1\n\n");
-    out.push_str("def polyplug_init(registrar_addr: int) -> None:\n");
+    out.push_str("def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:\n");
     out.push_str("    if registrar_addr == 0:\n");
     out.push_str("        return\n");
+    out.push_str("    if ctx_ptr == 0:\n");
+    out.push_str("        return\n");
+    out.push_str("    ctx: PluginContext = PluginContext.from_address(ctx_ptr)\n");
     out.push_str(
         "    registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))\n",
     );
@@ -308,7 +311,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import PluginDescriptor, PluginRegistrar, PluginVTable, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import PluginContext, PluginDescriptor, PluginRegistrar, PluginVTable, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -337,7 +340,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("def polyplug_abi_version() -> int: ...\n");
-    out.push_str("def polyplug_init(registrar_addr: int) -> None: ...\n");
+    out.push_str("def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None: ...\n");
 
     out
 }

@@ -270,7 +270,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs\n\n",
     );
-    out.push_str("function init(): void {\n");
+    out.push_str("function init(bundlePath: string): void {\n");
     out.push_str("    // Dependency resolution and vtable registration would go here.\n");
     out.push_str("    // Replace with generated values from bundle.toml.\n");
     if has_trace {
@@ -283,7 +283,9 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         out.push_str("    // traceLo and traceHi are both 0 if extension not available\n");
         out.push_str("    void traceLo; void traceHi;\n");
     }
-    out.push_str("}\n\ninit();\n");
+    out.push_str("}\n\n");
+    out.push_str("// bundlePath injected as global by polyplug host loader\n");
+    out.push_str("init(globalThis.bundlePath);\n");
     out
 }
 
