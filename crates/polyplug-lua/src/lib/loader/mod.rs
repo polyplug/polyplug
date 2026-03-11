@@ -322,10 +322,7 @@ impl BundleLoader for LuaLoader {
         })?;
 
         // Extract bundle directory for package.path / package.cpath injection.
-        let bundle_dir: std::path::PathBuf = path
-            .parent()
-            .unwrap_or(path)
-            .to_path_buf();
+        let bundle_dir: std::path::PathBuf = path.parent().unwrap_or(path).to_path_buf();
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         let bundle_dir_fwd: String = bundle_dir_str.replace('\\', "/");
         let path_code: String = format!(
@@ -379,8 +376,7 @@ impl BundleLoader for LuaLoader {
         // Call polyplug_init — it populates _G._polyplug_handlers.
         // Pass registrar pointer as first arg and PluginContext pointer as second arg.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
-        let bundle_path_static: &'static str =
-            Box::leak(bundle_dir_str.clone().into_boxed_str());
+        let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
         let ctx: polyplug::abi::PluginContext = polyplug::abi::PluginContext {
             bundle_path: polyplug::abi::StringView {
                 ptr: bundle_path_static.as_ptr(),

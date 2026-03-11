@@ -57,6 +57,12 @@ unsafe impl Send for AbiError {}
 // SAFETY: AbiError is a plain-old-data struct with no interior mutability.
 unsafe impl Sync for AbiError {}
 
+/// Plugin context passed by the loader — mirrors polyplug::abi::PluginContext.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PluginContext {
+    pub bundle_path: StringView,
+}
 /// Plugin VTable — mirrors polyplug::abi::PluginVTable.
 #[repr(C)]
 pub struct PluginVTable {
@@ -214,14 +220,29 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 ///
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
+/// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(
+    registrar: *mut PluginRegistrar,
+    ctx: *const PluginContext,
+) -> AbiError {
     if registrar.is_null() {
         return AbiError {
             code: 1, // ABI_ERROR_GENERIC
             message: StringView::null(),
         };
     }
+    if ctx.is_null() {
+        return AbiError {
+            code: 1,
+            message: StringView::null(),
+        };
+    }
+
+    // SAFETY: ctx is non-null, checked above.
+    let sv: StringView = unsafe { (*ctx).bundle_path };
+    LAST_BUNDLE_PATH_PTR.store(sv.ptr as *mut u8, Ordering::SeqCst);
+    LAST_BUNDLE_PATH_LEN.store(sv.len, Ordering::SeqCst);
 
     // SAFETY: registrar is non-null and provided by the host runtime per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
@@ -234,6 +255,23 @@ pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiEr
             &TEST_ADD_DESCRIPTOR as *const PluginDescriptor,
             &TEST_ADD_VTABLE as *const PluginVTable,
         )
+    }
+}
+
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+
+static LAST_BUNDLE_PATH_PTR: AtomicPtr<u8> = AtomicPtr::new(core::ptr::null_mut());
+static LAST_BUNDLE_PATH_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Returns the bundle path passed to the last `polyplug_init` call.
+///
+/// # Safety
+/// The returned StringView is valid as long as the bundle path memory is live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_get_last_bundle_path() -> StringView {
+    StringView {
+        ptr: LAST_BUNDLE_PATH_PTR.load(Ordering::SeqCst),
+        len: LAST_BUNDLE_PATH_LEN.load(Ordering::SeqCst),
     }
 }
 

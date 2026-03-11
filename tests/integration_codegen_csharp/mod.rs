@@ -148,17 +148,13 @@ fn test_csharp_codegen_generates_enum_types() {
 
     // ── 3. Read guest/Types.cs and assert enum content ─────────────────────────
     let types_file: PathBuf = out_dir.join("guest").join("Types.cs");
-    let content: String =
-        std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("public enum PixelFormat"),
         "Types.cs must contain public enum PixelFormat"
     );
-    assert!(
-        content.contains("[Flags]"),
-        "Types.cs must contain [Flags]"
-    );
+    assert!(content.contains("[Flags]"), "Types.cs must contain [Flags]");
 
     println!("test_csharp_codegen_generates_enum_types: all enum assertions passed ✓");
 }

@@ -57,6 +57,13 @@ unsafe impl Send for AbiError {}
 // SAFETY: AbiError is a plain-old-data struct with no interior mutability.
 unsafe impl Sync for AbiError {}
 
+/// Plugin context passed by the loader — mirrors polyplug::abi::PluginContext.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PluginContext {
+    pub bundle_path: StringView,
+}
+
 /// Plugin VTable — mirrors polyplug::abi::PluginVTable.
 #[repr(C)]
 pub struct PluginVTable {
@@ -184,9 +191,19 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 ///
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
+/// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(
+    registrar: *mut PluginRegistrar,
+    ctx: *const PluginContext,
+) -> AbiError {
     if registrar.is_null() {
+        return AbiError {
+            code: 1_u32,
+            message: StringView::null(),
+        };
+    }
+    if ctx.is_null() {
         return AbiError {
             code: 1_u32,
             message: StringView::null(),

@@ -9,4 +9,7 @@ const VTABLE_ID: bigint = 1n;
 const FN_COUNT: number = 4;
 
 // Register vtable with host
-Deno.core.ops.op_register_vtable(CONTRACT_ID, VTABLE_ID, FN_COUNT);
+function init(bundlePath: string): void {
+    Deno.core.ops.op_register_vtable(CONTRACT_ID, VTABLE_ID, FN_COUNT);
+}
+init(globalThis.bundlePath);  // bundlePath injected by loader

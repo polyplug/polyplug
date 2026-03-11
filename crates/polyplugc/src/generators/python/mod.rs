@@ -6,6 +6,8 @@ use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -16,8 +18,6 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::EnumDef;
-use crate::ir::EnumVariant;
 
 pub(crate) struct PythonGenerator;
 
@@ -933,10 +933,7 @@ fn to_upper_snake_case(s: &str) -> String {
     result
 }
 
-fn substitute_variant_refs_python(
-    declared_variants: &[EnumVariant],
-    expr: &str,
-) -> String {
+fn substitute_variant_refs_python(declared_variants: &[EnumVariant], expr: &str) -> String {
     let chars: Vec<char> = expr.chars().collect();
     let len: usize = chars.len();
     let mut result: String = String::new();
@@ -949,9 +946,8 @@ fn substitute_variant_refs_python(
                 i += 1;
             }
             let ident: String = chars[start..i].iter().collect();
-            let found_variant: Option<&EnumVariant> = declared_variants
-                .iter()
-                .find(|v| v.name == ident);
+            let found_variant: Option<&EnumVariant> =
+                declared_variants.iter().find(|v| v.name == ident);
             if let Some(ref_variant) = found_variant {
                 result.push('(');
                 result.push_str(&ref_variant.value);
@@ -968,7 +964,11 @@ fn substitute_variant_refs_python(
 }
 
 fn generate_python_enum(out: &mut String, e: &EnumDef) {
-    let base_class: &str = if e.bitflag { "enum.IntFlag" } else { "enum.IntEnum" };
+    let base_class: &str = if e.bitflag {
+        "enum.IntFlag"
+    } else {
+        "enum.IntEnum"
+    };
     out.push_str(&format!("class {}({}):\n", e.name, base_class));
     for variant in &e.variants {
         let upper_name: String = to_upper_snake_case(&variant.name);
@@ -989,13 +989,22 @@ mod tests {
             repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_python_enum(&mut out, &e);
-        assert!(out.contains("class PixelFormat(enum.IntEnum)"), "missing class def: {out}");
+        assert!(
+            out.contains("class PixelFormat(enum.IntEnum)"),
+            "missing class def: {out}"
+        );
         assert!(out.contains("UNKNOWN = 0"), "missing UNKNOWN: {out}");
         assert!(out.contains("RGBA8 = 1"), "missing RGBA8: {out}");
     }
@@ -1007,13 +1016,22 @@ mod tests {
             repr: ReprType::U32,
             bitflag: true,
             variants: vec![
-                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_python_enum(&mut out, &e);
-        assert!(out.contains("class ImageFlags(enum.IntFlag)"), "missing class def: {out}");
+        assert!(
+            out.contains("class ImageFlags(enum.IntFlag)"),
+            "missing class def: {out}"
+        );
         assert!(out.contains("NONE = 0"), "missing NONE: {out}");
     }
 }

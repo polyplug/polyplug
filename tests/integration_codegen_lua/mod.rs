@@ -133,8 +133,7 @@ fn test_lua_codegen_generates_enum_types() {
 
     // ── 3. Read guest/types.lua and assert enum content ─────────────────────────
     let types_file: PathBuf = out_dir.join("guest").join("types.lua");
-    let content: String =
-        std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("local PixelFormat = {"),

@@ -10,6 +10,8 @@ use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -21,8 +23,6 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::EnumDef;
-use crate::ir::EnumVariant;
 
 /// Generator for js-quickjs plugin bundles.
 ///
@@ -127,10 +127,7 @@ fn ts_abi_builtin(b: &AbiBuiltin) -> &'static str {
     }
 }
 
-fn substitute_variant_refs_js(
-    declared_variants: &[EnumVariant],
-    expr: &str,
-) -> String {
+fn substitute_variant_refs_js(declared_variants: &[EnumVariant], expr: &str) -> String {
     let chars: Vec<char> = expr.chars().collect();
     let len: usize = chars.len();
     let mut result: String = String::new();
@@ -171,7 +168,10 @@ fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) {
         out.push_str(&format!("    {}: {},\n", variant.name, subst_value));
     }
     out.push_str("} as const);\n");
-    out.push_str(&format!("type {} = typeof {}[keyof typeof {}];\n\n", e.name, e.name, e.name));
+    out.push_str(&format!(
+        "type {} = typeof {}[keyof typeof {}];\n\n",
+        e.name, e.name, e.name
+    ));
 }
 fn generate_types_ts(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
@@ -433,15 +433,27 @@ mod tests {
             repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e);
-        assert!(out.contains("Object.freeze({"), "missing Object.freeze: {out}");
+        assert!(
+            out.contains("Object.freeze({"),
+            "missing Object.freeze: {out}"
+        );
         assert!(out.contains("Unknown: 0"), "missing Unknown: {out}");
-        assert!(!out.contains("@bitflag"), "non-bitflag should not have @bitflag: {out}");
+        assert!(
+            !out.contains("@bitflag"),
+            "non-bitflag should not have @bitflag: {out}"
+        );
     }
 
     #[test]
@@ -451,13 +463,22 @@ mod tests {
             repr: ReprType::U32,
             bitflag: true,
             variants: vec![
-                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_js_quickjs_enum(&mut out, &e);
         assert!(out.contains("@bitflag"), "missing @bitflag: {out}");
-        assert!(out.contains("Object.freeze({"), "missing Object.freeze: {out}");
+        assert!(
+            out.contains("Object.freeze({"),
+            "missing Object.freeze: {out}"
+        );
     }
 }

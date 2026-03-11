@@ -92,8 +92,9 @@ public static unsafe class Plugin {
     private static readonly byte[] _contract_name = "test.add"u8.ToArray();
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    public static uint PolyplugInit(PluginRegistrar* registrar) {
+    public static uint PolyplugInit(PluginRegistrar* registrar, PluginContext* ctx) {
         if (registrar == null) return AbiConstants.ABI_ERROR_GENERIC;
+        if (ctx == null) return AbiConstants.ABI_ERROR_GENERIC;
         try {
             TestAddImpl.InitVtable();
             fixed (byte* namePtr = _plugin_name)

@@ -14,6 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT / "guest-libs" / "python"))
 from polyplug_guest.abi import (
     ABI_OK,
     AbiError,
+    PluginContext,
     PluginDescriptor,
     PluginRegistrar,
     PluginVTable,
@@ -139,7 +140,7 @@ def polyplug_abi_version() -> int:
     return 1
 
 
-def polyplug_init(registrar_addr: int) -> None:
+def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
     """Called by PythonLoader with the PluginRegistrar address as an integer."""
     registrar = PluginRegistrar.from_address(registrar_addr)
     err: AbiError = registrar.register_plugin(

@@ -106,8 +106,7 @@ fn test_js_quickjs_codegen_generates_enum_types() {
 
     // ── 3. Read guest/types.ts and assert enum content ──────────────────────────
     let types_file: PathBuf = out_dir.join("guest").join("types.ts");
-    let content: String =
-        std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("Object.freeze"),

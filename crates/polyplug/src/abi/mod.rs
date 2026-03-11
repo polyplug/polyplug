@@ -557,7 +557,7 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn plugin_context_layout() {
-        use std::mem::{size_of, align_of, offset_of};
+        use std::mem::{align_of, offset_of, size_of};
         assert_eq!(size_of::<PluginContext>(), 16);
         assert_eq!(align_of::<PluginContext>(), 8);
         assert_eq!(offset_of!(PluginContext, bundle_path), 0);

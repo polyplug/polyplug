@@ -9,6 +9,8 @@ use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -18,8 +20,6 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::EnumDef;
-use crate::ir::EnumVariant;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -665,7 +665,10 @@ fn substitute_variant_refs_cpp(
             }
             let ident: String = chars[start..i].iter().collect();
             if declared_names.contains(&ident.as_str()) {
-                result.push_str(&format!("static_cast<{}>({}::{})", repr_cpp, enum_name, ident));
+                result.push_str(&format!(
+                    "static_cast<{}>({}::{})",
+                    repr_cpp, enum_name, ident
+                ));
             } else {
                 result.push_str(&ident);
             }
@@ -682,7 +685,8 @@ fn generate_cpp_enum(out: &mut String, e: &EnumDef) {
     out.push_str(&format!("/// Enum `{}` (repr: {})\n", e.name, repr_cpp));
     out.push_str(&format!("enum class {} : {} {{\n", e.name, repr_cpp));
     for variant in &e.variants {
-        let subst_value: String = substitute_variant_refs_cpp(&e.variants, &variant.value, &e.name, repr_cpp);
+        let subst_value: String =
+            substitute_variant_refs_cpp(&e.variants, &variant.value, &e.name, repr_cpp);
         out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
     }
     out.push_str("};\n");
@@ -1017,15 +1021,30 @@ mod tests {
             repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_cpp_enum(&mut out, &e);
-        assert!(out.contains("enum class PixelFormat : uint32_t"), "missing enum class: {out}");
-        assert!(out.contains("Unknown = 0"), "missing Unknown variant: {out}");
-        assert!(!out.contains("operator|"), "non-bitflag should not have operator|: {out}");
+        assert!(
+            out.contains("enum class PixelFormat : uint32_t"),
+            "missing enum class: {out}"
+        );
+        assert!(
+            out.contains("Unknown = 0"),
+            "missing Unknown variant: {out}"
+        );
+        assert!(
+            !out.contains("operator|"),
+            "non-bitflag should not have operator|: {out}"
+        );
     }
 
     #[test]
@@ -1035,16 +1054,28 @@ mod tests {
             repr: ReprType::U32,
             bitflag: true,
             variants: vec![
-                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_cpp_enum(&mut out, &e);
-        assert!(out.contains("enum class ImageFlags : uint32_t"), "missing enum class: {out}");
+        assert!(
+            out.contains("enum class ImageFlags : uint32_t"),
+            "missing enum class: {out}"
+        );
         assert!(out.contains("operator|"), "missing operator|: {out}");
         assert!(out.contains("operator&"), "missing operator&: {out}");
         assert!(out.contains("operator~"), "missing operator~: {out}");
-        assert!(out.contains("static_cast<uint32_t>"), "missing static_cast: {out}");
+        assert!(
+            out.contains("static_cast<uint32_t>"),
+            "missing static_cast: {out}"
+        );
     }
 }

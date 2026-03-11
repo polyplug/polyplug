@@ -120,8 +120,7 @@ fn test_python_codegen_generates_enum_types() {
 
     // ── 3. Read guest/types.py and assert enum content ──────────────────────────
     let types_file: PathBuf = out_dir.join("guest").join("types.py");
-    let content: String =
-        std::fs::read_to_string(&types_file).expect("read types file");
+    let content: String = std::fs::read_to_string(&types_file).expect("read types file");
 
     assert!(
         content.contains("import enum"),

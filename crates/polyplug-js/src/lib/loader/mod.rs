@@ -582,10 +582,8 @@ impl BundleLoader for JsLoader {
         });
 
         // Extract bundle directory for globalThis.bundlePath injection.
-        let bundle_dir: std::path::PathBuf = bundle_path
-            .parent()
-            .unwrap_or(&bundle_path)
-            .to_path_buf();
+        let bundle_dir: std::path::PathBuf =
+            bundle_path.parent().unwrap_or(&bundle_path).to_path_buf();
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         // 6. Set up polyplug global and eval bundle.
         let eval_result: Result<(), PolyplugError> =

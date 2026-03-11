@@ -7,6 +7,7 @@ use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
+use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -16,7 +17,6 @@ use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::EnumDef;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -344,8 +344,12 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 
     out.push_str("public static unsafe class PolyplugInitializer {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
-    out.push_str("    public static uint PolyplugInit(PluginRegistrar* registrar, PluginContext* ctx) {\n");
-    out.push_str("        if (registrar == null || ctx == null) return AbiConstants.ABI_ERROR_GENERIC;\n");
+    out.push_str(
+        "    public static uint PolyplugInit(PluginRegistrar* registrar, PluginContext* ctx) {\n",
+    );
+    out.push_str(
+        "        if (registrar == null || ctx == null) return AbiConstants.ABI_ERROR_GENERIC;\n",
+    );
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     if has_trace {
@@ -669,14 +673,26 @@ mod tests {
             repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let out: String = generate_cs_enum(&e);
-        assert!(out.contains("public enum PixelFormat : uint"), "missing enum def: {out}");
+        assert!(
+            out.contains("public enum PixelFormat : uint"),
+            "missing enum def: {out}"
+        );
         assert!(out.contains("Unknown = 0"), "missing Unknown: {out}");
-        assert!(!out.contains("[Flags]"), "non-bitflag should not have [Flags]: {out}");
+        assert!(
+            !out.contains("[Flags]"),
+            "non-bitflag should not have [Flags]: {out}"
+        );
     }
 
     #[test]
@@ -686,12 +702,24 @@ mod tests {
             repr: ReprType::U32,
             bitflag: true,
             variants: vec![
-                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let out: String = generate_cs_enum(&e);
-        assert!(out.contains("[Flags]"), "bitflag should have [Flags]: {out}");
-        assert!(out.contains("public enum ImageFlags : uint"), "missing enum def: {out}");
+        assert!(
+            out.contains("[Flags]"),
+            "bitflag should have [Flags]: {out}"
+        );
+        assert!(
+            out.contains("public enum ImageFlags : uint"),
+            "missing enum def: {out}"
+        );
     }
 }

@@ -5,6 +5,8 @@ use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
@@ -15,8 +17,6 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
-use crate::ir::EnumDef;
-use crate::ir::EnumVariant;
 
 pub(crate) struct LuaGenerator;
 
@@ -511,7 +511,10 @@ fn cdef_guarded_block() -> &'static str {
 fn needs_bit_library(enums: &[EnumDef]) -> bool {
     for e in enums {
         for variant in &e.variants {
-            if variant.value.contains("<<") || variant.value.contains('|') || variant.value.contains('~') {
+            if variant.value.contains("<<")
+                || variant.value.contains('|')
+                || variant.value.contains('~')
+            {
                 return true;
             }
         }
@@ -519,10 +522,7 @@ fn needs_bit_library(enums: &[EnumDef]) -> bool {
     false
 }
 
-fn substitute_variant_refs_lua(
-    declared_variants: &[EnumVariant],
-    expr: &str,
-) -> String {
+fn substitute_variant_refs_lua(declared_variants: &[EnumVariant], expr: &str) -> String {
     let chars: Vec<char> = expr.chars().collect();
     let len: usize = chars.len();
     let mut result: String = String::new();
@@ -562,17 +562,24 @@ fn lua_transform_value_expr(expr: &str) -> String {
 
     // Try to split on `|` at top level (respecting parens) — lowest precedence
     if let Some(parts) = split_on_top_level(expr, '|') {
-        let transformed: Vec<String> = parts.iter().map(|p| lua_transform_value_expr(p.trim())).collect();
+        let transformed: Vec<String> = parts
+            .iter()
+            .map(|p| lua_transform_value_expr(p.trim()))
+            .collect();
         if transformed.len() == 1 {
             return transformed.into_iter().next().unwrap_or_default();
         }
         // bit.bor(a, b) — but bit.bor only takes 2 args; chain for 3+
-        return transformed.into_iter().reduce(|acc, next| format!("bit.bor({}, {})", acc, next)).unwrap_or_default();
+        return transformed
+            .into_iter()
+            .reduce(|acc, next| format!("bit.bor({}, {})", acc, next))
+            .unwrap_or_default();
     }
 
     // Try to split on `<<` — higher precedence than |
     if let Some(parts) = split_on_top_level_two_char(expr, '<', '<')
-        && parts.len() == 2 {
+        && parts.len() == 2
+    {
         let lhs: String = lua_transform_value_expr(parts[0].trim());
         let rhs: String = lua_transform_value_expr(parts[1].trim());
         return format!("bit.lshift({}, {})", lhs, rhs);
@@ -586,7 +593,7 @@ fn lua_transform_value_expr(expr: &str) -> String {
 
     // Parenthesized expression — recurse inside
     if expr.starts_with('(') && expr.ends_with(')') {
-        let inner: &str = &expr[1..expr.len()-1];
+        let inner: &str = &expr[1..expr.len() - 1];
         return lua_transform_value_expr(inner.trim());
     }
 
@@ -604,9 +611,15 @@ fn split_on_top_level(expr: &str, op: char) -> Option<Vec<&str>> {
     let mut i: usize = 0;
     while i < len {
         match chars[i] {
-            '(' => { depth += 1; }
-            ')' => { depth -= 1; }
-            c if c == op && depth == 0 => { splits.push(i); }
+            '(' => {
+                depth += 1;
+            }
+            ')' => {
+                depth -= 1;
+            }
+            c if c == op && depth == 0 => {
+                splits.push(i);
+            }
             _ => {}
         }
         i += 1;
@@ -633,8 +646,12 @@ fn split_on_top_level_two_char(expr: &str, op1: char, op2: char) -> Option<Vec<&
     let mut i: usize = 0;
     while i < len {
         match chars[i] {
-            '(' => { depth += 1; }
-            ')' => { depth -= 1; }
+            '(' => {
+                depth += 1;
+            }
+            ')' => {
+                depth -= 1;
+            }
             c if c == op1 && depth == 0 && i + 1 < len && chars[i + 1] == op2 => {
                 split_pos = Some(i);
                 break;
@@ -674,13 +691,22 @@ mod tests {
             repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_lua_enum(&mut out, &e);
-        assert!(out.contains("local PixelFormat = {"), "missing table def: {out}");
+        assert!(
+            out.contains("local PixelFormat = {"),
+            "missing table def: {out}"
+        );
         assert!(out.contains("Unknown = 0"), "missing Unknown: {out}");
     }
 
@@ -691,17 +717,38 @@ mod tests {
             repr: ReprType::U32,
             bitflag: true,
             variants: vec![
-                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
-                EnumVariant { name: "Hdr".to_owned(), value: "1 << 1".to_owned() },
-                EnumVariant { name: "CompressedHdr".to_owned(), value: "Compressed | Hdr".to_owned() },
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
+                EnumVariant {
+                    name: "Hdr".to_owned(),
+                    value: "1 << 1".to_owned(),
+                },
+                EnumVariant {
+                    name: "CompressedHdr".to_owned(),
+                    value: "Compressed | Hdr".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_lua_enum(&mut out, &e);
-        assert!(out.contains("local ImageFlags = {"), "missing table def: {out}");
-        assert!(out.contains("bit.lshift(1, 1)"), "missing bit.lshift for Hdr: {out}");
-        assert!(out.contains("bit.bor("), "missing bit.bor for CompressedHdr: {out}");
+        assert!(
+            out.contains("local ImageFlags = {"),
+            "missing table def: {out}"
+        );
+        assert!(
+            out.contains("bit.lshift(1, 1)"),
+            "missing bit.lshift for Hdr: {out}"
+        );
+        assert!(
+            out.contains("bit.bor("),
+            "missing bit.bor for CompressedHdr: {out}"
+        );
     }
 }
 const _: fn() = || {

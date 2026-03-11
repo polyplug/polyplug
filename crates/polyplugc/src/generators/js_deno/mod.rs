@@ -10,11 +10,11 @@ use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
 use crate::ir::AbiBuiltin;
-use crate::ir::PrimitiveType;
-use crate::ir::ResolvedBundle;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
+use crate::ir::PrimitiveType;
 use crate::ir::ReprType;
+use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedField;
@@ -139,10 +139,7 @@ fn generate_types_ts(ir: &ValidatedIr) -> String {
     out
 }
 
-fn substitute_variant_refs_jsdeno(
-    declared_variants: &[EnumVariant],
-    expr: &str,
-) -> String {
+fn substitute_variant_refs_jsdeno(declared_variants: &[EnumVariant], expr: &str) -> String {
     let chars: Vec<char> = expr.chars().collect();
     let len: usize = chars.len();
     let mut result: String = String::new();
@@ -452,15 +449,27 @@ mod tests {
             repr: ReprType::U32,
             bitflag: false,
             variants: vec![
-                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_js_deno_enum(&mut out, &e);
-        assert!(out.contains("Object.freeze({"), "missing Object.freeze: {out}");
+        assert!(
+            out.contains("Object.freeze({"),
+            "missing Object.freeze: {out}"
+        );
         assert!(out.contains("Unknown: 0"), "missing Unknown: {out}");
-        assert!(!out.contains("@bitflag"), "non-bitflag should not have @bitflag: {out}");
+        assert!(
+            !out.contains("@bitflag"),
+            "non-bitflag should not have @bitflag: {out}"
+        );
     }
 
     #[test]
@@ -470,13 +479,22 @@ mod tests {
             repr: ReprType::U32,
             bitflag: true,
             variants: vec![
-                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
-                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
             ],
         };
         let mut out: String = String::new();
         generate_js_deno_enum(&mut out, &e);
         assert!(out.contains("@bitflag"), "missing @bitflag: {out}");
-        assert!(out.contains("Object.freeze({"), "missing Object.freeze: {out}");
+        assert!(
+            out.contains("Object.freeze({"),
+            "missing Object.freeze: {out}"
+        );
     }
 }

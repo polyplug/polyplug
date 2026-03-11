@@ -93,6 +93,10 @@ path = "../../tests/integration_loader_dispatch/mod.rs"
 name = "integration_cross_plugin"
 path = "../../tests/integration_cross_plugin/mod.rs"
 
+[[test]]
+name = "integration_context"
+path = "../../tests/integration_context/mod.rs"
+
 [dev-dependencies]
 criterion          = { workspace = true }
 polyplug-dotnet    = { path = "../../crates/polyplug-dotnet" }

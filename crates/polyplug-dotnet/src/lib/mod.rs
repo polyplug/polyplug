@@ -84,10 +84,8 @@ impl BundleLoader for DotnetLoader {
             })
         })?;
 
-        let bundle_dir: std::path::PathBuf = path.parent()
-            .unwrap_or(path)
-            .canonicalize()
-            .map_err(|_| {
+        let bundle_dir: std::path::PathBuf =
+            path.parent().unwrap_or(path).canonicalize().map_err(|_| {
                 PolyplugError::Loader(LoaderError::AssemblyNotFound {
                     path: path.to_string_lossy().into_owned(),
                 })
@@ -130,10 +128,12 @@ impl BundleLoader for DotnetLoader {
             },
         };
         // SAFETY: managed_init is a valid fn ptr from CLR. registrar and ctx are non-null and valid.
-        let result: u32 = unsafe { (*managed_init)(
-            registrar as *mut PluginRegistrar,
-            &ctx as *const polyplug::abi::PluginContext,
-        ) };
+        let result: u32 = unsafe {
+            (*managed_init)(
+                registrar as *mut PluginRegistrar,
+                &ctx as *const polyplug::abi::PluginContext,
+            )
+        };
         if result != 0 {
             return Err(PolyplugError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,

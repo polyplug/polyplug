@@ -9,6 +9,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::CodegenError;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
+use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
@@ -23,9 +26,6 @@ use crate::ir::Version;
 use crate::ir::compute_bundle_id;
 use crate::ir::compute_contract_id;
 use crate::ir::resolve_type_ref;
-use crate::ir::EnumVariant;
-use crate::ir::ReprType;
-use crate::ir::EnumDef;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -345,10 +345,7 @@ fn validate_enum_value_expr(
 
 /// Check that no variant references another variant that itself contains a reference.
 /// Enforces the "one level deep" rule.
-fn check_enum_chained_refs(
-    enum_name: &str,
-    variants: &[EnumVariant],
-) -> Result<(), CodegenError> {
+fn check_enum_chained_refs(enum_name: &str, variants: &[EnumVariant]) -> Result<(), CodegenError> {
     // Helper: check if an expression string contains any variant name token
     let expr_contains_variant_ref = |expr: &str, variant_names: &[&str]| -> bool {
         let chars: Vec<char> = expr.chars().collect();
@@ -449,10 +446,12 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
     for raw_enum in &raw.r#enum {
         let repr: ReprType = match ReprType::parse(&raw_enum.repr) {
             Some(r) => r,
-            None => return Err(CodegenError::EnumInvalidRepr {
-                enum_name: raw_enum.name.clone(),
-                repr: raw_enum.repr.clone(),
-            }),
+            None => {
+                return Err(CodegenError::EnumInvalidRepr {
+                    enum_name: raw_enum.name.clone(),
+                    repr: raw_enum.repr.clone(),
+                });
+            }
         };
         let mut declared: Vec<String> = Vec::new();
         let mut variants: Vec<EnumVariant> = Vec::new();
@@ -657,12 +656,8 @@ mod tests {
     fn test_enum_forward_ref_rejected() {
         // Variant B references variant C which hasn't been declared yet
         let declared: Vec<String> = vec!["A".to_owned()];
-        let result: Result<(), CodegenError> = validate_enum_value_expr(
-            "C | 1",
-            "MyEnum",
-            "B",
-            &declared,
-        );
+        let result: Result<(), CodegenError> =
+            validate_enum_value_expr("C | 1", "MyEnum", "B", &declared);
         assert!(
             matches!(result, Err(CodegenError::EnumForwardRef { ref ref_name, .. }) if ref_name == "C"),
             "expected EnumForwardRef for C, got {result:?}",
@@ -674,9 +669,18 @@ mod tests {
         // A = "1", B = "A | 1" (B refs A which has no ref — OK so far)
         // C = "B | 2" (C refs B which refs A — chained ref!)
         let variants: Vec<EnumVariant> = vec![
-            EnumVariant { name: "A".to_owned(), value: "1".to_owned() },
-            EnumVariant { name: "B".to_owned(), value: "A | 1".to_owned() },
-            EnumVariant { name: "C".to_owned(), value: "B | 2".to_owned() },
+            EnumVariant {
+                name: "A".to_owned(),
+                value: "1".to_owned(),
+            },
+            EnumVariant {
+                name: "B".to_owned(),
+                value: "A | 1".to_owned(),
+            },
+            EnumVariant {
+                name: "C".to_owned(),
+                value: "B | 2".to_owned(),
+            },
         ];
         let result: Result<(), CodegenError> = check_enum_chained_refs("MyEnum", &variants);
         assert!(
@@ -708,19 +712,23 @@ mod tests {
         // Test that a valid bitflag expression parses without error
         // A=0, B=1, C=1<<1, D=B|C
         let declared_a: Vec<String> = vec![];
-        let r_a: Result<(), CodegenError> = validate_enum_value_expr("0", "Flags", "A", &declared_a);
+        let r_a: Result<(), CodegenError> =
+            validate_enum_value_expr("0", "Flags", "A", &declared_a);
         assert!(r_a.is_ok(), "A=0 should be valid, got {r_a:?}");
 
         let declared_b: Vec<String> = vec!["A".to_owned()];
-        let r_b: Result<(), CodegenError> = validate_enum_value_expr("1", "Flags", "B", &declared_b);
+        let r_b: Result<(), CodegenError> =
+            validate_enum_value_expr("1", "Flags", "B", &declared_b);
         assert!(r_b.is_ok(), "B=1 should be valid, got {r_b:?}");
 
         let declared_c: Vec<String> = vec!["A".to_owned(), "B".to_owned()];
-        let r_c: Result<(), CodegenError> = validate_enum_value_expr("1 << 1", "Flags", "C", &declared_c);
+        let r_c: Result<(), CodegenError> =
+            validate_enum_value_expr("1 << 1", "Flags", "C", &declared_c);
         assert!(r_c.is_ok(), "C=1<<1 should be valid, got {r_c:?}");
 
         let declared_d: Vec<String> = vec!["A".to_owned(), "B".to_owned(), "C".to_owned()];
-        let r_d: Result<(), CodegenError> = validate_enum_value_expr("B | C", "Flags", "D", &declared_d);
+        let r_d: Result<(), CodegenError> =
+            validate_enum_value_expr("B | C", "Flags", "D", &declared_d);
         assert!(r_d.is_ok(), "D=B|C should be valid, got {r_d:?}");
     }
 
