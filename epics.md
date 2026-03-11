@@ -3910,3 +3910,480 @@ VERIFICATION CHECKLIST
 - clippy passes with zero warnings
 - cargo test --workspace passes
 ```
+
+
+---
+
+## Epic 20 — PluginContext, ABI Type Helpers, and Runtime Dependency Path Setup
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 6 (ABI Layer), section 7 (VTable System),
+  section 10 (all adapter subsections), section 15 (String Model)
+- crates/polyplug/src/abi/mod.rs — current ABI types
+- guest-libs/ — all six guest libs
+- crates/polyplugc/src/generators/ — all six generators
+
+---
+
+PROJECT CONTEXT
+
+This epic adds three related things:
+
+1. PluginContext — a new ABI struct passed to init() alongside the registrar.
+   Gives plugins access to their bundle directory path at init time.
+   Plugin developers use this to construct absolute paths to dependencies
+   or data files inside their bundle directory.
+
+2. Helper methods and operators on StringView and Buffer in all six guest libs.
+   Makes ABI types feel native to each language rather than bare C structs.
+
+3. Automatic dependency path setup per non-native runtime.
+   polyplug transparently prepends bundle directory (and sub-paths) to each
+   runtime's module search path before loading the plugin.
+   Native plugins use PluginContext.bundle_path for this themselves.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+─────────────────────────────────────────────────────────────
+PART 1 — PluginContext
+─────────────────────────────────────────────────────────────
+
+C ABI STRUCT (crates/polyplug/src/abi/mod.rs):
+  #[repr(C)]
+  pub struct PluginContext {
+      pub bundle_path: StringView,  // absolute path to bundle directory, UTF-8
+  }
+  // Future fields appended here — ABI-stable by addition only.
+  // Plugins must not assume sizeof(PluginContext) — always accessed via pointer.
+
+INIT SIGNATURE CHANGE:
+  OLD: void init(PluginRegistrar* registrar)
+  NEW: void init(PluginRegistrar* registrar, const PluginContext* ctx)
+
+  This is a BREAKING ABI CHANGE. All existing plugins must be recompiled.
+  Acceptable pre-v1. After v1 this signature is frozen forever.
+
+  The context pointer is valid for the entire duration of init() only.
+  Plugin must not store the pointer — only copy values (e.g. copy bundle_path
+  string into owned storage if needed after init returns).
+  bundle_path StringView: ptr points into runtime-owned memory, valid for
+  the lifetime of the PluginRuntime.
+
+RUNTIME CONSTRUCTION:
+  NativeBundleLoader constructs PluginContext { bundle_path } from the
+  bundle directory path resolved at load time (Epic 18 guarantees this is
+  always an absolute directory path).
+  All other loaders (dotnet, python, lua, js-quickjs, js-deno) do the same.
+  PluginContext is stack-allocated in the loader, passed by pointer to init().
+
+POLYPLUGC GENERATOR CHANGES — init() signature per language:
+
+  Rust (guest-libs/rust/):
+    #[no_mangle]
+    pub unsafe extern "C" fn init(
+        registrar: *mut PluginRegistrar,
+        ctx: *const PluginContext,
+    ) {
+        let ctx = unsafe { &*ctx };
+        // bundle_path: ctx.bundle_path.as_str()
+        plugin_init(registrar, ctx);
+    }
+    Generated plugin_init signature:
+      fn plugin_init(registrar: &mut PluginRegistrar, ctx: &PluginContext)
+
+  C++:
+    extern "C" void init(PluginRegistrar* registrar, const PluginContext* ctx) {
+        // ctx->bundle_path is a StringView with helpers
+    }
+
+  C#:
+    [UnmanagedCallersOnly(EntryPoint = "init")]
+    public static void Init(IntPtr registrarPtr, IntPtr ctxPtr) {
+        var ctx = Marshal.PtrToStructure<PluginContext>(ctxPtr);
+        // ctx.BundlePath is a StringView with helpers
+    }
+
+  Python:
+    def init(registrar_ptr: int, ctx_ptr: int) -> None:
+        ctx = PluginContext.from_address(ctx_ptr)
+        # ctx.bundle_path is a StringView with helpers
+
+  Lua:
+    local function init(registrar_ptr, ctx_ptr)
+        local ctx = ffi.cast("PluginContext*", ctx_ptr)
+        -- ctx.bundle_path is a StringView with metamethods
+    end
+
+  js-quickjs:
+    // polyplug.init() JS wrapper receives bundle_path as string directly
+    // (QuickJS runtime converts StringView to JS string before calling JS init)
+    // JS init signature: function init(bundlePath: string): void
+
+  js-deno:
+    // Deno op passes bundle_path as string directly to JS init
+    // JS init signature: function init(bundlePath: string): void
+
+  NOTE for JS variants: since JS cannot hold raw pointers safely, the loader
+  extracts bundle_path from PluginContext and passes it as a plain JS string
+  to the plugin's init function. The PluginContext struct is never exposed to JS.
+
+─────────────────────────────────────────────────────────────
+PART 2 — ABI Type Helpers
+─────────────────────────────────────────────────────────────
+
+RUST (guest-libs/rust/src/lib/mod.rs):
+  impl StringView {
+      pub fn as_str(&self) -> &str { /* from_utf8_unchecked SAFETY: ABI guarantees UTF-8 */ }
+      pub fn as_bytes(&self) -> &[u8] { ... }
+      pub fn is_empty(&self) -> bool { self.len == 0 }
+      pub fn from_static(s: &'static str) -> Self { ... }
+      // From trait impls:
+  }
+  impl<'a> From<&'a str> for StringView { ... }      // zero-copy borrow
+  impl From<StringView> for String { ... }            // owned copy
+  impl fmt::Display for StringView { ... }
+  impl fmt::Debug for StringView { ... }
+  impl PartialEq<str> for StringView { ... }
+  impl PartialEq for StringView { ... }
+
+  impl Buffer {
+      pub fn as_slice(&self) -> &[u8] { ... }
+      pub fn as_slice_mut(&mut self) -> &mut [u8] { ... }
+      pub fn is_empty(&self) -> bool { self.len == 0 }
+  }
+
+  impl PluginContext {
+      pub fn bundle_path(&self) -> &str { self.bundle_path.as_str() }
+  }
+
+C++ (guest-libs/cpp/polyplug/abi.hpp):
+  struct StringView {
+      const uint8_t* ptr;
+      size_t len;
+
+      // implicit zero-copy conversion to std::string_view
+      operator std::string_view() const {
+          return {reinterpret_cast<const char*>(ptr), len};
+      }
+      // explicit allocating conversion to std::string
+      explicit operator std::string() const {
+          return {reinterpret_cast<const char*>(ptr), len};
+      }
+      // construct from std::string_view (zero-copy, caller keeps alive)
+      explicit StringView(std::string_view sv)
+          : ptr{reinterpret_cast<const uint8_t*>(sv.data())}, len{sv.size()} {}
+      // construct from string literal (zero-copy)
+      template<size_t N>
+      explicit StringView(const char (&lit)[N])
+          : ptr{reinterpret_cast<const uint8_t*>(lit)}, len{N - 1} {}
+
+      bool empty() const { return len == 0; }
+  };
+
+  struct Buffer {
+      void* ptr;
+      size_t len;
+      size_t cap;
+
+      template<typename T = uint8_t>
+      T* data() const { return static_cast<T*>(ptr); }
+      size_t size() const { return len; }
+      bool empty() const { return len == 0; }
+  };
+
+  // host-libs/cpp/polyplug/abi.hpp gets same helpers (host side uses same types)
+
+C# (guest-libs/csharp/src/Abi.cs):
+  NO unsafe keyword anywhere. No project option changes required.
+
+  [StructLayout(LayoutKind.Sequential)]
+  public readonly struct StringView {
+      public readonly IntPtr Ptr;
+      public readonly ulong Len;   // ulong matches size_t on 64-bit — polyplug is 64-bit only
+
+      // explicit cast TO string (allocates — developer is aware via explicit keyword)
+      public static explicit operator string(StringView sv) =>
+          Marshal.PtrToStringUTF8(sv.Ptr, (int)sv.Len) ?? string.Empty;
+
+      // ToString() for convenience and debugger display
+      public override string ToString() =>
+          Marshal.PtrToStringUTF8(Ptr, (int)Len) ?? string.Empty;
+
+      public bool IsEmpty => Len == 0;
+
+      // No FROM string operator — lifetime is ambiguous, document use of
+      // StringViewHelper.Pin(string) for the pinned case (see below)
+  }
+
+  // Helper for pinning managed strings into StringView lifetime
+  // IDisposable RAII — pin released on Dispose
+  public sealed class PinnedStringView : IDisposable {
+      public StringView View { get; }
+      private GCHandle _handle;
+      public static PinnedStringView Pin(string s) { ... }
+      public void Dispose() { _handle.Free(); }
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public readonly struct Buffer {
+      public readonly IntPtr Ptr;
+      public readonly ulong Len;
+      public readonly ulong Cap;
+
+      public bool IsEmpty => Len == 0;
+      // No AsSpan — requires unsafe. Access via Ptr + Len with Marshal if needed.
+  }
+
+  [StructLayout(LayoutKind.Sequential)]
+  public readonly struct PluginContext {
+      public readonly StringView BundlePath;
+      public string BundlePathString => (string)BundlePath;
+  }
+
+  // Also update host-libs/csharp/src/Abi.cs with same helpers
+
+PYTHON (guest-libs/python/polyplug_guest/abi.py):
+  class StringView(ctypes.Structure):
+      _fields_ = [("ptr", ctypes.c_void_p), ("len", ctypes.c_size_t)]
+
+      def __str__(self) -> str:
+          return ctypes.string_at(self.ptr, self.len).decode("utf-8")
+      def __bytes__(self) -> bytes:
+          return ctypes.string_at(self.ptr, self.len)
+      def __bool__(self) -> bool:
+          return self.len > 0
+      def __eq__(self, other) -> bool:
+          if isinstance(other, str): return str(self) == other
+          if isinstance(other, StringView):
+              return self.len == other.len and bytes(self) == bytes(other)
+          return NotImplemented
+      def __repr__(self) -> str:
+          return f"StringView({str(self)!r})"
+
+      @classmethod
+      def from_str(cls, s: str) -> tuple["StringView", bytes]:
+          # returns (view, backing_bytes) — caller MUST keep bytes alive
+          b = s.encode("utf-8")
+          return cls(ctypes.cast(b, ctypes.c_void_p), len(b)), b
+
+  class Buffer(ctypes.Structure):
+      _fields_ = [
+          ("ptr", ctypes.c_void_p),
+          ("len", ctypes.c_size_t),
+          ("cap", ctypes.c_size_t),
+      ]
+      def __bytes__(self) -> bytes:
+          return ctypes.string_at(self.ptr, self.len)
+      def __bool__(self) -> bool:
+          return self.len > 0
+      def __len__(self) -> int:
+          return self.len
+
+  class PluginContext(ctypes.Structure):
+      _fields_ = [("bundle_path", StringView)]
+
+      def bundle_path_str(self) -> str:
+          return str(self.bundle_path)
+
+  # Update abi.pyi stub with all new methods and types
+
+LUA (guest-libs/lua/polyplug_guest.lua):
+  -- StringView metamethods
+  StringView.__index    = StringView
+  StringView.__tostring = function(self) return ffi.string(self.ptr, self.len) end
+  StringView.__eq       = function(a, b)
+      if type(b) == "string" then
+          return ffi.string(a.ptr, a.len) == b
+      end
+      return a.len == b.len and
+             ffi.C.memcmp(a.ptr, b.ptr, a.len) == 0
+  end
+  StringView.__len = function(self) return tonumber(self.len) end
+  function StringView.from_string(s)
+      -- s must stay alive while view is used
+      return ffi.new("StringView",
+          ffi.cast("const uint8_t*", s), #s)
+  end
+
+  -- Buffer metamethods
+  Buffer.__index  = Buffer
+  Buffer.__tostring = function(self)
+      return ffi.string(self.ptr, self.len)
+  end
+  Buffer.__len = function(self) return tonumber(self.len) end
+  Buffer.__bool = function(self) return self.len > 0 end  -- LuaJIT extension
+
+  -- PluginContext
+  PluginContext.__index = PluginContext
+  function PluginContext:bundle_path_str()
+      return tostring(self.bundle_path)
+  end
+
+JS GUEST LIB (guest-libs/js/polyplug-guest.ts):
+  // No operator overloading in JS/TS — static helper class is the idiom.
+  // Both js-quickjs and js-deno variants receive bundle_path as a plain string
+  // from the loader — no StringView manipulation needed in JS.
+  // StringViewHelper kept for manual FFI cases only.
+
+  export class StringViewHelper {
+      static decode(sv: StringView): string { /* TextDecoder on memory view */ }
+      static encode(s: string): { view: StringView; bytes: Uint8Array } {
+          // TextEncoder → Uint8Array, caller keeps bytes alive
+      }
+      static isEmpty(sv: StringView): boolean { return sv.len === 0; }
+  }
+
+  export class BufferHelper {
+      static toBytes(buf: Buffer): Uint8Array { /* view into memory */ }
+      static isEmpty(buf: Buffer): boolean { return buf.len === 0; }
+  }
+
+─────────────────────────────────────────────────────────────
+PART 3 — Automatic Dependency Path Setup Per Runtime
+─────────────────────────────────────────────────────────────
+
+PYTHON (crates/polyplug-python/src/lib/loader/mod.rs):
+  Before loading plugin module via importlib:
+  1. Prepend bundle_dir to sys.path
+  2. If bundle_dir/site-packages/ exists: also prepend bundle_dir/site-packages
+  3. After plugin load: do NOT restore sys.path — prepended paths stay for the
+     process lifetime (removing them could break already-imported modules).
+  Use pyo3: py.run_bound("import sys; sys.path.insert(0, path)", ...) pattern.
+  No performance impact on hot path — done once at load time only.
+
+LUA (crates/polyplug-lua/src/lib/loader/mod.rs):
+  Before executing plugin chunk:
+  1. Prepend bundle_dir to package.path  (for .lua files)
+     pattern: bundle_dir .. "/?.lua;" .. bundle_dir .. "/?/init.lua;"
+  2. Prepend bundle_dir to package.cpath (for .so/.dll C extension modules)
+     pattern: bundle_dir .. "/?.so;" (Linux) / bundle_dir .. "/?.dll;" (Windows)
+  Use mlua: lua.load("package.path = ... ").exec() before plugin load.
+  Do NOT restore after load — same reasoning as Python.
+
+DOTNET (crates/polyplug-dotnet/src/lib/mod.rs):
+  The generated runtimeconfig.json already controlled by polyplug.
+  Add bundle_dir to additionalProbingPaths in generated runtimeconfig.json.
+  This allows managed assembly dependencies shipped in bundle dir to be found
+  by the CLR automatically.
+  runtimeconfig.json generation: add "additionalProbingPaths": ["BUNDLE_DIR_ABS"]
+  where BUNDLE_DIR_ABS is the absolute bundle directory path at load time.
+  NOTE: additionalProbingPaths is for managed assemblies only.
+  For native interop DLLs: plugin developer uses PluginContext.bundle_path
+  with NativeLibrary.Load() — documented in generated C# README.md.
+
+JS-DENO (crates/polyplug-js-deno/src/lib/loader/mod.rs):
+  deno_core module resolution: load plugin as file:///bundle_dir/index.ts
+  (or file:///bundle_dir/bundle.js if present).
+  Relative imports within the plugin (e.g. import "./utils.ts") resolve
+  correctly relative to the module URL — no extra configuration needed.
+  This is already correct if the module URL uses the absolute bundle path.
+  Verify and document — no code change likely needed, just confirm and test.
+
+JS-QUICKJS (crates/polyplug-js/src/lib/loader/mod.rs):
+  Rolldown pre-bundles everything into bundle.js — no imports at runtime.
+  No path setup needed. Document in README.md: "all dependencies must be
+  bundled via rolldown — runtime imports are not supported."
+
+NATIVE:
+  No automatic setup. Plugin developer uses PluginContext.bundle_path to
+  construct absolute paths. Document clearly in generated native README.md.
+
+─────────────────────────────────────────────────────────────
+EPIC GOAL
+─────────────────────────────────────────────────────────────
+
+1. ABI: add PluginContext struct.
+   crates/polyplug/src/abi/mod.rs
+   Update init() signature in all documentation and ABI comments.
+
+2. Runtime: all loaders construct PluginContext and pass to init().
+   NativeBundleLoader, DotnetLoader, PythonLoader, LuaLoader,
+   JsLoader, JsDenoLoader — all updated.
+   JS loaders: extract bundle_path string, pass to JS init as plain string.
+
+3. Guest libs: PluginContext + all StringView/Buffer helpers.
+   guest-libs/rust/    — impl blocks + trait impls
+   guest-libs/cpp/     — struct methods + conversion operators
+   guest-libs/csharp/  — explicit operator + PinnedStringView + no unsafe
+   guest-libs/python/  — dunder methods + abi.pyi updated
+   guest-libs/lua/     — metamethods
+   guest-libs/js/      — StringViewHelper + BufferHelper static classes
+   Also update host-libs/cpp/ and host-libs/csharp/ with same type helpers
+   (host side uses same ABI types).
+
+4. Generators: update init() signature in generated code for all six languages.
+   crates/polyplugc/src/generators/ — all six generators.
+   Generated plugin_init receives ctx parameter per language spec above.
+
+5. Automatic path setup per runtime:
+   polyplug-python: prepend bundle_dir (+ site-packages if exists) to sys.path
+   polyplug-lua:    prepend bundle_dir to package.path and package.cpath
+   polyplug-dotnet: add bundle_dir to additionalProbingPaths in runtimeconfig.json
+   polyplug-js-deno: verify module URL uses absolute bundle path (likely no change)
+   polyplug-js:     document rolldown requirement, no runtime change
+
+6. Update all existing test fixtures:
+   All fixture init() functions gain ctx parameter.
+   Tests that call init() directly gain a PluginContext argument.
+
+7. Integration tests — tests/integration_context/mod.rs (new):
+   a. bundle_path is correct absolute path to bundle directory
+   b. bundle_path StringView: as_str()/ToString()/tostring() returns correct value
+   c. Python: sys.path contains bundle_dir after load
+   d. Python: sys.path contains bundle_dir/site-packages if it exists
+   e. Lua: package.path contains bundle_dir pattern after load
+   f. Lua: package.cpath contains bundle_dir pattern after load
+   g. .NET: additionalProbingPaths contains bundle_dir in runtimeconfig.json
+   h. All six languages: plugin uses ctx bundle_path to construct a path
+      to a data file in bundle dir, opens and reads it — correct content
+
+8. All existing integration tests updated for new init() signature.
+
+9. PRD update: section 6 (PluginContext struct, init signature),
+   section 7 (init signature in vtable exchange diagram),
+   section 10 (Python sys.path, Lua package.path, .NET probingPaths),
+   section 15 (StringView/Buffer helpers per language).
+
+---
+
+VERIFICATION CHECKLIST
+
+- PluginContext struct in ABI — #[repr(C)], StringView bundle_path — verified
+- init(registrar, ctx) signature correct in all six languages — verified
+- bundle_path is absolute path to bundle directory — verified in test
+- PluginContext pointer valid for duration of init() only — documented
+- Rust StringView: as_str(), From<&str>, From<StringView>→String, Display, PartialEq — verified
+- C++ StringView: implicit→string_view, explicit→string, ctor from string_view and literal — verified
+- C# StringView: explicit operator string, no unsafe keyword anywhere — verified
+- C# PinnedStringView: IDisposable, GCHandle released on Dispose — verified
+- Python StringView: __str__, __bytes__, __bool__, __eq__, from_str — verified
+- Lua StringView: __tostring, __eq, __len, from_string — verified
+- JS: StringViewHelper.decode/encode/isEmpty, BufferHelper.toBytes/isEmpty — verified
+- Python: sys.path prepended with bundle_dir at load time — verified
+- Python: sys.path prepended with bundle_dir/site-packages if exists — verified
+- Lua: package.path prepended with bundle_dir pattern — verified
+- Lua: package.cpath prepended with bundle_dir pattern — verified
+- .NET: additionalProbingPaths in runtimeconfig.json contains bundle_dir — verified
+- js-deno: module URL is absolute file:/// path — verified
+- All existing integration tests pass with updated init() signature — verified
+- No unsafe in C# guest lib — verified by grep
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```

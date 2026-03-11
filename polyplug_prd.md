@@ -208,6 +208,14 @@ typedef struct {
     uint32_t generation;  // detects use-after-unload
 } PluginHandle;           // null sentinel: { index: U32_MAX, generation: 0 }
 
+// Passed to init() — gives plugin access to its bundle directory.
+// Valid for the duration of init() only. Do not store the pointer.
+// Copy bundle_path into owned storage if needed after init returns.
+typedef struct {
+    StringView bundle_path;  // absolute path to bundle directory, UTF-8
+    // future fields appended here — ABI-stable by addition only
+} PluginContext;
+
 // Opaque — managed by runtime. Holds an arc-swap read guard keeping the
 // vtable pointer alive for exactly one call sequence.
 typedef struct PluginVTableGuard PluginVTableGuard;
@@ -244,7 +252,7 @@ Host loads bundle (via correct loader — native, dotnet, python, or lua)
 Host builds HostVTable (its functions for plugins to call)
         │
         ▼
-Host calls init(registrar) passing HostVTable ptr
+Host calls init(registrar, ctx) passing HostVTable ptr and PluginContext
         │
         ▼
 Plugin resolves declared dependencies via find_by_contract / find_by_bundle
@@ -307,7 +315,8 @@ typedef struct {
 **Bundle entry point — single symbol exposed by every bundle:**
 
 ```c
-void init(PluginRegistrar* registrar);
+// PluginContext valid for duration of init() only — do not store the pointer.
+void init(PluginRegistrar* registrar, const PluginContext* ctx);
 ```
 
 **Registry storage — arc-swap slots for hot-reload safety:**
@@ -563,6 +572,8 @@ DotnetLoader::new(DotnetConfig {
 
 `hostfxr_initialize_for_runtime_config` requires a `.runtimeconfig.json` file path — there is no in-memory alternative. `polyplug-dotnet` generates a minimal one in a temp dir from `DotnetConfig.min_framework` **before** calling `nethost::load_hostfxr()` context init, passes it to hostfxr, then deletes it immediately after. Plugin developers ship only the `.dll`. No `.runtimeconfig.json` in the bundle.
 
+The generated `runtimeconfig.json` includes `additionalProbingPaths` pointing to the bundle directory. This allows managed assembly dependencies (`.dll` files) shipped inside the bundle directory to be found by the CLR automatically. For native interop DLLs, plugin developers use `NativeLibrary.Load(Path.Combine(bundlePath, "native.dll"))` with the `bundle_path` from `PluginContext`.
+
 **Assembly target framework version check — `pelite` reads PE metadata:**
 
 Plugin `.dll` target framework is read directly from the PE/COFF CLR metadata section using the `pelite` crate — specifically the `TargetFrameworkAttribute` custom attribute on the assembly. This happens before the CLR loads the assembly. Zero CLR involvement, zero extra files from plugin developer.
@@ -669,7 +680,7 @@ Uses `pyo3` 0.28 to embed CPython (`auto-initialize` feature removed — `prepar
 
 All plugin loads run inside `Python::with_gil(|py| { ... })`. The GIL is released via `py.allow_threads()` during any Rust-only work between loads to avoid blocking other Python threads.
 
-Plugins are loaded via `importlib.util.spec_from_file_location` — no `sys.path` mutation. Plugin format is a single `.py` file. The `init(registrar_ptr)` function receives the registrar as a `ctypes.c_void_p` integer and registers vtables back through the C ABI via `ctypes`.
+Plugins are loaded via `importlib.util.spec_from_file_location`. Before loading, polyplug-python prepends the bundle directory to `sys.path`. If `bundle_dir/site-packages/` exists, it is also prepended — this allows plugin developers to ship pip dependencies inside their bundle directory. These paths are not removed after load (removing them could break already-imported modules).
 
 The `host-libs/python/` package loads `polyplug.so` from a co-located path configured at builder time.
 
@@ -719,6 +730,10 @@ local reg = ffi.cast("PluginRegistrar*", ffi.cast("uintptr_t", _registrar_ptr))
 This cast happens once at init time. All subsequent vtable function pointer calls are FFI cdata indirect calls — JIT-compiled to near-native speed (~800M ops/sec vs ~45M for lightuserdata C bindings).
 
 `ffi.metatype` is used for all domain types, enabling LuaJIT's allocation sinking optimization — temporary struct allocations are eliminated entirely by the JIT.
+
+**Dependency path setup:**
+
+Before executing the plugin chunk, polyplug-lua prepends the bundle directory to `package.path` (for `.lua` files) and `package.cpath` (for C extension modules `.so`/`.dll`). This allows plugin developers to ship Lua module dependencies inside their bundle directory — a `require "somedep"` will find `bundle_dir/somedep.lua` or `bundle_dir/somedep.so` automatically. These paths are not removed after load.
 
 **Performance:** LuaJIT FFI call overhead is within 2x of native vtable dispatch.
 
@@ -1335,11 +1350,57 @@ Lua     lightuserdata pointing into host allocator
 All ABI strings are UTF-8 `StringView` (ptr + len, non-owning, no null terminator).
 
 ```
-Rust    &str → StringView: zero cost
-C++     std::string_view → StringView: zero cost
-C#      string → StringView: transcode UTF-16→UTF-8, ASCII fast path
+Rust    &str → StringView: zero cost (From<&str> impl)
+C++     std::string_view → StringView: zero cost (implicit conversion operator)
+C#      string → StringView: Marshal.PtrToStringUTF8 (no unsafe required)
 Python  str → StringView: encode UTF-8, pass ptr+len
 Lua     string → StringView: already bytes, just ptr+len
+```
+
+**ABI type helpers — per language:**
+
+All guest libs expose ergonomic helpers on `StringView` and `Buffer` so plugin
+developers never touch raw pointers directly.
+
+```
+Rust      StringView: as_str(), as_bytes(), is_empty(), From<&str>, From<StringView>→String,
+                      Display, Debug, PartialEq<str>
+          Buffer:     as_slice(), as_slice_mut(), is_empty()
+
+C++       StringView: implicit operator std::string_view (zero-copy),
+                      explicit operator std::string (allocating),
+                      ctor from std::string_view, ctor from string literal,
+                      empty()
+          Buffer:     data<T>(), size(), empty()
+
+C#        StringView: explicit operator string (Marshal, no unsafe),
+                      ToString(), IsEmpty
+                      PinnedStringView.Pin(string) → IDisposable RAII wrapper
+          Buffer:     IsEmpty
+          NOTE: no unsafe keyword required anywhere — no project option changes
+
+Python    StringView: __str__, __bytes__, __bool__, __eq__ (vs str and StringView),
+                      __repr__, from_str() classmethod → (view, backing_bytes)
+          Buffer:     __bytes__, __bool__, __len__
+
+Lua       StringView: __tostring, __eq (vs string and StringView), __len,
+                      from_string() (caller keeps string alive)
+          Buffer:     __tostring, __len, __bool (LuaJIT extension)
+
+JS/TS     StringViewHelper: decode(sv), encode(s)→{view,bytes}, isEmpty(sv)
+          BufferHelper:     toBytes(buf), isEmpty(buf)
+          (no operator overloading in JS — static helper class is idiomatic)
+```
+
+**PluginContext helpers:**
+
+```
+Rust      ctx.bundle_path() → &str
+C++       ctx->bundle_path (StringView with helpers above)
+C#        ctx.BundlePathString → string  (property, no unsafe)
+Python    ctx.bundle_path_str() → str
+Lua       ctx:bundle_path_str() → string
+JS/TS     bundlePath: string  (passed as plain string to JS init, not a struct)
 ```
 
 ---
