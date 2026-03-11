@@ -2020,7 +2020,7 @@ VERIFICATION CHECKLIST
 
 ---
 
-## Epic 11.6 — Patch: Fix JS Architecture (polyplug-js and polyplug-js-deno)
+## Epic 11.5 — Patch: Fix JS Architecture (polyplug-js and polyplug-js-deno)
 
 ```
 You are the PLANNER agent for the `polyplug` project.
@@ -3256,4 +3256,657 @@ VERIFICATION CHECKLIST
 - clippy passes with zero warnings
 - cargo test --workspace passes
 - cargo test --workspace --features hot-reload passes
+```
+
+---
+
+## Epic 18 — Bundle-as-Folder Enforcement + Per-Platform Native Binary Paths
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 11 (bundle.toml schema), section 13 (Plugin Discovery)
+- crates/polyplug/src/loader/manifest/mod.rs — current manifest parser
+- crates/polyplug/src/loader/scanner/mod.rs — current discovery scanner
+
+---
+
+PROJECT CONTEXT
+
+Currently manifest.toml has a single `file = "..."` field and bundles can be
+either flat files or directories. This epic enforces:
+
+1. Every bundle MUST be a directory. Flat file bundles are a hard error at discovery.
+2. Every runtime MUST have an explicit `file` field (or `[bundle.file]` table for
+   native). No defaults, no scanning, no inference. Missing file = hard error.
+3. `file` values are RELATIVE paths within the bundle directory. Absolute paths
+   and path traversal (../) are hard errors.
+4. Native runtime uses a `[bundle.file]` TOML table keyed by "os.arch".
+   All other runtimes use a flat `file = "..."` string.
+5. polyplugc generate and polyplugc pack are updated to emit the new manifest format.
+6. All existing test fixtures are updated to the new format.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+BUNDLE DIRECTORY ENFORCEMENT:
+  Scanner (crates/polyplug/src/loader/scanner/mod.rs) must:
+  - Only recognise entries that are DIRECTORIES as potential bundles.
+  - Any non-directory entry in a scan path is silently skipped (not an error —
+    scan paths may contain unrelated files).
+  - A directory is a bundle candidate if and only if it contains manifest.toml
+    at its root. No manifest.toml = silently skipped.
+  - A directory with manifest.toml that fails to parse = hard error with path.
+
+FILE FIELD RULES:
+  All runtimes: `file` is REQUIRED. Missing = hard error at manifest parse time.
+  Error message format:
+    error: bundle "NAME" manifest.toml missing required `file` field.
+    All runtimes require an explicit file path relative to the bundle directory.
+
+  Relative path enforcement:
+  - Value must not start with `/` — absolute path = hard error.
+  - Value must not contain `..` anywhere — path traversal = hard error.
+  - Value is joined to the bundle directory at load time:
+      bundle_dir.join(file_value)
+  - This produces the final path passed to the loader.
+  Error message format:
+    error: bundle "NAME" file path "VALUE" is invalid.
+    File paths must be relative to the bundle directory and must not contain `..`.
+
+NATIVE RUNTIME — [bundle.file] TABLE:
+  Native runtime requires a TOML table, not a string:
+
+    [bundle.file]
+    linux.x86_64   = "libplugin.x86_64.so"
+    linux.aarch64  = "libplugin.aarch64.so"
+    windows.x86_64 = "plugin.x86_64.dll"
+    windows.aarch64 = "plugin.aarch64.dll"
+    macos.x86_64   = "libplugin.x86_64.dylib"
+    macos.aarch64  = "libplugin.aarch64.dylib"
+
+  If native runtime has flat `file = "..."` string: hard error.
+  Error message:
+    error: bundle "NAME" uses runtime "native" but has a flat `file` string.
+    Native bundles require a [bundle.file] table with per-platform entries.
+    Example: [bundle.file] / linux.x86_64 = "libplugin.x86_64.so"
+
+  Platform key format: "os.arch" — both components required, dot-separated.
+  Valid OS values: linux, windows, macos (matching std::env::consts::OS exactly).
+  Valid arch values: x86_64, aarch64 (matching std::env::consts::ARCH exactly).
+  Plugin developer declares ONLY the platforms they support.
+  Any non-empty subset of platform keys is valid.
+  An empty [bundle.file] table is a hard error:
+    error: bundle "NAME" has an empty [bundle.file] table.
+    At least one platform entry is required.
+  At runtime: if current OS.ARCH key is absent from the table: hard error.
+  Error message:
+    error: bundle "NAME" does not support linux.aarch64.
+    Supported platforms: linux.x86_64, windows.x86_64
+
+  All other runtimes (dotnet, python, lua, js-quickjs, js-deno):
+  If they have a [bundle.file] TABLE instead of flat string: hard error.
+  Error message:
+    error: bundle "NAME" uses runtime "RUNTIME" but has a [bundle.file] table.
+    Only native runtime uses per-platform file tables.
+    Use: file = "relative/path/to/plugin_file"
+
+MANIFEST PARSING CHANGES:
+  ManifestData struct gains:
+    pub file: BundleFile   // replaces existing file: String
+
+  pub enum BundleFile {
+      Single(String),                          // all non-native runtimes
+      PerPlatform(HashMap<String, String>),    // native runtime only
+  }
+
+  impl BundleFile {
+      pub fn resolve(&self, runtime: &str) -> Result<&str, PolyplugError>
+      // For Single: returns the path string directly.
+      // For PerPlatform: looks up OS.ARCH key, errors if not found.
+  }
+
+  Validation at parse time (before any loading):
+  - native + Single → hard error
+  - non-native + PerPlatform → hard error
+  - Any variant + absolute path → hard error
+  - Any variant + path containing ".." → hard error
+
+NEW ERROR VARIANTS (crates/polyplug/src/error/mod.rs):
+  BundleNotADirectory { path: PathBuf }
+    — a flat file was passed directly as a bundle path (explicit load, not scan)
+  ManifestMissingFile { bundle: String }
+    — manifest parsed but file field absent
+  ManifestInvalidFilePath { bundle: String, path: String, reason: String }
+    — absolute path, path traversal, or other invalid relative path
+  ManifestWrongFileFormat { bundle: String, runtime: String }
+    — native with flat string, or non-native with table
+  PlatformNotSupported { bundle: String, platform: String, supported: Vec<String> }
+    — current OS.ARCH not in [bundle.file] table (includes empty table case)
+
+POLYPLUGC GENERATE CHANGES:
+  All generators updated to emit new manifest.toml format.
+  Native generator emits [bundle.file] table with a comment instructing the
+  plugin developer to add entries for the platforms they support:
+    # Add one entry per supported platform. You do not need all platforms.
+    # Valid OS values: linux, windows, macos
+    # Valid arch values: x86_64, aarch64
+    [bundle.file]
+    linux.x86_64 = "lib{bundle_name}.x86_64.so"
+    # linux.aarch64  = "lib{bundle_name}.aarch64.so"
+    # windows.x86_64 = "{bundle_name}.x86_64.dll"
+    # macos.aarch64  = "lib{bundle_name}.aarch64.dylib"
+  Uncommented entry is linux.x86_64 only as the most common starting point.
+  Plugin developer uncomments and fills in the platforms they actually build for.
+  All other generators emit: file = "plugin_file.ext" (placeholder, runtime-appropriate)
+  polyplugc generate README.md updated with explicit instructions:
+    "Edit the file field in manifest.toml to point to your compiled plugin file."
+
+POLYPLUGC PACK CHANGES:
+  polyplugc pack always produces a directory, never a flat file.
+  If output directory already exists and contains a manifest.toml:
+    hard error — do not overwrite existing bundle silently.
+    Error: "output directory already contains a bundle. Delete it first."
+  Pack validates that the manifest.toml it generates is valid under new rules
+  before writing it to disk.
+
+EXISTING TEST FIXTURES:
+  All fixtures in tests/fixtures/ that are currently flat .so files must be
+  moved into their own subdirectory with a manifest.toml.
+  Specifically:
+    tests/fixtures/libtest_plugin.so →
+      tests/fixtures/test_plugin/libtest_plugin.so (or arch-suffixed name)
+      tests/fixtures/test_plugin/manifest.toml (with [bundle.file] table)
+    tests/fixtures/libtest_plugin_cpp.so →
+      tests/fixtures/test_plugin_cpp/  (same pattern)
+    tests/fixtures/liberror_plugin.so →
+      tests/fixtures/error_plugin_bundle/  (same pattern)
+    tests/fixtures/libmemory_plugin.so →
+      tests/fixtures/memory_plugin_bundle/  (same pattern)
+    tests/fixtures/test_plugin.lua →
+      tests/fixtures/lua_plugin/test_plugin.lua
+      tests/fixtures/lua_plugin/manifest.toml (file = "test_plugin.lua")
+    tests/fixtures/test_plugin.py →
+      tests/fixtures/python_plugin/test_plugin.py
+      tests/fixtures/python_plugin/manifest.toml (file = "test_plugin.py")
+    tests/fixtures/test_plugin_js/bundle.js →
+      already a directory — add manifest.toml with file = "bundle.js" if missing
+    tests/fixtures/csharp_plugin/ →
+      already a directory — verify manifest.toml has correct file field
+  NOTE: existing test_plugin/ and memory_plugin/ and error_plugin/ Cargo crates
+  in fixtures/ are source trees, not bundle directories — they must NOT be
+  confused with bundle directories. The Cargo crates build artifacts go into
+  the bundle directories above.
+  All test code that hardcodes fixture paths must be updated to new paths.
+
+BUNDLE.TOML CHANGES:
+  bundle.toml (plugin developer's source file) also updated:
+  For native runtime:
+    [bundle.file] table replaces file = "..."
+  For all other runtimes:
+    file = "relative/path" replaces file = "..." (same syntax, now enforced relative)
+  polyplugc generate emits the new bundle.toml format as well.
+  NOTE: bundle.toml is distinct from manifest.toml.
+    bundle.toml = plugin developer's source (input to polyplugc)
+    manifest.toml = generated output (shipped with bundle)
+  Both are updated in this epic.
+
+PRD UPDATE:
+  Section 11 (bundle.toml schema): update runtime field and file field docs.
+  Section 13 (Plugin Discovery): add bundle-as-directory enforcement rule.
+  Planner should note PRD update as a task but executer writes code first,
+  PRD update last.
+
+---
+
+EPIC GOAL
+
+1. ManifestData: replace file: String with file: BundleFile enum.
+   crates/polyplug/src/loader/manifest/mod.rs
+
+2. Manifest parser: validate file field per rules above.
+   Hard errors for all invalid combinations.
+   Platform resolution in BundleFile::resolve().
+
+3. Scanner: enforce bundle-as-directory.
+   Non-directory entries silently skipped.
+   Directory without manifest.toml silently skipped.
+   Directory with unparseable manifest.toml = hard error.
+
+4. All loaders: use BundleFile::resolve() to get final path.
+   Join resolved path to bundle_dir.
+   NativeBundleLoader, DotnetLoader, PythonLoader, LuaLoader,
+   JsLoader, JsDenoLoader — all updated.
+
+5. New error variants: five new variants listed above.
+   crates/polyplug/src/error/mod.rs
+
+6. polyplugc generate: all seven generators emit new manifest.toml format.
+   Native: [bundle.file] table with six platform placeholders.
+   Others: file = "placeholder" string.
+   Also update generated bundle.toml for native to use [bundle.file].
+
+7. polyplugc pack: always produces directory.
+   Hard error if output already contains bundle.
+   Validates manifest before writing.
+
+8. Test fixtures: restructure all flat-file fixtures into bundle directories.
+   Update all test code that references old fixture paths.
+
+9. Integration tests — tests/integration_discovery/mod.rs (add cases):
+   a. Flat file in scan path → silently skipped (not an error)
+   b. Directory without manifest.toml → silently skipped
+   c. Bundle with missing file field → ManifestMissingFile error
+   d. Bundle with absolute path in file field → ManifestInvalidFilePath error
+   e. Bundle with ../ in file field → ManifestInvalidFilePath error
+   f. Native bundle with flat file string → ManifestWrongFileFormat error
+   g. Non-native bundle with [bundle.file] table → ManifestWrongFileFormat error
+   h. Native bundle on current platform — correct .so/.dll/.dylib loaded
+   i. Native bundle missing current platform → PlatformNotSupported error
+      with supported platforms listed (not current platform)
+   i2. Native bundle with empty [bundle.file] table → PlatformNotSupported
+       with empty supported list, clear message about empty table
+   j. Existing full integration tests still pass with restructured fixtures
+
+10. PRD update: sections 11 and 13.
+
+---
+
+VERIFICATION CHECKLIST
+
+- Flat file bundle → hard error at explicit load, silently skipped in scan — verified
+- Directory without manifest.toml → silently skipped — verified
+- Missing file field → ManifestMissingFile — verified
+- Absolute path → ManifestInvalidFilePath — verified
+- Path traversal (..) → ManifestInvalidFilePath — verified
+- Native + flat string → ManifestWrongFileFormat — verified
+- Non-native + table → ManifestWrongFileFormat — verified
+- Native + no current platform entry → PlatformNotSupported with available list — verified
+- Native + current platform entry → correct file loaded — verified
+- All existing integration tests pass with restructured fixtures — verified
+- polyplugc generate emits [bundle.file] table for native — verified
+- polyplugc generate emits file = "..." for all other runtimes — verified
+- polyplugc pack always produces directory — verified
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
+
+
+---
+
+## Epic 19 — Enum Types in api.toml Schema
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 11 (api.toml schema, type system)
+- crates/polyplugc/src/ir/mod.rs — IR types
+- crates/polyplugc/src/parser/mod.rs — api.toml parser
+- crates/polyplugc/src/generators/ — all six generators
+
+---
+
+PROJECT CONTEXT
+
+api.toml currently supports only [[type]] (flat C structs with primitive fields)
+and [[contract]] (functions). This epic adds [[enum]] — C-style enums with
+explicit discriminant values and an optional bitflag annotation.
+
+Enums are ABI types — they appear in contract function signatures exactly like
+[[type]] structs. At the ABI level an enum is its repr type (u8/u16/u32/u64).
+polyplugc generates idiomatic enum types per language. The target language
+compiler validates the discriminant value expressions — polyplugc does NOT
+evaluate or range-check them beyond a syntax check.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+API.TOML SYNTAX:
+
+  [[enum]]
+  name    = "ColorSpace"        # required, PascalCase, unique across all types+enums
+  repr    = "u32"               # required: u8 | u16 | u32 | u64
+  bitflag = true                # optional, default false
+
+  [[enum.variants]]
+  name  = "None"                # required, PascalCase
+  value = "0"                   # required, expression string — see below
+
+  [[enum.variants]]
+  name  = "Srgb"
+  value = "1"
+
+  [[enum.variants]]
+  name  = "Linear"
+  value = "1 << 1"
+
+  [[enum.variants]]
+  name  = "SrgbLinear"
+  value = "Srgb | Linear"       # reference to previously-declared variant by name
+
+  [[enum.variants]]
+  name  = "All"
+  value = "0xFF"
+
+VALUE EXPRESSION RULES:
+  Allowed tokens:
+    - Integer literals: decimal (0, 1, 255), hex (0xFF, 0xDEAD), binary (0b0101)
+    - Bit shift: 1 << N  (N must be a decimal integer literal, 0-63)
+    - Bitwise OR: A | B
+    - Bitwise NOT/complement: ~A  (generates bitwise complement in all languages)
+    - Variant name references: name of a previously declared variant in the
+      SAME enum (forward references are NOT allowed)
+    - Parentheses for grouping: (A | B)
+
+  NOT allowed: arithmetic (+, -, *, /), comparison, string literals, function calls,
+  cross-enum references.
+
+  polyplugc validation: tokenize the value string and verify only allowed tokens
+  appear. If invalid token found: hard error at parse time.
+  Error message:
+    error: enum "ColorSpace" variant "Bad" has invalid value expression "1 + 2".
+    Allowed operators: | << ~
+    Allowed operands: integer literals, previously declared variant names.
+
+  polyplugc does NOT evaluate the expression numerically.
+  The expression is emitted verbatim (with variant name substitution) into
+  each target language. Target language compiler validates range and type.
+
+  Variant name substitution in output:
+    In the value expression, variant name references are substituted with the
+    language-appropriate constant reference per generator.
+    Example: value = "Srgb | Linear"
+      Rust:   SrgbLinear = Srgb | Linear   (as u32 consts)
+      C++:    SrgbLinear = Srgb | Linear   (as constexpr)
+      C#:     SrgbLinear = Srgb | Linear   (as const uint)
+      Python: SRGB_LINEAR = SRGB | LINEAR  (SCREAMING_SNAKE_CASE)
+      Lua:    SrgbLinear = ColorSpace.Srgb | ColorSpace.Linear
+      JS/TS:  SrgbLinear = ColorSpace.Srgb | ColorSpace.Linear
+
+ENUM AS ABI TYPE:
+  Enums are valid field types in [[type]] structs:
+    [[type]]
+    name = "Image"
+    fields = [
+        { name = "color_space", type = "ColorSpace" },
+        { name = "width",       type = "u32" },
+    ]
+  Enums are valid function parameter and return types in [[contract]]:
+    [[contract.functions]]
+    name    = "decode"
+    params  = [{ name = "color_space", type = "ColorSpace" }]
+    returns = "ColorSpace"
+  At ABI level: enum is its repr type. Generated function signatures use
+  the repr type in the C ABI, with a cast to/from the enum type in generated code.
+
+NAME UNIQUENESS:
+  Enum names share the same namespace as [[type]] names.
+  Hard error if an enum name collides with a type name or another enum name.
+  Error:
+    error: "ColorSpace" is defined as both a [[type]] and an [[enum]] in api.toml.
+    Type and enum names must be unique.
+
+IR CHANGES (crates/polyplugc/src/ir/mod.rs):
+  Add to IR:
+    pub struct EnumDef {
+        pub name: String,
+        pub repr: ReprType,
+        pub bitflag: bool,
+        pub variants: Vec<EnumVariant>,
+    }
+
+    pub struct EnumVariant {
+        pub name: String,
+        pub value: String,   // validated expression string, stored verbatim
+    }
+
+    pub enum ReprType {
+        U8, U16, U32, U64,
+    }
+
+  ApiIr gains:
+    pub enums: Vec<EnumDef>
+
+  Type resolution: when resolving a field/param/return type name,
+  check enums vec in addition to types vec.
+
+CODE GENERATION — PER LANGUAGE:
+
+  RUST (crates/polyplugc/src/generators/rust/mod.rs):
+    Non-bitflag:
+      #[repr(u32)]  // or u8/u16/u64 per repr
+      #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+      pub enum ColorSpace {
+          None    = 0,
+          Srgb    = 1,
+          Linear  = 1 << 1,
+          SrgbLinear = Self::Srgb as u32 | Self::Linear as u32,
+          All     = 0xFF,
+      }
+    Bitflag (bitflag = true):
+      Use raw const pattern (do NOT add bitflags crate dependency):
+        pub mod color_space {
+            pub type ColorSpace = u32;
+            pub const NONE:        ColorSpace = 0;
+            pub const SRGB:        ColorSpace = 1;
+            pub const LINEAR:      ColorSpace = 1 << 1;
+            pub const SRGB_LINEAR: ColorSpace = SRGB | LINEAR;
+            pub const ALL:         ColorSpace = 0xFF;
+        }
+        pub use color_space::ColorSpace;
+      Reason: bitflags crate is not a polyplug dependency. Raw consts are
+      ABI-equivalent and work without any added dep.
+
+  C++ (crates/polyplugc/src/generators/cpp/mod.rs):
+    Non-bitflag:
+      enum class ColorSpace : uint32_t {
+          None       = 0,
+          Srgb       = 1,
+          Linear     = 1 << 1,
+          SrgbLinear = static_cast<uint32_t>(ColorSpace::Srgb) |
+                       static_cast<uint32_t>(ColorSpace::Linear),
+          All        = 0xFF,
+      };
+    Bitflag (bitflag = true):
+      Same enum class but add bitwise operator overloads:
+        inline ColorSpace operator|(ColorSpace a, ColorSpace b) {
+            return static_cast<ColorSpace>(
+                static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+        }
+        inline ColorSpace operator&(ColorSpace a, ColorSpace b) { ... }
+        inline ColorSpace operator~(ColorSpace a) { ... }
+
+  C# (crates/polyplugc/src/generators/csharp/mod.rs):
+    Non-bitflag:
+      public enum ColorSpace : uint
+      {
+          None       = 0,
+          Srgb       = 1,
+          Linear     = 1 << 1,
+          SrgbLinear = Srgb | Linear,
+          All        = 0xFF,
+      }
+    Bitflag (bitflag = true):
+      [Flags]
+      public enum ColorSpace : uint
+      { ... same variants ... }
+
+  Python (crates/polyplugc/src/generators/python/mod.rs):
+    Non-bitflag:
+      class ColorSpace(enum.IntEnum):
+          NONE        = 0
+          SRGB        = 1
+          LINEAR      = 1 << 1
+          SRGB_LINEAR = 1 | (1 << 1)   # variant refs substituted with literal exprs
+          ALL         = 0xFF            # Python IntEnum does not allow forward refs
+                                        # so variant refs are substituted at codegen time
+                                        # by re-emitting the expression with names replaced
+                                        # by their own value expressions recursively
+                                        # (one level only — no chained refs)
+    Bitflag (bitflag = true):
+      class ColorSpace(enum.IntFlag):
+          { same variants }
+    NOTE for Python: variant name references in value expressions must be
+    substituted at codegen time (not emitted as-is) because Python class body
+    evaluation is sequential and IntEnum does not support forward-refs or
+    self-referential expressions after the class is defined.
+    One-level substitution is sufficient — enforce in validation that variant
+    references only refer to previously-declared variants (already required).
+
+  Lua (crates/polyplugc/src/generators/lua/mod.rs):
+    local ColorSpace = {
+        None       = 0,
+        Srgb       = 1,
+        Linear     = 1 << 1,
+        SrgbLinear = 1 | (1 << 1),   -- variant refs substituted (same as Python)
+        All        = 0xFF,
+    }
+    NOTE: Lua table literal body does not support forward-self-refs.
+    Same one-level substitution as Python.
+    bitflag = true: no change in Lua — bitwise ops already work on integers.
+    Add comment: -- bitflag enum
+
+  js-quickjs (crates/polyplugc/src/generators/js_quickjs/mod.rs):
+    Non-bitflag:
+      const ColorSpace = Object.freeze({
+          None:       0,
+          Srgb:       1,
+          Linear:     1 << 1,
+          SrgbLinear: 1 | (1 << 1),   // variant refs substituted
+          All:        0xFF,
+      });
+    Bitflag (bitflag = true):
+      Same Object.freeze — add JSDoc comment: /** @bitflag */
+    NOTE: JS object literal also requires substitution for variant refs.
+
+  js-deno (crates/polyplugc/src/generators/js_deno/mod.rs):
+    Identical output to js-quickjs for enum generation.
+    Same substitution rules apply.
+
+SUBSTITUTION ALGORITHM (used by Python, Lua, js-quickjs, js-deno):
+  For each variant, scan its value expression for variant name tokens.
+  Replace each variant name token with the value expression of the referenced
+  variant, wrapped in parentheses: (original_expression).
+  One level only — the referenced variant's value must itself be
+  a pure literal expression (no further variant refs after substitution).
+  If a referenced variant itself contains a variant ref: hard error at codegen.
+  Error:
+    error: enum "ColorSpace" variant "SrgbLinear" references "Srgb" which
+    itself references another variant. Only one level of variant reference
+    is supported.
+  This rule is enforced at IR validation time (before codegen), not per-language.
+
+REPR TYPE → LANGUAGE MAPPING:
+  u8:  Rust u8,  C++ uint8_t,  C# byte,   Python no change, Lua integer, JS number
+  u16: Rust u16, C++ uint16_t, C# ushort, Python no change, Lua integer, JS number
+  u32: Rust u32, C++ uint32_t, C# uint,   Python no change, Lua integer, JS number
+  u64: Rust u64, C++ uint64_t, C# ulong,  Python no change, Lua integer, JS BigInt
+       NOTE: u64 enums in js-quickjs use lo/hi split (consistent with other u64 handling).
+       u64 enums in js-deno use BigInt.
+       u64 enums in Python: use int (Python int is arbitrary precision).
+
+NAMING CONVENTIONS:
+  Rust:   PascalCase enum name, PascalCase variant names (Self::Variant)
+  C++:    PascalCase enum class name, PascalCase variant names
+  C#:     PascalCase enum name, PascalCase variant names
+  Python: PascalCase class name, SCREAMING_SNAKE_CASE variant names
+  Lua:    PascalCase table name, PascalCase keys
+  JS/TS:  PascalCase const name, PascalCase keys
+
+---
+
+EPIC GOAL
+
+1. api.toml parser (crates/polyplugc/src/parser/mod.rs):
+   Parse [[enum]] sections into EnumDef IR nodes.
+   Validate value expressions — tokenize, check allowed operators.
+   Validate name uniqueness across types and enums.
+   Validate variant name references are backward-only (no forward refs).
+   Hard errors for all violations.
+
+2. IR (crates/polyplugc/src/ir/mod.rs):
+   Add EnumDef, EnumVariant, ReprType.
+   Add enums: Vec<EnumDef> to ApiIr.
+   Type resolution updated to include enum names.
+   IR validation: one-level variant ref check (no chained refs).
+
+3. All six generators updated:
+   Emit enum type definitions per language spec above.
+   Emit enums in the types output file (same file as [[type]] structs).
+   Substitution algorithm implemented for Python, Lua, js-quickjs, js-deno.
+   bitflag = true handled per language spec above.
+
+4. Codegen tests (tests/integration_codegen_rust/mod.rs etc.):
+   Add enum codegen test for each generator:
+   a. Non-bitflag enum with literals, shift, OR, variant ref
+   b. Bitflag enum — verify [Flags] / operator overloads / IntFlag emitted
+   c. Enum used as function param type — correct ABI repr in generated code
+   d. Enum used as struct field type — correct field type in generated code
+   e. Invalid value expression (+ operator) — hard error at parse
+   f. Forward variant reference — hard error at parse
+   g. Chained variant reference — hard error at IR validation
+   h. Enum name collision with type name — hard error at parse
+   i. Missing repr field — hard error at parse
+   j. Invalid repr value (e.g. repr = "f32") — hard error at parse
+
+5. Test fixture api.toml (tests/fixtures/test_api.toml):
+   Add a sample enum (non-bitflag) and a sample bitflag enum.
+   Use them in at least one contract function parameter and one struct field.
+   This exercises enum codegen in all integration tests automatically.
+
+6. PRD update: section 11 (api.toml schema) — document [[enum]] syntax,
+   value expression rules, bitflag annotation, repr types.
+
+---
+
+VERIFICATION CHECKLIST
+
+- [[enum]] parsed correctly from api.toml — verified
+- repr required, must be u8/u16/u32/u64 — hard error otherwise — verified
+- value expression tokenized, invalid operators → hard error — verified
+- forward variant reference → hard error — verified
+- chained variant reference → hard error at IR validation — verified
+- enum name collision with type name → hard error — verified
+- Rust: non-bitflag → #[repr(uN)] enum, bitflag → raw consts module — verified
+- C++: non-bitflag → enum class, bitflag → enum class + operator overloads — verified
+- C#: non-bitflag → enum : uN, bitflag → [Flags] enum : uN — verified
+- Python: non-bitflag → IntEnum, bitflag → IntFlag, variant refs substituted — verified
+- Lua: table literal, variant refs substituted — verified
+- js-quickjs: Object.freeze, variant refs substituted — verified
+- js-deno: identical to js-quickjs — verified
+- u64 enum: lo/hi in js-quickjs, BigInt in js-deno — verified
+- Enum as struct field type — compiles in all languages — verified
+- Enum as function param/return type — compiles in all languages — verified
+- test_api.toml updated with enum examples — verified
+- All existing integration tests pass — verified
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
 ```
