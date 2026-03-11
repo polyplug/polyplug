@@ -404,12 +404,18 @@ Python  host-libs/python/  →  polyplug pip package
                                ctypes bindings, Runtime class, ctypes.Structure
                                wrappers for StringView and Buffer
 
-Lua     host-libs/lua/     →  polyplug.lua + .so
-                               FFI declarations, Runtime table, FFI cdata
-                               wrappers for StringView and Buffer
+Lua     host-libs/lua/     →  polyplug.lua (LuaJIT FFI into libpolyplug.so)
+                               FFI declarations, Runtime metatable, Guard metatable,
+                               cdata wrappers for StringView and Buffer
+                               Performance: JIT-inlined C calls, near-native or faster
+
+JS/TS   host-libs/js/      →  polyplug.ts (Deno.dlopen into libpolyplug.so)
+                               Runtime class, Guard class, TypeScript types
+                               Requires --allow-ffi at runtime
+                               Performance: <10ns (V8 fast call), ~150ns (BigInt/slow path)
 ```
 
-Note: `polyplug-dotnet`, `polyplug-python`, `polyplug-lua` are **not** host libs. They are Rust adapter crates that teach the runtime how to *load* plugins written in those languages. A C# host app needs `host-libs/csharp/` to drive the runtime. It separately needs `polyplug-dotnet` only if it wants to load `.NET plugins`.
+Note: `polyplug-dotnet`, `polyplug-python`, `polyplug-lua` are **not** host libs. They are Rust adapter crates that teach the runtime how to *load* plugins written in those languages. A C# host app needs `host-libs/csharp/` to drive the runtime. It separately needs `polyplug-dotnet` only if it wants to load `.NET plugins`. Similarly, `polyplug-js` and `polyplug-js-deno` are adapter crates for *loading* JS plugins — they are distinct from `host-libs/js/` which lets a Deno app *be* the host.
 
 **App developer runtime initialization:**
 
@@ -1667,8 +1673,8 @@ Rust        host + guest    native, near zero overhead
 C++         host + guest    header-only libs, near zero overhead
 C#          host + guest    NativeAOT (native loader) or standard .NET (polyplug-dotnet)
 Python      host + guest    ctypes, via polyplug-python
-Lua         host + guest    LuaJIT recommended, via polyplug-lua
-JavaScript  host + guest    QuickJS embedded (polyplug-js) or V8 embedded (polyplug-js-deno)
+Lua         host + guest    LuaJIT FFI into libpolyplug.so, near-native performance
+JavaScript  host + guest    host: Deno (Deno.dlopen); guest: QuickJS (polyplug-js) or V8 (polyplug-js-deno)
 TypeScript  host + guest    same as JS — TS compiled by Rolldown (js-quickjs) or native (js-deno)
 ```
 
@@ -1716,27 +1722,79 @@ C++ (headers / vcpkg / conan)
 └── Polyplug.Guest        C# guest lib (NativeAOT or standard .NET)
 
 Python (pip)
-├── polyplug              Python host lib
+├── polyplug              Python host lib (ctypes into libpolyplug.so)
 └── polyplug-guest        Python guest lib
 
 Lua
-├── polyplug.lua + .so    Lua host lib
-└── polyplug-guest.lua    Lua guest lib
+├── host-libs/lua/        polyplug.lua — LuaJIT FFI host lib
+└── guest-libs/lua/       polyplug_guest.lua — Lua guest lib
 
-JS/TS (guest-libs/js/ — shipped as part of polyplugc SDK output)
-└── polyplug-guest.ts     shared guest lib for both js-quickjs and js-deno
+JS/TS (Deno)
+├── host-libs/js/         polyplug.ts — Deno.dlopen host lib (requires --allow-ffi)
+└── guest-libs/js/        polyplug-guest.ts — shared guest lib for js-quickjs and js-deno
     ├── AbiError, StringView, Buffer (lo/hi ptr fields for js-quickjs)
     ├── DependencyNotFoundError
     ├── EXT_TRACE_ID constant
     └── TraceVTable interface
     (re-exported in generated init.ts for both variants)
 
-NOTE: There is no JS host lib. The host is always a Rust binary.
+NOTE: host-libs/js/ targets Deno as the host runtime (Deno.dlopen into libpolyplug.so).
+QuickJS cannot be a standalone host — it is an embedded VM that runs inside a Rust process.
 ```
 
 ---
 
-## 25. Future Work
+## 25. C Facade — Stable Host API for FFI Consumers
+
+`host-libs/lua/` and `host-libs/js/` both call into `libpolyplug.so` via FFI (LuaJIT FFI and `Deno.dlopen` respectively). They cannot use the Rust-native API surface. A thin stable `extern "C"` facade is therefore added to `crates/polyplug/src/ffi/mod.rs` and exported from `lib.rs`.
+
+**Design rules:**
+- All symbols prefixed `polyplug_`
+- No Rust types cross the boundary — only primitives, pointers, and ABI structs
+- `PluginHandle` packed as `u64`: `(generation as u64) << 32 | index as u64`
+- Errors reported via `polyplug_last_error()` thread-local string — never panics across FFI
+- Runtime pointer opaque (`*mut OpaqueRuntime`) — consumers never dereference it
+
+**Exported symbols:**
+
+```c
+// Lifecycle
+OpaqueRuntime* polyplug_runtime_new();
+void           polyplug_runtime_free(OpaqueRuntime* rt);
+
+// Bundle loading
+uint32_t polyplug_load_bundle(OpaqueRuntime* rt,
+                               const uint8_t* path, size_t path_len);
+uint32_t polyplug_load_bundle_opts(OpaqueRuntime* rt,
+                                    const uint8_t* path, size_t path_len,
+                                    uint8_t compatibility_mode);
+uint32_t polyplug_reload_bundle(OpaqueRuntime* rt,
+                                 const uint8_t* path, size_t path_len);
+
+// Discovery
+uint64_t polyplug_find_by_contract(OpaqueRuntime* rt,
+                                    uint64_t contract_id, uint32_t min_version);
+uint64_t polyplug_find_by_bundle(OpaqueRuntime* rt,
+                                  uint64_t bundle_id,
+                                  uint64_t contract_id, uint32_t min_version);
+size_t   polyplug_find_all_by_contract(OpaqueRuntime* rt,
+                                        uint64_t contract_id, uint32_t min_version,
+                                        uint64_t* out, size_t out_cap);
+
+// Vtable access
+const OpaqueGuard* polyplug_resolve_plugin(OpaqueRuntime* rt, uint64_t packed_handle);
+void               polyplug_guard_free(const OpaqueGuard* guard);
+const void*        polyplug_get_vtable(const OpaqueGuard* guard);
+
+// Error retrieval — UTF-8, caller-provides-buffer
+size_t polyplug_last_error(uint8_t* out, size_t out_cap);
+```
+
+**Performance:** The C facade is a zero-overhead shim — each function is a direct call into the existing Rust runtime with no additional allocation or logic. LuaJIT JIT-compiles these calls to direct indirect calls (bypassing PLT). Deno uses V8 Fast API calls for non-BigInt parameters (<10ns) and the standard call path for BigInt u64 parameters (~150ns).
+
+---
+
+## 26. Future Work
 
 **Near term:**
 - Async plugin execution
@@ -1756,7 +1814,7 @@ NOTE: There is no JS host lib. The host is always a Rust binary.
 
 ---
 
-## 26. Non-Goals
+## 27. Non-Goals
 
 - UI frameworks
 - Build systems
@@ -1768,7 +1826,7 @@ NOTE: There is no JS host lib. The host is always a Rust binary.
 
 ---
 
-## 27. Hot-Reload Architecture
+## 28. Hot-Reload Architecture
 
 Hot-reload allows a running application to replace a plugin bundle with a new version without restarting. All callers transparently use the new vtable after reload with zero downtime and no stale pointer risk.
 

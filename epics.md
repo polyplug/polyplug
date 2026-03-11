@@ -4387,3 +4387,501 @@ VERIFICATION CHECKLIST
 - clippy passes with zero warnings
 - cargo test --workspace passes
 ```
+
+
+---
+
+## Epic 21 — C Facade + Lua Host Lib + Deno Host Lib
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+The plan must be granular enough that the executer can implement each step without
+making any architectural decisions. Every ambiguity must be resolved in the plan.
+
+All architectural questions for this epic are pre-answered below.
+Write the plan directly — do not ask further questions unless something is
+genuinely contradictory or missing.
+
+---
+
+READ FIRST
+- AGENTS.md — every rule applies
+- polyplug_prd.md — section 8 (host libs overview), section 24 (package ecosystem),
+  section 25 (C facade spec), section 10 (Lua and JS adapters for context)
+- host-libs/python/ — reference implementation pattern to follow
+- host-libs/lua/ — does not exist yet, create it
+- host-libs/js/  — does not exist yet, create it
+- crates/polyplug/src/ffi/ — does not exist yet, create it
+
+---
+
+PROJECT CONTEXT
+
+polyplug supports any language as both host and guest. This epic adds the two missing
+host libs — Lua and JS/Deno — plus the stable C facade in libpolyplug.so that both
+depend on. After this epic all six supported languages can be a runtime host.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+─────────────────────────────────────────────────────────────
+PART 1 — C Facade (crates/polyplug/src/ffi/mod.rs)
+─────────────────────────────────────────────────────────────
+
+New module: crates/polyplug/src/ffi/mod.rs
+Exported from crates/polyplug/src/lib.rs as: pub mod ffi;
+
+All symbols use #[no_mangle] and extern "C".
+All symbols prefixed polyplug_.
+No Rust types cross the boundary — only primitives, raw pointers, ABI structs.
+
+PluginHandle packing:
+  packed u64 = (generation as u64) << 32 | (index as u64)
+  null handle = u64::MAX  (both fields U32_MAX)
+  Unpack: index = (packed & 0xFFFF_FFFF) as u32
+          generation = (packed >> 32) as u32
+
+Opaque types:
+  pub struct OpaqueRuntime(PluginRuntime);  // PluginRuntime = the main runtime type
+  pub struct OpaqueGuard(PluginVTableGuard); // the arc-swap guard wrapper
+
+Error handling:
+  thread_local! { static LAST_ERROR: RefCell<String> = RefCell::new(String::new()); }
+  fn set_last_error(msg: impl Into<String>)
+  On any Err result: set_last_error, return error sentinel (0 for ptr, u32::MAX for codes)
+  Never panic across FFI boundary — all panics caught with std::panic::catch_unwind
+
+EXPORTED SYMBOLS (implement all):
+
+  // Lifecycle
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_runtime_new() -> *mut OpaqueRuntime
+    // Constructs a default PluginRuntime with no adapters
+    // Returns null on failure (set_last_error)
+
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_runtime_free(rt: *mut OpaqueRuntime)
+    // Drops the OpaqueRuntime. No-op if null.
+
+  // Bundle loading
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_load_bundle(rt: *mut OpaqueRuntime,
+                           path: *const u8, path_len: usize) -> u32
+    // Returns 0 on success, non-zero on error (set_last_error)
+
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_reload_bundle(rt: *mut OpaqueRuntime,
+                              path: *const u8, path_len: usize) -> u32
+    // Returns 0 on success, non-zero on error
+
+  // Discovery
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_find_by_contract(rt: *mut OpaqueRuntime,
+                                contract_id: u64, min_version: u32) -> u64
+    // Returns packed handle, or null handle (u64::MAX) if not found
+
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_find_by_bundle(rt: *mut OpaqueRuntime,
+                               bundle_id: u64, contract_id: u64,
+                               min_version: u32) -> u64
+
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_find_all_by_contract(rt: *mut OpaqueRuntime,
+                                    contract_id: u64, min_version: u32,
+                                    out: *mut u64, out_cap: usize) -> usize
+    // caller-provides-buffer pattern, returns count written
+
+  // Vtable access
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_resolve_plugin(rt: *mut OpaqueRuntime,
+                               packed_handle: u64) -> *const OpaqueGuard
+    // Returns null if handle invalid
+
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_guard_free(guard: *const OpaqueGuard)
+    // Drops the guard (releases arc-swap read guard). No-op if null.
+
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_get_vtable(guard: *const OpaqueGuard) -> *const ()
+    // Returns raw pointer to PluginVTable. Valid while guard is alive.
+
+  // Error retrieval
+  #[no_mangle] pub unsafe extern "C"
+  fn polyplug_last_error(out: *mut u8, out_cap: usize) -> usize
+    // Copies last error string (UTF-8) into caller-provided buffer.
+    // Returns number of bytes written (not including null terminator).
+    // Returns 0 if no error or buffer too small.
+    // Clears the stored error after reading.
+
+NOTE: The C facade does NOT include adapter registration (polyplug-dotnet, polyplug-python, etc.)
+because those adapters are Rust-only — the Lua and Deno host apps load bundles of any
+runtime type transparently. The runtime determines which adapter to invoke at load time.
+The FFI consumer never needs to know which adapter handles a given bundle.
+
+─────────────────────────────────────────────────────────────
+PART 2 — Lua Host Lib (host-libs/lua/)
+─────────────────────────────────────────────────────────────
+
+DIRECTORY LAYOUT:
+  host-libs/lua/
+    polyplug.lua           — main host lib module
+    polyplug.d.lua         — EmmyLua/LuaLS type annotations (documentation only)
+    README.md              — usage guide
+
+MECHANISM: LuaJIT FFI via ffi.load("polyplug") — loads libpolyplug.so from the path
+configured by the app. Performance: LuaJIT JIT-compiles C calls to direct indirect
+calls; hot-path vtable dispatch approaches native speed.
+
+IMPLEMENTATION (polyplug.lua):
+
+  -- polyplug.lua
+  local ffi = require("ffi")
+
+  ffi.cdef[[
+    typedef struct OpaqueRuntime OpaqueRuntime;
+    typedef struct OpaqueGuard   OpaqueGuard;
+
+    OpaqueRuntime* polyplug_runtime_new(void);
+    void           polyplug_runtime_free(OpaqueRuntime* rt);
+    uint32_t       polyplug_load_bundle(OpaqueRuntime* rt,
+                                         const uint8_t* path, size_t path_len);
+    uint32_t       polyplug_reload_bundle(OpaqueRuntime* rt,
+                                           const uint8_t* path, size_t path_len);
+    uint64_t       polyplug_find_by_contract(OpaqueRuntime* rt,
+                                              uint64_t contract_id,
+                                              uint32_t min_version);
+    uint64_t       polyplug_find_by_bundle(OpaqueRuntime* rt,
+                                            uint64_t bundle_id,
+                                            uint64_t contract_id,
+                                            uint32_t min_version);
+    size_t         polyplug_find_all_by_contract(OpaqueRuntime* rt,
+                                                  uint64_t contract_id,
+                                                  uint32_t min_version,
+                                                  uint64_t* out, size_t out_cap);
+    OpaqueGuard*   polyplug_resolve_plugin(OpaqueRuntime* rt,
+                                            uint64_t packed_handle);
+    void           polyplug_guard_free(const OpaqueGuard* guard);
+    const void*    polyplug_get_vtable(const OpaqueGuard* guard);
+    size_t         polyplug_last_error(uint8_t* out, size_t out_cap);
+  ]]
+
+  -- Load from path provided to polyplug.load_lib(path) or default "polyplug"
+  local lib = nil
+
+  local M = {}
+
+  -- Must be called before M.Runtime.new()
+  -- path: absolute or relative path to libpolyplug.so/.dll/.dylib
+  function M.load_lib(path)
+      lib = ffi.load(path)
+  end
+
+  -- Guard metatable
+  local Guard = {}
+  Guard.__index = Guard
+  Guard.__gc = function(self)
+      if self._ptr ~= nil then
+          lib.polyplug_guard_free(self._ptr)
+          self._ptr = nil
+      end
+  end
+  function Guard:vtable()
+      -- returns raw cdata pointer — caller casts to their vtable type via ffi.cast
+      return lib.polyplug_get_vtable(self._ptr)
+  end
+  function Guard:free()
+      lib.polyplug_guard_free(self._ptr)
+      self._ptr = nil
+  end
+
+  -- Runtime metatable
+  local Runtime = {}
+  Runtime.__index = Runtime
+  Runtime.__gc = function(self)
+      if self._ptr ~= nil then
+          lib.polyplug_runtime_free(self._ptr)
+          self._ptr = nil
+      end
+  end
+
+  function M.Runtime.new()
+      local ptr = lib.polyplug_runtime_new()
+      if ptr == nil then
+          error("polyplug_runtime_new failed: " .. M.last_error())
+      end
+      return setmetatable({ _ptr = ptr }, Runtime)
+  end
+
+  function Runtime:load_bundle(path)
+      local code = lib.polyplug_load_bundle(self._ptr, path, #path)
+      if code ~= 0 then
+          error("load_bundle failed: " .. M.last_error())
+      end
+  end
+
+  function Runtime:reload_bundle(path)
+      local code = lib.polyplug_reload_bundle(self._ptr, path, #path)
+      if code ~= 0 then
+          error("reload_bundle failed: " .. M.last_error())
+      end
+  end
+
+  function Runtime:find_by_contract(contract_id, min_version)
+      -- contract_id: uint64 cdata (ffi.new("uint64_t", ...))
+      return lib.polyplug_find_by_contract(self._ptr, contract_id, min_version)
+  end
+
+  function Runtime:find_by_bundle(bundle_id, contract_id, min_version)
+      return lib.polyplug_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
+  end
+
+  function Runtime:find_all_by_contract(contract_id, min_version, cap)
+      cap = cap or 16
+      local out = ffi.new("uint64_t[?]", cap)
+      local n = lib.polyplug_find_all_by_contract(
+          self._ptr, contract_id, min_version, out, cap)
+      local results = {}
+      for i = 0, tonumber(n) - 1 do
+          results[i+1] = out[i]
+      end
+      return results
+  end
+
+  function Runtime:resolve_plugin(packed_handle)
+      local ptr = lib.polyplug_resolve_plugin(self._ptr, packed_handle)
+      if ptr == nil then return nil end
+      return setmetatable({ _ptr = ptr }, Guard)
+  end
+
+  function Runtime:free()
+      lib.polyplug_runtime_free(self._ptr)
+      self._ptr = nil
+  end
+
+  function M.last_error()
+      local buf = ffi.new("uint8_t[512]")
+      local n = lib.polyplug_last_error(buf, 512)
+      if n == 0 then return "(no error)" end
+      return ffi.string(buf, n)
+  end
+
+  return M
+
+IMPORTANT DETAILS:
+- u64 IDs passed as ffi.new("uint64_t", value) — LuaJIT cdata uint64_t
+- NULL_HANDLE = ffi.cast("uint64_t", ffi.new("uint64_t", 0xFFFFFFFFFFFFFFFFULL))
+- Guard has __gc metamethod — automatic free when Lua GC collects
+- Runtime has __gc metamethod — automatic free
+- polyplug.load_lib(path) must be called before Runtime.new() — document clearly
+
+─────────────────────────────────────────────────────────────
+PART 3 — Deno Host Lib (host-libs/js/)
+─────────────────────────────────────────────────────────────
+
+DIRECTORY LAYOUT:
+  host-libs/js/
+    polyplug.ts            — main host lib module (Deno.dlopen)
+    polyplug_test.ts       — Deno test suite
+    README.md              — usage guide (note: requires --allow-ffi)
+    deno.json              — Deno config
+
+MECHANISM: Deno.dlopen into libpolyplug.so.
+Performance: V8 Fast API calls for non-BigInt params (<10ns); ~150ns for BigInt u64 params.
+u64 IDs are BigInt in TypeScript — they take the ~150ns slow path. This is acceptable
+because find_by_contract etc. are load-time operations. Hot-path vtable dispatch is direct
+memory access — no FFI call involved.
+
+IMPLEMENTATION (polyplug.ts):
+
+  // polyplug.ts — Deno host lib for polyplug
+
+  export const NULL_HANDLE = 0xFFFFFFFFFFFFFFFFn;  // BigInt
+
+  function openLib(path: string) {
+      return Deno.dlopen(path, {
+          polyplug_runtime_new:         { parameters: [],                                    result: "pointer"  },
+          polyplug_runtime_free:        { parameters: ["pointer"],                           result: "void"     },
+          polyplug_load_bundle:         { parameters: ["pointer", "buffer", "usize"],        result: "u32"      },
+          polyplug_reload_bundle:       { parameters: ["pointer", "buffer", "usize"],        result: "u32"      },
+          polyplug_find_by_contract:    { parameters: ["pointer", "u64", "u32"],             result: "u64"      },
+          polyplug_find_by_bundle:      { parameters: ["pointer", "u64", "u64", "u32"],      result: "u64"      },
+          polyplug_find_all_by_contract:{ parameters: ["pointer", "u64", "u32", "buffer", "usize"], result: "usize" },
+          polyplug_resolve_plugin:      { parameters: ["pointer", "u64"],                    result: "pointer"  },
+          polyplug_guard_free:          { parameters: ["pointer"],                           result: "void"     },
+          polyplug_get_vtable:          { parameters: ["pointer"],                           result: "pointer"  },
+          polyplug_last_error:          { parameters: ["buffer", "usize"],                   result: "usize"    },
+      } as const);
+  }
+
+  function readLastError(lib: ReturnType<typeof openLib>): string {
+      const buf = new Uint8Array(512);
+      const n = lib.symbols.polyplug_last_error(buf, 512n);
+      if (n === 0n) return "(no error)";
+      return new TextDecoder().decode(buf.subarray(0, Number(n)));
+  }
+
+  function encodeStr(s: string): Uint8Array {
+      return new TextEncoder().encode(s);
+  }
+
+  export class Guard {
+      #lib: ReturnType<typeof openLib>;
+      #ptr: Deno.PointerValue;
+
+      constructor(lib: ReturnType<typeof openLib>, ptr: Deno.PointerValue) {
+          this.#lib = lib;
+          this.#ptr = ptr;
+      }
+
+      vtable(): Deno.PointerValue {
+          return this.#lib.symbols.polyplug_get_vtable(this.#ptr);
+      }
+
+      free(): void {
+          this.#lib.symbols.polyplug_guard_free(this.#ptr);
+          this.#ptr = null;
+      }
+
+      [Symbol.dispose](): void { this.free(); }
+  }
+
+  export class Runtime {
+      #lib: ReturnType<typeof openLib>;
+      #ptr: Deno.PointerValue;
+
+      private constructor(lib: ReturnType<typeof openLib>, ptr: Deno.PointerValue) {
+          this.#lib = lib;
+          this.#ptr = ptr;
+      }
+
+      static open(libPath: string): Runtime {
+          const lib = openLib(libPath);
+          const ptr = lib.symbols.polyplug_runtime_new();
+          if (ptr === null) {
+              throw new Error("polyplug_runtime_new failed: " + readLastError(lib));
+          }
+          return new Runtime(lib, ptr);
+      }
+
+      loadBundle(path: string): void {
+          const encoded = encodeStr(path);
+          const code = this.#lib.symbols.polyplug_load_bundle(
+              this.#ptr, encoded, BigInt(encoded.length));
+          if (code !== 0) {
+              throw new Error("loadBundle failed: " + readLastError(this.#lib));
+          }
+      }
+
+      reloadBundle(path: string): void {
+          const encoded = encodeStr(path);
+          const code = this.#lib.symbols.polyplug_reload_bundle(
+              this.#ptr, encoded, BigInt(encoded.length));
+          if (code !== 0) {
+              throw new Error("reloadBundle failed: " + readLastError(this.#lib));
+          }
+      }
+
+      findByContract(contractId: bigint, minVersion: number): bigint {
+          return this.#lib.symbols.polyplug_find_by_contract(
+              this.#ptr, contractId, minVersion);
+      }
+
+      findByBundle(bundleId: bigint, contractId: bigint, minVersion: number): bigint {
+          return this.#lib.symbols.polyplug_find_by_bundle(
+              this.#ptr, bundleId, contractId, minVersion);
+      }
+
+      findAllByContract(contractId: bigint, minVersion: number, cap = 16): bigint[] {
+          const buf = new BigUint64Array(cap);
+          const n = this.#lib.symbols.polyplug_find_all_by_contract(
+              this.#ptr, contractId, minVersion,
+              new Uint8Array(buf.buffer), BigInt(cap));
+          return Array.from(buf.subarray(0, Number(n)));
+      }
+
+      resolvePlugin(packedHandle: bigint): Guard | null {
+          const ptr = this.#lib.symbols.polyplug_resolve_plugin(
+              this.#ptr, packedHandle);
+          if (ptr === null) return null;
+          return new Guard(this.#lib, ptr);
+      }
+
+      free(): void {
+          this.#lib.symbols.polyplug_runtime_free(this.#ptr);
+          this.#ptr = null;
+      }
+
+      [Symbol.dispose](): void { this.free(); }
+  }
+
+IMPORTANT DETAILS:
+- Requires --allow-ffi at runtime — document in README.md
+- u64 parameters passed as BigInt — takes V8 slow call path (~150ns)
+  This is acceptable: find_by_contract etc. are load-time only
+  Hot-path vtable dispatch does NOT go through FFI — it is direct pointer call
+- path_len passed as BigInt (usize = u64 on 64-bit) for polyplug_load_bundle
+- Guard and Runtime implement Symbol.dispose for "using" syntax (Deno 2.x)
+- NULL_HANDLE = 0xFFFFFFFFFFFFFFFFn — check against this for not-found
+
+─────────────────────────────────────────────────────────────
+EPIC GOAL
+─────────────────────────────────────────────────────────────
+
+1. C facade — crates/polyplug/src/ffi/mod.rs
+   All symbols from spec above.
+   pub mod ffi; exported from crates/polyplug/src/lib.rs.
+   thread_local LAST_ERROR, set_last_error, catch_unwind on every call.
+   Unit tests in ffi/mod.rs: round-trip load+find+resolve on a test fixture.
+
+2. Lua host lib — host-libs/lua/
+   polyplug.lua per spec above.
+   polyplug.d.lua type annotations (EmmyLua style).
+   README.md: how to use, how to pass u64 IDs (ffi.new("uint64_t",...)), --
+   how to cast vtable pointers, how to load_lib.
+
+3. Deno host lib — host-libs/js/
+   polyplug.ts per spec above.
+   polyplug_test.ts: Deno.test suite — load bundle, find, resolve, call vtable.
+   README.md: how to use, --allow-ffi requirement, BigInt for IDs, vtable usage.
+   deno.json: minimal config (no extra deps needed).
+
+4. Integration tests — tests/integration_host_lua/mod.rs (new):
+   a. Runtime.new() constructs successfully
+   b. load_bundle() loads a test fixture bundle
+   c. find_by_contract() returns valid handle
+   d. resolve_plugin() returns guard
+   e. guard:vtable() returns non-null pointer
+   f. calling a vtable function via FFI returns correct result
+   g. NULL_HANDLE returned for missing contract
+   h. last_error() returns message after failed operation
+
+5. Integration tests — tests/integration_host_deno/mod.rs (new):
+   Same surface as Lua tests but run via Deno subprocess:
+   deno run --allow-ffi tests/fixtures/deno_host_test.ts
+   a–h same as above
+   Uses deno::run_path or std::process::Command to invoke Deno
+
+6. PRD update: section 25 (C facade — already updated), section 8 (host-libs table).
+
+---
+
+VERIFICATION CHECKLIST
+
+- C facade compiles with no warnings — verified
+- All polyplug_ symbols visible in libpolyplug.so via `nm -D` — verified
+- catch_unwind on every extern "C" fn — verified by grep
+- LAST_ERROR thread-local cleared after polyplug_last_error read — verified
+- Lua: __gc on Runtime and Guard — no memory leaks — verified
+- Lua: u64 IDs as LuaJIT cdata uint64_t — not Lua numbers — verified
+- Deno: BigInt for all u64 params — no number/bigint confusion — verified
+- Deno: Symbol.dispose on Runtime and Guard — verified
+- Deno: --allow-ffi documented in README.md — verified
+- NULL_HANDLE correctly detected (u64::MAX / 0xFFFFFFFFFFFFFFFFn) — verified
+- All integration tests pass — verified
+- No .unwrap() in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+```
