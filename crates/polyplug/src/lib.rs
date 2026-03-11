@@ -16,6 +16,7 @@ pub mod runtime;
 pub use reload::ReloadEvent;
 
 pub mod version;
+pub mod ffi;
 
 // Re-export the allocator functions at crate level for convenience.
 // These are also exported with #[unsafe(no_mangle)] from allocator/mod.rs.

@@ -153,6 +153,14 @@ path = "../../tests/showcase/mod.rs"
 name = "integration_reload"
 path = "../../tests/integration_reload.rs"
 
+[[test]]
+name = "integration_host_lua"
+path = "../../tests/integration_host_lua/mod.rs"
+
+[[test]]
+name = "integration_host_deno"
+path = "../../tests/integration_host_deno/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false
