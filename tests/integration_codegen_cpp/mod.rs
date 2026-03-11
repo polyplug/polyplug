@@ -9,6 +9,7 @@
 
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
@@ -227,7 +228,10 @@ fn test_cpp_plugin_dispatch() {
 
     // ── 2. Resolve polyplug_init ──────────────────────────────────────────────
     // SAFETY: symbol matches expected ABI signature.
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
@@ -245,7 +249,16 @@ fn test_cpp_plugin_dispatch() {
     };
 
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
 
     // ── 5. Look up vtable for test.add by contract_id ─────────────────────────
@@ -321,7 +334,10 @@ fn test_cpp_host_loads_rust_plugin() {
     };
 
     // SAFETY: symbol matches expected ABI signature
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init not found in Rust plugin")
@@ -337,7 +353,16 @@ fn test_cpp_host_loads_rust_plugin() {
     };
 
     // SAFETY: init_fn is valid; registrar lives for call duration
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(
         init_result.code, ABI_OK,
         "Rust plugin polyplug_init must return ABI_OK"
@@ -409,7 +434,10 @@ fn test_exception_isolation_cpp() {
             .expect("failed to load throwing C++ test plugin")
     };
 
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init not found")
@@ -425,7 +453,16 @@ fn test_exception_isolation_cpp() {
     };
 
     // SAFETY: init_fn is valid; registrar lives for call duration
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(
         init_result.code, ABI_OK,
         "throwing plugin init must return ABI_OK"

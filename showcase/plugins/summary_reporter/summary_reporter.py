@@ -133,8 +133,8 @@ def polyplug_abi_version() -> int:
     return 1
 
 
-def polyplug_init(registrar_addr: int) -> None:
-    """Called by PythonLoader with the PluginRegistrar address as an integer."""
+def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
+    """Called by PythonLoader with the PluginRegistrar address and PluginContext pointer."""
     registrar: PluginRegistrar = PluginRegistrar.from_address(registrar_addr)
     err: AbiError = registrar.register_plugin(
         ctypes.byref(registrar),

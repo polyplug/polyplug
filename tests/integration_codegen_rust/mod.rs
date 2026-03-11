@@ -8,6 +8,7 @@
 
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
@@ -262,7 +263,10 @@ fn test_rust_codegen_compile_and_run() {
 
     // ── 7. Resolve polyplug_init ──────────────────────────────────────────────
     // SAFETY: symbol matches expected ABI signature.
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
@@ -277,7 +281,16 @@ fn test_rust_codegen_compile_and_run() {
     };
 
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
 
     // ── 9. Retrieve the captured vtable ──────────────────────────────────────

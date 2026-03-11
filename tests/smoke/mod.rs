@@ -13,6 +13,7 @@
 
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
@@ -270,7 +271,10 @@ fn smoke_rust_codegen_dispatch() {
 
     // ── 7. Resolve polyplug_init ──────────────────────────────────────────────
     // SAFETY: symbol matches expected ABI signature.
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
@@ -285,7 +289,16 @@ fn smoke_rust_codegen_dispatch() {
     };
 
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
 
     // ── 9. Retrieve the captured vtable ──────────────────────────────────────
@@ -389,7 +402,7 @@ fn smoke_cpp_codegen_dispatch() {
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_vtables.o");
 
             let compile_result: std::process::Output = Command::new("g++")
-                .arg("-std=c++17")
+                .arg("-std=c++20")
                 .arg(format!("-I{}", host_libs_cpp.display()))
                 .arg(format!("-I{}", out_dir.display()))
                 .arg(&vtables_hpp)

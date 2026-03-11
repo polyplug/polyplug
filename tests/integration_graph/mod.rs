@@ -12,6 +12,7 @@
 
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
@@ -88,8 +89,11 @@ fn load_and_init_plugin() -> libloading::Library {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
     };
 
-    // SAFETY: polyplug_init signature is `extern "C" fn(*mut PluginRegistrar) -> AbiError`.
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    // SAFETY: polyplug_init signature is `extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError`.
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
@@ -101,7 +105,16 @@ fn load_and_init_plugin() -> libloading::Library {
     };
 
     // SAFETY: init_fn is valid; registrar is valid for the call.
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
 
     library

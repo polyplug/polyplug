@@ -91,7 +91,7 @@ end
 -- polyplug_init is called by LuaLoader with the PluginRegistrar pointer as i64.
 -- It does NOT call register_plugin directly — the LuaLoader (Rust) does that
 -- after reading _G._polyplug_handlers and creating Rust-side trampolines.
-function polyplug_init(_registrar_ptr_int)
+function polyplug_init(_registrar_ptr_int, _ctx_ptr)
     -- LuaLoader reads _G._polyplug_handlers instead of calling register_plugin directly.
     -- This is the exact pattern from tests/fixtures/test_plugin.lua.
     _G._polyplug_handlers = {

@@ -9,6 +9,7 @@ use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::Buffer;
 use polyplug::abi::HostVTable;
+use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
@@ -208,7 +209,10 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature.
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
@@ -220,7 +224,16 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
     };
 
     // SAFETY: init_fn is valid; registrar lives for the call duration.
-    let init_result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let ctx: PluginContext = PluginContext {
+        bundle_path: StringView::null(),
+    };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    let init_result: AbiError = unsafe {
+        init_fn(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const PluginContext,
+        )
+    };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
 
     let contract_id: u64 = polyplug::abi::contract_id("memory.test", 1);
