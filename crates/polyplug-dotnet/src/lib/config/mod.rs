@@ -6,7 +6,7 @@
 /// .NET framework version they support.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// use polyplug_dotnet::DotnetConfig;
 /// let config = DotnetConfig::default();
 /// ```

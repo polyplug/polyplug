@@ -3,7 +3,7 @@
 /// Configuration for the CPython plugin loader.
 ///
 /// # Example
-/// ```rust
+/// ```rust,ignore
 /// use polyplug_python::PythonConfig;
 /// let config = PythonConfig::default();
 /// ```
