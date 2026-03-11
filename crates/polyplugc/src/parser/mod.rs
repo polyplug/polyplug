@@ -182,6 +182,7 @@ pub(crate) fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, CodegenE
     } else {
         ValidatedIr {
             types: Vec::new(),
+            enums: Vec::new(),
             contracts: Vec::new(),
             bundle: None,
         }
@@ -191,6 +192,7 @@ pub(crate) fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, CodegenE
     let bundle_ir: ValidatedIr = lower_bundle(raw)?;
     Ok(ValidatedIr {
         types: api_ir.types,
+        enums: api_ir.enums,
         contracts: api_ir.contracts,
         bundle: bundle_ir.bundle,
     })
@@ -278,6 +280,7 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, CodegenError> {
 
     Ok(ValidatedIr {
         types: resolved_types,
+        enums: Vec::new(),
         contracts: resolved_contracts,
         bundle: None,
     })
@@ -324,6 +327,7 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, CodegenError> {
     }
     Ok(ValidatedIr {
         types: Vec::new(),
+        enums: Vec::new(),
         contracts: Vec::new(),
         bundle: Some(ResolvedBundle {
             name: raw.bundle.name.clone(),

@@ -897,6 +897,7 @@ mod tests {
         let generator: CppGenerator = CppGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
+            enums: vec![],
             contracts: vec![],
             bundle: None,
         };
@@ -920,6 +921,7 @@ mod tests {
         let generator: CppGenerator = CppGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
+            enums: vec![],
             contracts: vec![],
             bundle: None,
         };

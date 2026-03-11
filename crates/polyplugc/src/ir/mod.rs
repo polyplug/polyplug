@@ -151,6 +151,77 @@ pub(crate) enum ResolvedTypeRef {
     UserDefined(String),
 }
 
+// ─── Enum IR ────────────────────────────────────────────────────────────────
+
+/// Repr type for an enum — the ABI-level integer type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReprType {
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
+impl ReprType {
+    /// Parse "u8" | "u16" | "u32" | "u64" string.
+    pub(crate) fn parse(s: &str) -> Option<ReprType> {
+        match s {
+            "u8" => Some(ReprType::U8),
+            "u16" => Some(ReprType::U16),
+            "u32" => Some(ReprType::U32),
+            "u64" => Some(ReprType::U64),
+            _ => None,
+        }
+    }
+
+    /// The Rust type name for this repr.
+    pub(crate) fn rust_name(&self) -> &'static str {
+        match self {
+            ReprType::U8 => "u8",
+            ReprType::U16 => "u16",
+            ReprType::U32 => "u32",
+            ReprType::U64 => "u64",
+        }
+    }
+
+    /// The C/C++ type name for this repr.
+    pub(crate) fn cpp_name(&self) -> &'static str {
+        match self {
+            ReprType::U8 => "uint8_t",
+            ReprType::U16 => "uint16_t",
+            ReprType::U32 => "uint32_t",
+            ReprType::U64 => "uint64_t",
+        }
+    }
+
+    /// The C# type name for this repr.
+    pub(crate) fn cs_name(&self) -> &'static str {
+        match self {
+            ReprType::U8 => "byte",
+            ReprType::U16 => "ushort",
+            ReprType::U32 => "uint",
+            ReprType::U64 => "ulong",
+        }
+    }
+}
+
+/// A validated enum variant.
+#[derive(Debug, Clone)]
+pub(crate) struct EnumVariant {
+    pub name: String,
+    /// Validated expression string, stored verbatim for codegen.
+    pub value: String,
+}
+
+/// A fully validated enum definition.
+#[derive(Debug)]
+pub(crate) struct EnumDef {
+    pub name: String,
+    pub repr: ReprType,
+    pub bitflag: bool,
+    pub variants: Vec<EnumVariant>,
+}
+
 // ─── IR Structs ────────────────────────────────────────────────────────────────
 
 /// A resolved user-defined flat struct.
@@ -242,6 +313,7 @@ pub(crate) enum ResolvedDependency {
 #[derive(Debug)]
 pub(crate) struct ValidatedIr {
     pub types: Vec<ResolvedType>,
+    pub enums: Vec<EnumDef>,
     pub contracts: Vec<ResolvedContract>,
     #[allow(dead_code)]
     pub bundle: Option<ResolvedBundle>,
@@ -355,5 +427,25 @@ mod tests {
         assert_eq!(id, compute_bundle_id("test-bundle"));
         // Different inputs → different outputs (basic collision check)
         assert_ne!(compute_bundle_id("bundle-a"), compute_bundle_id("bundle-b"));
+    }
+
+    #[test]
+    fn repr_type_parse_roundtrip() {
+        let r: ReprType = ReprType::parse("u32").expect("parse u32");
+        assert_eq!(r.rust_name(), "u32");
+        assert_eq!(r.cpp_name(), "uint32_t");
+        assert_eq!(r.cs_name(), "uint");
+    }
+
+    #[test]
+    fn repr_type_parse_u64() {
+        let r: Option<ReprType> = ReprType::parse("u64");
+        assert!(matches!(r, Some(ReprType::U64)));
+    }
+
+    #[test]
+    fn repr_type_parse_invalid() {
+        let r: Option<ReprType> = ReprType::parse("i32");
+        assert!(r.is_none());
     }
 }

@@ -1105,6 +1105,7 @@ mod tests {
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
+            enums: vec![],
             contracts: vec![],
             bundle: None,
         };
@@ -1123,6 +1124,7 @@ mod tests {
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
+            enums: vec![],
             contracts: vec![],
             bundle: None,
         };
