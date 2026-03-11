@@ -124,3 +124,41 @@ fn test_generate_csharp_files_exist() {
         eprintln!("skipping dotnet build check: dotnet not found");
     }
 }
+
+// ─── Enum types codegen test ─────────────────────────────────────────────────
+
+#[test]
+fn test_csharp_codegen_generates_enum_types() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let root: PathBuf = workspace_root();
+    let bundle_toml: PathBuf = root.join("tests").join("fixtures").join("test_bundle.toml");
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_csharp_enum");
+
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    // ── 2. Run polyplugc to generate C# bindings ───────────────────────────────
+    let output: Output = run_polyplugc_csharp(&bundle_toml, &out_dir);
+    assert!(
+        output.status.success(),
+        "polyplugc generate --lang csharp failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // ── 3. Read guest/Types.cs and assert enum content ─────────────────────────
+    let types_file: PathBuf = out_dir.join("guest").join("Types.cs");
+    let content: String =
+        std::fs::read_to_string(&types_file).expect("read types file");
+
+    assert!(
+        content.contains("public enum PixelFormat"),
+        "Types.cs must contain public enum PixelFormat"
+    );
+    assert!(
+        content.contains("[Flags]"),
+        "Types.cs must contain [Flags]"
+    );
+
+    println!("test_csharp_codegen_generates_enum_types: all enum assertions passed ✓");
+}

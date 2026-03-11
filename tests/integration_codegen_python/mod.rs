@@ -96,3 +96,45 @@ fn test_generate_python_files_exist() {
         eprintln!("skipping python check: python3 not found");
     }
 }
+
+// ─── Enum types codegen test ─────────────────────────────────────────────────
+
+#[test]
+fn test_python_codegen_generates_enum_types() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let root: PathBuf = workspace_root();
+    let bundle_toml: PathBuf = root.join("tests").join("fixtures").join("test_bundle.toml");
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_python_enum");
+
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    // ── 2. Run polyplugc to generate Python bindings ────────────────────────────
+    let output: Output = run_polyplugc_python(&bundle_toml, &out_dir);
+    assert!(
+        output.status.success(),
+        "polyplugc generate --lang python failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // ── 3. Read guest/types.py and assert enum content ──────────────────────────
+    let types_file: PathBuf = out_dir.join("guest").join("types.py");
+    let content: String =
+        std::fs::read_to_string(&types_file).expect("read types file");
+
+    assert!(
+        content.contains("import enum"),
+        "types.py must contain import enum"
+    );
+    assert!(
+        content.contains("class PixelFormat(enum.IntEnum)"),
+        "types.py must contain class PixelFormat(enum.IntEnum)"
+    );
+    assert!(
+        content.contains("class ImageFlags(enum.IntFlag)"),
+        "types.py must contain class ImageFlags(enum.IntFlag)"
+    );
+
+    println!("test_python_codegen_generates_enum_types: all enum assertions passed ✓");
+}

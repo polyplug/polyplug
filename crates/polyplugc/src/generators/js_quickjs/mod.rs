@@ -21,6 +21,8 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 
 /// Generator for js-quickjs plugin bundles.
 ///
@@ -125,6 +127,52 @@ fn ts_abi_builtin(b: &AbiBuiltin) -> &'static str {
     }
 }
 
+fn substitute_variant_refs_js(
+    declared_variants: &[EnumVariant],
+    expr: &str,
+) -> String {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut result: String = String::new();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            let found: Option<&EnumVariant> = declared_variants.iter().find(|v| v.name == ident);
+            if let Some(ref_variant) = found {
+                result.push('(');
+                result.push_str(&ref_variant.value);
+                result.push(')');
+            } else {
+                result.push_str(&ident);
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+fn generate_js_quickjs_enum(out: &mut String, e: &EnumDef) {
+    if e.bitflag {
+        out.push_str(&format!("/** @bitflag Enum {} */\n", e.name));
+    } else {
+        out.push_str(&format!("/** Enum {} */\n", e.name));
+    }
+    out.push_str(&format!("const {} = Object.freeze({{\n", e.name));
+    for variant in &e.variants {
+        let subst_value: String = substitute_variant_refs_js(&e.variants, &variant.value);
+        out.push_str(&format!("    {}: {},\n", variant.name, subst_value));
+    }
+    out.push_str("} as const);\n");
+    out.push_str(&format!("type {} = typeof {}[keyof typeof {}];\n\n", e.name, e.name, e.name));
+}
 fn generate_types_ts(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(
@@ -132,6 +180,9 @@ fn generate_types_ts(ir: &ValidatedIr) -> String {
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-quickjs\n\n",
     );
+    for e in &ir.enums {
+        generate_js_quickjs_enum(&mut out, e);
+    }
     for type_def in &ir.types {
         render_resolved_type(&mut out, type_def);
     }
@@ -364,4 +415,47 @@ fn contract_to_class_name(contract_name: &str) -> String {
         })
         .collect::<Vec<String>>()
         .join("")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::EnumDef;
+    use crate::ir::EnumVariant;
+    use crate::ir::ReprType;
+
+    #[test]
+    fn generate_js_quickjs_enum_non_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_js_quickjs_enum(&mut out, &e);
+        assert!(out.contains("Object.freeze({"), "missing Object.freeze: {out}");
+        assert!(out.contains("Unknown: 0"), "missing Unknown: {out}");
+        assert!(!out.contains("@bitflag"), "non-bitflag should not have @bitflag: {out}");
+    }
+
+    #[test]
+    fn generate_js_quickjs_enum_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "ImageFlags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: true,
+            variants: vec![
+                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_js_quickjs_enum(&mut out, &e);
+        assert!(out.contains("@bitflag"), "missing @bitflag: {out}");
+        assert!(out.contains("Object.freeze({"), "missing Object.freeze: {out}");
+    }
 }

@@ -323,3 +323,52 @@ fn test_rust_codegen_compile_and_run() {
     // Keep the library alive until after the last call.
     core::mem::forget(library);
 }
+
+// ─── Enum types codegen test ─────────────────────────────────────────────────
+
+#[test]
+fn test_rust_codegen_generates_enum_types() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_rust_enum");
+    let api_toml: PathBuf = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("test_api.toml");
+
+    std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
+
+    // ── 2. Run polyplugc to generate Rust bindings ────────────────────────────
+    let gen_output: Output = run_polyplugc(&api_toml, &out_dir);
+    assert!(
+        gen_output.status.success(),
+        "polyplugc generate failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&gen_output.stdout),
+        String::from_utf8_lossy(&gen_output.stderr),
+    );
+
+    // ── 3. Read host/types.rs and assert enum content ─────────────────────────
+    let types_file: PathBuf = out_dir.join("host").join("types.rs");
+    let content: String =
+        std::fs::read_to_string(&types_file).expect("read types file");
+
+    assert!(
+        content.contains("#[repr(u32)]"),
+        "types.rs must contain #[repr(u32)]: {}",
+        types_file.display()
+    );
+    assert!(
+        content.contains("pub enum PixelFormat"),
+        "types.rs must contain pub enum PixelFormat"
+    );
+    assert!(
+        content.contains("pub mod image_flags"),
+        "types.rs must contain pub mod image_flags"
+    );
+    assert!(
+        content.contains("pub struct ImageDesc"),
+        "types.rs must contain pub struct ImageDesc"
+    );
+
+    println!("test_rust_codegen_generates_enum_types: all enum assertions passed ✓");
+}

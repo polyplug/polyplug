@@ -19,6 +19,10 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
+#[cfg(test)]
+use crate::ir::ReprType;
 
 /// The Rust code generator.
 pub(crate) struct RustGenerator;
@@ -41,6 +45,10 @@ impl CodeGenerator for RustGenerator {
         let mut types_out: String = String::new();
         types_out.push_str(header);
 
+        // Emit enums before struct types
+        for e in &ir.enums {
+            generate_rust_enum(&mut types_out, e);
+        }
         // Emit user-defined types from IR
         for ty in &ir.types {
             generate_rust_type(&mut types_out, ty);
@@ -155,7 +163,10 @@ impl CodeGenerator for RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
-
+        // Emit enums before struct types
+        for e in &ir.enums {
+            generate_rust_enum(&mut types_out, e);
+        }
         for ty in &ir.types {
             generate_rust_type(&mut types_out, ty);
         }
@@ -1067,6 +1078,105 @@ fn rust_type_name(ty: &ResolvedTypeRef) -> String {
     }
 }
 
+fn to_snake_case(s: &str) -> String {
+    let mut result: String = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            result.push('_');
+        }
+        result.extend(c.to_lowercase());
+    }
+    result
+}
+
+fn substitute_variant_refs_rust_enum(
+    declared_variants: &[EnumVariant],
+    expr: &str,
+    _enum_name: &str,
+    repr_type: &str,
+) -> String {
+    let declared_names: Vec<&str> = declared_variants.iter().map(|v| v.name.as_str()).collect();
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut result: String = String::new();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            if declared_names.contains(&ident.as_str()) {
+                result.push_str(&format!("Self::{} as {}", ident, repr_type));
+            } else {
+                result.push_str(&ident);
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+fn substitute_variant_refs_rust_bitflag(
+    declared_variants: &[EnumVariant],
+    expr: &str,
+) -> String {
+    let declared_names: Vec<&str> = declared_variants.iter().map(|v| v.name.as_str()).collect();
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut result: String = String::new();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            if declared_names.contains(&ident.as_str()) {
+                result.push_str(&ident.to_uppercase());
+            } else {
+                result.push_str(&ident);
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+fn generate_rust_enum(out: &mut String, e: &EnumDef) {
+    let repr_str: &str = e.repr.rust_name();
+    if e.bitflag {
+        let mod_name: String = to_snake_case(&e.name);
+        out.push_str(&format!("/// Bitflag enum `{}` (repr {})\n", e.name, repr_str));
+        out.push_str(&format!("pub mod {} {{\n", mod_name));
+        out.push_str(&format!("    pub type {} = {};\n", e.name, repr_str));
+        for variant in &e.variants {
+            let subst_value: String = substitute_variant_refs_rust_bitflag(&e.variants, &variant.value);
+            out.push_str(&format!("    pub const {}: {} = {};\n", variant.name.to_uppercase(), e.name, subst_value));
+        }
+        out.push_str("}\n");
+        out.push_str(&format!("pub use {}::{};\n\n", mod_name, e.name));
+    } else {
+        out.push_str(&format!("/// Enum `{}` (repr {})\n", e.name, repr_str));
+        out.push_str(&format!("#[repr({})]\n", repr_str));
+        out.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\n");
+        out.push_str(&format!("pub enum {} {{\n", e.name));
+        for variant in &e.variants {
+            let subst_value: String = substitute_variant_refs_rust_enum(&e.variants, &variant.value, &e.name, repr_str);
+            out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
+        }
+        out.push_str("}\n\n");
+    }
+}
+
 fn contract_name_to_struct(name: &str) -> String {
     // Convert "image.decode" -> "ImageDecodeContract"
     name.split('.')
@@ -1152,5 +1262,60 @@ mod tests {
             arg_pack_struct_name("TestAddContract", "reset"),
             "TestAddContractResetArgs"
         );
+    }
+
+    #[test]
+    fn generate_rust_enum_non_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_rust_enum(&mut out, &e);
+        assert!(out.contains("#[repr(u32)]"), "missing repr attr: {out}");
+        assert!(out.contains("pub enum PixelFormat"), "missing enum def: {out}");
+        assert!(out.contains("Unknown = 0"), "missing Unknown variant: {out}");
+    }
+
+    #[test]
+    fn generate_rust_enum_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "ImageFlags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: true,
+            variants: vec![
+                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_rust_enum(&mut out, &e);
+        assert!(out.contains("pub mod image_flags"), "missing module: {out}");
+        assert!(out.contains("pub type ImageFlags = u32"), "missing type alias: {out}");
+        assert!(out.contains("pub const NONE"), "missing NONE const: {out}");
+        assert!(out.contains("pub const COMPRESSED"), "missing COMPRESSED const: {out}");
+    }
+
+    #[test]
+    fn generate_rust_enum_variant_ref_substitution() {
+        let e: EnumDef = EnumDef {
+            name: "Flags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant { name: "Hdr".to_owned(), value: "1 << 1".to_owned() },
+                EnumVariant { name: "CompressedHdr".to_owned(), value: "Compressed | Hdr".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_rust_enum(&mut out, &e);
+        assert!(out.contains("Self::Compressed as u32"), "missing Self::Compressed cast: {out}");
+        assert!(out.contains("Self::Hdr as u32"), "missing Self::Hdr cast: {out}");
     }
 }

@@ -82,3 +82,41 @@ fn test_generate_js_quickjs_files_exist() {
         out_dir.display()
     );
 }
+
+// ─── Enum types codegen test ─────────────────────────────────────────────────
+
+#[test]
+fn test_js_quickjs_codegen_generates_enum_types() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let root: PathBuf = workspace_root();
+    let bundle_toml: PathBuf = root.join("tests").join("fixtures").join("test_bundle.toml");
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_js_quickjs_enum");
+
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    // ── 2. Run polyplugc to generate js-quickjs bindings ────────────────────────
+    let output: Output = run_polyplugc_js_quickjs(&bundle_toml, &out_dir);
+    assert!(
+        output.status.success(),
+        "polyplugc generate --lang js-quickjs failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // ── 3. Read guest/types.ts and assert enum content ──────────────────────────
+    let types_file: PathBuf = out_dir.join("guest").join("types.ts");
+    let content: String =
+        std::fs::read_to_string(&types_file).expect("read types file");
+
+    assert!(
+        content.contains("Object.freeze"),
+        "types.ts must contain Object.freeze"
+    );
+    assert!(
+        content.contains("@bitflag"),
+        "types.ts must contain @bitflag"
+    );
+
+    println!("test_js_quickjs_codegen_generates_enum_types: all enum assertions passed ✓");
+}

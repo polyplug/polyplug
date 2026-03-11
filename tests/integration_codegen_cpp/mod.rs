@@ -468,3 +468,43 @@ fn test_exception_isolation_cpp() {
     println!("test_exception_isolation_cpp: exception caught, host survived ✓");
     core::mem::forget(library);
 }
+
+// ─── Enum types codegen test ─────────────────────────────────────────────────
+
+#[test]
+fn test_cpp_codegen_generates_enum_types() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_cpp_enum");
+    let api_toml: PathBuf = workspace_root()
+        .join("tests")
+        .join("fixtures")
+        .join("test_api.toml");
+
+    std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
+
+    // ── 2. Run polyplugc to generate C++ bindings ──────────────────────────────
+    let gen_output: Output = run_polyplugc_cpp(&api_toml, &out_dir);
+    assert!(
+        gen_output.status.success(),
+        "polyplugc generate --lang cpp failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&gen_output.stdout),
+        String::from_utf8_lossy(&gen_output.stderr),
+    );
+
+    // ── 3. Read host/types.hpp and assert enum content ─────────────────────────
+    let types_file: PathBuf = out_dir.join("host").join("types.hpp");
+    let content: String =
+        std::fs::read_to_string(&types_file).expect("read types file");
+
+    assert!(
+        content.contains("enum class PixelFormat"),
+        "types.hpp must contain enum class PixelFormat"
+    );
+    assert!(
+        content.contains("operator|"),
+        "types.hpp must contain operator|"
+    );
+
+    println!("test_cpp_codegen_generates_enum_types: all enum assertions passed ✓");
+}

@@ -1,3 +1,44 @@
+[[enum]]
+name = "PixelFormat"
+repr = "u32"
+
+[[enum.variants]]
+name = "Unknown"
+value = "0"
+
+[[enum.variants]]
+name = "Rgba8"
+value = "1"
+
+[[enum.variants]]
+name = "Bgra8"
+value = "2"
+
+[[enum.variants]]
+name = "Rgb8"
+value = "3"
+
+[[enum]]
+name = "ImageFlags"
+repr = "u32"
+bitflag = true
+
+[[enum.variants]]
+name = "None"
+value = "0"
+
+[[enum.variants]]
+name = "Compressed"
+value = "1"
+
+[[enum.variants]]
+name = "Hdr"
+value = "1 << 1"
+
+[[enum.variants]]
+name = "CompressedHdr"
+value = "Compressed | Hdr"
+
 [[types]]
 name = "AddArgs"
 fields = [
@@ -25,3 +66,12 @@ return = "StringView"
 
 [[contract.functions]]
 name = "reset"
+
+[[types]]
+name = "ImageDesc"
+fields = [
+  { name = "format", type = "PixelFormat" },
+  { name = "flags",  type = "ImageFlags"  },
+  { name = "width",  type = "u32" },
+  { name = "height", type = "u32" }
+]

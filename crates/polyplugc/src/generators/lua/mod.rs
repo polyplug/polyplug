@@ -15,6 +15,8 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 
 pub(crate) struct LuaGenerator;
 
@@ -172,6 +174,10 @@ fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
 fn generate_lua_types_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
+    // Conditionally require the bit library for bitwise enum support
+    if needs_bit_library(&ir.enums) {
+        out.push_str("local bit = require(\"bit\")\n");
+    }
     out.push_str("local ffi = require(\"ffi\")\n\n");
     out.push_str(cdef_guarded_block());
     out.push_str("cdef_guarded([[\n");
@@ -189,6 +195,11 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> String {
         }
     }
     out.push_str("]]) \n");
+    // Emit enum tables (outside cdef — Lua tables, not C structs)
+    for e in &ir.enums {
+        generate_lua_enum(&mut out, e);
+        out.push('\n');
+    }
     for ty in &ir.types {
         out.push_str(&format!("ffi.metatype(\"{}\", {{}})\n", ty.name));
     }
@@ -491,6 +502,203 @@ fn cdef_guarded_block() -> &'static str {
      end\n\n"
 }
 
+/// Returns true if any enum in `enums` has a variant value that uses `<<`, `|`, or `~`.
+fn needs_bit_library(enums: &[EnumDef]) -> bool {
+    for e in enums {
+        for variant in &e.variants {
+            if variant.value.contains("<<") || variant.value.contains('|') || variant.value.contains('~') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn substitute_variant_refs_lua(
+    declared_variants: &[EnumVariant],
+    expr: &str,
+) -> String {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut result: String = String::new();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            let found: Option<&EnumVariant> = declared_variants.iter().find(|v| v.name == ident);
+            if let Some(ref_variant) = found {
+                result.push('(');
+                result.push_str(&ref_variant.value);
+                result.push(')');
+            } else {
+                result.push_str(&ident);
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Transform a value expression for LuaJIT compatibility.
+/// Converts `<<` to `bit.lshift(lhs, rhs)`, `|` to `bit.bor(lhs, rhs)`, `~` to `bit.bnot(inner)`.
+/// Operates on post-substitution expression strings.
+///
+/// Precedence: `~` > `<<` > `|` (from tightest to loosest binding)
+/// Implementation: simple recursive approach on the constrained grammar.
+fn lua_transform_value_expr(expr: &str) -> String {
+    let expr: &str = expr.trim();
+
+    // Try to split on `|` at top level (respecting parens) — lowest precedence
+    if let Some(parts) = split_on_top_level(expr, '|') {
+        let transformed: Vec<String> = parts.iter().map(|p| lua_transform_value_expr(p.trim())).collect();
+        if transformed.len() == 1 {
+            return transformed.into_iter().next().unwrap_or_default();
+        }
+        // bit.bor(a, b) — but bit.bor only takes 2 args; chain for 3+
+        return transformed.into_iter().reduce(|acc, next| format!("bit.bor({}, {})", acc, next)).unwrap_or_default();
+    }
+
+    // Try to split on `<<` — higher precedence than |
+    if let Some(parts) = split_on_top_level_two_char(expr, '<', '<')
+        && parts.len() == 2 {
+        let lhs: String = lua_transform_value_expr(parts[0].trim());
+        let rhs: String = lua_transform_value_expr(parts[1].trim());
+        return format!("bit.lshift({}, {})", lhs, rhs);
+    }
+
+    // Handle ~ prefix
+    if let Some(stripped) = expr.strip_prefix('~') {
+        let inner: String = lua_transform_value_expr(stripped.trim());
+        return format!("bit.bnot({})", inner);
+    }
+
+    // Parenthesized expression — recurse inside
+    if expr.starts_with('(') && expr.ends_with(')') {
+        let inner: &str = &expr[1..expr.len()-1];
+        return lua_transform_value_expr(inner.trim());
+    }
+
+    // Pure integer literal or simple token — return as-is
+    expr.to_owned()
+}
+
+/// Split expr on a top-level single char operator (respecting parentheses).
+/// Returns None if char not found at top level.
+fn split_on_top_level(expr: &str, op: char) -> Option<Vec<&str>> {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut depth: i32 = 0;
+    let mut splits: Vec<usize> = Vec::new();
+    let mut i: usize = 0;
+    while i < len {
+        match chars[i] {
+            '(' => { depth += 1; }
+            ')' => { depth -= 1; }
+            c if c == op && depth == 0 => { splits.push(i); }
+            _ => {}
+        }
+        i += 1;
+    }
+    if splits.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    let mut prev: usize = 0;
+    for &pos in &splits {
+        parts.push(&expr[prev..pos]);
+        prev = pos + 1;
+    }
+    parts.push(&expr[prev..]);
+    Some(parts)
+}
+
+/// Split expr on a top-level two-char operator (e.g., `<<`).
+fn split_on_top_level_two_char(expr: &str, op1: char, op2: char) -> Option<Vec<&str>> {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut depth: i32 = 0;
+    let mut split_pos: Option<usize> = None;
+    let mut i: usize = 0;
+    while i < len {
+        match chars[i] {
+            '(' => { depth += 1; }
+            ')' => { depth -= 1; }
+            c if c == op1 && depth == 0 && i + 1 < len && chars[i + 1] == op2 => {
+                split_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let pos: usize = split_pos?;
+    Some(vec![&expr[..pos], &expr[pos + 2..]])
+}
+
+fn generate_lua_enum(out: &mut String, e: &EnumDef) {
+    if e.bitflag {
+        out.push_str(&format!("--- Bitflag enum {}\n", e.name));
+    } else {
+        out.push_str(&format!("--- Enum {}\n", e.name));
+    }
+    out.push_str(&format!("local {} = {{\n", e.name));
+    for variant in &e.variants {
+        let subst_value: String = substitute_variant_refs_lua(&e.variants, &variant.value);
+        let final_value: String = lua_transform_value_expr(&subst_value);
+        out.push_str(&format!("    {} = {},\n", variant.name, final_value));
+    }
+    out.push_str("}\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ReprType;
+
+    #[test]
+    fn generate_lua_enum_non_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_lua_enum(&mut out, &e);
+        assert!(out.contains("local PixelFormat = {"), "missing table def: {out}");
+        assert!(out.contains("Unknown = 0"), "missing Unknown: {out}");
+    }
+
+    #[test]
+    fn generate_lua_enum_bitflag_with_bit_library() {
+        let e: EnumDef = EnumDef {
+            name: "ImageFlags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: true,
+            variants: vec![
+                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+                EnumVariant { name: "Hdr".to_owned(), value: "1 << 1".to_owned() },
+                EnumVariant { name: "CompressedHdr".to_owned(), value: "Compressed | Hdr".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_lua_enum(&mut out, &e);
+        assert!(out.contains("local ImageFlags = {"), "missing table def: {out}");
+        assert!(out.contains("bit.lshift(1, 1)"), "missing bit.lshift for Hdr: {out}");
+        assert!(out.contains("bit.bor("), "missing bit.bor for CompressedHdr: {out}");
+    }
+}
 const _: fn() = || {
     let _: String = lua_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
 };

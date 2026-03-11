@@ -16,6 +16,7 @@ use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::EnumDef;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -58,6 +59,22 @@ fn generate_cs_user_type(ty: &ResolvedType) -> String {
     for field in &ty.fields {
         let cs_ty: String = cs_type_name(&field.ty);
         out.push_str(&format!("    public {} {};\n", cs_ty, field.name));
+    }
+    out.push_str("}\n");
+    out
+}
+
+/// Emit a C# enum definition for a validated IR enum.
+fn generate_cs_enum(e: &EnumDef) -> String {
+    let repr_cs: &str = e.repr.cs_name();
+    let mut out: String = String::new();
+    if e.bitflag {
+        out.push_str("[Flags]\n");
+    }
+    out.push_str(&format!("public enum {} : {} {{\n", e.name, repr_cs));
+    for variant in &e.variants {
+        // C# supports integer expressions natively, emit verbatim
+        out.push_str(&format!("    {} = {},\n", variant.name, variant.value));
     }
     out.push_str("}\n");
     out
@@ -133,6 +150,12 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
+
+    // Emit enums before struct types
+    for e in &ir.enums {
+        out.push_str(&generate_cs_enum(e));
+        out.push('\n');
+    }
 
     // Emit user-defined types
     for ty in &ir.types {
@@ -629,5 +652,46 @@ impl CodeGenerator for CSharpGenerator {
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::EnumDef;
+    use crate::ir::EnumVariant;
+    use crate::ir::ReprType;
+
+    #[test]
+    fn generate_cs_enum_non_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let out: String = generate_cs_enum(&e);
+        assert!(out.contains("public enum PixelFormat : uint"), "missing enum def: {out}");
+        assert!(out.contains("Unknown = 0"), "missing Unknown: {out}");
+        assert!(!out.contains("[Flags]"), "non-bitflag should not have [Flags]: {out}");
+    }
+
+    #[test]
+    fn generate_cs_enum_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "ImageFlags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: true,
+            variants: vec![
+                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let out: String = generate_cs_enum(&e);
+        assert!(out.contains("[Flags]"), "bitflag should have [Flags]: {out}");
+        assert!(out.contains("public enum ImageFlags : uint"), "missing enum def: {out}");
     }
 }

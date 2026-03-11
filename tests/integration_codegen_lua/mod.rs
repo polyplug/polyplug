@@ -109,3 +109,41 @@ fn test_generate_lua_files_exist() {
         eprintln!("skipping luajit syntax check: luajit not found");
     }
 }
+
+// ─── Enum types codegen test ─────────────────────────────────────────────────
+
+#[test]
+fn test_lua_codegen_generates_enum_types() {
+    // ── 1. Paths ──────────────────────────────────────────────────────────────
+    let root: PathBuf = workspace_root();
+    let bundle_toml: PathBuf = root.join("tests").join("fixtures").join("test_bundle.toml");
+    let out_dir: PathBuf =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("integration_codegen_lua_enum");
+
+    std::fs::create_dir_all(&out_dir).expect("create out_dir");
+
+    // ── 2. Run polyplugc to generate Lua bindings ───────────────────────────────
+    let output: Output = run_polyplugc_lua(&bundle_toml, &out_dir);
+    assert!(
+        output.status.success(),
+        "polyplugc generate --lang lua failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    // ── 3. Read guest/types.lua and assert enum content ─────────────────────────
+    let types_file: PathBuf = out_dir.join("guest").join("types.lua");
+    let content: String =
+        std::fs::read_to_string(&types_file).expect("read types file");
+
+    assert!(
+        content.contains("local PixelFormat = {"),
+        "types.lua must contain local PixelFormat = {{"
+    );
+    assert!(
+        content.contains("bit.lshift"),
+        "types.lua must contain bit.lshift"
+    );
+
+    println!("test_lua_codegen_generates_enum_types: all enum assertions passed ✓");
+}

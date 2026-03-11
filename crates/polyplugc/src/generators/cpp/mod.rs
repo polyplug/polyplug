@@ -18,6 +18,8 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
 
 /// The C++ code generator.
 pub(crate) struct CppGenerator;
@@ -120,6 +122,11 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
     out.push_str("#pragma once\n");
     out.push_str("#include <cstdint>\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n\n");
+
+    // Emit enums before struct types
+    for e in &ir.enums {
+        generate_cpp_enum(&mut out, e);
+    }
 
     for ty in &ir.types {
         generate_cpp_type(&mut out, ty);
@@ -636,6 +643,66 @@ needs_reinit_on_dep_reload = {reinit}\n\
     )
 }
 
+// ─── Per-enum emitter ────────────────────────────────────────────────────────
+
+fn substitute_variant_refs_cpp(
+    declared_variants: &[EnumVariant],
+    expr: &str,
+    enum_name: &str,
+    repr_cpp: &str,
+) -> String {
+    let declared_names: Vec<&str> = declared_variants.iter().map(|v| v.name.as_str()).collect();
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut result: String = String::new();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            if declared_names.contains(&ident.as_str()) {
+                result.push_str(&format!("static_cast<{}>({}::{})", repr_cpp, enum_name, ident));
+            } else {
+                result.push_str(&ident);
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+fn generate_cpp_enum(out: &mut String, e: &EnumDef) {
+    let repr_cpp: &str = e.repr.cpp_name();
+    out.push_str(&format!("/// Enum `{}` (repr: {})\n", e.name, repr_cpp));
+    out.push_str(&format!("enum class {} : {} {{\n", e.name, repr_cpp));
+    for variant in &e.variants {
+        let subst_value: String = substitute_variant_refs_cpp(&e.variants, &variant.value, &e.name, repr_cpp);
+        out.push_str(&format!("    {} = {},\n", variant.name, subst_value));
+    }
+    out.push_str("};\n");
+    if e.bitflag {
+        out.push_str(&format!(
+            "inline {} operator|({}  a, {} b) {{ return static_cast<{}>(static_cast<{}>(a) | static_cast<{}>(b)); }}\n",
+            e.name, e.name, e.name, e.name, repr_cpp, repr_cpp
+        ));
+        out.push_str(&format!(
+            "inline {} operator&({} a, {} b) {{ return static_cast<{}>(static_cast<{}>(a) & static_cast<{}>(b)); }}\n",
+            e.name, e.name, e.name, e.name, repr_cpp, repr_cpp
+        ));
+        out.push_str(&format!(
+            "inline {} operator~({} a) {{ return static_cast<{}>(~static_cast<{}>(a)); }}\n",
+            e.name, e.name, e.name, repr_cpp
+        ));
+    }
+    out.push('\n');
+}
+
 // ─── Per-type struct emitter ──────────────────────────────────────────────────
 
 fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
@@ -868,6 +935,7 @@ const _: fn() = || {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::ReprType;
 
     #[test]
     fn class_name_conversion() {
@@ -940,5 +1008,43 @@ mod tests {
         assert!(names.contains(&"guest/contracts.hpp".to_owned()));
         assert!(names.contains(&"guest/vtables.hpp".to_owned()));
         assert!(names.contains(&"guest/init.hpp".to_owned()));
+    }
+
+    #[test]
+    fn generate_cpp_enum_non_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant { name: "Unknown".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Rgba8".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_cpp_enum(&mut out, &e);
+        assert!(out.contains("enum class PixelFormat : uint32_t"), "missing enum class: {out}");
+        assert!(out.contains("Unknown = 0"), "missing Unknown variant: {out}");
+        assert!(!out.contains("operator|"), "non-bitflag should not have operator|: {out}");
+    }
+
+    #[test]
+    fn generate_cpp_enum_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "ImageFlags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: true,
+            variants: vec![
+                EnumVariant { name: "None".to_owned(), value: "0".to_owned() },
+                EnumVariant { name: "Compressed".to_owned(), value: "1".to_owned() },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_cpp_enum(&mut out, &e);
+        assert!(out.contains("enum class ImageFlags : uint32_t"), "missing enum class: {out}");
+        assert!(out.contains("operator|"), "missing operator|: {out}");
+        assert!(out.contains("operator&"), "missing operator&: {out}");
+        assert!(out.contains("operator~"), "missing operator~: {out}");
+        assert!(out.contains("static_cast<uint32_t>"), "missing static_cast: {out}");
     }
 }
