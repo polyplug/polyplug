@@ -1,0 +1,8 @@
+bundle_name    = "csv_decoder"
+runtime        = "native"
+version        = "1.0"
+file           = "libcsv_decoder.so"
+provides       = ["pipeline.decoder"]
+
+[function_count]
+"pipeline.decoder@1" = 1

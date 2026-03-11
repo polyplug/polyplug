@@ -1,7 +1,6 @@
 //! Scanner — filesystem discovery of plugin bundles.
 //!
 //! Scans one or more directories for plugin bundles by looking for:
-//!   - Shared library files (`.so`, `.dll`, `.dylib`) with a companion `manifest.toml`
 //!   - Subdirectories containing a `manifest.toml` file
 //!
 //! Results are returned as `(PathBuf, ManifestData)` pairs, sorted by `bundle_name`.
@@ -11,7 +10,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::loader::manifest::ManifestData;
-use crate::loader::parse_manifest;
 
 /// Scan a single directory for plugin bundles.
 ///
@@ -56,69 +54,17 @@ pub fn scan_dir(dir: &Path) -> Vec<(PathBuf, ManifestData)> {
             }
         };
 
-        if metadata.is_file() {
-            let ext: Option<String> = entry_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e: &str| e.to_ascii_lowercase());
-
-            match ext.as_deref() {
-                Some("so") | Some("dll") | Some("dylib") => {}
-                _ => continue,
-            }
-
-            let manifest_path: PathBuf = entry_path.with_extension("manifest.toml");
-
-            if !manifest_path.exists() {
-                eprintln!(
-                    "[polyplug] skipping {}: no companion manifest.toml",
-                    entry_path.display()
-                );
-                continue;
-            }
-
-            let mut manifest: ManifestData = match parse_manifest(&entry_path) {
+        if metadata.is_dir() {
+            let mut manifest: ManifestData = match crate::loader::parse_manifest(&entry_path) {
                 Ok(m) => m,
                 Err(e) => {
                     eprintln!(
-                        "[polyplug] scan_dir: failed to parse manifest for {}: {e}",
+                        "[polyplug] scan_dir: skipping {}: {e}",
                         entry_path.display()
                     );
                     continue;
                 }
             };
-
-            manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
-            results.push((entry_path, manifest));
-        } else if metadata.is_dir() {
-            let manifest_path: PathBuf = entry_path.join("manifest.toml");
-
-            if !manifest_path.exists() {
-                continue;
-            }
-
-            let toml_str: String = match std::fs::read_to_string(&manifest_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!(
-                        "[polyplug] scan_dir: failed to read {}: {e}",
-                        manifest_path.display()
-                    );
-                    continue;
-                }
-            };
-
-            let mut manifest: ManifestData = match toml::from_str(&toml_str) {
-                Ok(m) => m,
-                Err(e) => {
-                    eprintln!(
-                        "[polyplug] scan_dir: failed to parse {}: {e}",
-                        manifest_path.display()
-                    );
-                    continue;
-                }
-            };
-
             manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
             results.push((entry_path, manifest));
         }
@@ -157,7 +103,6 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<(PathBuf, ManifestData)> {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use std::io::Write;
 
     #[test]
     fn scan_dir_empty_returns_empty() {
@@ -169,29 +114,26 @@ mod tests {
     #[test]
     fn scan_dir_skips_bundle_without_manifest() {
         let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
-        // Create a .so file with no companion manifest
-        std::fs::File::create(tmp.path().join("plugin.so")).expect("create .so");
+        // Create a directory WITHOUT manifest.toml inside
+        let bundle_dir: PathBuf = tmp.path().join("plugin_without_manifest");
+        std::fs::create_dir(&bundle_dir).expect("create dir");
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
-        assert!(result.is_empty(), "bundle without manifest must be skipped");
+        assert!(
+            result.is_empty(),
+            "directory without manifest must be skipped"
+        );
     }
 
     #[test]
     fn scan_dir_finds_bundle_with_manifest() {
         let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
-
-        // Create a fake .so file
-        std::fs::File::create(tmp.path().join("myplugin.so")).expect("create .so");
-
-        // Create companion manifest.toml
-        let manifest_content: &str = r#"
-bundle_name = "myplugin"
-runtime = "native"
-"#;
-        let mut f: std::fs::File = std::fs::File::create(tmp.path().join("myplugin.manifest.toml"))
-            .expect("create manifest");
-        f.write_all(manifest_content.as_bytes())
-            .expect("write manifest");
-
+        // Create directory bundle: myplugin/manifest.toml + myplugin/myplugin.so
+        let bundle_dir: PathBuf = tmp.path().join("myplugin");
+        std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+        std::fs::write(bundle_dir.join("myplugin.so"), b"").expect("write stub so");
+        let manifest_content: &str =
+            "bundle_name = \"myplugin\"\nruntime = \"native\"\nfile = \"myplugin.so\"\n";
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 1, "expected exactly one bundle");
         assert_eq!(result[0].1.bundle_name, "myplugin");
@@ -204,15 +146,11 @@ runtime = "native"
         // Create a subdirectory bundle
         let bundle_dir: PathBuf = tmp.path().join("mybundle");
         std::fs::create_dir(&bundle_dir).expect("create bundle dir");
+        std::fs::write(bundle_dir.join("mybundle.so"), b"").expect("write stub so");
 
-        let manifest_content: &str = r#"
-bundle_name = "mybundle"
-runtime = "native"
-"#;
-        let mut f: std::fs::File =
-            std::fs::File::create(bundle_dir.join("manifest.toml")).expect("create manifest");
-        f.write_all(manifest_content.as_bytes())
-            .expect("write manifest");
+        let manifest_content: &str =
+            "bundle_name = \"mybundle\"\nruntime = \"native\"\nfile = \"mybundle.so\"\n";
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
 
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 1, "expected exactly one bundle");
@@ -222,24 +160,25 @@ runtime = "native"
     #[test]
     fn scan_dirs_deduplicates_by_path() {
         let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
-
-        // Create a fake .so file
-        std::fs::File::create(tmp.path().join("plugin.so")).expect("create .so");
-
-        // Create companion manifest.toml
-        let manifest_content: &str = r#"
-bundle_name = "plugin"
-runtime = "native"
-"#;
-        let mut f: std::fs::File = std::fs::File::create(tmp.path().join("plugin.manifest.toml"))
-            .expect("create manifest");
-        f.write_all(manifest_content.as_bytes())
-            .expect("write manifest");
-
+        // Create a directory bundle
+        let bundle_dir: PathBuf = tmp.path().join("plugin");
+        std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+        std::fs::write(bundle_dir.join("plugin.so"), b"").expect("write stub so");
+        let manifest_content: &str =
+            "bundle_name = \"plugin\"\nruntime = \"native\"\nfile = \"plugin.so\"\n";
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
         // Scan the same directory twice
         let dirs: Vec<PathBuf> = vec![tmp.path().to_path_buf(), tmp.path().to_path_buf()];
         let result: Vec<(PathBuf, ManifestData)> = scan_dirs(&dirs);
-
         assert_eq!(result.len(), 1, "same path scanned twice must dedup to one");
+    }
+
+    #[test]
+    fn scan_dir_ignores_flat_so_files() {
+        let tmp: tempfile::TempDir = tempfile::TempDir::new().expect("tmp dir");
+        // Create a flat .so file (not in a bundle directory) — should be ignored
+        std::fs::write(tmp.path().join("libplugin.so"), b"").expect("write flat so");
+        let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
+        assert!(result.is_empty(), "flat .so files must be ignored");
     }
 }

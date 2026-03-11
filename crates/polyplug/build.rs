@@ -112,6 +112,33 @@ fn main() {
     //   env!("TEST_PLUGIN_SO")
     println!("cargo:rustc-env=TEST_PLUGIN_SO={}", dest_so.display());
 
+    // Create bundle directory for test_plugin
+    let test_plugin_dir: PathBuf = fixtures_dir.join("test_plugin_dir");
+    fs::create_dir_all(&test_plugin_dir)
+        .unwrap_or_else(|e: std::io::Error| panic!("failed to create test_plugin_dir: {}", e));
+    fs::copy(&dest_so, test_plugin_dir.join(lib_filename)).unwrap_or_else(|e: std::io::Error| {
+        panic!("failed to copy test_plugin .so to bundle dir: {}", e)
+    });
+    fs::write(
+        test_plugin_dir.join("manifest.toml"),
+        concat!(
+            "bundle_name                = \"test_plugin\"\n",
+            "version                    = \"1.0\"\n",
+            "runtime                    = \"native\"\n",
+            "file                       = \"libtest_plugin.so\"\n",
+            "provides                   = [\"test.add\"]\n",
+            "needs_reinit_on_dep_reload = false\n",
+            "\n",
+            "[function_count]\n",
+            "\"test.add@1\" = 4\n",
+        ),
+    )
+    .unwrap_or_else(|e: std::io::Error| panic!("failed to write test_plugin manifest.toml: {}", e));
+    println!(
+        "cargo:rustc-env=TEST_PLUGIN_DIR={}",
+        test_plugin_dir.display()
+    );
+
     // ─── memory_plugin build ──────────────────────────────────────────────────
     // Re-run if memory_plugin sources change.
     println!("cargo:rerun-if-changed=tests/fixtures/memory_plugin/src/lib.rs");
@@ -243,6 +270,37 @@ fn main() {
         dest_reload_v1_so.display()
     );
 
+    // Create bundle directory for reload_plugin_v1
+    let reload_v1_dir: PathBuf = fixtures_dir.join("reload_plugin_v1");
+    fs::create_dir_all(&reload_v1_dir)
+        .unwrap_or_else(|e: std::io::Error| panic!("failed to create reload_v1 bundle dir: {}", e));
+    fs::copy(
+        &dest_reload_v1_so,
+        reload_v1_dir.join(reload_v1_lib_filename),
+    )
+    .unwrap_or_else(|e: std::io::Error| {
+        panic!("failed to copy reload_v1 .so to bundle dir: {}", e)
+    });
+    fs::write(
+        reload_v1_dir.join("manifest.toml"),
+        concat!(
+            "bundle_name                = \"reload_plugin_v1\"\n",
+            "version                    = \"1.0\"\n",
+            "runtime                    = \"native\"\n",
+            "file                       = \"libreload_plugin_v1.so\"\n",
+            "needs_reinit_on_dep_reload = false\n",
+            "provides                   = [\"reload.test\"]\n",
+            "\n",
+            "[function_count]\n",
+            "\"reload.test@1\" = 1\n",
+        ),
+    )
+    .unwrap_or_else(|e: std::io::Error| panic!("failed to write reload_v1 manifest.toml: {}", e));
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V1_DIR={}",
+        reload_v1_dir.display()
+    );
+
     // ─── reload_plugin_v2 build ───────────────────────────────────────────────
     // Re-run if reload_plugin_v2 sources change.
     println!("cargo:rerun-if-changed=tests/fixtures/reload_plugin_v2/src/lib.rs");
@@ -288,6 +346,37 @@ fn main() {
         dest_reload_v2_so.display()
     );
 
+    // Create bundle directory for reload_plugin_v2
+    let reload_v2_dir: PathBuf = fixtures_dir.join("reload_plugin_v2");
+    fs::create_dir_all(&reload_v2_dir)
+        .unwrap_or_else(|e: std::io::Error| panic!("failed to create reload_v2 bundle dir: {}", e));
+    fs::copy(
+        &dest_reload_v2_so,
+        reload_v2_dir.join(reload_v2_lib_filename),
+    )
+    .unwrap_or_else(|e: std::io::Error| {
+        panic!("failed to copy reload_v2 .so to bundle dir: {}", e)
+    });
+    fs::write(
+        reload_v2_dir.join("manifest.toml"),
+        concat!(
+            "bundle_name                = \"reload_plugin_v1\"\n",
+            "version                    = \"2.0\"\n",
+            "runtime                    = \"native\"\n",
+            "file                       = \"libreload_plugin_v2.so\"\n",
+            "needs_reinit_on_dep_reload = false\n",
+            "provides                   = [\"reload.test\"]\n",
+            "\n",
+            "[function_count]\n",
+            "\"reload.test@1\" = 1\n",
+        ),
+    )
+    .unwrap_or_else(|e: std::io::Error| panic!("failed to write reload_v2 manifest.toml: {}", e));
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V2_DIR={}",
+        reload_v2_dir.display()
+    );
+
     // ─── depender_plugin build ───────────────────────────────────────────────
     // Re-run if depender_plugin sources change.
     println!("cargo:rerun-if-changed=tests/fixtures/depender_plugin/src/lib.rs");
@@ -331,6 +420,41 @@ fn main() {
     println!(
         "cargo:rustc-env=DEPENDER_PLUGIN_SO={}",
         dest_depender_so.display()
+    );
+
+    // Create bundle directory for depender_plugin
+    let depender_dir: PathBuf = fixtures_dir.join("depender_plugin");
+    fs::create_dir_all(&depender_dir)
+        .unwrap_or_else(|e: std::io::Error| panic!("failed to create depender bundle dir: {}", e));
+    fs::copy(&dest_depender_so, depender_dir.join(depender_lib_filename)).unwrap_or_else(
+        |e: std::io::Error| panic!("failed to copy depender .so to bundle dir: {}", e),
+    );
+    fs::write(
+        depender_dir.join("manifest.toml"),
+        concat!(
+            "bundle_name                = \"depender_plugin\"\n",
+            "version                    = \"1.0\"\n",
+            "runtime                    = \"native\"\n",
+            "file                       = \"libdepender_plugin.so\"\n",
+            "needs_reinit_on_dep_reload = true\n",
+            "provides                   = [\"depender.test\"]\n",
+            "\n",
+            "[function_count]\n",
+            "\"depender.test@1\" = 1\n",
+            "\n",
+            "[[dependency]]\n",
+            "kind        = \"bundle\"\n",
+            "contract    = \"reload.test@1\"\n",
+            "min_version = \"1.0\"\n",
+            "bundle      = \"reload_plugin_v1\"\n",
+            "contract_id = 16526955377754357857\n",
+            "bundle_id   = 16808897324254478442\n",
+        ),
+    )
+    .unwrap_or_else(|e: std::io::Error| panic!("failed to write depender manifest.toml: {}", e));
+    println!(
+        "cargo:rustc-env=DEPENDER_PLUGIN_DIR={}",
+        depender_dir.display()
     );
 
     // Emit polyplugc binary path so integration tests can use env!("CARGO_BIN_EXE_polyplugc").

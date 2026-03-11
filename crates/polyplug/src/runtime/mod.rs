@@ -361,7 +361,7 @@ impl RuntimeBuilder {
                 // call file_stem(), read_to_string(), canonicalize(), etc. on the path.
                 // The scanner passes the directory path for directory bundles; here we
                 // join manifest.file to get the real file inside the bundle directory.
-                let effective_path: PathBuf = if bundle_path.is_dir() && !manifest.file.is_empty() {
+                let effective_path: PathBuf = if !manifest.file.is_empty() {
                     bundle_path.join(&manifest.file)
                 } else {
                     bundle_path.clone()
@@ -485,12 +485,17 @@ impl Runtime {
 
     /// Load a single plugin bundle explicitly with options.
     pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), PolyplugError> {
-        // Check companion manifest exists
-        let manifest_path: PathBuf = path.with_extension("manifest.toml");
+        // Require bundle path to be a directory
+        if !path.is_dir() {
+            return Err(PolyplugError::Loader(LoaderError::BundleNotADirectory {
+                path: path.to_path_buf(),
+            }));
+        }
+        let manifest_path: PathBuf = path.join("manifest.toml");
         if !manifest_path.exists() {
             return Err(PolyplugError::Loader(LoaderError::ManifestParse {
                 path: manifest_path.display().to_string(),
-                reason: "manifest file not found".to_owned(),
+                reason: "manifest.toml not found in bundle directory".to_owned(),
             }));
         }
         // Parse manifest and compute bundle_id
@@ -543,8 +548,24 @@ impl Runtime {
             host: self.host_vtable as *const HostVTable,
         };
         crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
-        let result: Result<(), PolyplugError> = loader.load(path, &mut registrar);
-        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0));
+        let effective_path: PathBuf = if !manifest.file.is_empty() {
+            path.join(&manifest.file)
+        } else {
+            path.to_path_buf()
+        };
+        let result: Result<(), PolyplugError> = loader.load(&effective_path, &mut registrar);
+        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0_u64));
+        if result.is_ok() {
+            let bundle_name: String = manifest.bundle_name.clone();
+            let mut manifests: std::sync::MutexGuard<
+                '_,
+                std::collections::HashMap<String, ManifestData>,
+            > = self
+                .bundle_manifests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            manifests.insert(bundle_name, manifest);
+        }
         result
     }
 }
@@ -657,7 +678,7 @@ impl Runtime {
             })?;
 
         watcher
-            .watch(&canonical_dir, notify::RecursiveMode::NonRecursive)
+            .watch(&canonical_dir, notify::RecursiveMode::Recursive)
             .map_err(
                 |e: notify::Error| crate::error::PolyplugError::WatcherFailed {
                     reason: e.to_string(),

@@ -547,8 +547,8 @@ impl BundleLoader for JsLoader {
         let _ = HOST_VTABLE.get_or_init(|| HostVtablePtr(registrar.host));
 
         // 2. Resolve bundle.js path.
-        // If path is a directory (directory bundle layout), join "bundle.js" inside it.
-        // If path is already a file (resolved from manifest.file by the runtime), use as-is.
+        // When called via the runtime, path is already the resolved file (manifest.file joined to bundle dir).
+        // When called directly (e.g. tests), path may be the bundle directory — fall back to bundle.js inside it.
         let bundle_path: PathBuf = if path.is_dir() {
             path.join("bundle.js")
         } else {

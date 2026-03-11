@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-#[cfg(feature = "hot-reload")]
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -31,16 +30,16 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
 
 #[test]
 fn test_a_basic_reload() {
-    let v1_path: &str = env!("RELOAD_PLUGIN_V1_SO");
-    let v2_path: &str = env!("RELOAD_PLUGIN_V2_SO");
+    let v1_path: &str = env!("RELOAD_PLUGIN_V1_DIR");
+    let v2_path: PathBuf =
+        std::path::PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
     let rt: Runtime = Runtime::builder().build().expect("build");
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
     let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
     let version_fn: extern "C" fn() -> u32 = get_version_fn(&rt, contract_id).expect("resolve v1");
     assert_eq!(version_fn(), 100_u32, "v1 should return 100");
-    rt.reload_bundle(std::path::Path::new(v2_path))
-        .expect("reload v2");
+    rt.reload_bundle(v2_path.as_path()).expect("reload v2");
     let version_fn2: extern "C" fn() -> u32 = get_version_fn(&rt, contract_id).expect("resolve v2");
     assert_eq!(version_fn2(), 200_u32, "v2 should return 200");
 }
@@ -48,7 +47,7 @@ fn test_a_basic_reload() {
 #[test]
 fn test_b_in_flight_safety() {
     let rt: Arc<Runtime> = Arc::new(Runtime::builder().build().expect("build"));
-    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
     let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
     let rt_clone: Arc<Runtime> = Arc::clone(&rt);
@@ -70,8 +69,12 @@ fn test_b_in_flight_safety() {
         }
     });
     for _ in 0..20_u32 {
-        let _ = rt.reload_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V2_SO")));
-        let _ = rt.reload_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")));
+        let _ = rt.reload_bundle(
+            &PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"),
+        );
+        let _ = rt.reload_bundle(
+            &PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("libreload_plugin_v1.so"),
+        );
     }
     caller.join().expect("caller thread panicked");
 }
@@ -79,9 +82,9 @@ fn test_b_in_flight_safety() {
 #[test]
 fn test_c_quiescence_arc_count() {
     let rt: Runtime = Runtime::builder().build().expect("build");
-    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
-    rt.reload_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V2_SO")))
+    rt.reload_bundle(&PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"))
         .expect("reload completes: quiescence succeeded");
     let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
     let version_fn: extern "C" fn() -> u32 =
@@ -92,12 +95,14 @@ fn test_c_quiescence_arc_count() {
 #[test]
 fn test_d_dlclose_timing() {
     let rt: Arc<Runtime> = Arc::new(Runtime::builder().build().expect("build"));
-    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
     let rt2: Arc<Runtime> = Arc::clone(&rt);
     let reload_thread: std::thread::JoinHandle<Result<(), PolyplugError>> =
         std::thread::spawn(move || {
-            rt2.reload_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V2_SO")))
+            rt2.reload_bundle(
+                &PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"),
+            )
         });
     let result: Result<(), PolyplugError> = reload_thread.join().expect("join");
     assert!(result.is_ok(), "reload should succeed: {:?}", result);
@@ -106,9 +111,9 @@ fn test_d_dlclose_timing() {
 #[test]
 fn test_e_cascade_reload() {
     let rt: Runtime = Runtime::builder().build().expect("build");
-    rt.load_bundle(std::path::Path::new(env!("DEPENDER_PLUGIN_SO")))
+    rt.load_bundle(std::path::Path::new(env!("DEPENDER_PLUGIN_DIR")))
         .expect("load depender");
-    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
     let dep_contract_id: u64 = polyplug::abi::contract_id("depender.test", 1);
     let init_count_before: u32 = {
@@ -122,7 +127,7 @@ fn test_e_cascade_reload() {
             f()
         }
     };
-    rt.reload_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.reload_bundle(&PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("libreload_plugin_v1.so"))
         .expect("reload v1");
     let init_count_after: u32 = {
         let handle: polyplug::abi::PluginHandle = rt
@@ -153,9 +158,9 @@ fn test_f_callback_fires() {
         })
         .build()
         .expect("build");
-    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
-    rt.reload_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V2_SO")))
+    rt.reload_bundle(&PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"))
         .expect("reload v2");
     let ev: ReloadEvent = fired
         .lock()
@@ -173,12 +178,18 @@ fn test_f_callback_fires() {
 #[test]
 fn test_g_file_watcher() {
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-    let so_dest: PathBuf = dir.path().join("reload_plugin.so");
-    std::fs::copy(env!("RELOAD_PLUGIN_V1_SO"), &so_dest).expect("copy v1");
-    let manifest_src: std::path::PathBuf =
-        std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")).with_extension("manifest.toml");
-    let manifest_dest: PathBuf = dir.path().join("reload_plugin.manifest.toml");
-    std::fs::copy(&manifest_src, &manifest_dest).expect("copy v1 manifest");
+    let bundle_dir: PathBuf = dir.path().join("reload_plugin_v1");
+    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    std::fs::copy(
+        env!("RELOAD_PLUGIN_V1_SO"),
+        bundle_dir.join("libreload_plugin_v1.so"),
+    )
+    .expect("copy v1 so");
+    std::fs::copy(
+        std::path::PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("manifest.toml"),
+        bundle_dir.join("manifest.toml"),
+    )
+    .expect("copy v1 manifest");
 
     let fired: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let fired_clone: Arc<AtomicBool> = Arc::clone(&fired);
@@ -190,12 +201,14 @@ fn test_g_file_watcher() {
             .build()
             .expect("build"),
     );
-    rt.load_bundle(so_dest.as_path()).expect("load from tmpdir");
+    rt.load_bundle(bundle_dir.as_path())
+        .expect("load from tmpdir");
     Runtime::watch_plugin_dir(Arc::clone(&rt), dir.path()).expect("watch");
 
     let so_staging: PathBuf = dir.path().join("reload_plugin_new.so");
     std::fs::copy(env!("RELOAD_PLUGIN_V2_SO"), &so_staging).expect("stage v2");
-    std::fs::rename(&so_staging, &so_dest).expect("atomic rename v2 into place");
+    std::fs::rename(&so_staging, bundle_dir.join("libreload_plugin_v1.so"))
+        .expect("atomic rename v2 into place");
 
     for _ in 0..50_u32 {
         if fired.load(Ordering::Relaxed) {
@@ -212,15 +225,15 @@ fn test_g_file_watcher() {
 #[test]
 fn test_h_multiple_reloads() {
     let rt: Runtime = Runtime::builder().build().expect("build");
-    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_SO")))
+    rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
     for i in 0..50_u32 {
-        let so: &str = if i % 2 == 0 {
-            env!("RELOAD_PLUGIN_V2_SO")
+        let so_path: PathBuf = if i % 2 == 0 {
+            PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so")
         } else {
-            env!("RELOAD_PLUGIN_V1_SO")
+            PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("libreload_plugin_v1.so")
         };
-        rt.reload_bundle(std::path::Path::new(so))
+        rt.reload_bundle(so_path.as_path())
             .expect("reload should succeed");
     }
     let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
@@ -235,7 +248,7 @@ fn test_i_non_native_returns_error() {
     let result: Result<(), PolyplugError> =
         rt.reload_bundle(std::path::Path::new("/nonexistent/fake_plugin.so"));
     assert!(
-        matches!(result, Err(PolyplugError::ReloadFailed { .. })),
-        "expected ReloadFailed for nonexistent path, got: {result:?}"
+        matches!(result, Err(PolyplugError::Loader(..))),
+        "expected Loader error for nonexistent path, got: {result:?}"
     );
 }

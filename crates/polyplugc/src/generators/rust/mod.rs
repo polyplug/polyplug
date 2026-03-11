@@ -313,6 +313,7 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
          bundle_name = \"{name}\"\n\
          version = \"{version}\"\n\
          runtime = \"native\"\n\
+         # file is relative to this bundle directory\n\
          file = \"{file}\"\n\
          provides = {provides_toml}\n\
          function_count = {function_count_toml}\n\

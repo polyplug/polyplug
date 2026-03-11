@@ -501,7 +501,7 @@ impl BundleLoader for JsDenoLoader {
             std::sync::mpsc::Receiver<JsCallRequest>,
         ) = std::sync::mpsc::sync_channel::<JsCallRequest>(16);
 
-        // 4. Clone path for thread
+        // 4. Clone path for thread (path is &Path, must be owned to move into thread)
         let bundle_path: PathBuf = path.to_owned();
 
         // 5. Spawn dedicated thread for this bundle's V8 isolate
@@ -527,13 +527,18 @@ impl BundleLoader for JsDenoLoader {
 
             tokio_rt.block_on(async move {
                 // Create deno_core JsRuntime
-                // Determine module file: prefer bundle.js, fallback to index.ts
-                let bundle_js: PathBuf = bundle_path.join("bundle.js");
-                let index_ts: PathBuf = bundle_path.join("index.ts");
-                let module_path: PathBuf = if bundle_js.exists() {
-                    bundle_js
+                // When called via the runtime, bundle_path is already the resolved file.
+                // When called directly (e.g. tests), bundle_path may be the bundle directory.
+                let module_path: PathBuf = if bundle_path.is_dir() {
+                    let bundle_js: std::path::PathBuf = bundle_path.join("bundle.js");
+                    let index_ts: std::path::PathBuf = bundle_path.join("index.ts");
+                    if bundle_js.exists() {
+                        bundle_js
+                    } else {
+                        index_ts
+                    }
                 } else {
-                    index_ts
+                    bundle_path.clone()
                 };
                 let module_source: String = std::fs::read_to_string(&module_path)
                     .unwrap_or_else(|e: std::io::Error| panic!("failed to read module: {e}"));

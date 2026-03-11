@@ -126,7 +126,13 @@ impl BundleLoader for NativeBundleLoader {
         // directly into the Registry via registry.push_library(). The trait's
         // `registrar` parameter is unused here — native loading goes through
         // dlopen + ABI init directly via the injected registry and host_vtable.
-        load_bundle(path, &self.registry, self.host_vtable)
+
+        // Derive the bundle directory from the .so file path (parent directory).
+        let bundle_dir: &Path = path.parent().unwrap_or(path);
+        let mut manifest: ManifestData =
+            parse_manifest(bundle_dir).map_err(|e: LoaderError| PolyplugError::Loader(e))?;
+        manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+        load_bundle(path, &manifest, &self.registry, self.host_vtable)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))
     }
 }
@@ -150,34 +156,27 @@ struct RegistrarState<'a> {
     registered_handles: Vec<PluginHandle>,
 }
 
-/// Read and parse the companion `manifest.toml` for a bundle at `bundle_path`.
+/// Read and parse `manifest.toml` from a bundle directory.
 ///
-/// `bundle_path` is the path to the bundle file itself (e.g. `plugins/foo.so`).
-/// The manifest is expected at `bundle_path.with_extension("manifest.toml")`.
-/// Tries the stem-based path first.
+/// `bundle_dir` must be a path to a directory containing `manifest.toml`.
 ///
-/// If the manifest file does not exist, returns a `ManifestData` with
-/// `runtime = "native"` (the default).
-#[allow(dead_code)]
-pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderError> {
-    // Try: same directory, same stem, extension = "manifest.toml"
-    // e.g. "plugins/foo.so" → "plugins/foo.manifest.toml"
-    let manifest_path: PathBuf = bundle_path.with_extension("manifest.toml");
+/// # Errors
+/// - `BundleNotADirectory`: if `bundle_dir` is not a directory
+/// - `ManifestParse`: if `manifest.toml` is not found or is malformed
+/// - `ManifestMissingFile`: if the `file` field is absent or empty
+pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
+    if !bundle_dir.is_dir() {
+        return Err(LoaderError::BundleNotADirectory {
+            path: bundle_dir.to_path_buf(),
+        });
+    }
+
+    let manifest_path: PathBuf = bundle_dir.join("manifest.toml");
 
     if !manifest_path.exists() {
-        // No manifest → default to native
-        return Ok(ManifestData {
-            runtime: "native".to_owned(),
-            bundle_name: String::new(),
-            dependencies: Vec::new(),
-            bundle_id: 0,
-            name: String::new(),
-            version: String::new(),
-            file: String::new(),
-            provides: Vec::new(),
-            function_count: std::collections::HashMap::new(),
-            needs_reinit_on_dep_reload: false,
-            path: PathBuf::new(),
+        return Err(LoaderError::ManifestParse {
+            path: manifest_path.to_string_lossy().into_owned(),
+            reason: "manifest.toml not found in bundle directory".to_owned(),
         });
     }
 
@@ -216,7 +215,8 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
         needs_reinit_on_dep_reload: data.needs_reinit_on_dep_reload,
         path: PathBuf::new(),
     };
-    manifest.path = bundle_path.to_path_buf();
+    manifest.validate_file()?;
+    manifest.path = bundle_dir.to_path_buf();
     Ok(manifest)
 }
 
@@ -239,16 +239,13 @@ pub(crate) fn parse_manifest(bundle_path: &Path) -> Result<ManifestData, LoaderE
 ///    `registry.loaded_libraries` — the never-unload invariant applies.
 pub fn load_bundle(
     path: &Path,
+    manifest: &ManifestData,
     registry: &Registry,
     host_vtable: &'static HostVTable,
 ) -> Result<(), LoaderError> {
     let path_str: String = path.to_string_lossy().into_owned();
 
-    // Step 0: Parse the manifest to get bundle_name and dependencies.
-    let mut manifest: ManifestData = parse_manifest(path)?;
-
-    // Compute bundle_id from bundle_name
-    manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+    // Step 0: manifest is provided by the caller — no internal parse needed.
 
     // Resolve dependency contract_ids and declare them to the registry
     let dep_contract_ids: Vec<u64> = manifest

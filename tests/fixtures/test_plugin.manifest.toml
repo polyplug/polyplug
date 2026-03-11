@@ -1,2 +1,0 @@
-runtime = "lua"
-file = "test_plugin.lua"

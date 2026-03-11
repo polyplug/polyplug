@@ -56,10 +56,26 @@ pub(crate) fn reload_bundle_impl(
         });
     }
 
-    let mut manifest: ManifestData = crate::loader::parse_manifest(path)
+    // Determine bundle_dir and so_path:
+    // - If path is a .so file (watcher-fired path), derive bundle_dir = path.parent()
+    // - If path is a directory (cascade reload passes bundle dir), need to get so file from manifest
+    let (bundle_dir_path, so_path): (PathBuf, PathBuf) = if path.is_dir() {
+        // Path is already the bundle directory (cascade reload case).
+        // Parse manifest first to discover the .so filename.
+        let temp_manifest: ManifestData = crate::loader::parse_manifest(path)
+            .map_err(|e: crate::error::LoaderError| PolyplugError::Loader(e))?;
+        let so: PathBuf = path.join(&temp_manifest.file);
+        (path.to_path_buf(), so)
+    } else {
+        // Path is the .so file (watcher path). Bundle dir is the parent.
+        let dir: PathBuf = path.parent().unwrap_or(path).to_path_buf();
+        (dir, path.to_path_buf())
+    };
+
+    let mut manifest: ManifestData = crate::loader::parse_manifest(&bundle_dir_path)
         .map_err(|e: crate::error::LoaderError| PolyplugError::Loader(e))?;
     manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
-    manifest.path = path.to_path_buf();
+    manifest.path = bundle_dir_path.clone();
     if manifest.runtime != "native" {
         crate::runtime::emit_warning(&format!(
             "reload_bundle only supports native bundles; runtime={} path={}",
@@ -81,10 +97,10 @@ pub(crate) fn reload_bundle_impl(
         });
     }
 
-    let path_str: String = path.to_string_lossy().into_owned();
+    let path_str: String = so_path.to_string_lossy().into_owned();
     // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
     let new_library: libloading::Library = unsafe {
-        libloading::Library::new(path).map_err(|e: libloading::Error| {
+        libloading::Library::new(&so_path).map_err(|e: libloading::Error| {
             PolyplugError::ReloadFailed {
                 bundle: path_str.clone(),
                 reason: format!("dlopen failed: {e}"),
@@ -184,7 +200,7 @@ pub(crate) fn reload_bundle_impl(
     };
     let event: ReloadEvent = ReloadEvent {
         bundle_name: manifest.bundle_name.clone(),
-        bundle_path: path.display().to_string(),
+        bundle_path: bundle_dir_path.display().to_string(),
         old_version,
         new_version: manifest.version.clone(),
         affected_contract_ids: new_vtable_map.keys().copied().collect::<Vec<u64>>(),

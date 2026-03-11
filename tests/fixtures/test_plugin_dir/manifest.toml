@@ -1,0 +1,9 @@
+bundle_name                = "test_plugin"
+version                    = "1.0"
+runtime                    = "native"
+file                       = "libtest_plugin.so"
+provides                   = ["test.add"]
+needs_reinit_on_dep_reload = false
+
+[function_count]
+"test.add@1" = 4

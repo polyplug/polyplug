@@ -151,6 +151,12 @@ pub enum LoaderError {
         expected: u32,
         found: u32,
     },
+
+    #[error("bundle path is not a directory: `{path}`")]
+    BundleNotADirectory { path: std::path::PathBuf },
+
+    #[error("bundle \"{bundle}\" manifest.toml has an empty or missing `file` field")]
+    ManifestMissingFile { bundle: String },
 }
 
 /// Errors from the plugin registry.

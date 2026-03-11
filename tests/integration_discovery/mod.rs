@@ -16,12 +16,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-/// Write a dummy bundle file (`.so`) and companion manifest TOML.
-fn write_manifest(dir: &Path, stem: &str, toml_content: &str) {
-    let bundle_path: PathBuf = dir.join(format!("{stem}.so"));
-    fs::write(&bundle_path, b"").expect("write dummy so");
-    let manifest_path: PathBuf = dir.join(format!("{stem}.manifest.toml"));
-    fs::write(&manifest_path, toml_content).expect("write manifest");
+/// Write a bundle directory: `<dir>/<stem>/manifest.toml` + `<dir>/<stem>/<stem>.so` stub.
+/// The `toml_content` should NOT include `file = "..."` — this helper adds it.
+fn write_bundle_dir(dir: &Path, stem: &str, toml_content: &str) {
+    let bundle_dir: PathBuf = dir.join(stem);
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+    let so_name: String = format!("{stem}.so");
+    fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
+    let manifest_toml: String = format!("file = \"{}\"\n{}", so_name, toml_content);
+    fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest.toml");
 }
 
 /// Write a script bundle (directory with manifest.toml inside).
@@ -46,7 +49,7 @@ fn chain_loads_in_dependency_order() {
     let cid_x: u64 = polyplug::abi::contract_id("contract.X", 1);
     let cid_y: u64 = polyplug::abi::contract_id("contract.Y", 1);
 
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_a",
         r#"
@@ -56,7 +59,7 @@ provides = ["contract.X"]
 "#,
     );
 
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_b",
         &format!(
@@ -74,7 +77,7 @@ min_version = "1.0"
         ),
     );
 
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_c",
         &format!(
@@ -124,7 +127,7 @@ fn missing_dep_fails_before_load() {
     let cid_x: u64 = polyplug::abi::contract_id("contract.X", 1);
 
     // Bundle B requires contract.X, but nothing provides it
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_b",
         &format!(
@@ -158,7 +161,7 @@ fn cycle_detected_with_clear_error() {
     let cid_a: u64 = polyplug::abi::contract_id("contract.A", 1);
     let cid_b: u64 = polyplug::abi::contract_id("contract.B", 1);
 
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_a",
         &format!(
@@ -176,7 +179,7 @@ min_version = "1.0"
         ),
     );
 
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_b",
         &format!(
@@ -229,7 +232,7 @@ fn malformed_manifest_skips_bundle() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
     // Write a valid bundle A
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "bundle_a",
         r#"
@@ -238,10 +241,11 @@ runtime = "native"
 "#,
     );
 
-    // Write a malformed manifest for bundle B (invalid TOML)
-    fs::write(tmp.path().join("bundle_b.so"), b"").expect("create bundle_b.so");
+    // Write a malformed manifest for bundle B (invalid TOML) in a directory
+    let bundle_b_dir: PathBuf = tmp.path().join("bundle_b");
+    fs::create_dir_all(&bundle_b_dir).expect("create bundle_b dir");
     fs::write(
-        tmp.path().join("bundle_b.manifest.toml"),
+        bundle_b_dir.join("manifest.toml"),
         b"NOT VALID TOML ===== [[[",
     )
     .expect("write bad manifest");
@@ -264,7 +268,7 @@ runtime = "native"
 fn unknown_runtime_fails_build() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    write_manifest(
+    write_bundle_dir(
         tmp.path(),
         "zigzag_plugin",
         r#"
@@ -295,33 +299,23 @@ runtime = "zigzag_unknown"
 fn explicit_load_bundle_missing_manifest_errors() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    // Create a dummy .so file WITHOUT a companion manifest
-    let plugin_path: PathBuf = tmp.path().join("test_plugin.so");
-    fs::write(&plugin_path, b"").expect("create dummy so");
+    // Create a plain file (not a directory) — load_bundle() should reject it
+    let plain_file: PathBuf = tmp.path().join("not_a_dir.so");
+    fs::write(&plain_file, b"").expect("write plain file");
 
     // Build a Runtime with no plugin dirs (no directory scanning)
-    let runtime: Runtime = Runtime::builder().build().expect("build should succeed");
+    let rt: Runtime = Runtime::builder().build().expect("build should succeed");
 
-    // Explicitly load the bundle — should fail with manifest-not-found
-    let result: Result<(), PolyplugError> = runtime.load_bundle(&plugin_path);
+    // Explicitly load the bundle — should fail with BundleNotADirectory
+    let result: Result<(), PolyplugError> = rt.load_bundle(&plain_file);
     assert!(
-        result.is_err(),
-        "load_bundle without manifest must return Err"
+        matches!(
+            result,
+            Err(PolyplugError::Loader(
+                LoaderError::BundleNotADirectory { .. }
+            ))
+        ),
+        "expected BundleNotADirectory, got {:?}",
+        result
     );
-
-    match result {
-        Err(PolyplugError::Loader(LoaderError::ManifestParse { reason, .. })) => {
-            assert!(
-                reason.contains("not found") || reason.contains("manifest"),
-                "error reason should mention manifest not found, got: {reason}"
-            );
-        }
-        other => {
-            let err_str: String = match other {
-                Err(e) => format!("wrong error variant: {:?}", e),
-                Ok(()) => "unexpected Ok(())".to_owned(),
-            };
-            panic!("expected ManifestParse error, got: {}", err_str);
-        }
-    }
 }

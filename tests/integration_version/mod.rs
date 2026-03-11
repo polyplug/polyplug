@@ -71,9 +71,12 @@ fn write_bundle_manifest(
     function_count_entries: &[(&str, u32)],
     deps: &[(&str, u64, &str)], // (contract_name, contract_id, min_version)
 ) -> PathBuf {
-    // Write an empty stub file (the no-op loader never calls dlopen)
-    let so_path: PathBuf = dir.path().join(format!("{}.so", bundle_name));
-    fs::write(&so_path, b"").expect("write dummy so");
+    let bundle_dir: PathBuf = dir.path().join(bundle_name);
+    std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+
+    // Write stub .so inside bundle dir (the no-op loader never calls dlopen)
+    let so_name: String = format!("{bundle_name}.so");
+    std::fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
 
     // Build provides array
     let provides_toml: String = if provides.is_empty() {
@@ -84,42 +87,45 @@ fn write_bundle_manifest(
             provides
                 .iter()
                 .map(|s: &&str| format!("\"{}\"", s))
-                .collect::<Vec<_>>()
+                .collect::<Vec<String>>()
                 .join(", ")
         )
     };
 
-    // Build function_count inline table
-    let fn_count_str: String = if function_count_entries.is_empty() {
-        "{}".to_owned()
-    } else {
-        format!(
-            "{{ {} }}",
-            function_count_entries
-                .iter()
-                .map(|(k, v): &(&str, u32)| format!("\"{}\" = {}", k, v))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    };
+    // Build [function_count] section lines
+    let fn_count_lines: String = function_count_entries
+        .iter()
+        .map(|(key, count): &(&str, u32)| format!("\"{}\" = {}", key, count))
+        .collect::<Vec<String>>()
+        .join("\n");
 
     // Build dependency entries
-    let mut dep_toml: String = String::new();
-    for (contract, contract_id, min_version) in deps {
-        dep_toml.push_str(&format!(
-            "\n[[dependency]]\nkind = \"contract\"\ncontract = \"{}\"\ncontract_id = {}\nmin_version = \"{}\"\n",
-            contract, contract_id, min_version
-        ));
-    }
+    let dep_lines: String = deps
+        .iter()
+        .map(|(contract, cid, min_ver): &(&str, u64, &str)| {
+            format!(
+                "\n[[dependency]]\nkind = \"contract\"\ncontract = \"{contract}\"\ncontract_id = {cid}\nmin_version = \"{min_ver}\""
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
 
     let toml_content: String = format!(
-        "bundle_name = \"{}\"\nruntime = \"test-noop\"\nversion = \"{}\"\nprovides = {}\nfunction_count = {}\n{}",
-        bundle_name, version, provides_toml, fn_count_str, dep_toml
+        "bundle_name = \"{bundle_name}\"\n\
+        version = \"{version}\"\n\
+        runtime = \"test-noop\"\n\
+        file = \"{so_name}\"\n\
+        provides = {provides_toml}\n\
+        needs_reinit_on_dep_reload = false\n\
+        \n\
+        [function_count]\n\
+        {fn_count_lines}\n\
+        {dep_lines}\n"
     );
 
-    let manifest_path: PathBuf = dir.path().join(format!("{}.manifest.toml", bundle_name));
-    fs::write(&manifest_path, toml_content).expect("write manifest");
-    so_path
+    fs::write(bundle_dir.join("manifest.toml"), toml_content).expect("write manifest.toml");
+
+    bundle_dir // Return the DIRECTORY path
 }
 
 // ────────────────────────────────────────────────────────────────────────────

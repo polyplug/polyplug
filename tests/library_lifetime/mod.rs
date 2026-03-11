@@ -11,11 +11,13 @@
 
 use polyplug::abi::HostVTable;
 use polyplug::abi::PluginHandle;
+use polyplug::abi::bundle_id;
 use polyplug::allocator::polyplug_host_alloc;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::loader::load_bundle;
+use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::parse_manifest;
 use polyplug::registry::Registry;
-use std::path::Path;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 
@@ -82,8 +84,11 @@ unsafe extern "C" fn stub_get_extension(_extension_id: u32) -> *const () {
 #[test]
 #[cfg(not(miri))]
 fn library_handle_outlives_load_call() {
-    let plugin_path: &str = env!("TEST_PLUGIN_SO");
-    let path: &Path = Path::new(plugin_path);
+    let plugin_dir: &std::path::Path = std::path::Path::new(env!("TEST_PLUGIN_DIR"));
+    let mut manifest: ManifestData =
+        parse_manifest(plugin_dir).expect("parse_manifest for test_plugin_dir");
+    manifest.bundle_id = bundle_id(&manifest.bundle_name);
+    let so_path: std::path::PathBuf = plugin_dir.join(&manifest.file);
 
     let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
         alloc: polyplug_host_alloc,
@@ -102,7 +107,8 @@ fn library_handle_outlives_load_call() {
     // epic fixes), dlclose() would fire while init is executing plugin code, which
     // could SIGBUS or corrupt state. Returning Ok(()) here proves the Library was
     // alive through the entire load sequence.
-    load_bundle(path, &registry, host_vtable).expect("load_bundle must succeed for test_plugin");
+    load_bundle(&so_path, &manifest, &registry, host_vtable)
+        .expect("load_bundle must succeed for test_plugin");
 
     // NOTE: registry.find() is NOT called here because registrar_callback is a stub
     // (does not register vtables into the Registry). That is a separate TODO, not part

@@ -125,6 +125,19 @@ impl ManifestData {
             .filter_map(|dep: &RawManifestDependency| dep.resolve())
             .collect::<Vec<ManifestDependency>>()
     }
+
+    /// Validate that the `file` field is non-empty after parsing.
+    ///
+    /// # Errors
+    /// Returns `Err(ManifestMissingFile)` if the `file` field is absent or whitespace-only.
+    pub fn validate_file(&self) -> Result<(), crate::error::LoaderError> {
+        if self.file.trim().is_empty() {
+            return Err(crate::error::LoaderError::ManifestMissingFile {
+                bundle: self.bundle_name.clone(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
