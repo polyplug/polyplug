@@ -16,7 +16,7 @@ libloading = { workspace = true }
 petgraph   = { workspace = true }
 serde      = { workspace = true }
 toml       = { workspace = true }
-notify     = { version = "6", optional = true }
+notify     = { version = "6", default-features = false, features = ["macos_fsevent", "inotify", "windows_ReadDirectoryChangesW"], optional = true }
 
 [features]
 default    = []

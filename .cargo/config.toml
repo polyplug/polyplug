@@ -1,0 +1,21 @@
+# .cargo/config.toml — polyplug workspace build configuration
+#
+# WARNING — target-cpu=native:
+#   This flag compiles for the current machine's exact CPU features (e.g., AVX-512).
+#   The resulting binary WILL CRASH WITH SIGILL on any machine that lacks those features.
+#
+#   ONLY use this when:
+#     1. You are building AND deploying on the same machine type, OR
+#     2. You know the deployment target has the same or newer CPU generation
+#
+#   If distributing this binary to other machines, REMOVE this flag or replace with
+#   a safe baseline such as:
+#     target-cpu=x86-64-v2  (requires: SSE4.2 — supported by nearly all x86-64 CPUs since ~2010)
+#     target-cpu=x86-64-v3  (requires: AVX2/BMI2 — supported by Intel Haswell+, AMD Zen+)
+#
+#   For CI systems with different hardware than deployment targets, REMOVE this entirely.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+  "-C", "target-cpu=native",   # use all CPU features available on the current build machine
+]
