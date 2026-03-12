@@ -244,3 +244,18 @@ A weighting system for multi-impl providers is planned for a future version. Thi
 
 ### WASM sandbox support
 Future versions will support WASM plugins in a sandboxed execution environment, providing crash isolation without IPC overhead. This is the planned path for untrusted plugin execution.
+
+## Plugin crash isolation
+
+Plugins run in-process. A plugin that dereferences a null pointer, causes a stack
+overflow, or triggers any hardware exception (SIGSEGV, SIGBUS, SIGILL) takes down
+the entire host process. **This is expected and intentional behaviour.**
+
+Isolating plugin crashes would require either:
+- Out-of-process execution with IPC — violates the zero-overhead hot-path goal
+- OS-level sandboxing (seccomp, pledge) — platform-specific, adds significant complexity
+
+Neither is acceptable for v1. See PRD section 27 (Non-Goals).
+
+App developers who need crash isolation should run plugins in a separate worker process
+and communicate via IPC. polyplug does not provide this facility.
