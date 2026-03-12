@@ -34,26 +34,40 @@ fn check_version_compatibility(tfm: &str, min_framework: &str) -> Result<(), Pol
         return Ok(());
     }
     let req_str: &str = min_framework.strip_prefix("net").unwrap_or(min_framework);
-    let required_major: u32 = req_str
-        .split('.')
+    let mut req_parts = req_str.split('.');
+    let req_major_str: &str = req_parts.next().ok_or_else(|| {
+        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
+            tfm: min_framework.to_owned(),
+            reason: "missing major version".to_owned(),
+        })
+    })?;
+    let required_major: u32 = req_major_str.parse().map_err(|_| {
+        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
+            tfm: min_framework.to_owned(),
+            reason: format!("invalid major version: {req_major_str}"),
+        })
+    })?;
+    let required_minor: u32 = req_parts
         .next()
-        .and_then(|s: &str| s.parse::<u32>().ok())
-        .unwrap_or(10);
-    let required_minor: u32 = req_str
-        .split('.')
-        .nth(1)
-        .and_then(|s: &str| s.parse::<u32>().ok())
+        .map(|s: &str| s.parse::<u32>().unwrap_or(0))
         .unwrap_or(0);
     let found_ver: &str = tfm.strip_prefix(".NETCoreApp,Version=v").unwrap_or(tfm);
-    let found_major: u32 = found_ver
-        .split('.')
+    let mut found_parts = found_ver.split('.');
+    let found_major_str: &str = found_parts.next().ok_or_else(|| {
+        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
+            tfm: tfm.to_owned(),
+            reason: "missing major version".to_owned(),
+        })
+    })?;
+    let found_major: u32 = found_major_str.parse().map_err(|_| {
+        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
+            tfm: tfm.to_owned(),
+            reason: format!("invalid major version: {found_major_str}"),
+        })
+    })?;
+    let found_minor: u32 = found_parts
         .next()
-        .and_then(|s: &str| s.parse::<u32>().ok())
-        .unwrap_or(0);
-    let found_minor: u32 = found_ver
-        .split('.')
-        .nth(1)
-        .and_then(|s: &str| s.parse::<u32>().ok())
+        .map(|s: &str| s.parse::<u32>().unwrap_or(0))
         .unwrap_or(0);
     if found_major != required_major {
         return Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch {

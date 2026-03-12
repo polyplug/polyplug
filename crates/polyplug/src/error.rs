@@ -112,6 +112,9 @@ pub enum LoaderError {
     #[error(".NET runtime version mismatch: required={required}, found={found}")]
     RuntimeVersionMismatch { required: String, found: String },
 
+    #[error("invalid .NET framework version in TFM `{tfm}`: {reason}")]
+    InvalidFrameworkVersion { tfm: String, reason: String },
+
     #[error("Python interpreter initialization failed: {reason}")]
     PythonInitFailed { reason: String },
 
