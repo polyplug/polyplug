@@ -7,7 +7,7 @@ pub mod trace;
 /// `*const ()` is not `Send` by default. This newtype wraps it so it can be
 /// stored in `OnceLock<HashMap<u32, SendPtr>>` on the global extension map.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SendPtr(pub(crate) *const ());
+pub(crate) struct SendPtr(pub *const ());
 
 // SAFETY: SendPtr wraps a raw pointer to a 'static extension vtable.
 // Extension vtables are written once during RuntimeBuilder::build() and never mutated.

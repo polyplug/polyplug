@@ -81,13 +81,6 @@ pub(crate) struct RegistryEntry {
     pub bundle_id: u64,
 }
 
-// SAFETY: RegistryEntry no longer holds raw pointers — VTableSlot (which does) is held via
-// ArcSwap<VTableSlot> inside RegistrySlot. RegistryEntry itself contains only plain data.
-// All concurrent access is mediated by the RwLock on Registry::slots.
-unsafe impl Send for RegistryEntry {}
-// SAFETY: Same reasoning as Send above — plain data fields, all mutation lock-protected.
-unsafe impl Sync for RegistryEntry {}
-
 /// Thread-safe plugin registry.
 //
 //  slots: RwLock protects all writes (registration/unload).

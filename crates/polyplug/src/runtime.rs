@@ -129,17 +129,6 @@ pub struct Runtime {
     watcher_stop: std::sync::Mutex<Option<std::sync::Arc<core::sync::atomic::AtomicBool>>>,
 }
 
-// SAFETY: Runtime wraps Arc<Registry> (Send+Sync) and Vec<LoadedBundle>.
-// LoadedBundle contains a Box<Library> which is not Sync by itself,
-// but libraries are stored in `Registry::loaded_libraries` and never shared
-// as references — only vtable pointers (which are valid for the Registry's
-// lifetime) are accessed concurrently. The Runtime is effectively immutable after init.
-// _extensions: all Extension impls are required to be Send+Sync by trait bound.
-unsafe impl Send for Runtime {}
-// SAFETY: See above — Runtime is immutable after init. All mutable state is behind Arc<RwLock>.
-// _extensions are Send+Sync by Extension trait bound.
-unsafe impl Sync for Runtime {}
-
 /// Options for `Runtime::load_bundle_with`.
 ///
 /// The `compatibility` field overrides the global `RuntimeBuilder::compatibility` setting
