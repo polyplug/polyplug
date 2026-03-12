@@ -6,7 +6,6 @@
 //!            unit tests (`cross_plugin_dep_tests` submodule) because `INIT_BUNDLE_ID`
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

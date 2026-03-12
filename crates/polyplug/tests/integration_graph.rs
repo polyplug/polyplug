@@ -1,7 +1,6 @@
 //! Integration test: multi-contract registration and lookup.
 //!
 //! This test crate is the crate root for the `integration_graph` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 //!
 //! Tests that:
 //! - Multiple registrations in a registry work correctly

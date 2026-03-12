@@ -2,7 +2,6 @@
 //! and returns ABI_ERROR_PANIC (= 3) WITHOUT aborting the process.
 //!
 //! This test crate is the crate root for the `integration_panic` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

@@ -1,7 +1,6 @@
 //! Stress tests for the polyplug memory model: Buffer, StringView, allocator.
 //!
 //! This test crate is the crate root for the `stress_memory` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

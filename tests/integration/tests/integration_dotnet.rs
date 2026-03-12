@@ -1,5 +1,4 @@
 //! Integration tests: DotnetLoader — cross-language .NET plugin scenarios.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

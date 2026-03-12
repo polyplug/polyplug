@@ -1,7 +1,6 @@
 //! Integration test: run the showcase host binary and verify its output.
 //!
 //! This test crate is the crate root for the `integration_showcase` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

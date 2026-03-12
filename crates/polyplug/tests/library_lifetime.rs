@@ -4,8 +4,6 @@
 //! libloading::Library handle at the end of load_bundle(). If it did,
 //! dlclose() would unmap plugin code pages while vtable fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
-//!
-//! AGENTS.md Rule 1: module roots use dirname/mod.rs.
 
 #![allow(clippy::expect_used)]
 

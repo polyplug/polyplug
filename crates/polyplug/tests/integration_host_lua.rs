@@ -2,8 +2,6 @@
 //!
 //! These tests call the C ABI functions directly from Rust (same process),
 //! exercising the same API surface that Lua and Deno use via FFI.
-//!
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

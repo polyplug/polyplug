@@ -1,7 +1,6 @@
 //! Integration tests for the polyplug extension system.
 //!
 //! This test crate is the crate root for the `integration_extension` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

@@ -3,7 +3,6 @@
 //! C++ test plugin vtable when TEST_PLUGIN_CPP_SO is non-empty.
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

@@ -1,6 +1,5 @@
 //! Integration tests: version negotiation, compatibility modes, and warning callbacks.
-//!
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
+
 #![allow(clippy::expect_used)]
 
 use polyplug::abi::PluginRegistrar;

@@ -6,9 +6,6 @@
 //!   fn 0 — error_return_with_message: returns AbiError { code: 99, message: <host-alloc'd msg> }
 //!   fn 1 — error_panic: catches an intentional panic and returns ABI_ERROR_PANIC
 //!   fn 2 — error_chain_propagate: calls another plugin via host vtable and propagates its error
-//!
-//! Rule 1 note: lib.rs is the crate root of a cdylib — exempt from the
-//! dirname/mod.rs rule per AGENTS.md (crate roots are always lib.rs/main.rs).
 
 // ─── ABI Types (mirrored from polyplug) ──────────────────────────────
 // We cannot depend on polyplug here (cdylib circular dependency).

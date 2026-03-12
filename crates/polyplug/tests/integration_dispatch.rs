@@ -1,7 +1,6 @@
 //! Integration test: call through vtable, verify function executes and returns ABI_OK.
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

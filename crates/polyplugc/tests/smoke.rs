@@ -7,7 +7,6 @@
 //!      optionally compile/load if g++ available, otherwise gracefully skip.
 //!
 //! This test crate is the crate root for the `smoke` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

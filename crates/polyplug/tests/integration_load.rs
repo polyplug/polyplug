@@ -1,7 +1,6 @@
 //! Integration test: load the test_plugin .so, verify ABI version, verify vtable registration.
 //!
 //! This test crate is the crate root for the `integration_load` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 

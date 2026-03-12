@@ -4,9 +4,6 @@
 //! It implements the "memory.test" contract with 4 functions exercising
 //! Buffer allocation, StringView echo, pre-allocated buffer fill, and
 //! zero-length roundtrip.
-//!
-//! Rule 1 note: lib.rs is the crate root of a cdylib — exempt from the
-//! dirname/mod.rs rule per AGENTS.md (crate roots are always lib.rs/main.rs).
 
 // ─── ABI Types (mirrored from polyplug) ──────────────────────────────
 // We cannot depend on polyplug here (cdylib circular dependency).

@@ -1,7 +1,6 @@
 //! Integration test: loader dispatch, duplicate detection, unknown runtime error, stub adapters.
 //!
 //! This test crate is the crate root for the `integration_loader_dispatch` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
 
 #![allow(clippy::expect_used)]
 
