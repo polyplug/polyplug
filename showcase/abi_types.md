@@ -104,13 +104,13 @@ struct DataRecord {
 using System.Runtime.InteropServices;
 
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct StringView {
-    public byte* Ptr;   // UTF-8, NOT null-terminated
-    public nuint  Len;
+public struct StringView {
+    public IntPtr Ptr;  // UTF-8, NOT null-terminated (IntPtr = 8 bytes on 64-bit)
+    public ulong  Len;  // byte count (ulong = 8 bytes, matches Rust usize on 64-bit)
 }
 
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct DataRecord {
+public struct DataRecord {
     public StringView Name;
     public StringView Value;
     public uint       Count;
