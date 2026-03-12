@@ -319,7 +319,7 @@ Wave FINAL (Verification & Documentation - After ALL):
 
 ### Wave 2: CLI & Parser
 
-- [ ] **Task 5: CLI Argument Validation Tests**
+- [x] **Task 5: CLI Argument Validation Tests**
 
   **What to do**: Test polyplugc CLI for all error paths
 
