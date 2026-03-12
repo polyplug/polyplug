@@ -1,4 +1,4 @@
-//! polyplug-dotnet — .NET CLR loader adapter for polyplug.
+//! polyplug_dotnet — .NET CLR loader adapter for polyplug.
 
 pub mod config;
 pub(crate) mod context;

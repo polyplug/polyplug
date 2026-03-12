@@ -1,18 +1,18 @@
 [package]
-name             = "polyplug-lua"
-version          = "0.1.0"
-edition.workspace     = true
-license.workspace     = true
+name = "polyplug_lua"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name       = "polyplug_lua"
-path       = "src/lib.rs"
+name = "polyplug_lua"
+path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-polyplug = { path = "../polyplug" }
-mlua = { version = "0.10", features = ["luajit", "vendored", "send"] }
+polyplug = { workspace = true }
+mlua = { workspace = true, features = ["luajit", "vendored", "send"] }
 
 [lints]
 workspace = true

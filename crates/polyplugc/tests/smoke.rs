@@ -74,7 +74,7 @@ fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
         .expect("failed to spawn polyplugc")
 }
 
-/// Write a `Cargo.toml` for a cdylib crate that depends on `polyplug-guest`.
+/// Write a `Cargo.toml` for a cdylib crate that depends on `polyplug_guest`.
 fn write_plugin_cargo_toml(crate_dir: &Path, guest_lib_path: &Path) {
     let content: String = format!(
         r#"[package]
@@ -87,7 +87,7 @@ name      = "smoke_rust_test_plugin"
 crate-type = ["cdylib"]
 
 [dependencies]
-polyplug-guest = {{ path = "{}" }}
+polyplug_guest = {{ path = "{}" }}
 
 [workspace]
 "#,

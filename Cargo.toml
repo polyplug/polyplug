@@ -1,53 +1,99 @@
 [workspace]
 resolver = "2"
-members  = ["crates/*", "tests/fixtures/test_plugin", "tests/fixtures/memory_plugin", "tests/fixtures/error_plugin", "tests/fixtures/reload_plugin_v1", "tests/fixtures/reload_plugin_v2", "tests/fixtures/depender_plugin", "tests/fixtures/no_init_plugin", "host-libs/rust", "guest-libs/rust", "tests/integration"]
+members = [
+    "crates/*",
+    "tests/fixtures/test_plugin",
+    "tests/fixtures/memory_plugin",
+    "tests/fixtures/error_plugin",
+    "tests/fixtures/reload_plugin_v1",
+    "tests/fixtures/reload_plugin_v2",
+    "tests/fixtures/depender_plugin",
+    "tests/fixtures/no_init_plugin",
+    "host-libs/rust",
+    "guest-libs/rust",
+    "tests/integration",
+]
 
 [workspace.package]
-edition      = "2024"
-license      = "MIT OR Apache-2.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
 rust-version = "1.93"
 
 [workspace.dependencies]
 # Serialization
-serde      = { version = "1.0", features = ["derive"] }
-toml       = { version = "0.9" }
+serde = { version = "1.0", features = ["derive"] }
+toml = { version = "0.9" }
 
 # Error handling
-thiserror  = { version = "2.0" }
+thiserror = { version = "2.0" }
 
 # Dynamic loading
 libloading = { version = "0.9" }
 
 # Graph algorithms
-petgraph   = { version = "0.8", default-features = false, features = ["stable_graph"] }
+petgraph = { version = "0.8", default-features = false, features = [
+    "stable_graph",
+] }
 
 # CLI (polyplugc only)
-clap       = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
 
 # Internal crates
-polyplug  = { path = "crates/polyplug" }
+polyplug = { path = "crates/polyplug" }
 polyplugc = { path = "crates/polyplugc" }
+polyplug_dotnet = { path = "crates/polyplug-dotnet" }
+polyplug_js = { path = "crates/polyplug-js" }
+polyplug_js_deno = { path = "crates/polyplug-js-deno" }
+polyplug_lua = { path = "crates/polyplug-lua" }
+polyplug_python = { path = "crates/polyplug-python" }
+polyplug_guest = { path = "guest-libs/rust" }
+polyplug_host = { path = "host-libs/rust" }
 criterion = { version = "0.8", features = ["html_reports"] }
+
+# Hot-reload
+arc-swap = { version = "1.7" }
+notify = { version = "8.2", default-features = false }
+
+# Testing utilities
+tempfile = { version = "3.27" }
+
+# .NET hosting
+netcorehost = { version = "0.20" }
+pelite = { version = "0.10" }
+once_cell = { version = "1.21" }
+
+# JavaScript (QuickJS)
+rquickjs = { version = "0.11" }
+
+# JavaScript (Deno)
+deno_core = { version = "0.391" }
+tokio = { version = "1" }
+
+# Lua
+mlua = { version = "0.11" }
+
+# Python
+pyo3 = { version = "0.28" }
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "warn"
-clone_on_ref_ptr           = "warn"
-unwrap_used                = "deny"
-expect_used                = "deny"
-std_instead_of_core        = "warn"
+clone_on_ref_ptr = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+std_instead_of_core = "warn"
 
 [workspace.lints.rust]
-unsafe_op_in_unsafe_fn     = "warn"
+unsafe_op_in_unsafe_fn = "warn"
 
 [profile.release]
-opt-level       = 3        # maximum optimization
-codegen-units   = 1        # single codegen unit — maximum cross-function inlining
-lto             = "thin"   # thin LTO — cross-crate inlining, safe for cdylib
-                           # NOTE: fat LTO + cdylib triggers LLVM crash rust-lang/rust#117220
-strip           = "symbols" # remove all symbols — minimum binary size
-debug           = false    # no debug info
-incremental     = false    # deterministic builds — never use incremental in release
-overflow-checks = false    # disable integer overflow checks — zero-cost arithmetic
+opt-level = 3     # maximum optimization
+codegen-units = 1 # single codegen unit — maximum cross-function inlining
+lto = "thin"      # thin LTO — cross-crate inlining, safe for cdylib
+# NOTE: fat LTO + cdylib triggers LLVM crash rust-lang/rust#117220
+strip = "symbols"       # remove all symbols — minimum binary size
+debug = false           # no debug info
+incremental = false     # deterministic builds — never use incremental in release
+overflow-checks = false # disable integer overflow checks — zero-cost arithmetic
 # NOTE: panic = "abort" is intentionally ABSENT.
 # The polyplug runtime uses std::panic::catch_unwind at every FFI boundary
 # (12 entry points in ffi/mod.rs + every generated ABI function via codegen).
@@ -57,11 +103,4 @@ overflow-checks = false    # disable integer overflow checks — zero-cost arith
 
 # polyplugc is a build-time CLI tool — optimize for size over raw throughput
 [profile.release.package.polyplugc]
-opt-level = "z"            # "z" = smallest code size (vs "s" which is moderate)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Epic 25 — Release optimization results (2026-03-12):
-# polyplugc:        BEFORE 2.0M → AFTER 1.5M
-# libpolyplug.so:   BEFORE 1.1M → AFTER 775K
-# vtable_dispatch:  N/A (bench not run — no bench artifact in release profile)
-# ─────────────────────────────────────────────────────────────────────────────
+opt-level = "z" # "z" = smallest code size (vs "s" which is moderate)

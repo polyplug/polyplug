@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 polyplug        = { path = "../../crates/polyplug" }
-polyplug-python = { path = "../../crates/polyplug-python" }
-polyplug-lua    = { path = "../../crates/polyplug-lua" }
-polyplug-js     = { path = "../../crates/polyplug-js" }
-polyplug-dotnet = { path = "../../crates/polyplug-dotnet" }
+polyplug_python = { path = "../../crates/polyplug-python" }
+polyplug_lua    = { path = "../../crates/polyplug-lua" }
+polyplug_js     = { path = "../../crates/polyplug-js" }
+polyplug_dotnet = { path = "../../crates/polyplug-dotnet" }

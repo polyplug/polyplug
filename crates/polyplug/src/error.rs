@@ -87,7 +87,7 @@ pub enum LoaderError {
     #[error(
         "bundle \"{bundle}\" requires runtime \"{runtime_name}\" \
          but no loader is registered for runtime \"{runtime_name}\".\n\
-         Add polyplug-{runtime_name} as a dependency and register \
+         Add polyplug_{runtime_name} as a dependency and register \
          the loader at init."
     )]
     NoLoaderForRuntime {

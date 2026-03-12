@@ -1,19 +1,19 @@
 [package]
-name             = "polyplug-js"
-version          = "0.1.0"
-edition.workspace     = true
-license.workspace     = true
+name = "polyplug_js"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name       = "polyplug_js"
-path       = "src/lib.rs"
+name = "polyplug_js"
+path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-polyplug   = { path = "../polyplug" }
-rquickjs   = { version = "0.11.0", features = ["parallel"] }
-thiserror  = { workspace = true }
+polyplug = { workspace = true }
+rquickjs = { workspace = true, features = ["parallel"] }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

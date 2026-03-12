@@ -1,19 +1,21 @@
 [package]
-name         = "integration"
-version      = "0.1.0"
-edition.workspace      = true
-license.workspace      = true
+name = "integration"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
-publish      = false
+publish = false
 
 [dev-dependencies]
-polyplug         = { workspace = true }
-polyplug-dotnet  = { path = "../../crates/polyplug-dotnet" }
-polyplug-python  = { path = "../../crates/polyplug-python" }
-polyplug-lua     = { path = "../../crates/polyplug-lua" }
-polyplug-js      = { path = "../../crates/polyplug-js" }
-polyplug-js-deno = { path = "../../crates/polyplug-js-deno" }
-tempfile         = "3"
+polyplug = { workspace = true }
+polyplug_dotnet = { workspace = true }
+polyplug_python = { workspace = true }
+polyplug_lua = { workspace = true }
+polyplug_js = { workspace = true }
+polyplug_js_deno = { workspace = true }
+tempfile = { workspace = true }
+libloading = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

@@ -206,7 +206,7 @@ fn no_loader_error_message_is_actionable() {
         "error message must contain runtime name, got: {msg}"
     );
     assert!(
-        msg.contains("polyplug-dotnet"),
+        msg.contains("polyplug_dotnet"),
         "error message must reference the adapter crate name, got: {msg}"
     );
 }

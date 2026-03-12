@@ -93,7 +93,7 @@ fn test_panic_returns_abi_error_panic() {
     );
 
     // ── Step 4: Write Cargo.toml for the cdylib crate ─────────────────────────
-    // Only depend on polyplug-guest; polyplug is an indirect dep.
+    // Only depend on polyplug_guest; polyplug is an indirect dep.
     // We do NOT add polyplug as a direct dep to avoid duplicate
     // `polyplug_abi_version` symbol (it is defined in polyplug/src/lib.rs).
     let guest_lib_path: PathBuf = workspace_root.join("guest-libs").join("rust");
@@ -108,7 +108,7 @@ fn test_panic_returns_abi_error_panic() {
          crate-type = [\"cdylib\"]\n\
          \n\
          [dependencies]\n\
-         polyplug-guest = {{ path = \"{}\" }}\n",
+         polyplug_guest = {{ path = \"{}\" }}\n",
         guest_lib_path.display()
     );
     std::fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");

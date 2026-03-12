@@ -269,6 +269,48 @@ If you believe an ABI change is necessary, stop and raise it as a discussion. Do
 
 ---
 
+### 11. Dependency Version Management
+
+**All dependency versions must be declared in the workspace `Cargo.toml`. Crates must never specify a version inline — use `{ workspace = true }` instead.**
+
+The workspace `Cargo.toml` owns the version. Each crate `Cargo.toml` owns the features. Never mix them up.
+
+```toml
+# CORRECT — workspace Cargo.toml (owns versions, optional base features)
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = "1"
+thiserror = "1"
+
+# CORRECT — crate Cargo.toml (inherits version, may add crate-specific features)
+[dependencies]
+serde = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+thiserror = { workspace = true }
+
+# FORBIDDEN — version declared in crate Cargo.toml
+[dependencies]
+serde = { version = "1", features = ["derive"] }   # FORBIDDEN — version belongs in workspace
+tokio = "1"                                         # FORBIDDEN — version belongs in workspace
+```
+
+**Rules:**
+
+- The workspace `Cargo.toml` is the single source of truth for dependency versions
+- Crates use `{ workspace = true }` and may extend with `features = [...]` as needed
+- Never declare a version number in a crate-level `Cargo.toml`
+- Never add `version = ...` alongside `workspace = true` — that is redundant and forbidden
+- Optional dependencies must also use `{ workspace = true, optional = true }` — version still lives in workspace
+
+```toml
+# FORBIDDEN — version alongside workspace = true
+serde = { workspace = true, version = "1" }  # FORBIDDEN
+
+# CORRECT — optional dep still uses workspace for version
+serde = { workspace = true, optional = true }
+```
+
+
 ## Project Structure
 
 ```
@@ -342,6 +384,8 @@ polyplug/
 | `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
 | modifying ABI structs | new functionality via extensions only |
 | editing generated files | fix the generator, re-run polyplugc |
+| dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
+| `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
 
 ---
 

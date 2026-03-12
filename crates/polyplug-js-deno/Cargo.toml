@@ -1,20 +1,20 @@
 [package]
-name             = "polyplug-js-deno"
-version          = "0.1.0"
-edition.workspace     = true
-license.workspace     = true
+name = "polyplug_js_deno"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name       = "polyplug_js_deno"
-path       = "src/lib.rs"
+name = "polyplug_js_deno"
+path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-polyplug     = { path = "../polyplug" }
-deno_core    = "0.311.0"
-tokio        = { version = "1", features = ["rt"] }
-thiserror    = { workspace = true }
+polyplug = { workspace = true }
+deno_core = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
