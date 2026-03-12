@@ -240,13 +240,41 @@ pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
         }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
-        let handles: Vec<PluginHandle> = runtime.0.find_all_by_contract(contract_id, min_version);
-        let write_count: usize = handles.len().min(out_cap);
-        for (i, handle) in handles.iter().take(write_count).enumerate() {
-            // SAFETY: i < out_cap, out is valid for out_cap u64 elements per ABI contract.
-            unsafe { out.add(i).write(pack_handle(*handle)) };
+        if out_cap == 0usize {
+            return 0usize;
         }
-        handles.len()
+        let mut handle_buf: [PluginHandle; 16] = [PluginHandle {
+            index: 0u32,
+            generation: 0u32,
+        }; 16];
+        let mut total_written: usize = 0usize;
+        loop {
+            let remaining: usize = out_cap - total_written;
+            if remaining == 0usize {
+                break;
+            }
+            let write_cap: usize = if remaining < handle_buf.len() {
+                remaining
+            } else {
+                handle_buf.len()
+            };
+            let count: usize = runtime.0.find_all_by_contract(
+                contract_id,
+                min_version,
+                &mut handle_buf[..write_cap],
+            );
+            for (offset, handle) in handle_buf[..count].iter().enumerate() {
+                // SAFETY: out is valid for out_cap u64 elements per ABI contract.
+                unsafe {
+                    out.add(total_written + offset).write(pack_handle(*handle));
+                }
+            }
+            total_written += count;
+            if count < write_cap {
+                break;
+            }
+        }
+        total_written
     }))
     .unwrap_or_else(|_| {
         set_last_error("panic in polyplug_rt_find_all_by_contract");

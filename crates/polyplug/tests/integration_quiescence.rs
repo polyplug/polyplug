@@ -29,9 +29,13 @@ fn test_quiescence_timeout() {
         .expect("RELOAD_PLUGIN_CONTRACT_ID must be a valid u64");
 
     // Find a handle for the loaded plugin.
-    let handles: Vec<polyplug::abi::PluginHandle> = rt.find_all_by_contract(contract_id, 0_u32);
+    let mut handles: [polyplug::abi::PluginHandle; 4] = [polyplug::abi::PluginHandle {
+        index: 0u32,
+        generation: 0u32,
+    }; 4];
+    let count: usize = rt.find_all_by_contract(contract_id, 0_u32, &mut handles);
     assert!(
-        !handles.is_empty(),
+        count > 0,
         "must find at least one plugin for contract_id={:#x}",
         contract_id
     );

@@ -429,8 +429,14 @@ impl Runtime {
     }
 
     /// Find all providers of a contract.
-    pub fn find_all_by_contract(&self, contract_id: u64, min_version: u32) -> Vec<PluginHandle> {
-        self.registry.find_all_by_contract(contract_id, min_version)
+    pub fn find_all_by_contract(
+        &self,
+        contract_id: u64,
+        min_version: u32,
+        out: &mut [PluginHandle],
+    ) -> usize {
+        self.registry
+            .find_all_by_contract(contract_id, min_version, out)
     }
 
     /// Resolve a plugin handle to a vtable pointer.
@@ -891,16 +897,12 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
         None => return 0,
     };
     // No dependency enforcement for find_all — enumeration is freely allowed
-    let handles: Vec<PluginHandle> = registry.find_all_by_contract(contract_id, min_version);
-    let count: usize = handles.len().min(out_cap);
-    // SAFETY: out is valid for out_cap elements per ABI contract. We write at most out_cap items.
-    for (i, &handle) in handles.iter().take(count).enumerate() {
-        // SAFETY: i < count <= out_cap; out points to a valid buffer of out_cap PluginHandles.
-        unsafe {
-            *out.add(i) = handle;
-        }
+    if out_cap == 0usize {
+        return 0usize;
     }
-    count
+    // SAFETY: out is valid for out_cap PluginHandle elements per ABI contract.
+    let out_slice: &mut [PluginHandle] = unsafe { std::slice::from_raw_parts_mut(out, out_cap) };
+    registry.find_all_by_contract(contract_id, min_version, out_slice)
 }
 
 /// HostVTable.resolve_plugin callback — returns raw vtable pointer for a handle.

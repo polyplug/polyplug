@@ -359,8 +359,12 @@ impl Registry {
 
     /// Find all plugins satisfying the given contract_id and minimum version.
     ///
-    /// Returns an empty Vec if none qualify.
-    pub fn find_all_by_contract(&self, contract_id: u64, min_version: u32) -> Vec<PluginHandle> {
+    pub fn find_all_by_contract(
+        &self,
+        contract_id: u64,
+        min_version: u32,
+        out: &mut [PluginHandle],
+    ) -> usize {
         let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
             self.slots.read().unwrap_or_else(|e| e.into_inner());
         let index_map: std::sync::RwLockReadGuard<'_, HashMap<u64, Vec<u32>>> = self
@@ -370,11 +374,17 @@ impl Registry {
 
         let indices: &Vec<u32> = match index_map.get(&contract_id) {
             Some(v) => v,
-            None => return Vec::new(),
+            None => return 0usize,
         };
 
-        let mut result: Vec<PluginHandle> = Vec::new();
+        if out.is_empty() {
+            return 0usize;
+        }
+        let mut write_count: usize = 0usize;
         for &slot_idx in indices.iter() {
+            if write_count >= out.len() {
+                break;
+            }
             let slot: &RegistrySlot = &slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref arc_vtable) = slot.vtable
@@ -384,14 +394,15 @@ impl Registry {
                 // Read-only access after registration.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
-                    result.push(PluginHandle {
+                    out[write_count] = PluginHandle {
                         index: slot_idx,
                         generation: slot.generation,
-                    });
+                    };
+                    write_count += 1usize;
                 }
             }
         }
-        result
+        write_count
     }
 
     /// Validate a PluginHandle and return an Arc-backed vtable guard.
@@ -718,8 +729,13 @@ mod tests {
             "each bundle gets its own slot"
         );
 
-        let all: Vec<PluginHandle> = registry.find_all_by_contract(0xAAAA_BBBB_CCCC_DDDD, 0);
-        assert_eq!(all.len(), 2, "both implementations should be found");
+        let mut handles: [PluginHandle; 4] = [PluginHandle {
+            index: 0u32,
+            generation: 0u32,
+        }; 4];
+        let count: usize =
+            registry.find_all_by_contract(0xAAAA_BBBB_CCCC_DDDD, 0, &mut handles);
+        assert_eq!(count, 2, "both implementations should be found");
     }
 
     #[test]
