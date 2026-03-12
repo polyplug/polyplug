@@ -361,7 +361,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add CLI argument validation tests`
   - Files: `crates/polyplugc/tests/cli_validation.rs`
 
-- [ ] **Task 6: Parser Error Handling Tests**
+- [x] **Task 6: Parser Error Handling Tests**
 
   **What to do**: Test parser.rs for all error conditions
 
