@@ -35,7 +35,7 @@ use polyplug::loader::BundleLoader;
 
 /// One shared QuickJS runtime per process.
 /// rquickjs `parallel` feature makes Runtime: Send+Sync.
-static QJS_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+static QJS_RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
 
 // ─── Thread-local pending vtable (set from registerVtable callback) ───────────
 
@@ -564,9 +564,14 @@ impl BundleLoader for JsLoader {
 
         // 3. Init/get QuickJS runtime.
         let runtime: &Runtime = QJS_RUNTIME.get_or_init(|| {
-            Runtime::new()
-                .unwrap_or_else(|e: rquickjs::Error| panic!("QuickJS runtime init failed: {e}"))
-        });
+                Runtime::new().map_err(|e: rquickjs::Error| format!("QuickJS runtime init failed: {e}"))
+            })
+            .as_ref()
+            .map_err(|reason: &String| {
+                PolyplugError::Loader(LoaderError::JsRuntimeInitFailed {
+                    reason: reason.clone(),
+                })
+            })?;
 
         // 4. Create fresh Context for this bundle.
         let ctx: Context = Context::full(runtime).map_err(|e: rquickjs::Error| {
