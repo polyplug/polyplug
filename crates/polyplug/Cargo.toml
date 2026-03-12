@@ -29,40 +29,6 @@ workspace = true
 criterion          = { workspace = true }
 tempfile           = "3"
 toml               = { workspace = true }
-polyplug-dotnet    = { path = "../polyplug-dotnet" }
-polyplug-python    = { path = "../polyplug-python" }
-polyplug-lua       = { path = "../polyplug-lua" }
-polyplug-js        = { path = "../polyplug-js" }
-polyplug-js-deno   = { path = "../polyplug-js-deno" }
-
-# Cross-crate integration tests (use multiple adapter crates — must live at workspace root)
-[[test]]
-name = "integration_dotnet"
-path = "../../tests/integration_dotnet.rs"
-
-[[test]]
-name = "integration_lua"
-path = "../../tests/integration_lua.rs"
-
-[[test]]
-name = "integration_python"
-path = "../../tests/integration_python.rs"
-
-[[test]]
-name = "integration_js"
-path = "../../tests/integration_js.rs"
-
-[[test]]
-name = "integration_loader_dispatch"
-path = "../../tests/integration_loader_dispatch.rs"
-
-[[test]]
-name = "cross_language"
-path = "../../tests/cross_language.rs"
-
-[[test]]
-name = "cross_language_deno"
-path = "../../tests/cross_language_deno.rs"
 
 [[bench]]
 name    = "vtable_dispatch"

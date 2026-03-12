@@ -1,0 +1,47 @@
+[package]
+name         = "integration"
+version      = "0.1.0"
+edition.workspace      = true
+license.workspace      = true
+rust-version.workspace = true
+publish      = false
+
+[dev-dependencies]
+polyplug         = { workspace = true }
+polyplug-dotnet  = { path = "../../crates/polyplug-dotnet" }
+polyplug-python  = { path = "../../crates/polyplug-python" }
+polyplug-lua     = { path = "../../crates/polyplug-lua" }
+polyplug-js      = { path = "../../crates/polyplug-js" }
+polyplug-js-deno = { path = "../../crates/polyplug-js-deno" }
+tempfile         = "3"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "integration_dotnet"
+path = "../integration_dotnet.rs"
+
+[[test]]
+name = "integration_lua"
+path = "../integration_lua.rs"
+
+[[test]]
+name = "integration_python"
+path = "../integration_python.rs"
+
+[[test]]
+name = "integration_js"
+path = "../integration_js.rs"
+
+[[test]]
+name = "integration_loader_dispatch"
+path = "../integration_loader_dispatch.rs"
+
+[[test]]
+name = "cross_language"
+path = "../cross_language.rs"
+
+[[test]]
+name = "cross_language_deno"
+path = "../cross_language_deno.rs"
