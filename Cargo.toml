@@ -23,6 +23,7 @@ license = "MIT"
 # Internal crates
 polyplug = { path = "crates/polyplug" }
 polyplugc = { path = "crates/polyplugc" }
+polyplug_codegen = { path = "crates/polyplug_codegen" }
 polyplug_dotnet = { path = "crates/polyplug_dotnet" }
 polyplug_js = { path = "crates/polyplug_js" }
 polyplug_js_deno = { path = "crates/polyplug_js_deno" }

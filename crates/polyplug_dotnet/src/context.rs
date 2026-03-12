@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use netcorehost::hostfxr::AssemblyDelegateLoader;
+use netcorehost::hostfxr::HostfxrContext;
+use netcorehost::hostfxr::InitializedForRuntimeConfig;
 use netcorehost::hostfxr::ManagedFunction;
 use netcorehost::pdcstring::PdCStr;
 use netcorehost::pdcstring::PdCString;
@@ -31,9 +33,7 @@ pub(crate) type InitFn =
 /// Created exactly once per process via CLR_CONTEXT.
 pub(crate) struct DotnetContext {
     /// Held to keep CLR runtime alive. Never locked after initialization except to obtain delegate loaders.
-    _context: Mutex<
-        netcorehost::hostfxr::HostfxrContext<netcorehost::hostfxr::InitializedForRuntimeConfig>,
-    >,
+    _context: Mutex<HostfxrContext<InitializedForRuntimeConfig>>,
     /// Per-assembly loader cache.
     /// Each `AssemblyDelegateLoader` is wrapped in `Arc<Mutex<...>>` because
     /// `AssemblyDelegateLoader` is `!Send` (it contains raw function pointers without an
@@ -42,14 +42,6 @@ pub(crate) struct DotnetContext {
     /// out of the map and used without holding the outer lock.
     loader_cache: Mutex<HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>>,
 }
-
-// SAFETY: DotnetContext is used only behind Arc and all its fields are protected by Mutex.
-// HostfxrContext<InitializedForRuntimeConfig> has an explicit `unsafe impl Send` in netcorehost.
-// AssemblyDelegateLoader contains function pointers that are safe to send across threads
-// because they are obtained from the CLR hosting API and remain valid for the lifetime of the runtime.
-unsafe impl Send for DotnetContext {}
-// SAFETY: All mutable access to DotnetContext's fields is serialized through Mutex.
-unsafe impl Sync for DotnetContext {}
 
 /// Global CLR context — initialized exactly once per process.
 pub(crate) static CLR_CONTEXT: OnceCell<Arc<DotnetContext>> = OnceCell::new();
@@ -158,9 +150,7 @@ pub(crate) fn init_context(
     // hostfxr locates shared frameworks relative to the runtimeconfig file's directory.
     // The .json extension on the temp file is required — hostfxr uses the filename to
     // detect file type (tempfile::Builder::suffix(".json") above ensures this).
-    let context: netcorehost::hostfxr::HostfxrContext<
-        netcorehost::hostfxr::InitializedForRuntimeConfig,
-    > = hostfxr
+    let context: HostfxrContext<InitializedForRuntimeConfig> = hostfxr
         .initialize_for_runtime_config(&pdcpath)
         .map_err(|e| {
             PolyplugError::Loader(LoaderError::ClrInitFailed {
@@ -240,17 +230,13 @@ impl DotnetContext {
         })?;
 
         let new_loader: AssemblyDelegateLoader = {
-            let ctx: std::sync::MutexGuard<
-                '_,
-                netcorehost::hostfxr::HostfxrContext<
-                    netcorehost::hostfxr::InitializedForRuntimeConfig,
-                >,
-            > = self._context.lock().map_err(|_| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
-                    path: asm_path.to_string_lossy().into_owned(),
-                    reason: "CLR context mutex poisoned".to_owned(),
-                })
-            })?;
+            let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
+                self._context.lock().map_err(|_| {
+                    PolyplugError::Loader(LoaderError::ClrInitFailed {
+                        path: asm_path.to_string_lossy().into_owned(),
+                        reason: "CLR context mutex poisoned".to_owned(),
+                    })
+                })?;
             ctx.get_delegate_loader_for_assembly(asm_pdc).map_err(|e| {
                 PolyplugError::Loader(LoaderError::ClrInitFailed {
                     path: asm_path.to_string_lossy().into_owned(),

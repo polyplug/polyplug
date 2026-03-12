@@ -1,4 +1,4 @@
-//! polyplug-python — CPython adapter for the polyplug runtime.
+//! polyplug_python — CPython adapter for the polyplug runtime.
 //!
 //! Implements `BundleLoader` for `.py` plugin bundles using pyo3 0.28
 //! CPython embedding. The interpreter is initialized exactly once per process.

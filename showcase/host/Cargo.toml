@@ -1,7 +1,7 @@
 [workspace]
 
 [package]
-name    = "showcase-host"
+name = "showcase-host"
 version = "0.1.0"
 edition = "2024"
 
@@ -10,8 +10,8 @@ name = "showcase-host"
 path = "src/main.rs"
 
 [dependencies]
-polyplug        = { path = "../../crates/polyplug" }
-polyplug_python = { path = "../../crates/polyplug-python" }
-polyplug_lua    = { path = "../../crates/polyplug-lua" }
-polyplug_js     = { path = "../../crates/polyplug-js" }
-polyplug_dotnet = { path = "../../crates/polyplug-dotnet" }
+polyplug = { workspace = true }
+polyplug_python = { workspace = true }
+polyplug_lua = { workspace = true }
+polyplug_js = { workspace = true }
+polyplug_dotnet = { workspace = true }

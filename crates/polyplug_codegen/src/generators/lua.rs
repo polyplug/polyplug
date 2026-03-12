@@ -1,0 +1,756 @@
+use std::path::PathBuf;
+
+use crate::error::PolyplugcError;
+use crate::generators::CodeGenerator;
+use crate::generators::GeneratedFile;
+use crate::generators::GeneratedFiles;
+use crate::ir::AbiBuiltin;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
+use crate::ir::PrimitiveType;
+use crate::ir::ResolvedBundle;
+use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
+use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedParam;
+use crate::ir::ResolvedPlugin;
+use crate::ir::ResolvedType;
+use crate::ir::ResolvedTypeRef;
+use crate::ir::ValidatedIr;
+
+pub(crate) struct LuaGenerator;
+
+impl CodeGenerator for LuaGenerator {
+    fn language_name(&self) -> &'static str {
+        "lua"
+    }
+
+    fn generate_host(
+        &self,
+        ir: &ValidatedIr,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        let types_lua: String = generate_lua_types_file(ir);
+        let callers_lua: String = generate_host_callers_file(ir);
+
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/types.lua"),
+            content: types_lua,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("host/callers.lua"),
+            content: callers_lua,
+            force_regenerate: false,
+        });
+
+        Ok(())
+    }
+
+    fn generate_guest(
+        &self,
+        ir: &ValidatedIr,
+        files: &mut GeneratedFiles,
+    ) -> Result<(), PolyplugcError> {
+        let types_lua: String = generate_lua_types_file(ir);
+        let contracts_lua: String = generate_guest_contracts_file(ir);
+
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/types.lua"),
+            content: types_lua,
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/contracts.lua"),
+            content: contracts_lua,
+            force_regenerate: false,
+        });
+        let init_lua: String = generate_init_lua(ir);
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/init.lua"),
+            content: init_lua,
+            force_regenerate: false,
+        });
+
+        if ir.bundle.is_some() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("manifest.toml"),
+                content: generate_bundle_manifest_lua(ir),
+                force_regenerate: true,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+fn generate_bundle_manifest_lua(ir: &ValidatedIr) -> String {
+    let bundle: &ResolvedBundle = match ir.bundle.as_ref() {
+        Some(b) => b,
+        None => return String::from("# ERROR: bundle manifest called without bundle IR\n"),
+    };
+
+    let name: &str = &bundle.name;
+    let version: String = format!(
+        "{}.{}.{}",
+        bundle.version.major, bundle.version.minor, bundle.version.patch
+    );
+    let file: String = format!("{}.lua", bundle.name);
+
+    let mut provides: Vec<String> = bundle
+        .plugins
+        .iter()
+        .flat_map(|p: &ResolvedPlugin| p.implements.iter().cloned())
+        .collect();
+    provides.sort();
+    provides.dedup();
+
+    let provides_toml: String = if provides.is_empty() {
+        String::from("[]")
+    } else {
+        format!(
+            "[{}]",
+            provides
+                .iter()
+                .map(|s: &String| format!("\"{}\"", s))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    let fn_count_entries: Vec<String> = ir
+        .contracts
+        .iter()
+        .map(|c: &ResolvedContract| {
+            let fn_count: u32 = c.functions.len() as u32;
+            format!("\"{}@{}\" = {}", c.name, c.version.major, fn_count)
+        })
+        .collect();
+    let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
+
+    let mut dep_toml: String = String::new();
+    for dep in &bundle.dependencies {
+        dep_toml.push_str("\n[[dependency]]\n");
+        match dep {
+            ResolvedDependency::ByContract {
+                contract,
+                min_version,
+                ..
+            } => {
+                dep_toml.push_str("kind = \"contract\"\n");
+                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
+                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
+            }
+            ResolvedDependency::ByBundle {
+                bundle,
+                contract,
+                min_version,
+                ..
+            } => {
+                dep_toml.push_str("kind = \"bundle\"\n");
+                dep_toml.push_str(&format!("bundle = \"{bundle}\"\n"));
+                dep_toml.push_str(&format!("contract = \"{contract}\"\n"));
+                dep_toml.push_str(&format!("min_version = \"{min_version}.0\"\n"));
+            }
+        }
+    }
+
+    let reinit: bool = bundle.needs_reinit_on_dep_reload;
+
+    format!(
+        "# THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n\
+         name = \"{name}\"\n\
+         bundle_name = \"{name}\"\n\
+         version = \"{version}\"\n\
+         runtime = \"lua\"\n\
+         file = \"{file}\"\n\
+         provides = {provides_toml}\n\
+         function_count = {function_count_toml}\n\
+         needs_reinit_on_dep_reload = {reinit}\n\
+         {dep_toml}"
+    )
+}
+
+fn generate_lua_types_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    // Conditionally require the bit library for bitwise enum support
+    if needs_bit_library(&ir.enums) {
+        out.push_str("local bit = require(\"bit\")\n");
+    }
+    out.push_str("local ffi = require(\"ffi\")\n\n");
+    out.push_str(cdef_guarded_block());
+    out.push_str("cdef_guarded([[\n");
+    for ty in &ir.types {
+        generate_lua_user_type(&mut out, ty);
+        out.push('\n');
+    }
+    for contract in &ir.contracts {
+        let contract_struct: String = contract_name_to_struct(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                emit_lua_arg_pack_struct(&mut out, &contract_struct, func);
+                out.push('\n');
+            }
+        }
+    }
+    out.push_str("]]) \n");
+    // Emit enum tables (outside cdef — Lua tables, not C structs)
+    for e in &ir.enums {
+        generate_lua_enum(&mut out, e);
+        out.push('\n');
+    }
+    for ty in &ir.types {
+        out.push_str(&format!("ffi.metatype(\"{}\", {{}})\n", ty.name));
+    }
+    out
+}
+
+fn generate_host_callers_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("local ffi = require(\"ffi\")\n");
+    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+    out.push_str("local M = {}\n\n");
+
+    for contract in &ir.contracts {
+        let contract_prefix: String = contract_name_to_prefix(&contract.name);
+        for func in &contract.functions {
+            generate_host_caller_function(&mut out, func, &contract_prefix);
+            out.push('\n');
+        }
+    }
+
+    out.push_str("return M\n");
+    out
+}
+
+fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("local ffi = require(\"ffi\")\n");
+    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+    out.push_str("local M = {}\n\n");
+
+    for contract in &ir.contracts {
+        generate_guest_contract_registration(&mut out, contract);
+        out.push('\n');
+    }
+
+    out.push_str("return M\n");
+    out
+}
+
+fn generate_init_lua(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str("-- THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n");
+    out.push_str(
+        "-- Re-generate with: polyplugc generate --bundle bundle.toml --lang lua --out <dir>\n\n",
+    );
+    let has_trace: bool = ir.bundle.as_ref().is_some_and(|b: &ResolvedBundle| {
+        b.plugins
+            .iter()
+            .any(|p: &ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
+    });
+    if has_trace {
+        out.push_str("local EXT_TRACE_ID = 0xC4EB9AEE\n");
+        out.push_str("-- Optional: trace extension\n");
+        out.push_str("local trace_vtable_ptr = polyplug.get_extension(EXT_TRACE_ID)\n");
+        out.push_str("-- trace_vtable_ptr is nil/0 if not available\n");
+    } else {
+        out.push_str("-- No optional extensions requested.\n");
+    }
+    out.push_str("\nlocal function polyplug_init(registrar_ptr, ctx_ptr)\n");
+    out.push_str("    if registrar_ptr == nil then return end\n");
+    out.push_str("    if ctx_ptr == nil then return end\n");
+    out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
+    out.push_str("end\n");
+    out
+}
+
+fn generate_lua_user_type(out: &mut String, ty: &ResolvedType) {
+    out.push_str("    typedef struct {\n");
+    for field in &ty.fields {
+        let ty_name: String = lua_type_name(&field.ty);
+        out.push_str(&format!(
+            "        {ty_name} {field_name};\n",
+            field_name = field.name
+        ));
+    }
+    out.push_str(&format!("    }} {};\n", ty.name));
+}
+
+fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, prefix: &str) {
+    let fn_name: String = format!("{}_{}", prefix, func.name);
+    let sig_params: String = build_lua_sig_params(func);
+    out.push_str(&format!("function M.{fn_name}(vtable{sig_params})\n"));
+    emit_lua_host_args_setup(out, func, prefix);
+    emit_lua_host_out_setup(out, &func.returns);
+    out.push_str("    local fn_ptr = vtable.functions[");
+    out.push_str(&format!("{}]", func.function_id));
+    out.push('\n');
+    out.push_str("    if fn_ptr == nil then\n");
+    out.push_str("        error(\"missing function pointer\", 2)\n");
+    out.push_str("    end\n");
+    out.push_str("    local fn = ffi.cast(\"uint32_t (*)(const void*, void*)\", fn_ptr)\n");
+    out.push_str("    local err = fn(args_ptr, out_ptr)\n");
+    out.push_str("    if err ~= 0 then\n");
+    out.push_str("        error(\"polyplug call failed\", 2)\n");
+    out.push_str("    end\n");
+    if has_return_value(&func.returns) {
+        out.push_str("    return out_val\n");
+    } else {
+        out.push_str("    return nil\n");
+    }
+    out.push_str("end\n");
+}
+
+fn generate_guest_contract_registration(out: &mut String, contract: &ResolvedContract) {
+    let contract_lower: String = contract.name.replace('.', "_");
+    let plugin_name: String = format!("{}_plugin", contract_lower);
+    let contract_version: u32 = contract.version.minor_patch_encoded();
+    let function_count: usize = contract.functions.len();
+    out.push_str(&format!(
+        "function M.register_{contract_lower}(registrar_ptr)\n"
+    ));
+    out.push_str("    if registrar_ptr == nil then\n");
+    out.push_str("        return\n");
+    out.push_str("    end\n");
+    out.push_str("    local registrar = polyplug_guest.cast_registrar(registrar_ptr)\n");
+    out.push_str("    if registrar == nil then\n");
+    out.push_str("        return\n");
+    out.push_str("    end\n");
+    out.push_str("    local descriptor = ffi.new(\"PluginDescriptor\")\n");
+    out.push_str(&format!(
+        "    descriptor.name = polyplug_guest.string_view(\"{plugin_name}\")\n",
+        plugin_name = plugin_name
+    ));
+    out.push_str(&format!(
+        "    descriptor.contract_name = polyplug_guest.string_view(\"{contract_name}\")\n",
+        contract_name = contract.name
+    ));
+    out.push_str(&format!(
+        "    descriptor.version_major = {major}\n",
+        major = contract.version.major
+    ));
+    out.push_str(&format!(
+        "    descriptor.version_minor = {minor}\n",
+        minor = contract.version.minor
+    ));
+    out.push_str(&format!(
+        "    descriptor.version_patch = {patch}\n",
+        patch = contract.version.patch
+    ));
+    out.push_str("    local vtable = ffi.new(\"PluginVTable\")\n");
+    out.push_str(&format!(
+        "    vtable.contract_id = 0x{:016X}\n",
+        contract.contract_id
+    ));
+    out.push_str(&format!(
+        "    vtable.contract_version = {}\n",
+        contract_version
+    ));
+    out.push_str(&format!("    vtable.function_count = {}\n", function_count));
+    out.push_str("    vtable.functions = nil\n");
+    out.push_str("    local err = registrar.register_plugin(registrar, descriptor, vtable)\n");
+    out.push_str("    if err.code ~= 0 then\n");
+    out.push_str("        error(\"plugin registration failed\", 2)\n");
+    out.push_str("    end\n");
+    out.push_str("end\n");
+}
+
+fn build_lua_sig_params(func: &ResolvedFunction) -> String {
+    if func.params.is_empty() {
+        return String::new();
+    }
+    let params: Vec<String> = func
+        .params
+        .iter()
+        .map(|p: &ResolvedParam| format!(", {}", p.name))
+        .collect();
+    params.join("")
+}
+
+fn emit_lua_host_args_setup(out: &mut String, func: &ResolvedFunction, contract_prefix: &str) {
+    if func.params.is_empty() {
+        out.push_str("    local args_ptr = nil\n");
+        return;
+    }
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        match &param.ty {
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {} )\n",
+                    param.name
+                ));
+            }
+            _ => {
+                let ty_name: String = lua_type_name(&param.ty);
+                out.push_str(&format!(
+                    "    local {name}_val = ffi.new(\"{ty}\", {name})\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {name}_val)\n",
+                    name = param.name
+                ));
+            }
+        }
+        return;
+    }
+    let contract_struct: String = contract_name_to_struct(contract_prefix);
+    let pack_struct: String = arg_pack_struct_name(&contract_struct, &func.name);
+    out.push_str(&format!(
+        "    local args_val = ffi.new(\"{pack_struct}\")\n",
+    ));
+    for param in &func.params {
+        out.push_str(&format!("    args_val.{0} = {0}\n", param.name));
+    }
+    out.push_str("    local args_ptr = ffi.cast(\"const void*\", args_val)\n");
+}
+
+fn emit_lua_host_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if !has_return_value(returns) {
+        out.push_str("    local out_ptr = nil\n");
+        return;
+    }
+    let ret_ty: String = match returns {
+        Some(ret) => lua_type_name(ret),
+        None => "void".to_owned(),
+    };
+    out.push_str(&format!("    local out_val = ffi.new(\"{ret_ty}\")\n"));
+    out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+}
+
+fn lua_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+fn has_return_value(returns: &Option<ResolvedTypeRef>) -> bool {
+    match returns {
+        Some(ty) => !matches!(ty, ResolvedTypeRef::AbiType(AbiBuiltin::Void)),
+        None => false,
+    }
+}
+
+fn contract_name_to_prefix(name: &str) -> String {
+    name.replace('.', "_")
+}
+
+fn contract_name_to_struct(name: &str) -> String {
+    name.split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        + "Contract"
+}
+
+fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
+    params.len() >= 2
+}
+
+fn emit_lua_arg_pack_struct(out: &mut String, contract_struct: &str, func: &ResolvedFunction) {
+    let struct_name: String = arg_pack_struct_name(contract_struct, &func.name);
+    out.push_str("    typedef struct {\n");
+    for param in &func.params {
+        let ty_name: String = lua_type_name(&param.ty);
+        out.push_str(&format!(
+            "        {ty_name} {param_name};\n",
+            param_name = param.name
+        ));
+    }
+    out.push_str(&format!("    }} {struct_name};\n"));
+}
+
+fn arg_pack_struct_name(contract_struct: &str, fn_name: &str) -> String {
+    let fn_pascal: String = fn_name
+        .split('_')
+        .map(|seg: &str| {
+            let mut chars: core::str::Chars<'_> = seg.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("{contract_struct}{fn_pascal}Args")
+}
+
+fn file_header() -> &'static str {
+    "-- THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+     -- DO NOT EDIT BY HAND\n\
+     -- Re-generate with: polyplugc generate --api <api.toml> --lang lua --out <dir>\n\n"
+}
+
+fn cdef_guarded_block() -> &'static str {
+    "local function cdef_guarded(decl)\n\
+    \tlocal ok, err = pcall(ffi.cdef, decl)\n\
+    \tif not ok and not string.find(err, \"already defined\", 1, true) then\n\
+    \t\terror(err, 2)\n\
+    \tend\n\
+     end\n\n"
+}
+
+/// Returns true if any enum in `enums` has a variant value that uses `<<`, `|`, or `~`.
+fn needs_bit_library(enums: &[EnumDef]) -> bool {
+    for e in enums {
+        for variant in &e.variants {
+            if variant.value.contains("<<")
+                || variant.value.contains('|')
+                || variant.value.contains('~')
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn substitute_variant_refs_lua(declared_variants: &[EnumVariant], expr: &str) -> String {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut result: String = String::new();
+    let mut i: usize = 0;
+    while i < len {
+        let c: char = chars[i];
+        if c.is_alphabetic() || c == '_' {
+            let start: usize = i;
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            let found: Option<&EnumVariant> = declared_variants.iter().find(|v| v.name == ident);
+            if let Some(ref_variant) = found {
+                result.push('(');
+                result.push_str(&ref_variant.value);
+                result.push(')');
+            } else {
+                result.push_str(&ident);
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Transform a value expression for LuaJIT compatibility.
+/// Converts `<<` to `bit.lshift(lhs, rhs)`, `|` to `bit.bor(lhs, rhs)`, `~` to `bit.bnot(inner)`.
+/// Operates on post-substitution expression strings.
+///
+/// Precedence: `~` > `<<` > `|` (from tightest to loosest binding)
+/// Implementation: simple recursive approach on the constrained grammar.
+fn lua_transform_value_expr(expr: &str) -> String {
+    let expr: &str = expr.trim();
+
+    // Try to split on `|` at top level (respecting parens) — lowest precedence
+    if let Some(parts) = split_on_top_level(expr, '|') {
+        let transformed: Vec<String> = parts
+            .iter()
+            .map(|p| lua_transform_value_expr(p.trim()))
+            .collect();
+        if transformed.len() == 1 {
+            return transformed.into_iter().next().unwrap_or_default();
+        }
+        // bit.bor(a, b) — but bit.bor only takes 2 args; chain for 3+
+        return transformed
+            .into_iter()
+            .reduce(|acc, next| format!("bit.bor({}, {})", acc, next))
+            .unwrap_or_default();
+    }
+
+    // Try to split on `<<` — higher precedence than |
+    if let Some(parts) = split_on_top_level_two_char(expr, '<', '<')
+        && parts.len() == 2
+    {
+        let lhs: String = lua_transform_value_expr(parts[0].trim());
+        let rhs: String = lua_transform_value_expr(parts[1].trim());
+        return format!("bit.lshift({}, {})", lhs, rhs);
+    }
+
+    // Handle ~ prefix
+    if let Some(stripped) = expr.strip_prefix('~') {
+        let inner: String = lua_transform_value_expr(stripped.trim());
+        return format!("bit.bnot({})", inner);
+    }
+
+    // Parenthesized expression — recurse inside
+    if expr.starts_with('(') && expr.ends_with(')') {
+        let inner: &str = &expr[1..expr.len() - 1];
+        return lua_transform_value_expr(inner.trim());
+    }
+
+    // Pure integer literal or simple token — return as-is
+    expr.to_owned()
+}
+
+/// Split expr on a top-level single char operator (respecting parentheses).
+/// Returns None if char not found at top level.
+fn split_on_top_level(expr: &str, op: char) -> Option<Vec<&str>> {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut depth: i32 = 0;
+    let mut splits: Vec<usize> = Vec::new();
+    let mut i: usize = 0;
+    while i < len {
+        match chars[i] {
+            '(' => {
+                depth += 1;
+            }
+            ')' => {
+                depth -= 1;
+            }
+            c if c == op && depth == 0 => {
+                splits.push(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if splits.is_empty() {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    let mut prev: usize = 0;
+    for &pos in &splits {
+        parts.push(&expr[prev..pos]);
+        prev = pos + 1;
+    }
+    parts.push(&expr[prev..]);
+    Some(parts)
+}
+
+/// Split expr on a top-level two-char operator (e.g., `<<`).
+fn split_on_top_level_two_char(expr: &str, op1: char, op2: char) -> Option<Vec<&str>> {
+    let chars: Vec<char> = expr.chars().collect();
+    let len: usize = chars.len();
+    let mut depth: i32 = 0;
+    let mut split_pos: Option<usize> = None;
+    let mut i: usize = 0;
+    while i < len {
+        match chars[i] {
+            '(' => {
+                depth += 1;
+            }
+            ')' => {
+                depth -= 1;
+            }
+            c if c == op1 && depth == 0 && i + 1 < len && chars[i + 1] == op2 => {
+                split_pos = Some(i);
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let pos: usize = split_pos?;
+    Some(vec![&expr[..pos], &expr[pos + 2..]])
+}
+
+fn generate_lua_enum(out: &mut String, e: &EnumDef) {
+    if e.bitflag {
+        out.push_str(&format!("--- Bitflag enum {}\n", e.name));
+    } else {
+        out.push_str(&format!("--- Enum {}\n", e.name));
+    }
+    out.push_str(&format!("local {} = {{\n", e.name));
+    for variant in &e.variants {
+        let subst_value: String = substitute_variant_refs_lua(&e.variants, &variant.value);
+        let final_value: String = lua_transform_value_expr(&subst_value);
+        out.push_str(&format!("    {} = {},\n", variant.name, final_value));
+    }
+    out.push_str("}\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::ReprType;
+
+    #[test]
+    fn generate_lua_enum_non_bitflag() {
+        let e: EnumDef = EnumDef {
+            name: "PixelFormat".to_owned(),
+            repr: ReprType::U32,
+            bitflag: false,
+            variants: vec![
+                EnumVariant {
+                    name: "Unknown".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Rgba8".to_owned(),
+                    value: "1".to_owned(),
+                },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_lua_enum(&mut out, &e);
+        assert!(
+            out.contains("local PixelFormat = {"),
+            "missing table def: {out}"
+        );
+        assert!(out.contains("Unknown = 0"), "missing Unknown: {out}");
+    }
+
+    #[test]
+    fn generate_lua_enum_bitflag_with_bit_library() {
+        let e: EnumDef = EnumDef {
+            name: "ImageFlags".to_owned(),
+            repr: ReprType::U32,
+            bitflag: true,
+            variants: vec![
+                EnumVariant {
+                    name: "None".to_owned(),
+                    value: "0".to_owned(),
+                },
+                EnumVariant {
+                    name: "Compressed".to_owned(),
+                    value: "1".to_owned(),
+                },
+                EnumVariant {
+                    name: "Hdr".to_owned(),
+                    value: "1 << 1".to_owned(),
+                },
+                EnumVariant {
+                    name: "CompressedHdr".to_owned(),
+                    value: "Compressed | Hdr".to_owned(),
+                },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_lua_enum(&mut out, &e);
+        assert!(
+            out.contains("local ImageFlags = {"),
+            "missing table def: {out}"
+        );
+        assert!(
+            out.contains("bit.lshift(1, 1)"),
+            "missing bit.lshift for Hdr: {out}"
+        );
+        assert!(
+            out.contains("bit.bor("),
+            "missing bit.bor for CompressedHdr: {out}"
+        );
+    }
+}
+const _: fn() = || {
+    let _: String = lua_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
+};

@@ -77,7 +77,7 @@ fn check_version_compatibility(tfm: &str, min_framework: &str) -> Result<(), Pol
     }
     if found_minor > required_minor + 2 {
         eprintln!(
-            "polyplug-dotnet: warning: assembly TFM {tfm} has higher minor version than required {min_framework}"
+            "polyplug_dotnet: warning: assembly TFM {tfm} has higher minor version than required {min_framework}"
         );
     }
     Ok(())

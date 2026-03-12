@@ -1,4 +1,4 @@
-//! PythonContext — CPython interpreter singleton for polyplug-python.
+//! PythonContext — CPython interpreter singleton for polyplug_python.
 
 use std::sync::OnceLock;
 

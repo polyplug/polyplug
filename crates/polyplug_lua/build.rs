@@ -1,13 +1,13 @@
-// build.rs for polyplug-lua
+// build.rs for polyplug_lua
 // allow expect in build scripts (no better error handling mechanism here)
 #![allow(clippy::expect_used)]
 fn main() {
     // Emit the guest Lua library directory so that LuaLoader's
     // env!("POLYPLUG_GUEST_LUA_DIR") resolves at compile time.
-    // This MUST be in polyplug-lua's own build.rs — cargo:rustc-env only
+    // This MUST be in polyplug_lua's own build.rs — cargo:rustc-env only
     // affects the crate that emits it, not downstream crates.
     let manifest_dir: std::path::PathBuf = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // workspace root is two levels up from crates/polyplug-lua/
+    // workspace root is two levels up from crates/polyplug_lua/
     let workspace_root: std::path::PathBuf = manifest_dir
         .parent()
         .expect("crates/ parent must exist")

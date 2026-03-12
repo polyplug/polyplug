@@ -1,4 +1,4 @@
-//! polyplug-js-deno — V8 in-process JS adapter for polyplug.
+//! polyplug_js_deno — V8 in-process JS adapter for polyplug.
 //!
 //! Implements BundleLoader for js-deno plugin bundles.
 //! One V8 isolate per bundle, pinned to a dedicated thread.

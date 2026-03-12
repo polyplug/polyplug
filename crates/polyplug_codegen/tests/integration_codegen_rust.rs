@@ -1,30 +1,28 @@
-//! Integration test: run polyplugc to generate Rust bindings, compile them as a
-//! cdylib, load with libloading, dispatch `add(3, 5)` through the vtable, assert == 8.
-//!
-//! This test crate is the crate root for the `integration_codegen_rust` test binary.
-//! (AGENTS.md Rule 1: module roots use dirname/mod.rs)
+//! Integration test: use polyplug_codegen library to generate Rust bindings,
+//! compile them as a cdylib, load with libloading, dispatch `add(3, 5)` through
+//! the vtable, assert == 8.
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::ABI_OK;
+use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::process::Output;
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
-/// Workspace root resolved from `CARGO_MANIFEST_DIR` (`crates/polyplug`).
+/// Workspace root resolved from `CARGO_MANIFEST_DIR` (`crates/polyplug_codegen`).
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("parent of crates/polyplug")
+        .expect("parent of crates/polyplug_codegen")
         .parent()
         .expect("workspace root")
         .to_path_buf()
@@ -41,21 +39,27 @@ fn so_filename() -> &'static str {
     }
 }
 
-// ─── Helper: run polyplugc ────────────────────────────────────────────────────
+// ─── Helper: generate code using library API ─────────────────────────────────
 
-/// Run `polyplugc generate --api <api_toml> --lang rust --out <out_dir>`.
-/// Returns the `Output` for inspection.
-fn run_polyplugc(api_toml: &Path, out_dir: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_polyplugc"))
-        .arg("generate")
-        .arg("--api")
-        .arg(api_toml)
-        .arg("--lang")
-        .arg("rust")
-        .arg("--out")
-        .arg(out_dir)
-        .output()
-        .expect("failed to spawn polyplugc")
+/// Use polyplug_codegen::generate() to generate Rust bindings.
+fn generate_rust_bindings(api_toml: &Path, out_dir: &Path) {
+    let config = GenerateConfig {
+        api_toml: api_toml.to_path_buf(),
+        lang: Lang::Rust,
+        side: Side::Host,
+        out_dir: out_dir.to_path_buf(),
+    };
+
+    let output = generate(config).expect("polyplug_codegen::generate failed");
+
+    // Write generated files to disk
+    for file in &output.files {
+        let file_path = out_dir.join(&file.path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).expect("failed to create parent dir");
+        }
+        std::fs::write(&file_path, &file.content).expect("failed to write generated file");
+    }
 }
 
 // ─── Helper: write Cargo.toml for the generated cdylib ───────────────────────
@@ -215,14 +219,8 @@ fn test_rust_codegen_compile_and_run() {
 
     std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
-    // ── 2. Run polyplugc to generate Rust bindings into tmp_dir/src/ ──────────
-    let gen_output: Output = run_polyplugc(&api_toml, &src_dir);
-    assert!(
-        gen_output.status.success(),
-        "polyplugc generate failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&gen_output.stdout),
-        String::from_utf8_lossy(&gen_output.stderr),
-    );
+    // ── 2. Generate Rust bindings using library API ───────────────────────────
+    generate_rust_bindings(&api_toml, &src_dir);
 
     // ── 3. Write Cargo.toml + src/lib.rs ─────────────────────────────────────
     write_plugin_cargo_toml(&tmp_dir, &guest_lib_path);
@@ -351,14 +349,8 @@ fn test_rust_codegen_generates_enum_types() {
 
     std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
-    // ── 2. Run polyplugc to generate Rust bindings ────────────────────────────
-    let gen_output: Output = run_polyplugc(&api_toml, &out_dir);
-    assert!(
-        gen_output.status.success(),
-        "polyplugc generate failed:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&gen_output.stdout),
-        String::from_utf8_lossy(&gen_output.stderr),
-    );
+    // ── 2. Generate Rust bindings using library API ───────────────────────────
+    generate_rust_bindings(&api_toml, &out_dir);
 
     // ── 3. Read host/types.rs and assert enum content ─────────────────────────
     let types_file: PathBuf = out_dir.join("host").join("types.rs");
