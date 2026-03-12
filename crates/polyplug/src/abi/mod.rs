@@ -61,10 +61,12 @@ impl StringView {
     /// # Safety
     /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
     pub unsafe fn as_str(&self) -> &str {
-        // SAFETY: Caller guarantees ptr is valid, non-null, UTF-8, and live for 'self lifetime.
+        // SAFETY: StringView::as_str is only called with host-owned StringViews created
+        // via StringView::from_static or StringView::from_str_ref — both guarantee valid
+        // UTF-8. Plugin-provided StringViews must never be passed to this method.
         unsafe {
             let slice: &[u8] = core::slice::from_raw_parts(self.ptr, self.len);
-            core::str::from_utf8_unchecked(slice)
+            core::str::from_utf8_unchecked(slice) // SAFETY: see comment above
         }
     }
 

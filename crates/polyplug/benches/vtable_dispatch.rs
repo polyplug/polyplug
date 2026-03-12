@@ -71,11 +71,12 @@ unsafe extern "C" fn bench_register_callback(
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     let vt: &PluginVTable = unsafe { &*vtable };
 
-    // SAFETY: desc.contract_name.ptr is valid UTF-8 for desc.contract_name.len bytes.
+    // SAFETY: desc.contract_name is set from a &'static str in the benchmark fixture.
+    // The bytes are valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes)
+        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     let result: Result<PluginHandle, _> = BENCH_REGISTRY.with(|cell| {

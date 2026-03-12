@@ -125,11 +125,12 @@ unsafe extern "C" fn registry_register_cb(
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     // SAFETY: vtable is valid for the duration of this call (ABI contract).
     let vt: &PluginVTable = unsafe { &*vtable };
-    // SAFETY: contract_name.ptr points to valid UTF-8 bytes for contract_name.len bytes.
+    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
+    // &'static str contract name — guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes)
+        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, RegistryError> = CROSS_REGISTRY.with(|reg_cell| {

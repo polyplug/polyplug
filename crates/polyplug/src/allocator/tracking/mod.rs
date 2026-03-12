@@ -1,11 +1,16 @@
+#![cfg_attr(debug_assertions, allow(clippy::std_instead_of_core))]
 //! Tracking allocator — wraps `polyplug_host_alloc`/`polyplug_host_free` and counts
 //! allocation/deallocation calls for test-time leak detection.
 //!
 //! This module does NOT implement `GlobalAlloc` or `std::alloc::Allocator`.
 //! It is purely a test-support shim that forwards to the ABI allocator and counts calls.
 
+#[cfg(debug_assertions)]
+use core::cell::RefCell;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
+#[cfg(debug_assertions)]
+use std::collections::HashSet;
 
 use crate::allocator::polyplug_host_alloc;
 use crate::allocator::polyplug_host_free;
@@ -13,6 +18,11 @@ use crate::allocator::polyplug_host_free;
 thread_local! {
     static TLS_ALLOC_COUNT: AtomicUsize = const { AtomicUsize::new(0) };
     static TLS_FREE_COUNT: AtomicUsize = const { AtomicUsize::new(0) };
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    static TLS_LIVE_ADDRS: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
 
 /// Standalone `extern "C"` function that increments the thread-local alloc counter
@@ -25,7 +35,14 @@ unsafe extern "C" fn tracking_alloc(size: usize, align: usize) -> *mut u8 {
     TLS_ALLOC_COUNT.with(|c| c.fetch_add(1, Ordering::SeqCst));
     // SAFETY: Caller guarantees size > 0 and align is a power of two.
     // Forwarding directly to the ABI allocator with unchanged parameters.
-    polyplug_host_alloc(size, align)
+    let ptr: *mut u8 = polyplug_host_alloc(size, align);
+    #[cfg(debug_assertions)]
+    if !ptr.is_null() {
+        TLS_LIVE_ADDRS.with(|s| {
+            s.borrow_mut().insert(ptr as usize);
+        });
+    }
+    ptr
 }
 
 /// Standalone `extern "C"` function that increments the thread-local free counter
@@ -36,6 +53,18 @@ unsafe extern "C" fn tracking_alloc(size: usize, align: usize) -> *mut u8 {
 /// with the same `size` and `align`. Must not be called twice for the same pointer.
 unsafe extern "C" fn tracking_free(ptr: *mut u8, size: usize, align: usize) {
     TLS_FREE_COUNT.with(|c| c.fetch_add(1, Ordering::SeqCst));
+    #[cfg(debug_assertions)]
+    {
+        let addr: usize = ptr as usize;
+        TLS_LIVE_ADDRS.with(|s| {
+            if !s.borrow_mut().remove(&addr) {
+                panic!(
+                    "TrackingAllocator: double-free detected at address {:#x}",
+                    addr
+                );
+            }
+        });
+    }
     // SAFETY: ptr was allocated by polyplug_host_alloc via tracking_alloc with this layout.
     // Caller guarantees size and align match the original allocation.
     unsafe { polyplug_host_free(ptr, size, align) }
@@ -53,6 +82,8 @@ impl TrackingAllocator {
     pub fn new() -> TrackingAllocator {
         TLS_ALLOC_COUNT.with(|c| c.store(0, Ordering::SeqCst));
         TLS_FREE_COUNT.with(|c| c.store(0, Ordering::SeqCst));
+        #[cfg(debug_assertions)]
+        TLS_LIVE_ADDRS.with(|s| s.borrow_mut().clear());
         TrackingAllocator
     }
 

@@ -55,10 +55,12 @@ unsafe extern "C" fn registry_register_callback(
     }
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     let vt: &PluginVTable = unsafe { &*vtable };
+    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
+    // &'static str contract name — guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes)
+        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
     let result: Result<PluginHandle, polyplug::error::RegistryError> =
         DENO_REGISTRY.with(|reg_cell| {

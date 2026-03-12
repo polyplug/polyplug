@@ -77,11 +77,12 @@ unsafe extern "C" fn registry_register_callback(
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // Extract contract name from StringView.
-    // SAFETY: desc.contract_name.ptr points to valid UTF-8 bytes for desc.contract_name.len bytes.
+    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
+    // &'static str contract name — guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes)
+        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     // Register with thread-local Registry.

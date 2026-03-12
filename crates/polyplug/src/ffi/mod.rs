@@ -89,7 +89,11 @@ pub unsafe extern "C" fn polyplug_load_bundle(
         }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
-        // SAFETY: path points to path_len valid UTF-8 bytes per ABI contract.
+        if path.is_null() {
+            set_last_error("null path pointer in polyplug_load_bundle");
+            return 1u32;
+        }
+        // SAFETY: path is non-null and points to path_len valid UTF-8 bytes per ABI contract.
         let bytes: &[u8] = unsafe { core::slice::from_raw_parts(path, path_len) };
         let s: &str = match core::str::from_utf8(bytes) {
             Ok(s) => s,
@@ -129,7 +133,11 @@ pub unsafe extern "C" fn polyplug_reload_bundle(
         }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
-        // SAFETY: path points to path_len valid UTF-8 bytes per ABI contract.
+        if path.is_null() {
+            set_last_error("null path pointer in polyplug_reload_bundle");
+            return 1u32;
+        }
+        // SAFETY: path is non-null and points to path_len valid UTF-8 bytes per ABI contract.
         let bytes: &[u8] = unsafe { core::slice::from_raw_parts(path, path_len) };
         let s: &str = match core::str::from_utf8(bytes) {
             Ok(s) => s,
@@ -224,6 +232,12 @@ pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
         if rt.is_null() {
             return 0usize;
         }
+        if out.is_null() && out_cap > 0 {
+            set_last_error(
+                "null output buffer with non-zero capacity in polyplug_rt_find_all_by_contract",
+            );
+            return 0usize;
+        }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         let handles: Vec<PluginHandle> = runtime.0.find_all_by_contract(contract_id, min_version);
@@ -251,6 +265,12 @@ pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
             set_last_error("null runtime");
+            return core::ptr::null_mut();
+        }
+        const NULL_HANDLE: u64 = u64::MAX;
+        if packed_handle == NULL_HANDLE {
+            // Null handle — return null guard without setting last_error.
+            // Callers that receive NULL_HANDLE back from find functions use this as a sentinel.
             return core::ptr::null_mut();
         }
         let handle: PluginHandle = unpack_handle(packed_handle);

@@ -36,10 +36,12 @@ unsafe extern "C" fn trace_emit_thunk(msg: StringView, state: *const ()) {
     // SAFETY: state is a non-null *const TraceState leaked in TraceExtension::new.
     // The TraceState outlives any call through this vtable (it is never freed).
     let ts: *const TraceState = state as *const TraceState;
-    // SAFETY: ABI contract guarantees msg.ptr points to valid UTF-8 for msg.len bytes,
-    // and remains valid for the duration of this call.
+    // SAFETY: The ABI contract for TraceVTable::emit (see abi/mod.rs and TRUST_MODEL.md)
+    // states that msg.ptr points to valid UTF-8 bytes for exactly msg.len bytes, and
+    // remains valid for the duration of this call. Plugins that violate this contract
+    // invoke undefined behaviour — enforcement is the caller's responsibility.
     let s: &str =
-        unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(msg.ptr, msg.len)) };
+        unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(msg.ptr, msg.len)) }; // SAFETY: see comment above
     // SAFETY: ts is non-null and properly aligned (guaranteed by Box::into_raw).
     unsafe { ((*ts).callback)(s) };
 }

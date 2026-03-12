@@ -41,6 +41,9 @@ pub enum RuntimeError {
     #[error("quiescence timeout waiting for in-flight calls to complete for bundle `{bundle}`")]
     QuiescenceTimeout { bundle: String },
 
+    #[error("invalid UTF-8 in plugin-provided data: context={context}")]
+    InvalidUtf8 { context: String },
+
     #[cfg(feature = "hot-reload")]
     #[error("file watcher error: {reason}")]
     WatcherFailed { reason: String },
