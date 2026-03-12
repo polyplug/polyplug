@@ -64,8 +64,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: cargo build -p polyplug-dotnet --features download-nethost
-        run: cargo build -p polyplug-dotnet --features download-nethost
+      - name: cargo build -p polyplug_dotnet --features download-nethost
+        run: cargo build -p polyplug_dotnet --features download-nethost
   # Single required status check — point branch protection rules at this job.
   # Adding matrix entries in the future won't require updating branch rules.
   ci:

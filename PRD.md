@@ -71,7 +71,7 @@ The app developer's entire plugin API is derived from a single schema file. Code
 Every supported language can be a host and a guest. No language is a first-class citizen. The C ABI is the universal boundary.
 
 **Pay only for what you use**
-Language runtime adapters (dotnet, python, lua) are separate crates following the serde model. If you do not depend on `polyplug-dotnet`, .NET support does not exist in your binary. Not a feature flag — a missing dependency. True zero cost for unused languages.
+Language runtime adapters (dotnet, python, lua) are separate crates following the serde model. If you do not depend on `polyplug_dotnet`, .NET support does not exist in your binary. Not a feature flag — a missing dependency. True zero cost for unused languages.
 
 **C# unsafe is confined to generated code only — never in libs or app code**
 
@@ -427,7 +427,7 @@ JS/TS   host-libs/js/      →  polyplug.ts (Deno.dlopen into libpolyplug.so)
                                Performance: <10ns (V8 fast call), ~150ns (BigInt/slow path)
 ```
 
-Note: `polyplug-dotnet`, `polyplug-python`, `polyplug-lua` are **not** host libs. They are Rust adapter crates that teach the runtime how to *load* plugins written in those languages. A C# host app needs `host-libs/csharp/` to drive the runtime. It separately needs `polyplug-dotnet` only if it wants to load `.NET plugins`. Similarly, `polyplug-js` and `polyplug-js-deno` are adapter crates for *loading* JS plugins — they are distinct from `host-libs/js/` which lets a Deno app *be* the host.
+Note: `polyplug_dotnet`, `polyplug_python`, `polyplug_lua` are **not** host libs. They are Rust adapter crates that teach the runtime how to *load* plugins written in those languages. A C# host app needs `host-libs/csharp/` to drive the runtime. It separately needs `polyplug_dotnet` only if it wants to load `.NET plugins`. Similarly, `polyplug_js` and `polyplug_js-deno` are adapter crates for *loading* JS plugins — they are distinct from `host-libs/js/` which lets a Deno app *be* the host.
 
 **App developer runtime initialization:**
 
@@ -510,11 +510,11 @@ Runtime C ABI
 **Per language:**
 
 ```
-Rust    → polyplug-guest crate, proc macro, allocator hook
+Rust    → polyplug_guest crate, proc macro, allocator hook
 C++     → guest-libs/cpp/ header-only, entry point macro, RAII helpers
 C#      → Polyplug.Guest NuGet, entry point attribute, marshaling helpers
-Python  → polyplug-guest pip package, entry point decorator, ctypes helpers
-Lua     → polyplug-guest.lua, entry point registration helper
+Python  → polyplug_guest pip package, entry point decorator, ctypes helpers
+Lua     → polyplug_guest.lua, entry point registration helper
 ```
 
 ---
@@ -523,11 +523,11 @@ Lua     → polyplug-guest.lua, entry point registration helper
 
 Language runtime adapters are separate crates that teach `polyplug` how to load non-native bundles. They follow the **serde model**: separate crates, not feature flags.
 
-- If `polyplug-dotnet` is not in your `Cargo.toml`, .NET support is not compiled into your binary
-- If `polyplug-python` is not in your `Cargo.toml`, Python support is not compiled into your binary
-- If `polyplug-lua` is not in your `Cargo.toml`, Lua support is not compiled into your binary
-- If `polyplug-js` is not in your `Cargo.toml`, QuickJS JS support is not compiled into your binary
-- If `polyplug-js-deno` is not in your `Cargo.toml`, V8/Deno JS support is not compiled into your binary
+- If `polyplug_dotnet` is not in your `Cargo.toml`, .NET support is not compiled into your binary
+- If `polyplug_python` is not in your `Cargo.toml`, Python support is not compiled into your binary
+- If `polyplug_lua` is not in your `Cargo.toml`, Lua support is not compiled into your binary
+- If `polyplug_js` is not in your `Cargo.toml`, QuickJS JS support is not compiled into your binary
+- If `polyplug_js-deno` is not in your `Cargo.toml`, V8/Deno JS support is not compiled into your binary
 
 This is not a feature flag. It is a missing dependency. True zero cost.
 
@@ -548,11 +548,11 @@ App developer registers adapters at init:
 
 ```rust
 PluginRuntime::new()
-    .loader(DotnetLoader::new())              // from polyplug-dotnet
-    .loader(PythonLoader::new())              // from polyplug-python
-    .loader(LuaLoader::new())                 // from polyplug-lua
-    .loader(JsLoader::new(JsConfig {}))       // from polyplug-js (QuickJS)
-    .loader(JsDenoLoader::new(JsDenoConfig {})) // from polyplug-js-deno (V8)
+    .loader(DotnetLoader::new())              // from polyplug_dotnet
+    .loader(PythonLoader::new())              // from polyplug_python
+    .loader(LuaLoader::new())                 // from polyplug_lua
+    .loader(JsLoader::new(JsConfig {}))       // from polyplug_js (QuickJS)
+    .loader(JsDenoLoader::new(JsDenoConfig {})) // from polyplug_js-deno (V8)
     .init()?;
 ```
 
@@ -561,21 +561,21 @@ If a bundle's manifest declares `runtime = "js-quickjs"` but no JS loader is reg
 ```
 Error: bundle "my_js_plugin" requires runtime "js-quickjs"
 but no loader is registered for runtime "js-quickjs".
-Add polyplug-js as a dependency and register JsLoader at init.
+Add polyplug_js as a dependency and register JsLoader at init.
 ```
 
 Native plugins (Rust, C++, C# NativeAOT) require no adapter. The built-in native loader in `polyplug` handles them via dlopen.
 
 ---
 
-### polyplug-dotnet
+### polyplug_dotnet
 
 Enables loading of standard .NET C# plugins without NativeAOT.
 
 **Cargo dependency:**
 
 ```toml
-# polyplug-dotnet/Cargo.toml
+# polyplug_dotnet/Cargo.toml
 netcorehost = { version = "0.20", features = ["nethost"] }
 
 # Optional Cargo feature — app developer opts in when they want zero system .NET dep at build time
@@ -585,7 +585,7 @@ download-nethost = ["netcorehost/download-nethost"]
 
 `nethost` feature: enables `nethost::load_hostfxr()` which automatically locates hostfxr via `DOTNET_ROOT`, `PATH`, and well-known system paths — no manual scanning needed.
 
-`download-nethost` feature: downloads the `nethost` binary from NuGet at build time — zero system .NET install required to compile `polyplug-dotnet`. App developers enable this via `polyplug-dotnet/download-nethost` in their own `Cargo.toml`. Not enabled by default (supply chain / CI caching concerns).
+`download-nethost` feature: downloads the `nethost` binary from NuGet at build time — zero system .NET install required to compile `polyplug_dotnet`. App developers enable this via `polyplug_dotnet/download-nethost` in their own `Cargo.toml`. Not enabled by default (supply chain / CI caching concerns).
 
 **Configuration — app developer provides at init:**
 
@@ -610,7 +610,7 @@ DotnetLoader::new(DotnetConfig {
 
 **runtimeconfig.json — generated on the fly, never shipped by plugin developer:**
 
-`hostfxr_initialize_for_runtime_config` requires a `.runtimeconfig.json` file path — there is no in-memory alternative. `polyplug-dotnet` generates a minimal one in a temp dir from `DotnetConfig.min_framework` **before** calling `nethost::load_hostfxr()` context init, passes it to hostfxr, then deletes it immediately after. Plugin developers ship only the `.dll`. No `.runtimeconfig.json` in the bundle.
+`hostfxr_initialize_for_runtime_config` requires a `.runtimeconfig.json` file path — there is no in-memory alternative. `polyplug_dotnet` generates a minimal one in a temp dir from `DotnetConfig.min_framework` **before** calling `nethost::load_hostfxr()` context init, passes it to hostfxr, then deletes it immediately after. Plugin developers ship only the `.dll`. No `.runtimeconfig.json` in the bundle.
 
 The generated `runtimeconfig.json` includes `additionalProbingPaths` pointing to the bundle directory. This allows managed assembly dependencies (`.dll` files) shipped inside the bundle directory to be found by the CLR automatically. For native interop DLLs, plugin developers use `NativeLibrary.Load(Path.Combine(bundlePath, "native.dll"))` with the `bundle_path` from `PluginContext`.
 
@@ -723,13 +723,13 @@ public static extern AbiError call_plugin(
 **C# bundle manifest — plugin ships only `.dll`:**
 
 ```toml
-runtime = "dotnet"    # standard .NET, requires polyplug-dotnet
+runtime = "dotnet"    # standard .NET, requires polyplug_dotnet
 # or absent           # NativeAOT, loaded by native loader, no adapter needed
 ```
 
 ---
 
-### polyplug-python
+### polyplug_python
 
 Enables loading of Python plugins via CPython embedding.
 
@@ -743,7 +743,7 @@ Uses `pyo3` 0.28 to embed CPython (`auto-initialize` feature removed — `prepar
 
 All plugin loads run inside `Python::with_gil(|py| { ... })`. The GIL is released via `py.allow_threads()` during any Rust-only work between loads to avoid blocking other Python threads.
 
-Plugins are loaded via `importlib.util.spec_from_file_location`. Before loading, polyplug-python prepends the bundle directory to `sys.path`. If `bundle_dir/site-packages/` exists, it is also prepended — this allows plugin developers to ship pip dependencies inside their bundle directory. These paths are not removed after load (removing them could break already-imported modules).
+Plugins are loaded via `importlib.util.spec_from_file_location`. Before loading, polyplug_python prepends the bundle directory to `sys.path`. If `bundle_dir/site-packages/` exists, it is also prepended — this allows plugin developers to ship pip dependencies inside their bundle directory. These paths are not removed after load (removing them could break already-imported modules).
 
 The `host-libs/python/` package loads `polyplug.so` from a co-located path configured at builder time.
 
@@ -756,7 +756,7 @@ The `host-libs/python/` package loads `polyplug.so` from a co-located path confi
 
 ---
 
-### polyplug-lua
+### polyplug_lua
 
 Enables loading of Lua plugins via LuaJIT or standard Lua embedding.
 
@@ -773,7 +773,7 @@ LuaLoader::new(LuaConfig { min_version: LuaVersion::Lua54 })
 Uses `mlua` crate with `vendored` feature (compiles LuaJIT/Lua from source — no system install) and `send` feature (makes `mlua::Lua: Send + Sync` for `OnceLock`). One shared VM per process.
 
 ```toml
-# Cargo.toml for polyplug-lua (LuaJIT variant)
+# Cargo.toml for polyplug_lua (LuaJIT variant)
 mlua = { version = "0.11", features = ["luajit", "vendored", "send"] }
 # Lua 5.5 variant:
 mlua = { version = "0.11", features = ["lua55", "vendored", "send"] }
@@ -796,19 +796,19 @@ This cast happens once at init time. All subsequent vtable function pointer call
 
 **Dependency path setup:**
 
-Before executing the plugin chunk, polyplug-lua prepends the bundle directory to `package.path` (for `.lua` files) and `package.cpath` (for C extension modules `.so`/`.dll`). This allows plugin developers to ship Lua module dependencies inside their bundle directory — a `require "somedep"` will find `bundle_dir/somedep.lua` or `bundle_dir/somedep.so` automatically. These paths are not removed after load.
+Before executing the plugin chunk, polyplug_lua prepends the bundle directory to `package.path` (for `.lua` files) and `package.cpath` (for C extension modules `.so`/`.dll`). This allows plugin developers to ship Lua module dependencies inside their bundle directory — a `require "somedep"` will find `bundle_dir/somedep.lua` or `bundle_dir/somedep.so` automatically. These paths are not removed after load.
 
 **Performance:** LuaJIT FFI call overhead is within 2x of native vtable dispatch.
 
 ---
 
-### polyplug-js
+### polyplug_js
 
 Enables loading of JavaScript and TypeScript plugins via embedded QuickJS.
 Runtime value: `js-quickjs`.
 
 **Embedding model:** QuickJS is embedded in-process via the `rquickjs` crate —
-identical model to `polyplug-lua`. One shared JS VM per process, mutex-protected.
+identical model to `polyplug_lua`. One shared JS VM per process, mutex-protected.
 No subprocess. No IPC. No process boundary. Direct Rust function pointer calls.
 
 **Cargo dependency:**
@@ -872,14 +872,14 @@ Plugin developer needs: `npm i -g rolldown`. No other toolchain required.
 Pure-logic npm packages (lodash, zod, date-fns, etc.) work perfectly — bundled by Rolldown.
 Node.js API packages (`fs`, `http`, `net`, `crypto`) do NOT work — QuickJS has no Node APIs.
 `rolldown-plugin-node-polyfills` is NOT recommended — polyfills for I/O APIs throw at runtime,
-producing confusing errors. Plugin developers needing Node.js APIs must use `polyplug-js-deno`.
+producing confusing errors. Plugin developers needing Node.js APIs must use `polyplug_js-deno`.
 
 **Performance:** JS value boxing/unboxing only — ~50-200ns per cross-plugin call.
 Same performance tier as Lua. No channel, no thread hop, no IPC.
 
 ---
 
-### polyplug-js-deno
+### polyplug_js-deno
 
 Enables loading of JavaScript and TypeScript plugins via embedded V8 (deno_core).
 Runtime value: `js-deno`.
@@ -1585,9 +1585,9 @@ A plugin that segfaults kills the host process. This is intentional — see `TRU
 # Cargo.toml
 [dependencies]
 polyplug        = "1.0"      # always required
-polyplug-dotnet = "1.0"      # only if loading .NET plugins
-polyplug-python = "1.0"      # only if loading Python plugins
-polyplug-lua    = "1.0"      # only if loading Lua plugins
+polyplug_dotnet = "1.0"      # only if loading .NET plugins
+polyplug_python = "1.0"      # only if loading Python plugins
+polyplug_lua    = "1.0"      # only if loading Lua plugins
 ```
 
 **Step 2: Write api.toml** (see Section 11)
@@ -1747,10 +1747,10 @@ cargo build --release
 ```
 Rust        host + guest    native, near zero overhead
 C++         host + guest    header-only libs, near zero overhead
-C#          host + guest    NativeAOT (native loader) or standard .NET (polyplug-dotnet)
-Python      host + guest    ctypes, via polyplug-python
+C#          host + guest    NativeAOT (native loader) or standard .NET (polyplug_dotnet)
+Python      host + guest    ctypes, via polyplug_python
 Lua         host + guest    LuaJIT FFI into libpolyplug.so, near-native performance
-JavaScript  host + guest    host: Deno (Deno.dlopen); guest: QuickJS (polyplug-js) or V8 (polyplug-js-deno)
+JavaScript  host + guest    host: Deno (Deno.dlopen); guest: QuickJS (polyplug_js) or V8 (polyplug_js-deno)
 TypeScript  host + guest    same as JS — TS compiled by Rolldown (js-quickjs) or native (js-deno)
 ```
 
@@ -1758,7 +1758,7 @@ TypeScript  host + guest    same as JS — TS compiled by Rolldown (js-quickjs) 
 
 ```
 NativeAOT       runtime = "native"    native loader, native performance, no adapter
-standard .NET   runtime = "dotnet"    polyplug-dotnet required, CLR via hostfxr
+standard .NET   runtime = "dotnet"    polyplug_dotnet required, CLR via hostfxr
 ```
 
 **JS/TS — two runtime variants, two adapter crates:**
@@ -1769,7 +1769,7 @@ js-deno       V8 embedded in-process         ~1-5μs/call,   +~30MB binary, Node
 ```
 
 Plugin developer picks variant in `bundle.toml`. App developer registers one or both adapters.
-See PRD §10 (polyplug-js and polyplug-js-deno) for when to pick which.
+See PRD §10 (polyplug_js and polyplug_js-deno) for when to pick which.
 
 ---
 
@@ -1780,12 +1780,12 @@ Follows the serde model. `polyplug` is always present. Adapters are optional add
 ```
 RUST (crates.io)
 ├── polyplug              runtime core + Rust host lib
-├── polyplug-guest        Rust guest lib
-├── polyplug-dotnet       standard .NET adapter
-├── polyplug-python       Python adapter
-├── polyplug-lua          Lua adapter
-├── polyplug-js           JS/TS adapter — QuickJS embedded (runtime = "js-quickjs")
-├── polyplug-js-deno      JS/TS adapter — V8 embedded via deno_core (runtime = "js-deno")
+├── polyplug_guest        Rust guest lib
+├── polyplug_dotnet       standard .NET adapter
+├── polyplug_python       Python adapter
+├── polyplug_lua          Lua adapter
+├── polyplug_js           JS/TS adapter — QuickJS embedded (runtime = "js-quickjs")
+├── polyplug_js-deno      JS/TS adapter — V8 embedded via deno_core (runtime = "js-deno")
 └── polyplugc             CLI codegen tool (--lang js-quickjs, --lang js-deno)
 
 C++ (headers / vcpkg / conan)
@@ -1799,7 +1799,7 @@ C++ (headers / vcpkg / conan)
 
 Python (pip)
 ├── polyplug              Python host lib (ctypes into libpolyplug.so)
-└── polyplug-guest        Python guest lib
+└── polyplug_guest        Python guest lib
 
 Lua
 ├── host-libs/lua/        polyplug.lua — LuaJIT FFI host lib
@@ -1807,7 +1807,7 @@ Lua
 
 JS/TS (Deno)
 ├── host-libs/js/         polyplug.ts — Deno.dlopen host lib (requires --allow-ffi)
-└── guest-libs/js/        polyplug-guest.ts — shared guest lib for js-quickjs and js-deno
+└── guest-libs/js/        polyplug_guest.ts — shared guest lib for js-quickjs and js-deno
     ├── AbiError, StringView, Buffer (lo/hi ptr fields for js-quickjs)
     ├── DependencyNotFoundError
     ├── EXT_TRACE_ID constant
@@ -1886,7 +1886,7 @@ size_t polyplug_last_error(uint8_t* out, size_t out_cap);
 - Distributed plugins
 - Remote plugin execution
 - Permission system
-- polyplug-jvm (Java/Kotlin via JNI embedding)
+- polyplug_jvm (Java/Kotlin via JNI embedding)
 - Swift support (native, no adapter needed)
 - Zig support (native, no adapter needed)
 
@@ -1983,7 +1983,7 @@ polyplug/                                YOU maintain
 ├── AGENTS.md
 ├── Cargo.toml                           workspace root
 ├── crates/
-│   ├── polyplug/                        runtime core (renamed from polyplug-runtime)
+│   ├── polyplug/                        runtime core (renamed from polyplug_runtime)
 │   │   ├── build.rs
 │   │   ├── Cargo.toml
 │   │   └── src/
@@ -2002,22 +2002,22 @@ polyplug/                                YOU maintain
 │   │       │   └── mod.rs
 │   │       └── runtime/
 │   │           └── mod.rs
-│   ├── polyplug-guest/                  Rust guest lib
+│   ├── polyplug_guest/                  Rust guest lib
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib/
 │   │           └── mod.rs
-│   ├── polyplug-dotnet/                 standard .NET adapter
+│   ├── polyplug_dotnet/                 standard .NET adapter
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib/
 │   │           └── mod.rs
-│   ├── polyplug-python/                 Python adapter
+│   ├── polyplug_python/                 Python adapter
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib/
 │   │           └── mod.rs
-│   ├── polyplug-lua/                    Lua adapter
+│   ├── polyplug_lua/                    Lua adapter
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       └── lib/
@@ -2063,8 +2063,8 @@ polyplug/                                YOU maintain
 │   │       ├── contract.hpp
 │   │       └── guest.hpp
 │   ├── csharp/                          Polyplug.Guest NuGet
-│   ├── python/                          polyplug-guest pip
-│   └── lua/                             polyplug-guest.lua
+│   ├── python/                          polyplug_guest pip
+│   └── lua/                             polyplug_guest.lua
 └── tests/
     ├── fixtures/
     │   ├── test_api.toml
@@ -2087,7 +2087,7 @@ my-game-engine/                          APP DEVELOPER
 ├── api.toml
 ├── Cargo.toml
 │   └── polyplug = "1.0"
-│       polyplug-dotnet = "1.0"          only if .NET plugins needed
+│       polyplug_dotnet = "1.0"          only if .NET plugins needed
 └── src/
     └── generated/
         ├── host/                        polyplugc --api output

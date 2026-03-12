@@ -41,11 +41,11 @@ clap = { version = "4.5", features = ["derive"] }
 # Internal crates
 polyplug = { path = "crates/polyplug" }
 polyplugc = { path = "crates/polyplugc" }
-polyplug_dotnet = { path = "crates/polyplug-dotnet" }
-polyplug_js = { path = "crates/polyplug-js" }
-polyplug_js_deno = { path = "crates/polyplug-js-deno" }
-polyplug_lua = { path = "crates/polyplug-lua" }
-polyplug_python = { path = "crates/polyplug-python" }
+polyplug_dotnet = { path = "crates/polyplug_dotnet" }
+polyplug_js = { path = "crates/polyplug_js" }
+polyplug_js_deno = { path = "crates/polyplug_js_deno" }
+polyplug_lua = { path = "crates/polyplug_lua" }
+polyplug_python = { path = "crates/polyplug_python" }
 polyplug_guest = { path = "guest-libs/rust" }
 polyplug_host = { path = "host-libs/rust" }
 criterion = { version = "0.8", features = ["html_reports"] }
