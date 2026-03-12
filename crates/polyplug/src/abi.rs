@@ -377,6 +377,7 @@ pub fn bundle_id(name: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn fnv1a_known_values() {
@@ -428,9 +429,6 @@ mod tests {
 
     #[test]
     fn layout_string_view() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         assert_eq!(size_of::<StringView>(), 16);
         assert_eq!(align_of::<StringView>(), 8);
         assert_eq!(offset_of!(StringView, ptr), 0);
@@ -439,9 +437,6 @@ mod tests {
 
     #[test]
     fn layout_buffer() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         assert_eq!(size_of::<Buffer>(), 24);
         assert_eq!(align_of::<Buffer>(), 8);
         assert_eq!(offset_of!(Buffer, ptr), 0);
@@ -451,9 +446,6 @@ mod tests {
 
     #[test]
     fn layout_abi_error() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         assert_eq!(size_of::<AbiError>(), 24);
         assert_eq!(align_of::<AbiError>(), 8);
         assert_eq!(offset_of!(AbiError, code), 0);
@@ -462,9 +454,6 @@ mod tests {
 
     #[test]
     fn layout_plugin_handle() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         assert_eq!(size_of::<PluginHandle>(), 8);
         assert_eq!(align_of::<PluginHandle>(), 4);
         assert_eq!(offset_of!(PluginHandle, index), 0);
@@ -473,9 +462,6 @@ mod tests {
 
     #[test]
     fn layout_plugin_vtable() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         assert_eq!(size_of::<PluginVTable>(), 24);
         assert_eq!(align_of::<PluginVTable>(), 8);
         assert_eq!(offset_of!(PluginVTable, contract_id), 0);
@@ -486,9 +472,6 @@ mod tests {
 
     #[test]
     fn layout_host_vtable() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         // HostVTable: 7 extern "C" fn pointers, each 8 bytes on x86_64.
         assert_eq!(size_of::<HostVTable>(), 56);
         assert_eq!(align_of::<HostVTable>(), 8);
@@ -503,9 +486,6 @@ mod tests {
 
     #[test]
     fn layout_plugin_descriptor() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         // name(16) + contract_name(16) + version_major(4) + version_minor(4) + version_patch(4)
         // + 4 bytes tail padding = 48 bytes on x86_64.
         assert_eq!(size_of::<PluginDescriptor>(), 48);
@@ -519,9 +499,6 @@ mod tests {
 
     #[test]
     fn layout_plugin_registrar() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         // register_plugin fn ptr (8) + host ptr (8) = 16 bytes.
         assert_eq!(size_of::<PluginRegistrar>(), 16);
         assert_eq!(align_of::<PluginRegistrar>(), 8);
@@ -530,9 +507,6 @@ mod tests {
 
     #[test]
     fn layout_extension_entry() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         // extension_id(4) + padding(4) + vtable ptr(8) = 16 bytes.
         assert_eq!(size_of::<ExtensionEntry>(), 16);
         assert_eq!(align_of::<ExtensionEntry>(), 8);
@@ -542,9 +516,6 @@ mod tests {
 
     #[test]
     fn layout_runtime_config() {
-        use std::mem::align_of;
-        use std::mem::offset_of;
-        use std::mem::size_of;
         // plugin_dirs ptr(8) + plugin_dir_count(8) + compatibility(4) + padding(4)
         // + extensions ptr(8) + extension_count(8) = 40 bytes.
         assert_eq!(size_of::<RuntimeConfig>(), 40);
@@ -559,7 +530,6 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn plugin_context_layout() {
-        use std::mem::{align_of, offset_of, size_of};
         assert_eq!(size_of::<PluginContext>(), 16);
         assert_eq!(align_of::<PluginContext>(), 8);
         assert_eq!(offset_of!(PluginContext, bundle_path), 0);

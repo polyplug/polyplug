@@ -280,6 +280,10 @@ impl Default for CapabilityGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::GraphError;
+    use crate::loader::manifest::ManifestData;
+    use crate::loader::manifest::RawManifestDependency;
+    use std::path::PathBuf;
 
     fn make_capability(name: &str, major: u32, minor: u32) -> ContractCapability {
         ContractCapability::new(name.to_owned(), Version { major, minor })
@@ -374,9 +378,6 @@ mod tests {
 
     #[test]
     fn from_manifests_chain_order() {
-        use crate::loader::manifest::ManifestData;
-        use crate::loader::manifest::RawManifestDependency;
-        use std::path::PathBuf;
 
         let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
         let cid_y: u64 = crate::abi::contract_id("contract.Y", 1);
@@ -471,10 +472,6 @@ mod tests {
 
     #[test]
     fn from_manifests_bybundle_missing_fails() {
-        use crate::error::GraphError;
-        use crate::loader::manifest::ManifestData;
-        use crate::loader::manifest::RawManifestDependency;
-        use std::path::PathBuf;
 
         let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
 

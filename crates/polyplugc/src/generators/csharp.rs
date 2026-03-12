@@ -663,9 +663,7 @@ impl CodeGenerator for CSharpGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::EnumDef;
-    use crate::ir::EnumVariant;
-    use crate::ir::ReprType;
+    use crate::ir::*;
 
     #[test]
     fn generate_cs_enum_non_bitflag() {
@@ -726,7 +724,6 @@ mod tests {
 
     #[test]
     fn generate_cs_guest_init_uses_plugin_class() {
-        use crate::ir::*;
         let ir: ValidatedIr = ValidatedIr {
             contracts: vec![ResolvedContract {
                 name: "test.check".to_owned(),
@@ -759,7 +756,6 @@ mod tests {
 
     #[test]
     fn generate_cs_guest_vtables_no_unsafe_struct() {
-        use crate::ir::*;
         let ir: ValidatedIr = ValidatedIr {
             contracts: vec![ResolvedContract {
                 name: "test.check".to_owned(),

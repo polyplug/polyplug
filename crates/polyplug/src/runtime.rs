@@ -940,6 +940,7 @@ pub(crate) unsafe extern "C" fn host_get_extension(extension_id: u32) -> *const 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::OnceLock;
 
     #[test]
     fn builder_creates_runtime() {
@@ -1004,7 +1005,6 @@ mod tests {
     // global registry exactly once. Cargo may run unit tests in parallel within
     // a binary, so the OnceLock ensures idempotent setup.
 
-    use std::sync::OnceLock;
 
     /// One-time setup: register a plugin for contract 0xF00D_CAFE in the global registry.
     fn ensure_test_plugin_registered() {
