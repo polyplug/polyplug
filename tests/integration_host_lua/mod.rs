@@ -8,10 +8,10 @@
 #![allow(clippy::expect_used)]
 
 use polyplug::ffi::{
-    polyplug_error_message_len, polyplug_get_vtable, polyplug_guard_free, polyplug_last_error,
-    polyplug_load_bundle, polyplug_rt_find_all_by_contract,
-    polyplug_rt_find_by_contract, polyplug_rt_resolve_plugin, polyplug_runtime_free,
-    polyplug_runtime_new, OpaqueGuard, OpaqueRuntime,
+    OpaqueGuard, OpaqueRuntime, polyplug_error_message_len, polyplug_get_vtable,
+    polyplug_guard_free, polyplug_last_error, polyplug_load_bundle,
+    polyplug_rt_find_all_by_contract, polyplug_rt_find_by_contract, polyplug_rt_resolve_plugin,
+    polyplug_runtime_free, polyplug_runtime_new,
 };
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");

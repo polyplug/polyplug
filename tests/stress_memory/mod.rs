@@ -713,21 +713,42 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     std::mem::forget(library);
 }
 
-#[test]
-#[should_panic(expected = "double-free")]
+/// Called when the test binary is re-invoked with the `POLYPLUG_DOUBLE_FREE_SUBPROCESS`
+/// environment variable set. Performs a real double-free to trigger `abort()`.
 #[cfg(debug_assertions)]
-fn test_double_free_detected() {
-    // Allocate via tracking_alloc, free twice, assert double-free panic.
-    // Uses TrackingAllocator which wraps polyplug_host_alloc/free.
+fn run_double_free_subprocess() -> ! {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     let alloc: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
     let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
     // SAFETY: size=64, align=1 is a valid layout.
     let ptr: *mut u8 = unsafe { alloc(64_usize, 1_usize) };
-    assert!(!ptr.is_null(), "alloc must succeed");
     // SAFETY: ptr was just allocated with size=64, align=1.
     unsafe { free_fn(ptr, 64_usize, 1_usize) };
-    // Second free on same pointer — must panic with "double-free" in debug builds.
-    // SAFETY: This is intentionally invalid — test verifies the panic fires.
+    // Second free — triggers abort() in tracking_free.
+    // SAFETY: This is intentionally invalid — the abort fires before UB occurs.
     unsafe { free_fn(ptr, 64_usize, 1_usize) };
+    // unreachable — abort() terminates the process.
+    std::process::exit(0)
+}
+
+#[test]
+#[cfg(debug_assertions)]
+fn test_double_free_detected() {
+    // Use an env var (not a CLI arg) as the subprocess sentinel — CLI args are intercepted
+    // by the cargo test harness and cause "Unrecognized option" errors.
+    const SENTINEL: &str = "POLYPLUG_DOUBLE_FREE_SUBPROCESS";
+    // If this invocation IS the subprocess, perform the double-free and let abort() fire.
+    if std::env::var(SENTINEL).is_ok() {
+        run_double_free_subprocess();
+    }
+    // Otherwise spawn ourselves as a subprocess with the sentinel env var set.
+    let exe: std::path::PathBuf = std::env::current_exe().expect("current_exe");
+    let status: std::process::ExitStatus = std::process::Command::new(&exe)
+        .env(SENTINEL, "1")
+        .status()
+        .expect("failed to spawn subprocess");
+    assert!(
+        !status.success(),
+        "double-free subprocess must exit non-zero (aborted)"
+    );
 }

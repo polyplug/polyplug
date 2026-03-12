@@ -245,10 +245,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
         let minor: u32 = contract.version.minor;
         let patch: u32 = contract.version.patch;
 
-        out.push_str(&format!(
-            "public static class {}Vtables {{\n",
-            class_name
-        ));
+        out.push_str(&format!("public static class {}Vtables {{\n", class_name));
         out.push_str(&format!(
             "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
         ));
@@ -299,13 +296,9 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
             "    public static PluginVTable {upper}_VTABLE;\n\n"
         ));
         // Static constructor instead of Init method
-        out.push_str(&format!(
-            "    static {class_name}Vtables() {{\n"
-        ));
+        out.push_str(&format!("    static {class_name}Vtables() {{\n"));
         out.push_str("        unsafe {\n");
-        out.push_str(&format!(
-            "            {upper}_FNS = new IntPtr[] {{\n"
-        ));
+        out.push_str(&format!("            {upper}_FNS = new IntPtr[] {{\n"));
         for func in &contract.functions {
             let fn_name: String = func.name.replace('-', "_");
             let abi_method: String = format!("{lower}_{fn_name}_abi");
@@ -318,12 +311,8 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
         out.push_str(&format!(
             "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
         ));
-        out.push_str(&format!(
-            "        {upper}_VTABLE = new PluginVTable {{\n"
-        ));
-        out.push_str(&format!(
-            "            ContractId = {upper}_CONTRACT_ID,\n"
-        ));
+        out.push_str(&format!("        {upper}_VTABLE = new PluginVTable {{\n"));
+        out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
         out.push_str(&format!(
             "            ContractVersion = {minor}u << 16 | {patch}u,\n"
         ));
@@ -355,12 +344,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Guest;\n\n");
 
     out.push_str("public static class Plugin {\n");
-    out.push_str(
-        "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
-    );
-    out.push_str(
-        "    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {\n",
-    );
+    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str("    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {\n");
     out.push_str(
         "        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n",
     );
@@ -384,7 +369,6 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         let major: u32 = contract.version.major;
         let minor: u32 = contract.version.minor;
         let patch: u32 = contract.version.patch;
-
 
         out.push_str(&format!("            // Register {}\n", contract.name));
 
@@ -747,7 +731,11 @@ mod tests {
             contracts: vec![ResolvedContract {
                 name: "test.check".to_owned(),
                 contract_id: 0x1234567890ABCDEFu64,
-                version: Version { major: 1, minor: 0, patch: 0 },
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
                 functions: vec![],
             }],
             types: vec![],
@@ -776,7 +764,11 @@ mod tests {
             contracts: vec![ResolvedContract {
                 name: "test.check".to_owned(),
                 contract_id: 0x1234567890ABCDEFu64,
-                version: Version { major: 1, minor: 0, patch: 0 },
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
                 functions: vec![],
             }],
             types: vec![],

@@ -58,10 +58,11 @@ unsafe extern "C" fn tracking_free(ptr: *mut u8, size: usize, align: usize) {
         let addr: usize = ptr as usize;
         TLS_LIVE_ADDRS.with(|s| {
             if !s.borrow_mut().remove(&addr) {
-                panic!(
+                eprintln!(
                     "TrackingAllocator: double-free detected at address {:#x}",
                     addr
                 );
+                std::process::abort();
             }
         });
     }
