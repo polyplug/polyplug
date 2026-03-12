@@ -10,8 +10,8 @@ name = "showcase-host"
 path = "src/main.rs"
 
 [dependencies]
-polyplug = { workspace = true }
-polyplug_python = { workspace = true }
-polyplug_lua = { workspace = true }
-polyplug_js = { workspace = true }
-polyplug_dotnet = { workspace = true }
+polyplug = { path = "../../crates/polyplug" }
+polyplug_python = { path = "../../crates/polyplug_python" }
+polyplug_lua = { path = "../../crates/polyplug_lua" }
+polyplug_js = { path = "../../crates/polyplug_js" }
+polyplug_dotnet = { path = "../../crates/polyplug_dotnet" }
