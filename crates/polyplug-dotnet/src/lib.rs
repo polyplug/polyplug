@@ -90,9 +90,9 @@ impl BundleLoader for DotnetLoader {
                     path: path.to_string_lossy().into_owned(),
                 })
             })?;
-        let context: std::sync::Arc<crate::context::DotnetContext> = CLR_CONTEXT
-            .get_or_try_init(|| init_context(&self.config, &bundle_dir))?
-            .clone();
+        let context: std::sync::Arc<crate::context::DotnetContext> = std::sync::Arc::clone(
+            CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, &bundle_dir))?,
+        );
 
         let stem: std::borrow::Cow<'_, str> =
             abs_path.file_stem().unwrap_or_default().to_string_lossy();

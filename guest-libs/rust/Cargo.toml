@@ -8,7 +8,7 @@ description  = "Guest-side Rust bindings for plugin authors using the polyplug r
 
 [lib]
 name = "polyplug_guest"
-path = "src/lib/mod.rs"
+path = "src/lib.rs"
 
 [dependencies]
 polyplug = { path = "../../crates/polyplug" }

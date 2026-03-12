@@ -2074,7 +2074,9 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "polyplug",
+ "polyplug-guest",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "toml",
 ]

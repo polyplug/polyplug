@@ -5740,3 +5740,566 @@ VERIFICATION CHECKLIST
 - cargo test --workspace passes
 - cargo test --workspace -- --ignored passes (quiescence test)
 ```
+
+
+---
+
+## Epic 24 — Codebase Audit: Correctness, Safety, Redundancy, and Conceptual Alignment
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is NOT to implement anything.
+Your job is to produce a brutally honest, exhaustive audit report of every
+crate under the `crates/` directory, then produce a concrete fix plan.
+
+You will be held to a high standard. Vague findings like "could be improved"
+are unacceptable. Every finding must name the exact file, the exact line or
+function, the exact problem, and the exact fix. If you cannot be specific,
+do not report the finding.
+
+---
+
+READ FIRST — ALL OF THESE, IN FULL
+
+- AGENTS.md — every rule applies to the fix plan you produce
+- TRUST_MODEL.md — safety contracts and unsafe justification policy
+- polyplug_prd.md — the complete design spec; use this as ground truth
+  for what the code is SUPPOSED to do. Any deviation is a finding.
+- Every .rs file under crates/ — read them all before forming any opinion.
+  Do not skim. Do not assume. Read.
+
+Crates to audit:
+  crates/polyplug/          — runtime core
+  crates/polyplugc/         — CLI codegen tool
+  crates/polyplug-dotnet/   — .NET adapter
+  crates/polyplug-python/   — Python adapter
+  crates/polyplug-lua/      — Lua adapter
+  crates/polyplug-js/       — QuickJS adapter
+  crates/polyplug-js-deno/  — deno_core adapter
+
+---
+
+AUDIT CATEGORIES
+
+You must audit every category below. Do not skip any. Do not merge categories.
+Report each finding under its category heading.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 1 — unsafe blocks and functions
+─────────────────────────────────────────────────────────────
+
+Find every `unsafe` keyword in every .rs file. For each one:
+
+1. State the file and line number.
+2. State what the unsafe operation is (pointer dereference, transmute,
+   raw pointer cast, extern call, etc.).
+3. Evaluate the SAFETY justification:
+   - Is there a `// SAFETY:` comment? If not → FINDING: missing SAFETY comment.
+   - Is the SAFETY comment correct and sufficient? If it is vague, wrong, or
+     incomplete → FINDING: insufficient SAFETY justification.
+   - Is the unsafe actually necessary? Could the same result be achieved
+     safely with no performance loss? If yes → FINDING: unnecessary unsafe.
+4. For each unnecessary unsafe, state the exact safe replacement.
+
+Be ruthless. "It's easier this way" is not a justification for unsafe.
+If it can be done safely with equivalent performance, it must be done safely.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 2 — unsafe impl Send and unsafe impl Sync
+─────────────────────────────────────────────────────────────
+
+Find every `unsafe impl Send` and `unsafe impl Sync`. For each one:
+
+**MANDATORY MECHANICAL VERIFICATION — DO THIS FIRST, BEFORE ANY REASONING:**
+  Remove the `unsafe impl` block temporarily. Run `cargo check`.
+  - If `cargo check` PASSES: the impl is unnecessary. This is a confirmed
+    FINDING regardless of what the SAFETY comment says. Restore the file and
+    report it. Do not rationalize why it might still be needed.
+  - If `cargo check` FAILS: read the exact compiler error. It will name the
+    exact field and type blocking auto-derivation. Use that — not reasoning —
+    as the basis for your analysis.
+
+  Do NOT reason about derivation chains without running `cargo check`.
+  Derivation chains are non-obvious and reasoning about them is unreliable.
+  `cargo check` is the only source of truth.
+
+1. State the file, line, and type.
+2. State the result of `cargo check` after removing the impl (pass or fail).
+   If fail: paste the exact compiler error field and type.
+3. Answer: is the manual impl actually correct?
+   - What invariant makes this safe? Is that invariant upheld everywhere
+     the type is used? Trace the usages.
+   - If the invariant is not upheld → FINDING: unsound Send/Sync impl.
+4. Answer: can the type be restructured to make Send/Sync auto-derive
+   without unsafe? (e.g. replace *const T with a wrapper newtype that
+   encodes the safety contract in the type system)
+   If yes → FINDING: unsafe impl avoidable by restructuring.
+5. Known justified case: `VTableSlot(*const PluginVTable)` — Send+Sync
+   because PluginVTable is read-only after registration (TRUST_MODEL.md).
+   This is ACCEPTABLE but must have a SAFETY comment referencing the trust
+   model. If the comment is absent or wrong → FINDING.
+
+Do not accept "it's a raw pointer so we need unsafe impl" as a complete
+justification. That explains WHY auto-derive fails, not WHY the manual impl
+is sound.
+
+PRE-KNOWN FINDING (confirm and fix, do not re-investigate):
+  Type:  Registry  (crates/polyplug/src/registry/mod.rs)
+  Issue: `unsafe impl Send for Registry {}` and `unsafe impl Sync for Registry {}`
+         are unnecessary. `libloading 0.9` already implements `Send` and `Sync`
+         for `Library` via its own `unsafe impl`. This makes the derivation
+         chain complete — all fields of `Registry` are `Send + Sync` through
+         their wrapper types (`Mutex`, `RwLock`). `Registry` auto-derives
+         both without any manual impl.
+  Fix:   Delete both `unsafe impl Send for Registry {}` and
+         `unsafe impl Sync for Registry {}` and their SAFETY comments.
+         Run `cargo check` to confirm it compiles. Run `cargo test --workspace`
+         to confirm nothing regresses.
+  This was missed by the initial audit because the agent reasoned about the
+  derivation chain instead of verifying mechanically with `cargo check`.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 3 — correctness deviations from the PRD
+─────────────────────────────────────────────────────────────
+
+The PRD is the ground truth. Read it. Then read the code. For every place
+where the code does something different from what the PRD specifies:
+
+1. State the PRD section and the exact specification.
+2. State the file, function, and line where the code deviates.
+3. Classify the deviation:
+   - WRONG: code does something the PRD explicitly forbids
+   - MISSING: PRD specifies behavior that the code does not implement
+   - INCONSISTENT: code implements the behavior but in a way that
+     contradicts the PRD's stated rationale or design intent
+4. State the fix.
+
+Be specific. "The code doesn't fully implement X" is not a finding.
+"PRD section 6 states find_all_by_contract uses caller-provides-buffer
+with no runtime allocation. crates/polyplug/src/registry/mod.rs line 142
+allocates a Vec internally before copying — this violates the no-allocation
+contract." is a finding.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 4 — redundancy
+─────────────────────────────────────────────────────────────
+
+Find every case where:
+
+a. The same logic is duplicated across two or more locations and could be
+   unified without loss of clarity or performance.
+b. A data structure carries information that is already present elsewhere
+   and kept in sync manually — i.e. a derived field that should not exist.
+c. A function or method does what an existing standard library function
+   already does correctly (reinventing the wheel).
+d. Dead code: functions, types, constants, or modules that are defined but
+   never used (and are not part of a public API that must be kept).
+
+For each finding: file, line, description, and exact fix (delete / merge /
+replace with std equivalent).
+
+─────────────────────────────────────────────────────────────
+CATEGORY 5 — misaligned concepts
+─────────────────────────────────────────────────────────────
+
+Find every place where the code uses a concept, name, or abstraction that
+contradicts or blurs the terminology defined in the PRD and TRUST_MODEL.md.
+
+Examples of what to look for (not exhaustive):
+- A variable or field named "plugin" when the PRD calls it a "bundle"
+- An error variant called "NotFound" when the PRD specifies "NullHandle"
+- A function that the PRD says belongs to the registry but is implemented
+  in the loader (wrong layer)
+- A comment that describes the wrong behavior (copy-paste artifact)
+- A type alias that obscures an important distinction the PRD makes clear
+- An abstraction boundary that the PRD defines as strict but the code
+  crosses freely (e.g. loader touching registry internals directly)
+
+For each finding: file, line, the misaligned concept, the correct concept
+per PRD, and the fix.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 6 — missing or wrong error handling
+─────────────────────────────────────────────────────────────
+
+Find every place where:
+
+a. An error is silently swallowed (`.ok()`, `let _ =`, `unwrap_or_default()`
+   on a path that should propagate the error).
+b. A panic-capable call exists in production code (`.unwrap()`, `.expect()`,
+   `panic!()`, `unreachable!()` outside of genuinely unreachable branches).
+   Note: `.unwrap()` is forbidden by AGENTS.md — every occurrence is a finding.
+c. An error type is too coarse — a single variant covers multiple distinct
+   failure modes that callers cannot distinguish.
+d. An error message is empty, useless ("error occurred"), or does not
+   include the context needed to diagnose the problem.
+
+For each finding: file, line, the problem, the correct fix.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 7 — performance regressions against PRD guarantees
+─────────────────────────────────────────────────────────────
+
+The PRD makes specific performance guarantees. Find every place in the code
+that violates them:
+
+- Hot path (vtable dispatch): must be one atomic load + one indirect call.
+  Any allocation, lock acquisition, hash lookup, or branch on the hot path
+  is a FINDING.
+- find_all_by_contract: no allocation in the runtime (caller-provides-buffer).
+  Any Vec allocation is a FINDING.
+- host_alloc / host_free: must not acquire locks or do bookkeeping in release
+  builds. Any lock in the release path is a FINDING.
+- Per-call managed/unmanaged transition in C#: only hot-path P/Invoke calls
+  have [SuppressGCTransition]. Any missing annotation on a hot-path call is
+  a FINDING. (Note: this is in the generators, not Rust — still report it.)
+- TrackingAllocator: must have zero overhead in release builds. Any
+  conditional or field access in the release dealloc path is a FINDING.
+
+─────────────────────────────────────────────────────────────
+CATEGORY 8 — AGENTS.md violations
+─────────────────────────────────────────────────────────────
+
+Read AGENTS.md. Then find every violation in every .rs file under crates/:
+
+- `filename.rs` instead of `filename/mod.rs` — FINDING per file
+- `use` statement not at the top of the file — FINDING per occurrence
+- Implicit types (missing explicit type annotation where required) — FINDING
+- `.unwrap()` anywhere in production code — FINDING per occurrence
+- `unsafe` block without `// SAFETY:` comment — FINDING per occurrence
+- Any other rule in AGENTS.md that is violated
+
+List every violation. Do not summarize. Do not say "several files violate X."
+Name every file and every line.
+
+---
+
+OUTPUT FORMAT — MANDATORY
+
+The audit report must follow this exact structure.
+Do not deviate. Do not add sections. Do not merge sections.
+
+# polyplug Codebase Audit Report
+
+## Audit Scope
+List every file read. If a file was not read, do not produce findings for it.
+
+## Category 1 — unsafe blocks and functions
+### Finding 1.N
+- **File:** path/to/file
+- **Line:** N
+- **Code:** (the exact unsafe construct)
+- **Problem:** (precise description)
+- **Fix:** (exact replacement or action)
+
+[repeat for every finding]
+
+## Category 2 — unsafe impl Send / Sync
+[same structure]
+
+## Category 3 — Correctness deviations from PRD
+[same structure]
+
+## Category 4 — Redundancy
+[same structure]
+
+## Category 5 — Misaligned concepts
+[same structure]
+
+## Category 6 — Error handling
+[same structure]
+
+## Category 7 — Performance regressions
+[same structure]
+
+## Category 8 — AGENTS.md violations
+[same structure]
+
+## Fix Plan
+
+For each finding, produce a numbered fix entry:
+
+### Fix N — [short title]
+- **Priority:** critical | high | medium | low
+- **Effort:** trivial (< 30 min) | small (< 2h) | medium (< 1 day) | large (> 1 day)
+- **Category:** [1–8]
+- **Files affected:** list
+- **Exact change:** describe the change precisely enough that an executer
+  agent can implement it without asking any questions.
+
+## Summary Table
+
+| Category | Findings | Critical | High | Medium | Low |
+|---|---|---|---|---|---|
+| 1 unsafe blocks | N | N | N | N | N |
+| 2 unsafe impl | N | N | N | N | N |
+| 3 PRD deviations | N | N | N | N | N |
+| 4 Redundancy | N | N | N | N | N |
+| 5 Misaligned concepts | N | N | N | N | N |
+| 6 Error handling | N | N | N | N | N |
+| 7 Performance | N | N | N | N | N |
+| 8 AGENTS.md | N | N | N | N | N |
+| **Total** | **N** | **N** | **N** | **N** | **N** |
+
+---
+
+MANDATORY CONSTRAINTS FOR THE PLANNER
+
+These are not suggestions. Violating any of them means the report is rejected
+and must be redone.
+
+1. You MUST read every .rs file in every crate before writing a single finding.
+   Do not produce findings from memory or assumption.
+
+2. Every finding MUST include a file path and line number.
+   Findings without line numbers are rejected.
+
+3. Every finding MUST include an exact fix.
+   "Refactor this" is not a fix. "Replace line 42 with X" is a fix.
+
+4. You MUST NOT soften findings.
+   If the code is wrong, say it is wrong. If an unsafe impl is unsound,
+   say it is unsound. This is a technical audit, not a code review for feelings.
+
+5. You MUST NOT invent findings.
+   If you are not certain a pattern is a problem, do not report it.
+   Uncertainty is not a finding — investigate until you are certain.
+
+6. You MUST NOT report the same finding twice under different categories.
+   Pick the most relevant category. Cross-reference if needed.
+
+7. The fix plan must be implementable without this audit report being present.
+   The executer agent will receive only the fix plan. Write it accordingly.
+
+8. You MUST explicitly state at the end of the report:
+   "I have read every file listed in Audit Scope in full."
+   If you cannot truthfully make this statement, do not submit the report.
+
+9. For Category 2 (unsafe impl Send/Sync) specifically: you MUST verify every
+   impl mechanically by temporarily removing it and running `cargo check`.
+   Reasoning about derivation chains without `cargo check` is FORBIDDEN.
+   A passing `cargo check` after removal is the only acceptable proof that
+   an impl is unnecessary. A failing `cargo check` is the only acceptable
+   proof that it is needed. The compiler error — not your reasoning — names
+   what is actually blocking derivation. Any Category 2 finding submitted
+   without a `cargo check` result is rejected.
+```
+
+
+---
+
+## Epic 25 — Release Build Optimization: Maximum Performance, Minimum Size
+
+```
+You are the EXECUTER agent for the `polyplug` project.
+
+Your single goal: make every release build as fast as possible and as small
+as possible. You are optimizing for PRODUCTION SHIPPING BUILDS only.
+`cargo test` behavior is not your concern. Dev build times are not your concern.
+The only thing that matters is: when someone ships polyplug in a release binary,
+it is maximally fast and minimally sized.
+
+---
+
+READ FIRST
+
+- AGENTS.md
+- Every Cargo.toml in the workspace (read them all before touching anything):
+    Cargo.toml                        workspace root
+    crates/polyplug/Cargo.toml
+    crates/polyplugc/Cargo.toml
+    crates/polyplug-dotnet/Cargo.toml
+    crates/polyplug-python/Cargo.toml
+    crates/polyplug-lua/Cargo.toml
+    crates/polyplug-js/Cargo.toml
+    crates/polyplug-js-deno/Cargo.toml
+    guest-libs/rust/Cargo.toml
+    host-libs/rust/Cargo.toml
+    showcase/host/Cargo.toml
+
+---
+
+HARD CONSTRAINTS — NON-NEGOTIABLE
+
+CONSTRAINT 1 — cdylib and fat LTO
+  `crates/polyplug/` produces `libpolyplug.so` (crate-type = "cdylib").
+  `lto = "fat"` combined with `codegen-units = 1` on a cdylib triggers a
+  known LLVM crash (rust-lang/rust#117220).
+  USE `lto = "thin"` for the workspace. Do not use "fat".
+
+CONSTRAINT 2 — profile settings in workspace root only
+  Cargo only reads `[profile.*]` from the workspace root Cargo.toml.
+  Member crate profile sections are silently ignored by Cargo.
+  ALL profile settings go in workspace root Cargo.toml exclusively.
+  Do not add `[profile.*]` to any member crate Cargo.toml.
+
+CONSTRAINT 3 — do not touch these dependency feature flags
+  The following were set by prior epics and are load-bearing. Do not change:
+    mlua:         ["luajit", "vendored", "send"]   — vendored compiles LuaJIT
+    netcorehost:  exactly as-is
+    pelite:       exactly as-is
+    pyo3:         exactly as-is
+    rquickjs:     exactly as-is
+    deno_core:    exactly as-is
+  Touching any of these breaks the build or breaks runtime correctness.
+
+---
+
+WHAT TO IMPLEMENT
+
+─────────────────────────────────────────────────────────────
+STEP 1 — workspace root Cargo.toml: release profile
+─────────────────────────────────────────────────────────────
+
+Replace or create [profile.release] in the workspace root Cargo.toml with
+exactly the following. Do not add anything not listed here without justification.
+
+[profile.release]
+opt-level     = 3        # maximum optimization
+codegen-units = 1        # single codegen unit — maximum cross-function inlining
+lto           = "thin"   # thin LTO — cross-crate inlining, safe for cdylib
+panic         = "abort"  # no unwind tables — smaller binary, zero unwind overhead
+strip         = "symbols"# remove all symbols — minimum binary size
+debug         = false    # no debug info
+incremental   = false    # deterministic builds — never use incremental in release
+overflow-checks = false  # disable integer overflow checks — zero-cost arithmetic
+
+# polyplugc is a build-time CLI tool — optimize for size over raw throughput
+[profile.release.package.polyplugc]
+opt-level = "z"          # "z" = smallest code size (vs "s" which is moderate)
+
+─────────────────────────────────────────────────────────────
+STEP 2 — dependency feature flag audit
+─────────────────────────────────────────────────────────────
+
+For every dependency in every member crate Cargo.toml, check whether
+default features include anything polyplug does not use. For each one where
+you can safely disable defaults without breaking compilation or correctness,
+add `default-features = false` and explicitly list only the features needed.
+
+Rules per dependency category:
+
+notify (hot-reload, Epic 17):
+  notify pulls in all platform backends by default (inotify, FSEvents,
+  ReadDirectoryChangesW, kqueue). We only need the ones for supported targets.
+  Set: notify = { version = "6", default-features = false,
+                  features = ["macos_fsevent", "inotify", "windows_ReadDirectoryChangesW"] }
+  This removes kqueue and other unused backends.
+
+serde (if present for config parsing only):
+  If serde is only used for deserializing .toml config at startup (not on
+  the hot path), keep it but add default-features = false and add only
+  "derive" if needed.
+
+arc-swap:
+  Has no optional features that affect polyplug. Leave as-is.
+
+libloading:
+  Has no optional features. Leave as-is.
+
+ALL OTHER dependencies:
+  Read the crate's Cargo.toml on crates.io. List what the default features
+  are. Remove any that polyplug demonstrably does not use.
+  Do NOT remove a default feature speculatively — only if you are certain
+  it is not needed. When in doubt, leave it.
+
+─────────────────────────────────────────────────────────────
+STEP 3 — [lib] crate-type audit
+─────────────────────────────────────────────────────────────
+
+Read the [lib] section of each crate. Verify:
+
+crates/polyplug/:
+  Must have crate-type = ["cdylib", "rlib"]
+  cdylib = produces libpolyplug.so for Lua/Deno FFI host libs
+  rlib   = allows linking into Rust host apps and adapter crates
+  If only "cdylib" is present, add "rlib". If only "rlib", add "cdylib".
+
+crates/polyplugc/:
+  Must be [[bin]] only. No [lib] needed.
+
+All adapter crates (polyplug-dotnet, polyplug-python, polyplug-lua,
+polyplug-js, polyplug-js-deno):
+  Must be crate-type = ["rlib"] only.
+  If cdylib is present and not needed, remove it — cdylib produces extra
+  artifact files that bloat the build output.
+
+guest-libs/rust/:
+  Must be crate-type = ["rlib"] only.
+
+host-libs/rust/:
+  Must be crate-type = ["rlib"] only.
+
+─────────────────────────────────────────────────────────────
+STEP 4 — .cargo/config.toml
+─────────────────────────────────────────────────────────────
+
+Create or update .cargo/config.toml in the workspace root.
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+  "-C", "target-cpu=native",   # use all CPU features of the build machine
+                                # ONLY acceptable for release builds on the
+                                # target machine — NOT for cross-compilation
+                                # or CI that runs on different hardware
+                                # Remove this if CI uses different hardware
+                                # than deployment target
+]
+
+IMPORTANT: if CI runs on different hardware than the deployment machine,
+remove target-cpu=native entirely and document why. Do not silently ship
+a binary that segfaults on a different CPU than it was compiled on.
+
+─────────────────────────────────────────────────────────────
+STEP 5 — verify the release build
+─────────────────────────────────────────────────────────────
+
+Run only the release build. Do not run cargo test — it will fail with
+panic = "abort" and that is expected and acceptable.
+
+  cargo build --release --workspace
+  cargo build --release --bin polyplugc
+
+If either fails, fix the failure before proceeding.
+
+─────────────────────────────────────────────────────────────
+STEP 6 — measure before and after
+─────────────────────────────────────────────────────────────
+
+Before making any changes, record:
+  ls -lh target/release/polyplugc           (if it exists)
+  ls -lh target/release/libpolyplug.so      (if it exists)
+
+After all changes:
+  cargo build --release --workspace
+  ls -lh target/release/polyplugc
+  ls -lh target/release/libpolyplug.so
+  cargo bench --bench vtable_dispatch 2>&1 | tail -20   (if bench exists)
+
+Record the before/after numbers as a comment block at the bottom of the
+workspace root Cargo.toml:
+
+  # Epic 25 — Release optimization results:
+  # polyplugc:       BEFORE → AFTER
+  # libpolyplug.so:  BEFORE → AFTER
+  # vtable_dispatch: BEFORE → AFTER ns/call (if bench ran)
+
+---
+
+VERIFICATION CHECKLIST
+
+- cargo build --release --workspace succeeds with zero errors — verified
+- No [profile.*] in any member crate Cargo.toml — verified
+- lto = "fat" appears nowhere — verified
+- lto = "thin" in [profile.release] — verified
+- panic = "abort" in [profile.release] — verified
+- strip = "symbols" in [profile.release] — verified
+- codegen-units = 1 in [profile.release] — verified
+- overflow-checks = false in [profile.release] — verified
+- polyplugc uses opt-level = "z" — verified
+- mlua features unchanged — verified
+- netcorehost / pelite / pyo3 / rquickjs / deno_core features unchanged — verified
+- Before/after size numbers recorded in workspace root Cargo.toml — verified
+- target-cpu=native either set with documented rationale or explicitly absent — verified
+```

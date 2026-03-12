@@ -25,161 +25,44 @@ hot-reload = ["dep:notify"]
 [lints]
 workspace = true
 
-[[test]]
-name = "integration_load"
-path = "../../tests/integration_load/mod.rs"
-
-[[test]]
-name = "integration_dispatch"
-path = "../../tests/integration_dispatch/mod.rs"
-
-[[test]]
-name = "integration_graph"
-path = "../../tests/integration_graph/mod.rs"
-
-[[test]]
-name = "fnv1a_compat"
-path = "../../tests/fnv1a_compat/mod.rs"
-
-[[test]]
-name = "integration_panic"
-path = "../../tests/integration_panic/mod.rs"
-
-[[test]]
-name = "integration_codegen_rust"
-path = "../../tests/integration_codegen_rust/mod.rs"
-
-[[test]]
-name = "integration_codegen_cpp"
-path = "../../tests/integration_codegen_cpp/mod.rs"
-
-[[test]]
-name = "integration_codegen_csharp"
-path = "../../tests/integration_codegen_csharp/mod.rs"
-
-[[test]]
-name = "integration_codegen_python"
-path = "../../tests/integration_codegen_python/mod.rs"
-
-[[test]]
-name = "integration_codegen_lua"
-path = "../../tests/integration_codegen_lua/mod.rs"
-
-[[test]]
-name = "integration_codegen_js_quickjs"
-path = "../../tests/integration_codegen_js_quickjs/mod.rs"
-
-[[test]]
-name = "integration_codegen_js_deno"
-path = "../../tests/integration_codegen_js_deno/mod.rs"
-
-[[test]]
-name = "smoke"
-path = "../../tests/smoke/mod.rs"
-
-[[test]]
-name = "stress_error"
-path = "../../tests/stress_error/mod.rs"
-
-[[test]]
-name = "stress_memory"
-path = "../../tests/stress_memory/mod.rs"
-
-[[test]]
-name = "integration_loader_dispatch"
-path = "../../tests/integration_loader_dispatch/mod.rs"
-
-[[test]]
-name = "integration_cross_plugin"
-path = "../../tests/integration_cross_plugin/mod.rs"
-
-[[test]]
-name = "integration_context"
-path = "../../tests/integration_context/mod.rs"
-
 [dev-dependencies]
 criterion          = { workspace = true }
-polyplug-dotnet    = { path = "../../crates/polyplug-dotnet" }
-polyplug-python    = { path = "../../crates/polyplug-python" }
-polyplug-lua       = { path = "../../crates/polyplug-lua" }
-polyplug-js       = { path = "../../crates/polyplug-js" }
-polyplug-js-deno  = { path = "../../crates/polyplug-js-deno" }
 tempfile           = "3"
 toml               = { workspace = true }
+polyplug-dotnet    = { path = "../polyplug-dotnet" }
+polyplug-python    = { path = "../polyplug-python" }
+polyplug-lua       = { path = "../polyplug-lua" }
+polyplug-js        = { path = "../polyplug-js" }
+polyplug-js-deno   = { path = "../polyplug-js-deno" }
 
+# Cross-crate integration tests (use multiple adapter crates — must live at workspace root)
 [[test]]
 name = "integration_dotnet"
-path = "../../tests/integration_dotnet/mod.rs"
-
-[[test]]
-name = "library_lifetime"
-path = "../../tests/library_lifetime/mod.rs"
-
-[[test]]
-name = "integration_python"
-path = "../../tests/integration_python/mod.rs"
+path = "../../tests/integration_dotnet.rs"
 
 [[test]]
 name = "integration_lua"
-path = "../../tests/integration_lua/mod.rs"
+path = "../../tests/integration_lua.rs"
+
+[[test]]
+name = "integration_python"
+path = "../../tests/integration_python.rs"
 
 [[test]]
 name = "integration_js"
-path = "../../tests/integration_js/mod.rs"
+path = "../../tests/integration_js.rs"
 
 [[test]]
-name = "integration_discovery"
-path = "../../tests/integration_discovery/mod.rs"
-
-[[test]]
-name = "integration_extension"
-path = "../../tests/integration_extension/mod.rs"
-
-[[test]]
-name = "integration_version"
-path = "../../tests/integration_version/mod.rs"
+name = "integration_loader_dispatch"
+path = "../../tests/integration_loader_dispatch.rs"
 
 [[test]]
 name = "cross_language"
-path = "../../tests/cross_language/mod.rs"
+path = "../../tests/cross_language.rs"
+
 [[test]]
 name = "cross_language_deno"
-path = "../../tests/cross_language_deno/mod.rs"
-[[test]]
-name = "integration_showcase"
-path = "../../tests/showcase/mod.rs"
-
-[[test]]
-name = "integration_reload"
-path = "../../tests/integration_reload.rs"
-
-[[test]]
-name = "integration_host_lua"
-path = "../../tests/integration_host_lua/mod.rs"
-
-[[test]]
-name = "integration_host_deno"
-path = "../../tests/integration_host_deno/mod.rs"
-
-[[test]]
-name = "integration_ffi_null"
-path = "../../tests/integration_ffi_null/mod.rs"
-
-[[test]]
-name = "integration_invalid_utf8"
-path = "../../tests/integration_invalid_utf8/mod.rs"
-
-[[test]]
-name = "integration_malformed"
-path = "../../tests/integration_malformed/mod.rs"
-
-[[test]]
-name = "integration_quiescence"
-path = "../../tests/integration_quiescence/mod.rs"
-
-[[test]]
-name = "integration_stringview_nulls"
-path = "../../tests/integration_stringview_nulls/mod.rs"
+path = "../../tests/cross_language_deno.rs"
 
 [[bench]]
 name    = "vtable_dispatch"

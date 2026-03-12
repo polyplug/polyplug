@@ -8,7 +8,7 @@ description  = "Host-side Rust bindings for the polyplug plugin runtime"
 
 [lib]
 name = "polyplug_host"
-path = "src/lib/mod.rs"
+path = "src/lib.rs"
 
 [dependencies]
 polyplug = { path = "../../crates/polyplug" }

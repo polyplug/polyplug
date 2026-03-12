@@ -25,12 +25,13 @@ petgraph   = { version = "0.8", default-features = false, features = ["stable_gr
 clap       = { version = "4.5", features = ["derive"] }
 
 # Internal crates
-polyplug = { path = "crates/polyplug" }
-polyplugc        = { path = "crates/polyplugc" }
+polyplug  = { path = "crates/polyplug" }
+polyplugc = { path = "crates/polyplugc" }
 criterion = { version = "0.8", features = ["html_reports"] }
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "warn"
+clone_on_ref_ptr           = "warn"
 unwrap_used                = "deny"
 expect_used                = "deny"
 std_instead_of_core        = "warn"

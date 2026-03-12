@@ -7,7 +7,7 @@ rust-version.workspace = true
 
 [lib]
 name       = "polyplug_js_deno"
-path       = "src/lib/mod.rs"
+path       = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]

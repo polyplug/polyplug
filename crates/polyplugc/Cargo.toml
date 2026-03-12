@@ -16,5 +16,10 @@ thiserror        = { workspace = true }
 clap             = { workspace = true }
 polyplug = { workspace = true }
 
+[dev-dependencies]
+polyplug         = { workspace = true }
+polyplug-guest   = { path = "../../guest-libs/rust" }
+tempfile         = "3"
+
 [lints]
 workspace = true

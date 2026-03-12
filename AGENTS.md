@@ -24,24 +24,33 @@ Violating any rule below is grounds for immediate rejection of the change. These
 
 ### 1. Module Structure
 
-**ALWAYS use `filename/mod.rs` for module roots. Bare `filename.rs` as a module root is FORBIDDEN.**
+**Use `filename.rs` for single-file modules. Use `filename/mod.rs` ONLY when the module has (or immediately needs) submodules inside the same folder.**
 
 ```
-// CORRECT
+// CORRECT — single-file module (no children)
 src/
-├── loader/
-│   └── mod.rs
+├── registry.rs
+├── graph.rs
+└── error.rs
+
+// CORRECT — multi-file module (has submodules)
+src/
+└── loader/
+    ├── mod.rs
+    ├── manifest.rs
+    └── scanner.rs
+
+// FORBIDDEN — folder wrapper for a single file with no children
+src/
 ├── registry/
-│   └── mod.rs
-└── graph/
-    └── mod.rs
-
-// FORBIDDEN
-src/
-├── loader.rs      ← FORBIDDEN as a module root
-├── registry.rs    ← FORBIDDEN as a module root
-└── graph.rs       ← FORBIDDEN as a module root
+│   └── mod.rs   ← FORBIDDEN when registry has no submodules
+├── graph/
+│   └── mod.rs   ← FORBIDDEN when graph has no submodules
+└── error/
+    └── mod.rs   ← FORBIDDEN when error has no submodules
 ```
+
+**Rule:** if a `folder/mod.rs` has zero sibling `.rs` files and zero subdirectories inside the folder, collapse it to `folder.rs` and delete the empty directory.
 
 **FORBIDDEN module pattern — never use this:**
 
@@ -51,8 +60,6 @@ pub mod loader {
     include!("loader.rs");
 }
 ```
-
----
 
 ### 2. Import Placement
 
@@ -270,38 +277,41 @@ polyplug/
 ├── crates/
 │   ├── polyplug/                    Rust runtime core
 │   │   └── src/
-│   │       ├── lib/
-│   │       │   └── mod.rs
-│   │       ├── loader/
-│   │       │   └── mod.rs
-│   │       ├── registry/
-│   │       │   └── mod.rs
-│   │       ├── graph/
-│   │       │   └── mod.rs
-│   │       ├── allocator/
-│   │       │   └── mod.rs
-│   │       └── error/
-│   │           └── mod.rs
+│   │       ├── lib.rs               crate root
+│   │       ├── abi.rs
+│   │       ├── error.rs
+│   │       ├── ffi.rs
+│   │       ├── graph.rs
+│   │       ├── registry.rs
+│   │       ├── reload.rs
+│   │       ├── runtime.rs
+│   │       ├── version.rs
+│   │       ├── allocator/           has submodule: tracking
+│   │       │   ├── mod.rs
+│   │       │   └── tracking.rs
+│   │       ├── extensions/          has submodule: trace
+│   │       │   ├── mod.rs
+│   │       │   └── trace.rs
+│   │       └── loader/              has submodules: manifest, scanner
+│   │           ├── mod.rs
+│   │           ├── manifest.rs
+│   │           └── scanner.rs
 │   └── polyplugc/                   CLI codegen tool
 │       └── src/
-│           ├── main/
-│           │   └── mod.rs
-│           ├── parser/
-│           │   └── mod.rs
-│           ├── ir/
-│           │   └── mod.rs
-│           └── generators/
+│           ├── main.rs              binary entry point
+│           ├── error.rs
+│           ├── ir.rs
+│           ├── pack.rs
+│           ├── parser.rs
+│           └── generators/          has submodules: rust, cpp, csharp, python, lua, js_*
 │               ├── mod.rs
-│               ├── rust/
-│               │   └── mod.rs
-│               ├── cpp/
-│               │   └── mod.rs
-│               ├── csharp/
-│               │   └── mod.rs
-│               ├── python/
-│               │   └── mod.rs
-│               └── lua/
-│                   └── mod.rs
+│               ├── rust.rs
+│               ├── cpp.rs
+│               ├── csharp.rs
+│               ├── python.rs
+│               ├── lua.rs
+│               ├── js_deno.rs
+│               └── js_quickjs.rs
 ├── host-libs/
 │   ├── rust/
 │   ├── cpp/
@@ -322,7 +332,7 @@ polyplug/
 
 | Forbidden | Correct |
 |---|---|
-| `filename.rs` as module root | `filename/mod.rs` |
+| `folder/mod.rs` with no submodules | `folder.rs` (flat file) |
 | `use` inside function/impl | `use` at file top only |
 | `include!()` module pattern | proper `mod` declarations |
 | `let x = foo()` (inferred) | `let x: MyType = foo()` |
