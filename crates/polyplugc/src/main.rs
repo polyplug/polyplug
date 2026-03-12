@@ -34,7 +34,7 @@ enum Command {
         lang: String,
 
         /// Output directory for generated files.
-        #[arg(long, short = 'o')]
+        #[arg(long, short = 'o', required = true)]
         out: PathBuf,
     },
 
@@ -61,7 +61,7 @@ enum Command {
         #[arg(short, long)]
         lang: String,
         /// Output directory for scaffold files
-        #[arg(short, long)]
+        #[arg(short, long, required = true)]
         out: PathBuf,
     },
 }
