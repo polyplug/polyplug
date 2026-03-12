@@ -75,7 +75,7 @@ pub trait BundleLoader: Send + Sync {
         vec![self.runtime_name().to_owned()]
     }
 
-    /// Load a plugin bundle at `path` and register its vtables via `registrar`.
+    /// Load a bundle at `path` and register its vtables via `registrar`.
     ///
     /// # Errors
     /// Returns `Err(PolyplugError::...)` on any failure. For stub loaders,
@@ -83,7 +83,7 @@ pub trait BundleLoader: Send + Sync {
     fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError>;
 }
 
-/// The built-in loader for native (Rust/C++/NativeAOT) plugin bundles.
+/// The built-in loader for native (Rust/C++/NativeAOT) bundles.
 ///
 /// Uses dlopen (via libloading) to load `.so` / `.dll` / `.dylib` files.
 /// Automatically registered in `RuntimeBuilder::new()` — app developers
@@ -115,7 +115,7 @@ impl BundleLoader for NativeBundleLoader {
         "native"
     }
 
-    /// Load a native plugin bundle by calling `load_bundle()`.
+    /// Load a native bundle by calling `load_bundle()`.
     ///
     /// The `Library` handle for the loaded bundle is stored in the `Registry`
     /// (`self.registry`) — NOT here in the loader. `NativeBundleLoader` may be
@@ -137,7 +137,7 @@ impl BundleLoader for NativeBundleLoader {
     }
 }
 
-/// A successfully loaded plugin bundle.
+/// A successfully loaded bundle.
 //
 //  The `library` field is intentionally never dropped — it lives for the entire
 //  process lifetime. All vtable function pointers extracted from it are 'static.
@@ -220,7 +220,7 @@ pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
     Ok(manifest)
 }
 
-/// Load a single native plugin bundle.
+/// Load a single native bundle.
 ///
 /// # Steps
 /// 1. Parse the manifest to extract bundle_name and dependencies.
@@ -266,7 +266,7 @@ pub fn load_bundle(
             error: format!("declare_deps failed: {e}"),
         })?;
 
-    // SAFETY: The path points to a compiled plugin bundle. libloading handles
+    // SAFETY: The path points to a compiled bundle. libloading handles
     // platform-specific loading (RTLD_NOW | RTLD_LOCAL on Unix, LoadLibraryExW on Windows).
     // If the library is not a valid shared library or missing symbols, libloading
     // returns an error before any code in the library runs.
