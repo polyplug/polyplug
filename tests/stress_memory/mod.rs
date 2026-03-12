@@ -150,11 +150,12 @@ unsafe extern "C" fn registry_register_callback(
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // Extract contract name from StringView.
-    // SAFETY: desc.contract_name.ptr points to valid UTF-8 bytes for desc.contract_name.len bytes.
+    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
+    // &'static str contract name — guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes)
+        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
@@ -710,4 +711,23 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let _workspace_root: PathBuf = workspace_root();
 
     std::mem::forget(library);
+}
+
+#[test]
+#[should_panic(expected = "double-free")]
+#[cfg(debug_assertions)]
+fn test_double_free_detected() {
+    // Allocate via tracking_alloc, free twice, assert double-free panic.
+    // Uses TrackingAllocator which wraps polyplug_host_alloc/free.
+    let tracker: TrackingAllocator = TrackingAllocator::new();
+    let alloc: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
+    let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
+    // SAFETY: size=64, align=1 is a valid layout.
+    let ptr: *mut u8 = unsafe { alloc(64_usize, 1_usize) };
+    assert!(!ptr.is_null(), "alloc must succeed");
+    // SAFETY: ptr was just allocated with size=64, align=1.
+    unsafe { free_fn(ptr, 64_usize, 1_usize) };
+    // Second free on same pointer — must panic with "double-free" in debug builds.
+    // SAFETY: This is intentionally invalid — test verifies the panic fires.
+    unsafe { free_fn(ptr, 64_usize, 1_usize) };
 }

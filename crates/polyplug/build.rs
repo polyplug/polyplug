@@ -300,6 +300,7 @@ fn main() {
         "cargo:rustc-env=RELOAD_PLUGIN_V1_DIR={}",
         reload_v1_dir.display()
     );
+    println!("cargo:rustc-env=RELOAD_PLUGIN_CONTRACT_ID=16526955377754357857");
 
     // ─── reload_plugin_v2 build ───────────────────────────────────────────────
     // Re-run if reload_plugin_v2 sources change.
@@ -455,6 +456,72 @@ fn main() {
     println!(
         "cargo:rustc-env=DEPENDER_PLUGIN_DIR={}",
         depender_dir.display()
+    );
+
+    // ─── no_init_plugin build ─────────────────────────────────────────────────
+    // Re-run if no_init_plugin sources change.
+    println!("cargo:rerun-if-changed=tests/fixtures/no_init_plugin/src/lib.rs");
+    println!("cargo:rerun-if-changed=tests/fixtures/no_init_plugin/Cargo.toml");
+
+    // Build no_init_plugin as a release cdylib via cargo.
+    let no_init_status: std::process::ExitStatus = Command::new(env!("CARGO"))
+        .arg("build")
+        .arg("--package")
+        .arg("no_init_plugin")
+        .arg("--release")
+        .arg("--target-dir")
+        .arg(&plugin_target_dir)
+        .current_dir(&workspace_root)
+        .env_remove("CARGO_TARGET_DIR")
+        .status()
+        .expect("failed to run cargo build for no_init_plugin");
+
+    if !no_init_status.success() {
+        panic!(
+            "cargo build -p no_init_plugin failed with status: {}",
+            no_init_status
+        );
+    }
+
+    let no_init_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libno_init_plugin.dylib"
+    } else if cfg!(target_os = "windows") {
+        "no_init_plugin.dll"
+    } else {
+        "libno_init_plugin.so"
+    };
+
+    let built_no_init_so: PathBuf = plugin_target_dir.join("release").join(no_init_lib_filename);
+    let dest_no_init_so: PathBuf = fixtures_dir.join(no_init_lib_filename);
+    fs::copy(&built_no_init_so, &dest_no_init_so)
+        .unwrap_or_else(|e| panic!("failed to copy no_init_plugin .so: {}", e));
+
+    // Create bundle directory for no_init_plugin.
+    let no_init_plugin_dir: PathBuf = fixtures_dir.join("no_init_plugin");
+    fs::create_dir_all(&no_init_plugin_dir).unwrap_or_else(|e: std::io::Error| {
+        panic!("failed to create no_init_plugin bundle dir: {}", e)
+    });
+    fs::copy(
+        &dest_no_init_so,
+        no_init_plugin_dir.join(no_init_lib_filename),
+    )
+    .unwrap_or_else(|e: std::io::Error| {
+        panic!("failed to copy no_init_plugin .so to bundle dir: {}", e)
+    });
+    fs::write(
+        no_init_plugin_dir.join("manifest.toml"),
+        concat!(
+            "bundle_name = \"no_init_plugin\"\n",
+            "runtime     = \"native\"\n",
+            "file        = \"libno_init_plugin.so\"\n",
+        ),
+    )
+    .unwrap_or_else(|e: std::io::Error| {
+        panic!("failed to write no_init_plugin manifest.toml: {}", e)
+    });
+    println!(
+        "cargo:rustc-env=NO_INIT_PLUGIN_DIR={}",
+        no_init_plugin_dir.display()
     );
 
     // Emit polyplugc binary path so integration tests can use env!("CARGO_BIN_EXE_polyplugc").

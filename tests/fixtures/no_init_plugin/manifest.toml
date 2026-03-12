@@ -1,0 +1,3 @@
+bundle_name = "no_init_plugin"
+runtime     = "native"
+file        = "libno_init_plugin.so"

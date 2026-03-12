@@ -161,6 +161,26 @@ path = "../../tests/integration_host_lua/mod.rs"
 name = "integration_host_deno"
 path = "../../tests/integration_host_deno/mod.rs"
 
+[[test]]
+name = "integration_ffi_null"
+path = "../../tests/integration_ffi_null/mod.rs"
+
+[[test]]
+name = "integration_invalid_utf8"
+path = "../../tests/integration_invalid_utf8/mod.rs"
+
+[[test]]
+name = "integration_malformed"
+path = "../../tests/integration_malformed/mod.rs"
+
+[[test]]
+name = "integration_quiescence"
+path = "../../tests/integration_quiescence/mod.rs"
+
+[[test]]
+name = "integration_stringview_nulls"
+path = "../../tests/integration_stringview_nulls/mod.rs"
+
 [[bench]]
 name    = "vtable_dispatch"
 harness = false
