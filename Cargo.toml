@@ -57,3 +57,10 @@ overflow-checks = false    # disable integer overflow checks — zero-cost arith
 # polyplugc is a build-time CLI tool — optimize for size over raw throughput
 [profile.release.package.polyplugc]
 opt-level = "z"            # "z" = smallest code size (vs "s" which is moderate)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Epic 25 — Release optimization results (2026-03-12):
+# polyplugc:        BEFORE 2.0M → AFTER 1.5M
+# libpolyplug.so:   BEFORE 1.1M → AFTER 775K
+# vtable_dispatch:  N/A (bench not run — no bench artifact in release profile)
+# ─────────────────────────────────────────────────────────────────────────────
