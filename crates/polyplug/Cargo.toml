@@ -40,3 +40,7 @@ harness = false
 [[test]]
 name = "integration_trust_boundary"
 required-features = ["testing"]
+
+[[test]]
+name = "integration_registrar_security"
+required-features = ["testing"]

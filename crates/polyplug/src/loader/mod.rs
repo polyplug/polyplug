@@ -15,15 +15,15 @@ pub mod scanner;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::abi::ABI_OK;
 use crate::abi::AbiError;
 use crate::abi::AbiError as AbiErrorType;
 use crate::abi::HostVTable;
-use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::abi::PluginDescriptor;
 use crate::abi::PluginHandle;
 use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
+use crate::abi::ABI_OK;
+use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::error::LoaderError;
 use crate::registry::Registry;
 use std::sync::Arc;
@@ -478,10 +478,26 @@ pub mod testing {
     //! Thin wrappers that expose crate-private loader items to integration tests.
     //! Only compiled when `test` or the `testing` feature is active.
 
+    use super::BundleInitGuard;
     use crate::abi::HostVTable;
     use crate::abi::PluginRegistrar;
     use crate::registry::Registry;
-    use super::BundleInitGuard;
+
+    pub struct RegistrarContext {
+        registrar: PluginRegistrar,
+        guard: Option<BundleInitGuard>,
+    }
+
+    impl RegistrarContext {
+        pub fn registrar_mut(&mut self) -> &mut PluginRegistrar {
+            &mut self.registrar
+        }
+
+        pub fn drop_guard(&mut self) {
+            let dropped: Option<BundleInitGuard> = self.guard.take();
+            drop(dropped);
+        }
+    }
 
     /// Create a `PluginRegistrar` + `BundleInitGuard` for the given bundle.
     ///
@@ -495,7 +511,12 @@ pub mod testing {
         registry: &Registry,
         bundle_id: u64,
         host_vtable: &'static HostVTable,
-    ) -> (PluginRegistrar, BundleInitGuard) {
-        super::make_registrar_context(registry, bundle_id, host_vtable)
+    ) -> RegistrarContext {
+        let (registrar, guard): (PluginRegistrar, BundleInitGuard) =
+            super::make_registrar_context(registry, bundle_id, host_vtable);
+        RegistrarContext {
+            registrar,
+            guard: Some(guard),
+        }
     }
 }

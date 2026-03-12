@@ -199,7 +199,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add trust boundary transition tests`
   - Files: `crates/polyplug/tests/integration_trust_boundary.rs`
 
-- [ ] **Task 2: Quiescence Race Window Tests**
+- [x] **Task 2: Quiescence Race Window Tests**
 
   **What to do**: Test the Arc::strong_count check vs actual drop window
 
@@ -239,7 +239,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add quiescence race window tests`
   - Files: `crates/polyplug/tests/stress_quiescence_race.rs`
 
-- [ ] **Task 3: Registrar Callback Security Tests**
+- [x] **Task 3: Registrar Callback Security Tests**
 
   **What to do**: Test registrar_callback resilience against malformed inputs
 
