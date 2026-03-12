@@ -563,8 +563,10 @@ impl BundleLoader for JsLoader {
             })?;
 
         // 3. Init/get QuickJS runtime.
-        let runtime: &Runtime = QJS_RUNTIME.get_or_init(|| {
-                Runtime::new().map_err(|e: rquickjs::Error| format!("QuickJS runtime init failed: {e}"))
+        let runtime: &Runtime = QJS_RUNTIME
+            .get_or_init(|| {
+                Runtime::new()
+                    .map_err(|e: rquickjs::Error| format!("QuickJS runtime init failed: {e}"))
             })
             .as_ref()
             .map_err(|reason: &String| {

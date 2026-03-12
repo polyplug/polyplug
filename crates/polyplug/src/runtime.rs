@@ -901,7 +901,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
         return 0usize;
     }
     // SAFETY: out is valid for out_cap PluginHandle elements per ABI contract.
-    let out_slice: &mut [PluginHandle] = unsafe { std::slice::from_raw_parts_mut(out, out_cap) };
+    let out_slice: &mut [PluginHandle] = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
     registry.find_all_by_contract(contract_id, min_version, out_slice)
 }
 
@@ -1004,7 +1004,6 @@ mod tests {
     // These use a module-level OnceLock to register the test plugin in the
     // global registry exactly once. Cargo may run unit tests in parallel within
     // a binary, so the OnceLock ensures idempotent setup.
-
 
     /// One-time setup: register a plugin for contract 0xF00D_CAFE in the global registry.
     fn ensure_test_plugin_registered() {

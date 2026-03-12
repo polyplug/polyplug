@@ -10,14 +10,14 @@ use std::sync::MutexGuard;
 use std::sync::OnceLock;
 
 use deno_core::FastString;
+use deno_core::ModuleLoadOptions;
+use deno_core::ModuleLoadReferrer;
 use deno_core::ModuleLoader;
 use deno_core::ModuleSource;
 use deno_core::ModuleSourceCode;
 use deno_core::ModuleType;
-use deno_core::ModuleLoadOptions;
-use deno_core::ModuleLoadReferrer;
-use deno_core::op2;
 use deno_core::ResolutionKind;
+use deno_core::op2;
 use deno_error::JsErrorBox;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
@@ -436,7 +436,9 @@ impl ModuleLoader for InMemoryModuleLoader {
         _kind: ResolutionKind,
     ) -> Result<deno_core::ModuleSpecifier, deno_error::JsErrorBox> {
         let resolved: deno_core::ModuleSpecifier = deno_core::resolve_import(specifier, referrer)
-            .map_err(|e: deno_core::ModuleResolutionError| JsErrorBox::generic(e.to_string()))?;
+            .map_err(
+            |e: deno_core::ModuleResolutionError| JsErrorBox::generic(e.to_string()),
+        )?;
         Ok(resolved)
     }
 
@@ -455,8 +457,7 @@ impl ModuleLoader for InMemoryModuleLoader {
             );
             return deno_core::ModuleLoadResponse::Sync(Ok(source));
         }
-        let error: JsErrorBox =
-            JsErrorBox::generic("only the main JS fixture module is supported");
+        let error: JsErrorBox = JsErrorBox::generic("only the main JS fixture module is supported");
         deno_core::ModuleLoadResponse::Sync(Err(error))
     }
 }
@@ -536,14 +537,16 @@ impl BundleLoader for JsDenoLoader {
             // Build tokio single-thread runtime
             // SAFETY: deno_core 0.311.0 requires tokio; smol would cause panics.
             let tokio_rt: tokio::runtime::Runtime =
-                match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
                     Ok(rt) => rt,
                     Err(e) => {
-                        let _ = err_tx.send(PolyplugError::Loader(
-                            LoaderError::JsRuntimeInitFailed {
+                        let _ =
+                            err_tx.send(PolyplugError::Loader(LoaderError::JsRuntimeInitFailed {
                                 reason: format!("failed to build tokio runtime: {e}"),
-                            },
-                        ));
+                            }));
                         return;
                     }
                 };
@@ -610,25 +613,23 @@ impl BundleLoader for JsDenoLoader {
                         })
                     })?;
 
-                let mod_id: deno_core::ModuleId =
-                    runtime
-                        .load_main_es_module(&module_url)
-                        .await
-                        .map_err(|e: deno_core::error::CoreError| {
-                            PolyplugError::Loader(LoaderError::JsExecutionFailed {
-                                reason: format!("failed to load module: {e}"),
-                            })
-                        })?;
-                // Evaluate the module — triggers top-level execution including op_register_vtable
-                let evaluate_future = runtime.mod_evaluate(mod_id);
-                runtime
-                    .run_event_loop(Default::default())
+                let mod_id: deno_core::ModuleId = runtime
+                    .load_main_es_module(&module_url)
                     .await
                     .map_err(|e: deno_core::error::CoreError| {
                         PolyplugError::Loader(LoaderError::JsExecutionFailed {
-                            reason: format!("event loop failed: {e}"),
+                            reason: format!("failed to load module: {e}"),
                         })
                     })?;
+                // Evaluate the module — triggers top-level execution including op_register_vtable
+                let evaluate_future = runtime.mod_evaluate(mod_id);
+                runtime.run_event_loop(Default::default()).await.map_err(
+                    |e: deno_core::error::CoreError| {
+                        PolyplugError::Loader(LoaderError::JsExecutionFailed {
+                            reason: format!("event loop failed: {e}"),
+                        })
+                    },
+                )?;
                 // Drive the evaluate future to completion
                 let _eval_result: Result<(), deno_core::error::CoreError> = evaluate_future.await;
 
@@ -662,12 +663,14 @@ impl BundleLoader for JsDenoLoader {
                 .recv_timeout(core::time::Duration::from_secs(30))
                 .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
                     // Check if the bundle thread reported a specific error.
-                    err_rx.try_recv().unwrap_or_else(|_: std::sync::mpsc::TryRecvError| {
-                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                            runtime: "js-deno".to_owned(),
-                            message: "vtable registration timed out after 30s".to_owned(),
+                    err_rx
+                        .try_recv()
+                        .unwrap_or_else(|_: std::sync::mpsc::TryRecvError| {
+                            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                                runtime: "js-deno".to_owned(),
+                                message: "vtable registration timed out after 30s".to_owned(),
+                            })
                         })
-                    })
                 })?;
         let raw_vtable: *const PluginVTable = raw_vtable_wrapped.0;
 

@@ -733,8 +733,7 @@ mod tests {
             index: 0u32,
             generation: 0u32,
         }; 4];
-        let count: usize =
-            registry.find_all_by_contract(0xAAAA_BBBB_CCCC_DDDD, 0, &mut handles);
+        let count: usize = registry.find_all_by_contract(0xAAAA_BBBB_CCCC_DDDD, 0, &mut handles);
         assert_eq!(count, 2, "both implementations should be found");
     }
 

@@ -146,7 +146,11 @@ pub enum LoaderError {
     JsRuntimeInitFailed { reason: String },
 
     #[error("failed to read bundle at `{path}`: {source}")]
-    BundleReadFailed { path: String, #[source] source: std::io::Error },
+    BundleReadFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 
     #[error("module resolution failed: {reason}")]
     ModuleResolutionFailed { reason: String },

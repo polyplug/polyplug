@@ -378,7 +378,6 @@ mod tests {
 
     #[test]
     fn from_manifests_chain_order() {
-
         let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
         let cid_y: u64 = crate::abi::contract_id("contract.Y", 1);
 
@@ -472,7 +471,6 @@ mod tests {
 
     #[test]
     fn from_manifests_bybundle_missing_fails() {
-
         let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
 
         let dep_b: RawManifestDependency = RawManifestDependency {
