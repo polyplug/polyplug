@@ -22,6 +22,13 @@ pub(crate) enum CodegenError {
         source: std::io::Error,
     },
 
+    #[error("failed to read file `{path}`: {source}")]
+    ReadFailed {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("IR validation failed: {message}")]
     ValidationFailed { message: String },
 

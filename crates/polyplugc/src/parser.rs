@@ -144,7 +144,7 @@ pub(crate) struct RawDependency {
 
 /// Parse and validate an `api.toml` file, producing a `ValidatedIr`.
 pub(crate) fn parse_api(path: &Path) -> Result<ValidatedIr, CodegenError> {
-    let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::WriteFailed {
+    let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::ReadFailed {
         path: path.to_string_lossy().into_owned(),
         source: e,
     })?;
@@ -163,7 +163,7 @@ pub(crate) fn parse_api_str(content: &str) -> Result<ValidatedIr, CodegenError> 
 /// Parse and validate a `bundle.toml` file.
 #[allow(dead_code)]
 pub(crate) fn parse_bundle(path: &Path) -> Result<ValidatedIr, CodegenError> {
-    let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::WriteFailed {
+    let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::ReadFailed {
         path: path.to_string_lossy().into_owned(),
         source: e,
     })?;
@@ -186,7 +186,7 @@ pub(crate) fn parse_bundle_str(content: &str) -> Result<ValidatedIr, CodegenErro
 /// bundle file's parent directory and calls `parse_api()` to load types + contracts.
 /// Returns a `ValidatedIr` with the bundle metadata merged with the API types/contracts.
 pub(crate) fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, CodegenError> {
-    let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::WriteFailed {
+    let content: String = std::fs::read_to_string(path).map_err(|e| CodegenError::ReadFailed {
         path: path.to_string_lossy().into_owned(),
         source: e,
     })?;
