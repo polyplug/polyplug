@@ -403,4 +403,64 @@ mod tests {
         assert!(!rt.is_null());
         unsafe { polyplug_runtime_free(rt) };
     }
+
+    #[test]
+    fn handle_roundtrip_zero() {
+        let h: PluginHandle = PluginHandle {
+            index: 0u32,
+            generation: 0u32,
+        };
+        let packed: u64 = pack_handle(h);
+        let unpacked: PluginHandle = unpack_handle(packed);
+        assert_eq!(unpacked.index, h.index);
+        assert_eq!(unpacked.generation, h.generation);
+    }
+
+    #[test]
+    fn handle_roundtrip_max_values() {
+        // index = u32::MAX - 1 avoids the null sentinel (index == u32::MAX means null)
+        let h: PluginHandle = PluginHandle {
+            index: u32::MAX - 1,
+            generation: u32::MAX,
+        };
+        let packed: u64 = pack_handle(h);
+        let unpacked: PluginHandle = unpack_handle(packed);
+        assert_eq!(unpacked.index, h.index);
+        assert_eq!(unpacked.generation, h.generation);
+    }
+
+    #[test]
+    fn handle_roundtrip_pack_unpack_identity() {
+        // pack(unpack(x)) == x for boundary values
+        let boundary_values: [u64; 4] = [
+            0u64,
+            1u64,
+            (u32::MAX as u64) << 32 | (u32::MAX - 1) as u64,
+            (1u64 << 32) | 1u64,
+        ];
+        for &val in &boundary_values {
+            let unpacked: PluginHandle = unpack_handle(val);
+            let repacked: u64 = pack_handle(unpacked);
+            assert_eq!(repacked, val);
+        }
+    }
+
+    #[test]
+    fn handle_sentinel_null_roundtrip() {
+        // u64::MAX is the sentinel for the null handle
+        let packed: u64 = u64::MAX;
+        let unpacked: PluginHandle = unpack_handle(packed);
+        assert!(unpacked.is_null());
+        let repacked: u64 = pack_handle(unpacked);
+        assert_eq!(repacked, u64::MAX);
+    }
+
+    #[test]
+    fn handle_null_packs_to_sentinel() {
+        // The null PluginHandle (index == u32::MAX) must pack to u64::MAX
+        let null_h: PluginHandle = PluginHandle::null();
+        assert!(null_h.is_null());
+        let packed: u64 = pack_handle(null_h);
+        assert_eq!(packed, u64::MAX);
+    }
 }

@@ -1077,3 +1077,32 @@ mod tests {
         );
     }
 }
+
+// ─── Test-only public surface ───────────────────────────────────────────────
+#[cfg(any(test, feature = "testing"))]
+pub mod testing {
+    //! Thin wrappers that expose crate-private items to integration tests.
+    //! Only compiled when `test` or the `testing` feature is active.
+
+    /// Read the INIT_BUNDLE_ID thread-local on the calling thread.
+    pub fn read_init_bundle_id() -> u64 {
+        super::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.get())
+    }
+
+    /// Set the INIT_BUNDLE_ID thread-local on the calling thread.
+    pub fn set_init_bundle_id(id: u64) {
+        super::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(id));
+    }
+
+    /// Dispatch to `host_find_by_contract` for integration tests.
+    ///
+    /// # Safety
+    /// Same preconditions as `host_find_by_contract`: args are plain integers.
+    pub unsafe fn test_host_find_by_contract(
+        contract_id: u64,
+        min_version: u32,
+    ) -> crate::abi::PluginHandle {
+        // SAFETY: caller satisfies same preconditions as host_find_by_contract.
+        unsafe { super::host_find_by_contract(contract_id, min_version) }
+    }
+}
