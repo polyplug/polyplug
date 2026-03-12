@@ -186,7 +186,7 @@ impl BundleLoader for PythonLoader {
             // The registrar lifetime extends for the duration of this call.
             let registrar_addr: usize = registrar as *mut PluginRegistrar as usize;
 
-            // SAFETY: bundle_path_static outlives this call; leaked intentionally so StringView ptr is 'static.
+            // NOTE: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =
                 Box::leak(bundle_dir_str.clone().into_boxed_str());
             let ctx: PluginContext = PluginContext {
