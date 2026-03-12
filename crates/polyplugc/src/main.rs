@@ -98,13 +98,13 @@ fn run(cli: Cli) -> Result<(), polyplug_codegen::PolyplugcError> {
                 api_toml: manifest,
                 lang: lang_enum,
                 side,
-                out_dir: out,
+                out_dir: out.clone(),
             };
 
             let output = generate(config)?;
 
             // Write generated files
-            write_files(&output)?;
+            write_files(&output, &out)?;
         }
 
         Command::Validate { api, bundle } => {
@@ -168,11 +168,13 @@ fn parse_lang(lang: &str) -> Result<Lang, polyplug_codegen::PolyplugcError> {
 
 fn write_files(
     output: &polyplug_codegen::GenerateOutput,
+    out_dir: &PathBuf,
 ) -> Result<(), polyplug_codegen::PolyplugcError> {
     use std::fs;
 
     for file in &output.files {
-        if let Some(parent) = file.path.parent() {
+        let file_path = out_dir.join(&file.path);
+        if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 polyplug_codegen::PolyplugcError::WriteFailed {
                     path: parent.to_string_lossy().into_owned(),
@@ -180,9 +182,9 @@ fn write_files(
                 }
             })?;
         }
-        fs::write(&file.path, &file.content).map_err(|e| {
+        fs::write(&file_path, &file.content).map_err(|e| {
             polyplug_codegen::PolyplugcError::WriteFailed {
-                path: file.path.to_string_lossy().into_owned(),
+                path: file_path.to_string_lossy().into_owned(),
                 source: e,
             }
         })?;
