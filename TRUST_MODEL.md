@@ -88,10 +88,6 @@ Returns null if undeclared    |  Direct pointer dispatch
     +-- Allowed? -> Handle    |
     +-- Denied?  -> Null      |
 ```
-Strict Enforcement            |  Zero Overhead
-Checks manifest declarations  |  Trusts Phase 1 results
-Returns null if undeclared    |  Direct pointer dispatch
-```
 
 ### The BundleInitGuard
 The transition is managed by a thread-local RAII guard called `BundleInitGuard`.
@@ -167,12 +163,48 @@ The polyplug trust model is a **Software Architecture Enforcement Tool**, not a 
 | Undeclared Dependencies | **YES** | Caught during initialization lookup. |
 | Version Mismatches | **YES** | Rejected by `find_by_contract` if version < `min_version`. |
 | Use-after-Unload | **YES** | Caught by generational index checks in `PluginHandle`. |
+| Malformed / corrupted binaries | **YES** | Invalid UTF-8, truncated, wrong magic, missing `init` — all return clean errors. |
+| Null pointer inputs to C facade | **YES** | All `polyplug_rt_*` functions null-check every pointer at entry. |
+| Double-free of host memory (debug) | **YES** | `TrackingAllocator` panics on double-free in `cfg(debug_assertions)`. ASan in CI. |
 | Malicious Memory Access | **NO** | Plugins share the same address space and can read/write any memory. |
 | Malicious Symbol Access | **NO** | A plugin can use `dlopen(NULL, ...)` to find host symbols directly. |
 | Denial of Service | **NO** | A plugin can loop infinitely or exhaust host memory. |
+| Plugin crash isolation | **NO** | A plugin segfault kills the host process — by design (see below). |
+| Data exfiltration / privilege escalation | **NO** | Plugins run with the same OS privileges as the host process. |
 
 ### The "Trusted Same-Process" Assumption
-Polyplug assumes that all loaded bundles are authorized to run by the host application. If you require protection against hostile code, you must wrap the polyplug host in an OS-level sandbox (e.g., Firecracker, WebAssembly, or Linux Namespaces).
+
+polyplug assumes that all loaded bundles are authorized to run by the host application. If you require protection against hostile code, you must wrap the polyplug host in an OS-level sandbox (e.g., Firecracker, WebAssembly, or Linux Namespaces).
+
+### Plugin crash isolation — explicit non-goal
+
+**A plugin that segfaults, triggers SIGABRT, or causes any fatal signal kills the host process.** This is intentional and by design.
+
+Isolating plugin crashes requires either:
+- **Out-of-process execution** — violates the zero-overhead hot path goal. A single indirect call becomes an IPC round-trip (~microseconds instead of nanoseconds). This is a fundamental incompatibility with polyplug's core design principle.
+- **OS-level sandboxing** (seccomp, pledge, etc.) — platform-specific, adds significant complexity, and still cannot prevent all crash vectors.
+
+polyplug's position: the hot path must be a single indirect call. Plugin crash isolation is incompatible with that goal. App developers who need crash isolation must run untrusted plugins in a separate worker process with their own IPC layer. polyplug is not the right tool for untrusted plugin execution. See Non-Goals in the PRD.
+
+### Input validation at the host boundary
+
+Even with trusted plugins, malformed or corrupted plugin binaries are a real scenario. polyplug defends against these at load time:
+
+- **Invalid UTF-8** — all strings extracted from plugin binaries are validated via `std::str::from_utf8`. Invalid UTF-8 is a hard load error. The runtime remains healthy after rejecting a bad bundle.
+- **Truncated or wrong-magic binaries** — `libloading` returns a clean error; polyplug propagates as `PolyplugError::LoadFailed`.
+- **Missing `init` symbol** — returns `PolyplugError::MissingSymbol`. Runtime remains healthy.
+- **Unknown runtime value** — returns `PolyplugError::UnknownRuntime`.
+- **Null pointer inputs** — all C facade functions null-check every pointer at entry. A null pointer returns a defined error code. No null pointer ever causes UB in polyplug runtime code.
+
+### `from_utf8_unchecked` policy
+
+`std::str::from_utf8_unchecked` is permitted **only** on host-owned data — data created and managed by the polyplug runtime or host application. Every use must have a `// SAFETY:` comment explaining why the data is guaranteed to be valid UTF-8.
+
+`from_utf8_unchecked` is **never** used on data originating from a plugin binary or passed from a plugin across the ABI boundary. Such data always goes through `std::str::from_utf8` with a hard error on failure.
+
+### `PluginVTable` immutability
+
+`PluginVTable` pointers are treated as read-only after registration. Casting a `*const PluginVTable` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable in-process. It is a contract that trusted plugins must uphold.
 
 ## 7. ABI Freeze Notice
 
@@ -201,11 +233,14 @@ To support future features without breaking the ABI, the `HostVTable` includes `
 
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
 
-### Hot-Reload (Epic 10)
-Future versions will support reloading bundles at runtime. The generation counter in `PluginHandle` is the foundation for this feature. When a bundle is reloaded, its previous registry slots are marked stale, and any existing handles held by other plugins will be rejected by the `resolve_guard`, forcing them to re-resolve the contract.
+### Hot-Reload ✅ done (Epic 17)
+Hot-reload is implemented. The generation counter in `PluginHandle` detects stale handles. Arc-swap guards ensure the old vtable stays alive until all in-flight calls complete. Quiescence timeout is 5 seconds. See the Hot-Reload Safety Guarantees section above.
 
-### Scripting Bindings (Epics 10/11)
-Python and Lua bindings are planned. These will respect the same trust model rules. Scripted plugins will have their own "Virtual Bundle ID" and will declare dependencies via their respective script manifests. The runtime will enforce these through the same `INIT_BUNDLE_ID` mechanism used by native code.
+### Scripting and JS Bindings ✅ done (Epics 10–11, 11.5)
+Python, Lua, JavaScript (QuickJS and Deno/V8) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
 
 ### Priority Resolution
-We plan to introduce a weighting system for multi-impl providers. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_by_contract` returns the "best" provider rather than just the first one registered.
+A weighting system for multi-impl providers is planned for a future version. This will allow the host or a "Coordinator Bundle" to assign priorities to implementations, ensuring that `find_by_contract` returns the "best" provider rather than just the first one registered.
+
+### WASM sandbox support
+Future versions will support WASM plugins in a sandboxed execution environment, providing crash isolation without IPC overhead. This is the planned path for untrusted plugin execution.

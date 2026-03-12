@@ -5392,3 +5392,351 @@ VERIFICATION CHECKLIST
 - dotnet build succeeds on guest-libs/csharp/ with zero warnings
 - dotnet build succeeds on host-libs/csharp/ with zero warnings
 ```
+
+---
+
+## Epic 23 — Hardening and Safety
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+Your job is to create a detailed, step-by-step execution plan for the EXECUTER agent.
+All architectural decisions for this epic are fully pre-answered below.
+Do not ask questions — implement exactly as specified.
+
+---
+
+READ FIRST
+- AGENTS.md
+- polyplug_prd.md — section 5 (Runtime Core), section 6 (ABI Layer),
+  section 19 (Security Model), section 27 (Non-Goals)
+- TRUST_MODEL.md
+- crates/polyplug/src/allocator/tracking/mod.rs
+- crates/polyplug/src/ffi/mod.rs
+- crates/polyplug/src/loader/mod.rs  (contract name UTF-8 extraction)
+- crates/polyplug/src/registry/mod.rs
+- tests/stress_memory/mod.rs
+- tests/stress_error/mod.rs
+
+---
+
+GOAL
+
+Fix three production code bugs (items 1–3 below) and add missing test coverage
+for five correctness gaps (items 4–7). One item (plugin segfault isolation)
+is explicitly a non-goal — document it only.
+
+This epic touches no public API and no ABI. Pure internal hardening.
+
+---
+
+PRE-ANSWERED DECISIONS
+
+─────────────────────────────────────────────────────────────
+FIX 1 — from_utf8_unchecked → from_utf8 for contract names
+─────────────────────────────────────────────────────────────
+
+PRIORITY: Highest. This is active UB in production code today.
+
+Location: crates/polyplug/src/loader/mod.rs (and any other site that calls
+from_utf8_unchecked on data originating from a plugin binary).
+
+Find every call to std::str::from_utf8_unchecked (or as_str_unchecked, or
+any other unchecked UTF-8 conversion) where the input comes from:
+- A plugin's exported symbol name
+- A contract name or bundle name extracted from a plugin's manifest or binary
+- Any StringView passed from a plugin (i.e. originating from untrusted code)
+
+Replace with std::str::from_utf8(...).map_err(|_| PolyplugError::InvalidUtf8 {
+    context: "contract name",  // descriptive context string
+})?
+
+PolyplugError::InvalidUtf8 { context: String } variant must be added if not
+already present. It is a hard load-time error — the bundle fails to load.
+
+IMPORTANT DISTINCTION:
+- StringView passed FROM HOST TO PLUGIN: host-owned, trusted, from_utf8_unchecked
+  is acceptable (SAFETY comment required explaining why).
+- StringView passed FROM PLUGIN TO HOST: untrusted, must use from_utf8.
+- Contract names extracted from plugin binary at load time: untrusted, must
+  use from_utf8.
+
+Add SAFETY comments to every remaining from_utf8_unchecked explaining why
+it is safe (i.e. it is host-owned data, not plugin-provided).
+
+─────────────────────────────────────────────────────────────
+FIX 2 — Null pointer checks in all C facade FFI functions
+─────────────────────────────────────────────────────────────
+
+Location: crates/polyplug/src/ffi/mod.rs
+
+Every FFI function that takes a pointer parameter must null-check it at entry.
+A null pointer must return a defined error, never cause UB.
+
+Rules per function:
+
+polyplug_runtime_new: returns null on allocation failure — already correct if
+  Box::new is used (panics on OOM in Rust, acceptable). No inbound pointers.
+
+polyplug_runtime_free(rt: *mut OpaqueRuntime):
+  if rt.is_null() { return; }  // free(null) is a no-op by C convention
+
+polyplug_load_bundle(rt, path, path_len):
+  if rt.is_null() || path.is_null() { write last_error; return non-zero; }
+
+polyplug_load_bundle_opts: same as above
+
+polyplug_find_by_contract(rt, contract_id, min_version):
+  if rt.is_null() { return NULL_HANDLE (u64::MAX); }
+
+polyplug_find_by_bundle: same
+
+polyplug_find_all_by_contract(rt, contract_id, min_version, out, out_cap):
+  if rt.is_null() { return 0; }
+  if out.is_null() && out_cap > 0 { write last_error; return 0; }
+  // out.is_null() with out_cap == 0 is valid — caller probing for count.
+  // Implement: if out_cap == 0, return total count without writing.
+
+polyplug_resolve_plugin(rt, handle):
+  if rt.is_null() { return null ptr; }
+  if handle == NULL_HANDLE (u64::MAX) { return null ptr; }
+  // null handle → null guard — not an error, caller checks return
+
+polyplug_guard_free(guard):
+  if guard.is_null() { return; }  // no-op, matches free(null) convention
+
+polyplug_get_vtable(guard):
+  if guard.is_null() { return null ptr; }
+
+polyplug_reload_bundle(rt, path, path_len):
+  if rt.is_null() || path.is_null() { write last_error; return non-zero; }
+
+polyplug_last_error(rt, out, out_cap):
+  if rt.is_null() || out.is_null() { return 0; }
+
+─────────────────────────────────────────────────────────────
+FIX 3 — Double-free detection in TrackingAllocator (debug builds)
+─────────────────────────────────────────────────────────────
+
+Location: crates/polyplug/src/allocator/tracking/mod.rs
+
+Current state: allocator tracks live allocations to detect leaks (alloc adds
+to set, free removes from set). Double-free is not detected.
+
+Fix: when free() is called on a pointer not in the live set, panic with a
+descriptive message including the pointer address. This is debug-only behavior
+(cfg(debug_assertions) or a feature flag — use cfg(debug_assertions)).
+
+Implementation:
+  fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+      #[cfg(debug_assertions)]
+      {
+          let addr = ptr as usize;
+          let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+          if !live.remove(&addr) {
+              panic!(
+                  "TrackingAllocator: double-free detected at address {:#x}",
+                  addr
+              );
+          }
+      }
+      self.inner.dealloc(ptr, layout);
+  }
+
+Also: add ASan support in CI.
+  In .cargo/config.toml (or CI workflow):
+    [target.x86_64-unknown-linux-gnu]
+    rustflags = ["-Z", "sanitizer=address"]
+  This is a nightly-only flag — add a separate CI job:
+    cargo +nightly test -Z build-std --target x86_64-unknown-linux-gnu
+  Document in BENCHMARKS.md or a new CI.md that ASan job exists.
+
+─────────────────────────────────────────────────────────────
+TEST 4 — Null pointer tests for all FFI functions
+─────────────────────────────────────────────────────────────
+
+New test file: tests/integration_ffi_null/mod.rs
+
+Test cases — one per null scenario from Fix 2:
+  a. polyplug_runtime_free(null) → no crash, no panic
+  b. polyplug_load_bundle(null rt, ...) → non-zero return, last_error set
+  c. polyplug_load_bundle(rt, null path, ...) → non-zero return
+  d. polyplug_find_all_by_contract(rt, ..., null out, cap=0) → returns count
+  e. polyplug_find_all_by_contract(rt, ..., null out, cap=5) → non-zero / 0
+  f. polyplug_resolve_plugin(rt, NULL_HANDLE) → returns null ptr, no panic
+  g. polyplug_guard_free(null) → no crash
+  h. polyplug_get_vtable(null guard) → returns null ptr, no panic
+  i. polyplug_last_error(null rt, ...) → returns 0, no crash
+
+Each test calls the C facade directly via unsafe extern "C" fn calls.
+Tests run in a single process — isolation via careful ordering.
+
+─────────────────────────────────────────────────────────────
+TEST 5 — Invalid UTF-8 from plugin
+─────────────────────────────────────────────────────────────
+
+New test file: tests/integration_invalid_utf8/mod.rs
+
+Approach: create a test fixture that is a valid .so but exports a contract
+name that contains invalid UTF-8 bytes. Load it. Assert:
+  - load_bundle returns Err(PolyplugError::InvalidUtf8 { .. })
+  - Runtime remains healthy after rejection (can load valid plugins after)
+
+Fixture construction: build a small Rust plugin with a deliberately mangled
+contract name embedded as raw bytes (use include_bytes! or a build.rs that
+patches bytes post-compilation). Alternatively: construct a minimal valid ELF
+.so in the test itself using object crate or raw bytes — keep it simple.
+
+Simplest approach: write a tiny C file with:
+  const char* _polyplug_contract_name = "\xff\xfe invalid utf8";
+Compile it in build.rs and commit the .so as a test fixture.
+
+─────────────────────────────────────────────────────────────
+TEST 6 — Malformed binary tests
+─────────────────────────────────────────────────────────────
+
+New test file: tests/integration_malformed/mod.rs
+
+Test cases — all should return clean Err, never panic:
+  a. Truncated .so (valid ELF header, truncated body):
+     Create by truncating tests/fixtures/test_plugin.so at byte 512.
+     load_bundle → Err, error message mentions load failure.
+
+  b. Wrong magic bytes (not ELF):
+     Create a file containing b"NOTANELF\x00" * 100.
+     load_bundle → Err.
+
+  c. Missing init symbol:
+     Build a tiny Rust cdylib that exports NO symbols (empty lib.rs).
+     load_bundle → Err(PolyplugError::MissingSymbol { symbol: "init" })
+     or similar — whatever the current error type is for missing symbols.
+
+  d. Valid ELF but init has wrong signature (returns wrong type):
+     Build a Rust cdylib that exports:
+       pub extern "C" fn init() -> u64 { 42 }
+     polyplug calls init(registrar, ctx) — ABI mismatch.
+     This is technically UB but in practice the call will misfire.
+     Document the expected behavior: undefined, out of scope for now.
+     Skip this sub-case — add a comment explaining why it's untestable safely.
+
+  e. Manifest present but .so file missing from bundle directory:
+     Create a bundle directory with manifest.toml pointing to nonexistent.so.
+     load_bundle → Err with clear "file not found" message.
+
+  f. Manifest with unknown runtime value:
+     bundle.toml with runtime = "cobol".
+     load_bundle → Err(PolyplugError::UnknownRuntime { runtime: "cobol" })
+
+Fixture construction for a/b/e/f: done inline in test (write bytes to tmpdir).
+Fixture for c: build a new Rust cdylib fixture tests/fixtures/no_init_plugin/.
+Fixture for d: documented as skipped.
+
+─────────────────────────────────────────────────────────────
+TEST 7 — Quiescence timeout
+─────────────────────────────────────────────────────────────
+
+New test file: tests/integration_quiescence/mod.rs
+
+Test the existing 5-second quiescence timeout during hot-reload.
+
+Setup:
+  1. Load reload_plugin_v1 fixture.
+  2. Spawn a thread that calls resolve_plugin, holds the guard, and sleeps
+     for 6 seconds (longer than timeout) WITHOUT dropping the guard.
+  3. Main thread calls reload_bundle() with reload_plugin_v2.
+  4. Assert: reload_bundle returns Err(PolyplugError::QuiescenceTimeout)
+     (or whatever the current error type is — read the source).
+  5. Join the thread (let it drop the guard).
+  6. Call reload_bundle again — assert it succeeds this time.
+  7. Assert: calls now use v2 vtable.
+
+This test takes ~5 seconds to run. Mark it with #[ignore] so it does not run
+in default `cargo test`. Run via `cargo test -- --ignored` in CI only.
+Add a comment: // Takes ~5s — run with `cargo test -- --ignored`
+
+─────────────────────────────────────────────────────────────
+TEST 8 — Embedded null bytes in StringView
+─────────────────────────────────────────────────────────────
+
+New test file: tests/integration_stringview_nulls/mod.rs
+
+Test that StringView with embedded null bytes round-trips correctly through
+all layers that accept StringView — polyplug never treats it as a C string.
+
+Test cases:
+  a. Create StringView { ptr: b"hello\x00world".as_ptr(), len: 11 }
+     Pass it through host_alloc/host_free cycle — assert no truncation.
+  b. If any codepath does ptr+len → CString conversion, it must use
+     explicit length — verify by inspection and add a lint comment.
+  c. In generated code: StringView passed as a contract function parameter
+     with embedded null — assert the receiving plugin sees the full 11 bytes.
+
+─────────────────────────────────────────────────────────────
+TEST 9 — Double-free test (uses enhanced TrackingAllocator from Fix 3)
+─────────────────────────────────────────────────────────────
+
+New test in tests/stress_memory/mod.rs (add to existing file):
+
+  #[test]
+  #[should_panic(expected = "double-free")]
+  #[cfg(debug_assertions)]
+  fn test_double_free_detected() {
+      // Allocate via host_alloc, free twice, assert panic
+      let runtime = /* build test runtime with TrackingAllocator */;
+      let ptr = runtime.alloc(64);
+      runtime.free(ptr);
+      runtime.free(ptr);  // should panic with "double-free detected"
+  }
+
+─────────────────────────────────────────────────────────────
+NON-GOAL — Plugin segfault isolation
+─────────────────────────────────────────────────────────────
+
+A plugin that calls an invalid function pointer, dereferences a null pointer,
+or causes a SIGSEGV takes down the entire host process. This is expected and
+intentional behavior in polyplug's trust model.
+
+Isolating plugin crashes requires either:
+  - Out-of-process execution (IPC): violates the zero-overhead hot path goal
+  - OS-level sandboxing (seccomp, pledge): platform-specific, adds complexity
+
+Neither is acceptable for v1. Document this explicitly:
+
+Update TRUST_MODEL.md:
+  Add section: "Plugin crash isolation"
+  Content: plugins run in-process. A plugin segfault kills the host.
+  This is by design. App developers who need crash isolation should run
+  plugins in a separate worker process and communicate via IPC — polyplug
+  does not provide this. See section 27 (Non-Goals) in the PRD.
+
+Update PRD section 27 (Non-Goals):
+  Add: "Plugin crash isolation (segfault in plugin kills host — by design,
+  see TRUST_MODEL.md)"
+
+---
+
+VERIFICATION CHECKLIST
+
+- grep -rn "from_utf8_unchecked" crates/ → only appears with SAFETY comments
+  explaining host-owned data; zero occurrences on plugin-provided data
+- grep -rn "from_utf8_unchecked" crates/polyplug/src/loader/ → zero results
+- PolyplugError::InvalidUtf8 variant exists and is returned on bad plugin UTF-8
+- polyplug_runtime_free(null) → no crash (test passes)
+- polyplug_resolve_plugin(rt, NULL_HANDLE) → null return, no panic (test passes)
+- polyplug_find_all_by_contract(rt, ..., null, 0) → returns count (test passes)
+- TrackingAllocator double-free test panics with "double-free" in debug builds
+- TrackingAllocator double-free test does NOT run/panic in release builds
+- Truncated .so → Err, no panic (test passes)
+- Missing init symbol → Err with symbol name in message (test passes)
+- Nonexistent bundle file → Err with clear message (test passes)
+- Unknown runtime → Err (test passes)
+- Invalid UTF-8 contract name → Err(InvalidUtf8), runtime healthy after (test passes)
+- StringView with embedded null bytes round-trips correctly (test passes)
+- Quiescence timeout test is marked #[ignore], passes when run with --ignored
+- TRUST_MODEL.md updated with plugin crash isolation section
+- PRD section 27 updated with segfault non-goal
+- No .unwrap() added in production code
+- clippy passes with zero warnings
+- cargo test --workspace passes
+- cargo test --workspace -- --ignored passes (quiescence test)
+```

@@ -1556,6 +1556,26 @@ Script    — Python / Lua, interpreter restrictions
 
 Sandbox policies: FS access, network access, host API surface, memory limits, CPU time limits.
 
+**Trust model — in-process plugins:**
+
+polyplug assumes plugins are trusted code vetted and distributed by the app developer. Malicious in-process code is explicitly out of scope. See `TRUST_MODEL.md` for the complete trust model including plugin crash isolation policy.
+
+**Input validation at the host boundary (Epic 23):**
+
+Even with trusted plugins, malformed or corrupted plugin binaries are a real scenario (corrupted download, wrong architecture binary, partial write). polyplug defends against these at load time:
+
+- All strings extracted from plugin binaries (contract names, bundle names) are validated as UTF-8 via `std::str::from_utf8`. Invalid UTF-8 is a hard load error (`PolyplugError::InvalidUtf8`). `from_utf8_unchecked` is only used on host-owned data with a mandatory `// SAFETY:` comment.
+- All C facade FFI functions null-check every pointer parameter at entry. Null pointers return defined errors, never UB.
+- Malformed binaries (truncated, wrong magic, missing `init` symbol) return clean `Err` results. The runtime remains healthy after rejecting a bad bundle.
+
+**Double-free detection (debug builds):**
+
+`TrackingAllocator` maintains a `HashSet` of live allocations in debug builds (`cfg(debug_assertions)`). A double-free panics immediately with the address. Release builds have zero overhead. ASan runs in a dedicated CI job for system-level memory safety verification.
+
+**Plugin crash isolation — non-goal:**
+
+A plugin that segfaults kills the host process. This is intentional — see `TRUST_MODEL.md` and section 27 (Non-Goals).
+
 ---
 
 ## 20. Developer Experience — App Developer
@@ -1882,6 +1902,7 @@ size_t polyplug_last_error(uint8_t* out, size_t out_cap);
 - Networking libraries
 - Serialization formats (beyond ABI needs)
 - Out-of-process plugin execution (IPC adds unacceptable overhead, violates performance goal)
+- Plugin crash isolation (a plugin segfault kills the host process — by design; app developers needing crash isolation must run plugins in a separate process with their own IPC layer; polyplug does not provide this)
 
 ---
 
