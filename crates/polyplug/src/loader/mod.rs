@@ -450,10 +450,13 @@ pub(crate) unsafe extern "C" fn registrar_callback(
     // Registry::register is marked unsafe because it dereferences vtable_ptr internally.
     match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
         Ok(_handle) => AbiError::ok(),
-        Err(_err) => AbiError {
-            code: 1,
-            message: crate::abi::StringView::null(),
-        },
+        Err(e) => {
+            eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
+            AbiError {
+                code: 1,
+                message: crate::abi::StringView::null(),
+            }
+        }
     }
 }
 
