@@ -892,10 +892,9 @@ via deno_core's `#[op2(fast)]` op system. No subprocess. No IPC.
 **Cargo dependencies:**
 
 ```toml
-deno_core    = "0.311.0"
-smol         = "2.0.0"       # LocalExecutor satisfies V8 thread-pinning
-futures-lite = "2.3.0"
-# tokio is NOT used — smol is lighter and explicitly supported by deno_core
+deno_core = "0.391"  # A modern JavaScript/TypeScript runtime built with V8, Rust, and Tokio
+tokio     = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+# smol and futures-lite are NOT used — deno_core 0.391+ requires tokio
 ```
 
 **Configuration:**

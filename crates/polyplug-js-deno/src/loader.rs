@@ -14,9 +14,11 @@ use deno_core::ModuleLoader;
 use deno_core::ModuleSource;
 use deno_core::ModuleSourceCode;
 use deno_core::ModuleType;
-use deno_core::RequestedModuleType;
-use deno_core::ResolutionKind;
+use deno_core::ModuleLoadOptions;
+use deno_core::ModuleLoadReferrer;
 use deno_core::op2;
+use deno_core::ResolutionKind;
+use deno_error::JsErrorBox;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
@@ -432,19 +434,19 @@ impl ModuleLoader for InMemoryModuleLoader {
         specifier: &str,
         referrer: &str,
         _kind: ResolutionKind,
-    ) -> Result<deno_core::ModuleSpecifier, deno_core::error::AnyError> {
-        let resolved: deno_core::ModuleSpecifier = deno_core::resolve_import(specifier, referrer)?;
+    ) -> Result<deno_core::ModuleSpecifier, deno_error::JsErrorBox> {
+        let resolved: deno_core::ModuleSpecifier = deno_core::resolve_import(specifier, referrer)
+            .map_err(|e: deno_core::ModuleResolutionError| JsErrorBox::generic(e.to_string()))?;
         Ok(resolved)
     }
 
     fn load(
         &self,
-        specifier: &deno_core::ModuleSpecifier,
-        _maybe_referrer: Option<&deno_core::ModuleSpecifier>,
-        _is_dynamic: bool,
-        _requested_module_type: RequestedModuleType,
+        module_specifier: &deno_core::ModuleSpecifier,
+        _maybe_referrer: Option<&ModuleLoadReferrer>,
+        _options: ModuleLoadOptions,
     ) -> deno_core::ModuleLoadResponse {
-        if *specifier == self.specifier {
+        if *module_specifier == self.specifier {
             let source: ModuleSource = ModuleSource::new(
                 ModuleType::JavaScript,
                 ModuleSourceCode::String(FastString::from(self.source.clone())),
@@ -453,8 +455,8 @@ impl ModuleLoader for InMemoryModuleLoader {
             );
             return deno_core::ModuleLoadResponse::Sync(Ok(source));
         }
-        let error: deno_core::error::AnyError =
-            deno_core::error::generic_error("only the main JS fixture module is supported");
+        let error: JsErrorBox =
+            JsErrorBox::generic("only the main JS fixture module is supported");
         deno_core::ModuleLoadResponse::Sync(Err(error))
     }
 }
@@ -567,7 +569,7 @@ impl BundleLoader for JsDenoLoader {
 
                 let mut runtime: deno_core::JsRuntime =
                     deno_core::JsRuntime::new(deno_core::RuntimeOptions {
-                        extensions: vec![polyplug_ops::init_ops()],
+                        extensions: vec![polyplug_ops::init()],
                         module_loader: Some(std::rc::Rc::new(module_loader)),
                         ..Default::default()
                     });
@@ -583,7 +585,7 @@ impl BundleLoader for JsDenoLoader {
                 // V8 internal errors which are non-recoverable; panic is appropriate here.
                 runtime
                     .execute_script("<bundlePath>", inject_script)
-                    .unwrap_or_else(|e: deno_core::anyhow::Error| {
+                    .unwrap_or_else(|e: Box<deno_core::error::JsError>| {
                         panic!("failed to inject globalThis.bundlePath: {e}");
                     });
 
@@ -600,7 +602,7 @@ impl BundleLoader for JsDenoLoader {
                     panic!("event loop failed: {e}");
                 }
                 // Drive the evaluate future to completion
-                let _eval_result: Result<(), deno_core::anyhow::Error> = evaluate_future.await;
+                let _eval_result: Result<(), deno_core::error::CoreError> = evaluate_future.await;
 
                 // op_register_vtable has sent vtable_ptr via VTABLE_SENDER by now
                 // Clear thread-local sender

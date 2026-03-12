@@ -67,6 +67,7 @@ rquickjs = { version = "0.11" }
 
 # JavaScript (Deno)
 deno_core = { version = "0.391" }
+deno_error = { version = "0.7" }
 tokio = { version = "1" }
 
 # Lua
