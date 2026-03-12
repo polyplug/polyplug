@@ -16,13 +16,24 @@ members = [
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
-rust-version = "1.93"
+rust-version = "1.85"
+license = "MIT"
 
 [workspace.dependencies]
+# Internal crates
+polyplug = { path = "crates/polyplug" }
+polyplugc = { path = "crates/polyplugc" }
+polyplug_dotnet = { path = "crates/polyplug_dotnet" }
+polyplug_js = { path = "crates/polyplug_js" }
+polyplug_js_deno = { path = "crates/polyplug_js_deno" }
+polyplug_lua = { path = "crates/polyplug_lua" }
+polyplug_python = { path = "crates/polyplug_python" }
+polyplug_guest = { path = "guest-libs/rust" }
+polyplug_host = { path = "host-libs/rust" }
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-toml = { version = "0.9" }
+toml = { version = "0.9.8" }
 
 # Error handling
 thiserror = { version = "2.0" }
@@ -38,16 +49,6 @@ petgraph = { version = "0.8", default-features = false, features = [
 # CLI (polyplugc only)
 clap = { version = "4.5", features = ["derive"] }
 
-# Internal crates
-polyplug = { path = "crates/polyplug" }
-polyplugc = { path = "crates/polyplugc" }
-polyplug_dotnet = { path = "crates/polyplug_dotnet" }
-polyplug_js = { path = "crates/polyplug_js" }
-polyplug_js_deno = { path = "crates/polyplug_js_deno" }
-polyplug_lua = { path = "crates/polyplug_lua" }
-polyplug_python = { path = "crates/polyplug_python" }
-polyplug_guest = { path = "guest-libs/rust" }
-polyplug_host = { path = "host-libs/rust" }
 criterion = { version = "0.8", features = ["html_reports"] }
 
 # Hot-reload
@@ -67,7 +68,7 @@ rquickjs = { version = "0.11" }
 
 # JavaScript (Deno)
 deno_core = { version = "0.391" }
-deno_error = { version = "0.7" }
+deno_error = { version = "=0.7.1" }
 tokio = { version = "1" }
 
 # Lua

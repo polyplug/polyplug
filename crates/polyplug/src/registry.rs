@@ -109,15 +109,6 @@ pub struct Registry {
     declared_deps: RwLock<HashMap<u64, HashSet<u64>>>,
 }
 
-// SAFETY: Registry uses RwLock and Mutex internally for all interior mutability.
-// `loaded_libraries` is a Mutex<Vec<Library>>. `Library` is Send in libloading 0.9.
-// All mutable state is lock-protected; sharing across threads is safe.
-unsafe impl Send for Registry {}
-// SAFETY: Registry uses RwLock and Mutex internally for all interior mutability.
-// `loaded_libraries` is a Mutex<Vec<Library>>. `Library` is Send in libloading 0.9.
-// All mutable state is lock-protected; sharing across threads is safe.
-unsafe impl Sync for Registry {}
-
 impl Registry {
     /// Create an empty registry.
     pub fn new() -> Registry {

@@ -139,6 +139,18 @@ pub enum LoaderError {
     #[error("JS runtime \"{runtime}\" panicked during bundle load: {message}")]
     JsRuntimePanic { runtime: String, message: String },
 
+    #[error("JS runtime initialization failed: {reason}")]
+    JsRuntimeInitFailed { reason: String },
+
+    #[error("failed to read bundle at `{path}`: {source}")]
+    BundleReadFailed { path: String, #[source] source: std::io::Error },
+
+    #[error("module resolution failed: {reason}")]
+    ModuleResolutionFailed { reason: String },
+
+    #[error("failed to execute JS script: {reason}")]
+    JsExecutionFailed { reason: String },
+
     #[error("version mismatch for contract `{contract}`: required={required}, found={found}")]
     VersionMismatch {
         contract: String,

@@ -497,6 +497,12 @@ impl BundleLoader for JsDenoLoader {
         let (vtable_tx, vtable_rx): VtableChannelPair =
             std::sync::mpsc::sync_channel::<(SendPluginVTable, u64, usize)>(1);
 
+        // 2b. Create channel for propagating init errors from the bundle thread.
+        let (err_tx, err_rx): (
+            std::sync::mpsc::SyncSender<PolyplugError>,
+            std::sync::mpsc::Receiver<PolyplugError>,
+        ) = std::sync::mpsc::sync_channel::<PolyplugError>(1);
+
         // 3. Create channel for vtable call dispatch
         let (call_tx, call_rx): (
             std::sync::mpsc::SyncSender<JsCallRequest>,
@@ -529,12 +535,20 @@ impl BundleLoader for JsDenoLoader {
 
             // Build tokio single-thread runtime
             // SAFETY: deno_core 0.311.0 requires tokio; smol would cause panics.
-            let tokio_rt: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap_or_else(|e: std::io::Error| panic!("failed to build tokio runtime: {e}"));
+            let tokio_rt: tokio::runtime::Runtime =
+                match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        let _ = err_tx.send(PolyplugError::Loader(
+                            LoaderError::JsRuntimeInitFailed {
+                                reason: format!("failed to build tokio runtime: {e}"),
+                            },
+                        ));
+                        return;
+                    }
+                };
 
-            tokio_rt.block_on(async move {
+            let init_result: Result<(), PolyplugError> = tokio_rt.block_on(async move {
                 // Create deno_core JsRuntime
                 // When called via the runtime, bundle_path is already the resolved file.
                 // When called directly (e.g. tests), bundle_path may be the bundle directory.
@@ -549,18 +563,23 @@ impl BundleLoader for JsDenoLoader {
                 } else {
                     bundle_path.clone()
                 };
-                let module_source: String = std::fs::read_to_string(&module_path)
-                    .unwrap_or_else(|e: std::io::Error| panic!("failed to read module: {e}"));
+                let module_source: String =
+                    std::fs::read_to_string(&module_path).map_err(|e: std::io::Error| {
+                        PolyplugError::Loader(LoaderError::BundleReadFailed {
+                            path: module_path.display().to_string(),
+                            source: e,
+                        })
+                    })?;
 
-                let module_url: deno_core::ModuleSpecifier = match deno_core::resolve_path(
+                let module_url: deno_core::ModuleSpecifier = deno_core::resolve_path(
                     module_path.to_str().unwrap_or("bundle.js"),
                     &std::env::current_dir().unwrap_or_else(|_: std::io::Error| PathBuf::from(".")),
-                ) {
-                    Ok(url) => url,
-                    Err(e) => {
-                        panic!("failed to resolve module URL: {e}");
-                    }
-                };
+                )
+                .map_err(|e| {
+                    PolyplugError::Loader(LoaderError::ModuleResolutionFailed {
+                        reason: format!("failed to resolve module URL: {e}"),
+                    })
+                })?;
 
                 let module_loader: InMemoryModuleLoader = InMemoryModuleLoader {
                     specifier: module_url.clone(),
@@ -581,26 +600,35 @@ impl BundleLoader for JsDenoLoader {
                         format!("globalThis.bundlePath = {:?};", bundle_path_static)
                             .into_boxed_str(),
                     ));
-                // SAFETY: inject_script is a valid JS snippet. execute_script panics only on
-                // V8 internal errors which are non-recoverable; panic is appropriate here.
+                // SAFETY: inject_script is a valid JS snippet; the only failure mode is
+                // a V8 exception from the injected source, which is propagated as an error.
                 runtime
                     .execute_script("<bundlePath>", inject_script)
-                    .unwrap_or_else(|e: Box<deno_core::error::JsError>| {
-                        panic!("failed to inject globalThis.bundlePath: {e}");
-                    });
+                    .map_err(|e: Box<deno_core::error::JsError>| {
+                        PolyplugError::Loader(LoaderError::JsExecutionFailed {
+                            reason: format!("failed to inject globalThis.bundlePath: {e}"),
+                        })
+                    })?;
 
                 let mod_id: deno_core::ModuleId =
-                    match runtime.load_main_es_module(&module_url).await {
-                        Ok(id) => id,
-                        Err(e) => {
-                            panic!("failed to load module: {e}");
-                        }
-                    };
+                    runtime
+                        .load_main_es_module(&module_url)
+                        .await
+                        .map_err(|e: deno_core::error::CoreError| {
+                            PolyplugError::Loader(LoaderError::JsExecutionFailed {
+                                reason: format!("failed to load module: {e}"),
+                            })
+                        })?;
                 // Evaluate the module — triggers top-level execution including op_register_vtable
                 let evaluate_future = runtime.mod_evaluate(mod_id);
-                if let Err(e) = runtime.run_event_loop(Default::default()).await {
-                    panic!("event loop failed: {e}");
-                }
+                runtime
+                    .run_event_loop(Default::default())
+                    .await
+                    .map_err(|e: deno_core::error::CoreError| {
+                        PolyplugError::Loader(LoaderError::JsExecutionFailed {
+                            reason: format!("event loop failed: {e}"),
+                        })
+                    })?;
                 // Drive the evaluate future to completion
                 let _eval_result: Result<(), deno_core::error::CoreError> = evaluate_future.await;
 
@@ -615,7 +643,12 @@ impl BundleLoader for JsDenoLoader {
                     // For MVP: return ABI_OK (stub dispatch — full impl in future epic)
                     let _ = req.result_tx.send(AbiError::ok());
                 }
+
+                Ok(())
             });
+            if let Err(e) = init_result {
+                let _ = err_tx.send(e);
+            }
         });
 
         // Leak thread handle so the thread isn't dropped
@@ -628,9 +661,12 @@ impl BundleLoader for JsDenoLoader {
             vtable_rx
                 .recv_timeout(core::time::Duration::from_secs(30))
                 .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-deno".to_owned(),
-                        message: "vtable registration timed out after 30s".to_owned(),
+                    // Check if the bundle thread reported a specific error.
+                    err_rx.try_recv().unwrap_or_else(|_: std::sync::mpsc::TryRecvError| {
+                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                            runtime: "js-deno".to_owned(),
+                            message: "vtable registration timed out after 30s".to_owned(),
+                        })
                     })
                 })?;
         let raw_vtable: *const PluginVTable = raw_vtable_wrapped.0;
