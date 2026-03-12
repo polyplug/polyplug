@@ -168,7 +168,7 @@ fn parse_lang(lang: &str) -> Result<Lang, polyplug_codegen::PolyplugcError> {
 
 fn write_files(
     output: &polyplug_codegen::GenerateOutput,
-    out_dir: &PathBuf,
+    out_dir: &std::path::Path,
 ) -> Result<(), polyplug_codegen::PolyplugcError> {
     use std::fs;
 
