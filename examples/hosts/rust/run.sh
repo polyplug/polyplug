@@ -27,6 +27,10 @@ fi
 # Export LD_LIBRARY_PATH so libpolyplug.so and sibling loader libraries are found
 export LD_LIBRARY_PATH="${LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
+# Export LD_PRELOAD so libpolyplug.so symbols (e.g. polyplug_host_alloc) are
+# globally visible to plugins loaded with RTLD_LOCAL by the runtime
+export LD_PRELOAD="${LIB_DIR}/libpolyplug.so${LD_PRELOAD:+:${LD_PRELOAD}}"
+
 echo "[run.sh] Using binary : ${HOST_BIN}"
 echo "[run.sh] LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
 echo ""

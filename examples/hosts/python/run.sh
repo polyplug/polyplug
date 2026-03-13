@@ -22,5 +22,6 @@ fi
 
 export PYTHONPATH="${PYTHON_HOST_LIB}${PYTHONPATH:+:${PYTHONPATH}}"
 export LD_LIBRARY_PATH="${POLYPLUG_LIB}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_PRELOAD="${POLYPLUG_LIB}/libpolyplug.so${LD_PRELOAD:+:${LD_PRELOAD}}"
 
 exec python3 "${SCRIPT_DIR}/host.py" "$@"

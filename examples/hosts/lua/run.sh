@@ -36,6 +36,7 @@ fi
 # dynamic linker can find it and any sibling loader libs (libpolyplug_*.so).
 SO_DIR="$(dirname "${POLYPLUG_SO}")"
 export LD_LIBRARY_PATH="${SO_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_PRELOAD="${POLYPLUG_SO}${LD_PRELOAD:+:${LD_PRELOAD}}"
 
 # ---------------------------------------------------------------------------
 # Locate luajit (required for FFI support).
