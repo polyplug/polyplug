@@ -659,7 +659,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add QuickJS loader tests`
   - Files: `crates/polyplug_js/tests/js_quickjs_loader.rs`
 
-- [ ] **Task 13: Deno Loader Tests**
+- [x] **Task 13: Deno Loader Tests**
 
   **What to do**: Test polyplug_js_deno loader
 
@@ -697,7 +697,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add Deno loader tests`
   - Files: `crates/polyplug_js_deno/tests/js_deno_loader.rs`
 
-- [ ] **Task 14: Lua Loader Tests**
+- [x] **Task 14: Lua Loader Tests**
 
   **What to do**: Test polyplug_lua loader
 
@@ -737,7 +737,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add Lua loader tests`
   - Files: `crates/polyplug_lua/tests/lua_loader.rs`
 
-- [ ] **Task 15: Python Loader Tests**
+- [x] **Task 15: Python Loader Tests**
 
   **What to do**: Test polyplug_python loader
 
