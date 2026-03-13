@@ -5,6 +5,8 @@
 //! Buffer allocation, StringView echo, pre-allocated buffer fill, and
 //! zero-length roundtrip.
 
+use core::mem::align_of;
+
 // ─── ABI Types (mirrored from polyplug) ──────────────────────────────
 // We cannot depend on polyplug here (cdylib circular dependency).
 // Mirror the ABI types inline. These are frozen per §7 ABI Stability.
@@ -223,7 +225,27 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
     // out points to a valid u32 per the ABI contract.
     let fill_args: &FillArgs = unsafe { &*(args as *const FillArgs) };
     let ptr: *mut u8 = fill_args.buf.ptr;
+    let len: usize = fill_args.buf.len;
     let cap: usize = fill_args.buf.cap;
+    let required_align: usize = align_of::<u64>();
+    if cap < len {
+        return AbiError {
+            code: 1_u32, // ABI_ERROR_GENERIC
+            message: StringView::null(),
+        };
+    }
+    if cap > 0 && ptr.is_null() {
+        return AbiError {
+            code: 1_u32, // ABI_ERROR_GENERIC
+            message: StringView::null(),
+        };
+    }
+    if cap > 0 && (ptr as usize) % required_align != 0 {
+        return AbiError {
+            code: 1_u32, // ABI_ERROR_GENERIC
+            message: StringView::null(),
+        };
+    }
     // SAFETY: ptr is a valid buffer of at least cap bytes owned and allocated by the host.
     // The host guarantees the buffer is writable for the full capacity.
     unsafe {

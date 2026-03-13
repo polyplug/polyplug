@@ -490,7 +490,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add concurrent registry stress tests`
   - Files: `crates/polyplug/tests/stress_concurrent_registry.rs`
 
-- [ ] **Task 9: FFI Robustness Tests (CORRECTED)**
+- [x] **Task 9: FFI Robustness Tests (CORRECTED)**
 
   **What to do**: Test host resilience against malformed ABI calls
 
