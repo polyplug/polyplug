@@ -162,6 +162,9 @@ pcall(ffi.cdef, [[
     typedef struct { uint8_t _reserved; } PolyplugJsCfg;
     void* polyplug_js_loader_create(const PolyplugJsCfg* cfg);
 
+    typedef struct { uint8_t _reserved; } PolyplugNativeConfig;
+    void* polyplug_native_loader_create(const PolyplugNativeConfig* cfg);
+
     uint32_t polyplug_runtime_register_loader(void* rt, void* loader);
 ]])
 
@@ -225,6 +228,17 @@ function M.register_js_loader(rt)
     if loader == nil then error("polyplug: js loader create failed") end
     local err = M._lib.polyplug_runtime_register_loader(rt, loader)
     if err ~= 0 then error("polyplug: js loader register failed: " .. err) end
+end
+
+-- Register a native loader with the runtime.
+-- rt: an OpaqueRuntime* cdata.
+function M.register_native_loader(rt)
+    local cfg = ffi.new("PolyplugNativeConfig", 0)
+    local lib = get_loader_lib("polyplug_native")
+    local loader = lib.polyplug_native_loader_create(cfg)
+    if loader == nil then error("polyplug: native loader create failed") end
+    local err = M._lib.polyplug_runtime_register_loader(rt, loader)
+    if err ~= 0 then error("polyplug: native loader register failed: " .. err) end
 end
 
 return M

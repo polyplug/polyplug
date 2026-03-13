@@ -30,6 +30,7 @@ polyplug_js = { path = "crates/polyplug_js" }
 polyplug_js_deno = { path = "crates/polyplug_js_deno" }
 polyplug_lua = { path = "crates/polyplug_lua" }
 polyplug_python = { path = "crates/polyplug_python" }
+polyplug_native = { path = "crates/polyplug_native" }
 polyplug_guest = { path = "guest-libs/rust" }
 polyplug_host = { path = "host-libs/rust" }
 

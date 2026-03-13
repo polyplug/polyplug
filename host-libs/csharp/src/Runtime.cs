@@ -225,6 +225,9 @@ public sealed class Runtime {
     [DllImport("polyplug_js", EntryPoint = "polyplug_js_loader_create", CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr polyplug_js_loader_create(IntPtr cfgPtr);
 
+    [DllImport("polyplug_native", EntryPoint = "polyplug_native_loader_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_native_loader_create(IntPtr cfgPtr);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct DotnetLoaderConfig {
         public IntPtr MinFrameworkPtr;
@@ -239,6 +242,11 @@ public sealed class Runtime {
 
     [StructLayout(LayoutKind.Sequential)]
     private struct EmptyLoaderConfig {
+        public byte Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeLoaderConfig {
         public byte Reserved;
     }
 
@@ -330,6 +338,25 @@ public sealed class Runtime {
             uint err = polyplug_runtime_register_loader(_handle, loaderPtr);
             if (err != 0u) {
                 ThrowLastError($"polyplug: js loader register failed: {err}");
+            }
+        } finally {
+            Marshal.FreeHGlobal(cfgPtr);
+        }
+    }
+
+    public void RegisterNativeLoader() {
+        EnsureHandle();
+        NativeLoaderConfig cfg = new NativeLoaderConfig { Reserved = 0 };
+        IntPtr cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<NativeLoaderConfig>());
+        try {
+            Marshal.StructureToPtr(cfg, cfgPtr, false);
+            IntPtr loaderPtr = polyplug_native_loader_create(cfgPtr);
+            if (loaderPtr == IntPtr.Zero) {
+                throw new InvalidOperationException("polyplug: native loader create failed");
+            }
+            uint err = polyplug_runtime_register_loader(_handle, loaderPtr);
+            if (err != 0u) {
+                ThrowLastError($"polyplug: native loader register failed: {err}");
             }
         } finally {
             Marshal.FreeHGlobal(cfgPtr);

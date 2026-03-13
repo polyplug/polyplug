@@ -1,0 +1,17 @@
+[package]
+name = "polyplug_native"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "polyplug_native"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+polyplug = { workspace = true }
+
+[lints]
+workspace = true

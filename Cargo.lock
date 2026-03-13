@@ -2201,6 +2201,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyplug_native"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+]
+
+[[package]]
 name = "polyplug_python"
 version = "0.1.0"
 dependencies = [

@@ -215,6 +215,27 @@ export function registerLuaLoader(
   if (err !== 0) throw new Error(`polyplug: lua loader register failed: ${err}`);
 }
 
+const NATIVE_SYMBOLS = {
+  polyplug_native_loader_create: {
+    parameters: ["pointer"] as const,
+    result: "pointer" as const,
+  },
+} as const satisfies Deno.ForeignLibraryInterface;
+
+export function registerNativeLoader(
+  lib: Deno.DynamicLibrary<typeof SYMBOLS>,
+  rt: Deno.PointerValue,
+): void {
+  const loaderLib = getLoaderLib("polyplug_native", NATIVE_SYMBOLS);
+  // Build PolyplugNativeConfig: single reserved byte
+  const cfgBuf: Uint8Array<ArrayBuffer> = new Uint8Array(new ArrayBuffer(1));
+  const cfgPtr: Deno.PointerValue = Deno.UnsafePointer.of(cfgBuf);
+  const loaderPtr: Deno.PointerValue = loaderLib.symbols.polyplug_native_loader_create(cfgPtr) as Deno.PointerValue;
+  if (loaderPtr === null) throw new Error("polyplug: native loader create failed");
+  const err: number = lib.symbols.polyplug_runtime_register_loader(rt, loaderPtr) as number;
+  if (err !== 0) throw new Error(`polyplug: native loader register failed: ${err}`);
+}
+
 export function registerJsLoader(
   lib: Deno.DynamicLibrary<typeof SYMBOLS>,
   rt: Deno.PointerValue,

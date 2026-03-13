@@ -47,6 +47,11 @@ struct PolyplugJsConfig {
     uint8_t _reserved;  ///< padding; set to 0
 };
 
+/// Config for the native (Rust/C/C++) loader — no required fields.
+struct PolyplugNativeConfig {
+    uint8_t _reserved;  ///< padding; set to 0
+};
+
 /// Create a DotnetLoader from config.
 /// Returns an opaque pointer to be passed to polyplug_runtime_register_loader.
 /// On failure returns null.
@@ -74,6 +79,12 @@ void* polyplug_js_loader_create(const PolyplugJsConfig* config);
 
 /// Free a js loader without registering it. No-op on null.
 void  polyplug_js_loader_free(void* ptr);
+
+/// Create a native (Rust/C/C++) loader from config.
+void* polyplug_native_loader_create(const PolyplugNativeConfig* config);
+
+/// Free a native loader without registering it. No-op on null.
+void  polyplug_native_loader_free(void* ptr);
 
 /// Register an opaque loader pointer into the runtime.
 /// loader_ptr must be produced by a polyplug_*_loader_create function.
@@ -160,6 +171,23 @@ inline void register_js_loader(RuntimeHandle rt)
     if (polyplug_runtime_register_loader(rt, loader) != 0U) {
         throw std::runtime_error(
             "polyplug: js loader register failed");
+    }
+}
+
+/// Register the native (Rust/C/C++) guest loader with the given runtime handle.
+///
+/// Throws std::runtime_error on failure.
+inline void register_native_loader(RuntimeHandle rt)
+{
+    PolyplugNativeConfig cfg{0U};
+    void* const loader = polyplug_native_loader_create(&cfg);
+    if (loader == nullptr) {
+        throw std::runtime_error(
+            "polyplug: native loader create failed");
+    }
+    if (polyplug_runtime_register_loader(rt, loader) != 0U) {
+        throw std::runtime_error(
+            "polyplug: native loader register failed");
     }
 }
 

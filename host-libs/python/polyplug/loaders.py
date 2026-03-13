@@ -79,3 +79,14 @@ def register_lua_loader(runtime: "Runtime") -> None:
 def register_js_loader(runtime: "Runtime") -> None:
     cfg: _EmptyConfig = _EmptyConfig(0)
     _register(runtime, "polyplug_js", "polyplug_js_loader_create", ctypes.byref(cfg))
+
+
+class _NativeConfig(ctypes.Structure):
+    _fields_ = [("_reserved", ctypes.c_uint8)]
+
+
+def register_native_loader(runtime: "Runtime") -> None:
+    cfg: _NativeConfig = _NativeConfig(0)
+    _register(
+        runtime, "polyplug_native", "polyplug_native_loader_create", ctypes.byref(cfg)
+    )
