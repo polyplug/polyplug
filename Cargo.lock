@@ -2186,6 +2186,7 @@ dependencies = [
  "deno_core",
  "deno_error",
  "polyplug",
+ "tempfile",
  "thiserror",
  "tokio",
 ]
@@ -2196,6 +2197,7 @@ version = "0.1.0"
 dependencies = [
  "mlua",
  "polyplug",
+ "tempfile",
 ]
 
 [[package]]
@@ -2204,6 +2206,7 @@ version = "0.1.0"
 dependencies = [
  "polyplug",
  "pyo3",
+ "tempfile",
 ]
 
 [[package]]

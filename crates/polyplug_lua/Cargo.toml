@@ -14,5 +14,9 @@ crate-type = ["rlib"]
 polyplug = { workspace = true }
 mlua = { workspace = true, features = ["luajit", "vendored", "send"] }
 
+
+[dev-dependencies]
+polyplug = { workspace = true }
+tempfile = { workspace = true }
 [lints]
 workspace = true

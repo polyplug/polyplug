@@ -14,5 +14,13 @@ crate-type = ["rlib"]
 polyplug = { workspace = true }
 pyo3 = { workspace = true }
 
+[dev-dependencies]
+polyplug = { workspace = true }
+tempfile = { workspace = true }
+
+[[test]]
+name = "python_loader"
+path = "tests/python_loader.rs"
+
 [lints]
 workspace = true
