@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # examples/build_everything.sh — Build all polyplug guest examples with PASS/FAIL reporting
 #
-# Compiles or verifies all 12 guest plugin examples across all languages:
-#   Native   : polyplug_native crate      (cargo build --release -p polyplug_native)
-#   Native   : native example plugin      (cargo build --release)
+# Compiles or verifies all 10 guest plugin examples across 6 languages:
 #   Rust     : decoder, encoder           (cargo build --release)
 #   C++      : transformer, validator     (make)
 #   C#       : encoder, reporter          (dotnet build --configuration Release)
@@ -262,14 +260,6 @@ run_dir_example() {
 
 printf "\n${BOLD}polyplug — build all guest examples${RESET}\n"
 printf "%-30s\n" "$(printf '%.0s─' {1..50})"
-
-# ── Native loader ───────────────────────────────────────────────────────────
-printf "\n${BOLD}[native loader]${RESET}  cargo build --release -p polyplug_native\n"
-run_workspace_crate polyplug_native  cargo build --release -p polyplug_native
-
-# ── Native example plugin ────────────────────────────────────────────────────
-printf "\n${BOLD}[native example]${RESET}  cargo build --release\n"
-run_dir_example "native/plugin" "${GUESTS_DIR}/native"  cargo build --release
 
 # ── Rust ────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}[rust]${RESET}  cargo build --release\n"
