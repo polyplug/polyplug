@@ -402,32 +402,41 @@ polyplug C ABI
 **Per language — source location, published artifact, and contents:**
 
 ```
-Rust    host-libs/rust/    →  polyplug crate
+Rust    host-libs/rust/    →  polyplug crate (crates.io)
                                PluginRuntime builder, type-safe ABI wrappers
 
-C++     host-libs/cpp/     →  single-header / vcpkg / conan
+C++     host-libs/cpp/     →  polyplug package (vcpkg / Conan / release archive)
                                RAII Runtime class, zero-overhead ABI wrappers
+                               loaders/python.hpp, loaders/lua.hpp, etc. (one per loader)
 
 C#      host-libs/csharp/  →  Polyplug NuGet
-                               P/Invoke declarations, Runtime builder class,
+                               P/Invoke declarations, Runtime class,
                                ref struct wrappers for StringView and Buffer
+                               Register*Loader() methods (one per loader)
 
 Python  host-libs/python/  →  polyplug pip package
-                               ctypes bindings, Runtime class, ctypes.Structure
-                               wrappers for StringView and Buffer
+                               ctypes bindings, Runtime class, ctypes.Structure wrappers
+                               loaders/python.py, loaders/lua.py, etc. (one per loader)
 
-Lua     host-libs/lua/     →  polyplug.lua (LuaJIT FFI into libpolyplug.so)
-                               FFI declarations, Runtime metatable, Guard metatable,
-                               cdata wrappers for StringView and Buffer
+Lua     host-libs/lua/     →  polyplug LuaRocks rock / release archive
+                               LuaJIT FFI host lib, Runtime metatable, Guard metatable
+                               register_*_loader() functions (one per loader)
                                Performance: JIT-inlined C calls, near-native or faster
 
-JS/TS   host-libs/js/      →  polyplug.ts (Deno.dlopen into libpolyplug.so)
-                               Runtime class, Guard class, TypeScript types
+JS/TS   host-libs/js/      →  @polyplug/core JSR package
+                               Deno.dlopen host lib, Runtime class, TypeScript types
+                               register*Loader() functions (one per loader)
                                Requires --allow-ffi at runtime
                                Performance: <10ns (V8 fast call), ~150ns (BigInt/slow path)
 ```
 
-Note: `polyplug-dotnet`, `polyplug-python`, `polyplug-lua` are **not** host libs. They are Rust adapter crates that teach the runtime how to *load* plugins written in those languages. A C# host app needs `host-libs/csharp/` to drive the runtime. It separately needs `polyplug-dotnet` only if it wants to load `.NET plugins`. Similarly, `polyplug-js` and `polyplug-js-deno` are adapter crates for *loading* JS plugins — they are distinct from `host-libs/js/` which lets a Deno app *be* the host.
+Note: `polyplug_loaders_dotnet`, `polyplug_loaders_python`, `polyplug_loaders_lua`,
+`polyplug_loaders_js`, `polyplug_loaders_js_deno` are **loader packages** — they teach
+the runtime how to load plugins written in those languages. They are distinct from the
+host lib for a given language. A C# host app uses `host-libs/csharp/` (`Polyplug` NuGet)
+to drive the runtime. It additionally installs `Polyplug.Loaders.Python` only if it
+wants to load Python guest plugins. Each loader is a separate opt-in package in every
+language ecosystem. See §24 for the full package listing per language.
 
 **App developer runtime initialization — with loader registration:**
 
@@ -1816,61 +1825,223 @@ App developer registers one or both adapters via loader registration FFI.
 
 ## 24. Package Ecosystem
 
-Follows the serde model. `polyplug` is always present. Adapters are optional addons.
+### Design principle
+
+Follows the EntityFramework/serde opt-in model. The core runtime package is always
+present. Each loader is a separate optional package — app developers install only the
+loaders they actually need. A C# host app that wants Python and Lua guests installs
+three packages total: the core runtime, the Python loader, and the Lua loader. Nothing
+else is linked, nothing else is loaded.
+
+Every loader package is a thin write-and-forget wrapper around the C ABI. The actual
+loader logic lives once in Rust. The language-specific package contains only:
+- A config struct and one registration function call (~20 lines)
+- The pre-built native shared library for the target platform
+
+The native shared library extension is platform-specific:
+`.so` on Linux, `.dylib` on macOS, `.dll` on Windows. Every package ships all three.
+
+### Package count
+
+5 loaders × 6 host languages = 30 loader packages total. This sounds large but each is
+trivial to maintain — they change only when the underlying loader's config API changes,
+which is rare. The precedent is strong: SQLite, libsodium, libzmq all follow the same
+pattern across all language ecosystems with no complaints about package count.
+
+### Rust (crates.io)
 
 ```
-RUST (crates.io)
-├── polyplug              runtime core + Rust host lib + C facade (libpolyplug.so)
-├── polyplug_guest        Rust guest lib
-├── polyplug_dotnet       .NET adapter (libpolyplug_dotnet.so — exports loader FFI)
-├── polyplug_python       Python adapter (libpolyplug_python.so — exports loader FFI)
-├── polyplug_lua          Lua adapter (libpolyplug_lua.so — exports loader FFI)
-├── polyplug_js           QuickJS adapter (libpolyplug_js.so — exports loader FFI)
-├── polyplug_js_deno      V8/deno_core adapter (libpolyplug_js_deno.so — exports loader FFI)
-├── polyplug_codegen      codegen library (programmatic access to polyplugc logic)
-└── polyplugc             CLI codegen tool
+polyplug              runtime core + Rust host lib + C facade
+polyplug_guest        Rust guest lib
+polyplug_codegen      codegen library (programmatic API into polyplugc logic)
+polyplugc             CLI codegen tool
 
-C++ (headers / vcpkg / conan)
-├── host-libs/cpp/polyplug.hpp          host lib — wraps libpolyplug.so
-├── host-libs/cpp/polyplug/loaders.hpp  loader registration — wraps loader .so files
-└── guest-libs/cpp/polyplug_guest.hpp   guest lib
-
-.NET (NuGet)
-├── Polyplug              C# host lib (P/Invoke libpolyplug.so + loader registration)
-└── Polyplug.Guest        C# guest lib (NativeAOT or standard .NET)
-
-Python (pip)
-├── polyplug              Python host lib (ctypes libpolyplug.so + loader registration)
-└── polyplug-guest        Python guest lib
-
-Lua
-├── host-libs/lua/polyplug.lua          LuaJIT FFI host lib + loader registration
-├── host-libs/lua/polyplug.d.lua        type declarations
-└── guest-libs/lua/polyplug_guest.lua   Lua guest lib
-
-JS/TS (Deno host, QuickJS/Deno guests)
-├── host-libs/js/polyplug.ts            Deno.dlopen host lib + loader registration
-└── guest-libs/js/polyplug-guest.ts     shared guest lib (js-quickjs and js-deno)
+Loader crates — each produces rlib (Rust hosts) + cdylib (non-Rust hosts):
+polyplug_loaders_dotnet    .NET loader
+polyplug_loaders_python    Python loader
+polyplug_loaders_lua       Lua loader
+polyplug_loaders_js        QuickJS loader  (runtime = "js-quickjs")
+polyplug_loaders_js_deno   Deno/V8 loader  (runtime = "js-deno")
 ```
 
-**Loader FFI pattern** — each adapter crate produces both `rlib` (for Rust hosts)
-and `cdylib` (for non-Rust hosts). The cdylib exports:
+Rust app developer example — C# host wanting Python + Lua guests:
+```toml
+[dependencies]
+polyplug                 = "1"
+polyplug_loaders_python  = "1"
+polyplug_loaders_lua     = "1"
+```
+
+### C++ (vcpkg / Conan / release archive)
 
 ```
-polyplug_*_loader_create(config)  → *mut c_void   (opaque BundleLoader)
+polyplug                  core runtime headers + libpolyplug
+polyplug-guest            guest lib headers
+polyplug-loaders-dotnet   .NET loader header + native binary
+polyplug-loaders-python   Python loader header + native binary
+polyplug-loaders-lua      Lua loader header + native binary
+polyplug-loaders-js       QuickJS loader header + native binary
+polyplug-loaders-js-deno  Deno loader header + native binary
+```
+
+C++ app developer example — wanting Python + Lua guests:
+```json
+// vcpkg.json
+{
+  "dependencies": ["polyplug", "polyplug-loaders-python", "polyplug-loaders-lua"]
+}
+```
+```cpp
+#include <polyplug/runtime.hpp>
+#include <polyplug/loaders/python.hpp>
+#include <polyplug/loaders/lua.hpp>
+
+auto rt = polyplug::Runtime::build();
+polyplug::register_python_loader(rt);
+polyplug::register_lua_loader(rt);
+```
+
+### .NET (NuGet)
+
+```
+Polyplug                  core runtime + C# host lib
+Polyplug.Guest            C# guest lib
+Polyplug.Loaders.Dotnet   .NET loader + native binary (runtimes/*/native/)
+Polyplug.Loaders.Python   Python loader + native binary
+Polyplug.Loaders.Lua      Lua loader + native binary
+Polyplug.Loaders.Js       QuickJS loader + native binary
+Polyplug.Loaders.JsDeno   Deno loader + native binary
+```
+
+NuGet bundles native binaries via the `runtimes/<rid>/native/` convention.
+MSBuild copies the correct platform binary to the output directory automatically.
+
+C# app developer example — wanting Python + Lua guests:
+```
+dotnet add package Polyplug
+dotnet add package Polyplug.Loaders.Python
+dotnet add package Polyplug.Loaders.Lua
+```
+```csharp
+var rt = new Polyplug.Runtime();
+rt.RegisterPythonLoader();
+rt.RegisterLuaLoader();
+```
+
+### Python (pip)
+
+```
+polyplug                  core runtime + Python host lib
+polyplug-guest            Python guest lib
+polyplug-loaders-dotnet   .NET loader + native binary (wheel)
+polyplug-loaders-python   Python loader + native binary
+polyplug-loaders-lua      Lua loader + native binary
+polyplug-loaders-js       QuickJS loader + native binary
+polyplug-loaders-js-deno  Deno loader + native binary
+```
+
+Python wheels bundle native binaries directly. `ctypes.CDLL` resolves them
+from the wheel-installed path at runtime.
+
+Python app developer example — wanting Python + Lua guests:
+```
+pip install polyplug polyplug-loaders-python polyplug-loaders-lua
+```
+```python
+import polyplug
+from polyplug.loaders.python import register_python_loader
+from polyplug.loaders.lua import register_lua_loader
+
+rt = polyplug.Runtime()
+register_python_loader(rt)
+register_lua_loader(rt)
+```
+
+### Lua (LuaRocks / release archive)
+
+```
+polyplug                  core runtime + Lua host lib (LuaJIT FFI)
+polyplug-guest            Lua guest lib
+polyplug-loaders-dotnet   .NET loader + native binary
+polyplug-loaders-python   Python loader + native binary
+polyplug-loaders-lua      Lua loader + native binary
+polyplug-loaders-js       QuickJS loader + native binary
+polyplug-loaders-js-deno  Deno loader + native binary
+```
+
+Lua app developer example — wanting Python + Lua guests:
+```
+luarocks install polyplug
+luarocks install polyplug-loaders-python
+luarocks install polyplug-loaders-lua
+```
+```lua
+local polyplug = require("polyplug")
+local rt = polyplug.runtime_new()
+polyplug.register_python_loader(rt)
+polyplug.register_lua_loader(rt)
+```
+
+### JS/TS — Deno (JSR / release archive)
+
+```
+@polyplug/core            Deno.dlopen host lib (polyplug.ts)
+@polyplug/guest           shared guest lib (js-quickjs and js-deno)
+@polyplug/loaders-dotnet  .NET loader registration + native binary setup
+@polyplug/loaders-python  Python loader registration + native binary setup
+@polyplug/loaders-lua     Lua loader registration + native binary setup
+@polyplug/loaders-js      QuickJS loader registration + native binary setup
+@polyplug/loaders-js-deno Deno loader registration + native binary setup
+```
+
+Deno packages (JSR) contain the TypeScript wrapper. Native binaries are downloaded
+for the current platform via `deno task setup` from the GitHub release — the standard
+Deno pattern for packages with native dependencies.
+
+Deno app developer example — wanting Python + Lua guests:
+```json
+// deno.json
+{
+  "imports": {
+    "@polyplug/core": "jsr:@polyplug/core@1",
+    "@polyplug/loaders-python": "jsr:@polyplug/loaders-python@1",
+    "@polyplug/loaders-lua": "jsr:@polyplug/loaders-lua@1"
+  },
+  "tasks": {
+    "setup": "deno run -A jsr:@polyplug/core/setup python lua"
+  }
+}
+```
+```typescript
+import { runtimeNew, loadBundle } from "@polyplug/core";
+import { registerPythonLoader } from "@polyplug/loaders-python";
+import { registerLuaLoader } from "@polyplug/loaders-lua";
+
+const rt = runtimeNew();
+registerPythonLoader(rt);
+registerLuaLoader(rt);
+```
+
+### Loader FFI internals (relevant to contributors, not app developers)
+
+Each loader crate produces both `rlib` (used by Rust hosts via crate API) and
+`cdylib` (used by all non-Rust hosts via the C ABI). The cdylib exports:
+
+```
+polyplug_*_loader_create(config)  → *mut c_void   (opaque Box<dyn BundleLoader>)
 polyplug_*_loader_free(ptr)       → void           (discard without registering)
 ```
 
-The runtime core exports:
+The runtime core (`libpolyplug`) exports:
 
 ```
 polyplug_runtime_register_loader(rt, loader_ptr) → u32  (0 = ok)
 ```
 
-Non-Rust hosts call create → register in two steps. Host libs wrap this into
-a single `register_*_loader(rt, config)` call per language.
+Non-Rust host libs call create → register in two steps. The language-specific
+wrapper in each loader package reduces this to a single idiomatic function call.
 
-NOTE: host-libs/js/ targets Deno as the host runtime (Deno.dlopen into libpolyplug.so).
+NOTE: `host-libs/js/` targets Deno as the host runtime (Deno.dlopen into libpolyplug).
 QuickJS cannot be a standalone host — it is an embedded VM that runs inside a Rust process.
 
 ---
