@@ -363,6 +363,9 @@ pub(crate) fn resolve_type_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use polyplug::abi::bundle_id as runtime_bundle_id;
+    use polyplug::abi::contract_id as runtime_contract_id;
+    use polyplug::abi::extension_id as runtime_extension_id;
 
     #[test]
     fn version_parse() {
@@ -419,6 +422,23 @@ mod tests {
     }
 
     #[test]
+    fn contract_id_golden_values() {
+        // Golden: FNV-1a of "image.decode@1" — must match runtime abi::contract_id
+        assert_eq!(compute_contract_id("image.decode", 1), 0xa1ba05dd7da18569_u64);
+        // Golden: FNV-1a of "audio.encode@2"
+        assert_eq!(compute_contract_id("audio.encode", 2), 0x7a7958404b1d72a5_u64);
+    }
+
+    #[test]
+    fn codegen_contract_id_matches_runtime() {
+        // codegen compute_contract_id must produce identical results to the
+        // runtime polyplug::abi::contract_id — both delegate to the same fn.
+        let codegen_id: u64 = compute_contract_id("image.decode", 1);
+        let runtime_id: u64 = runtime_contract_id("image.decode", 1);
+        assert_eq!(codegen_id, runtime_id);
+    }
+
+    #[test]
     fn bundle_id_uses_fnv1a() {
         // FNV-1a of "test-bundle" must be deterministic and non-zero
         let id: u64 = compute_bundle_id("test-bundle");
@@ -427,6 +447,44 @@ mod tests {
         assert_eq!(id, compute_bundle_id("test-bundle"));
         // Different inputs → different outputs (basic collision check)
         assert_ne!(compute_bundle_id("bundle-a"), compute_bundle_id("bundle-b"));
+    }
+
+    #[test]
+    fn bundle_id_golden_values() {
+        // Golden: FNV-1a of "my-bundle"
+        assert_eq!(compute_bundle_id("my-bundle"), 0xfe6226876e3a35b2_u64);
+        // Golden: FNV-1a of "polyplug-core"
+        assert_eq!(compute_bundle_id("polyplug-core"), 0x6ef4aee714f5f991_u64);
+    }
+
+    #[test]
+    fn codegen_bundle_id_matches_runtime() {
+        // codegen compute_bundle_id must produce identical results to the
+        // runtime polyplug::abi::bundle_id — both delegate to the same fn.
+        let codegen_id: u64 = compute_bundle_id("my-bundle");
+        let runtime_id: u64 = runtime_bundle_id("my-bundle");
+        assert_eq!(codegen_id, runtime_id);
+    }
+
+    #[test]
+    fn extension_id_stability() {
+        // Same input always yields same output
+        assert_eq!(compute_extension_id("trace"), compute_extension_id("trace"));
+        // Golden: lower 32 bits of FNV-1a of "trace"
+        assert_eq!(compute_extension_id("trace"), 0xc4eb9aee_u32);
+        // Golden: lower 32 bits of FNV-1a of "metrics"
+        assert_eq!(compute_extension_id("metrics"), 0xb54e70d6_u32);
+        // Different names produce different IDs
+        assert_ne!(compute_extension_id("trace"), compute_extension_id("metrics"));
+    }
+
+    #[test]
+    fn codegen_extension_id_matches_runtime() {
+        // codegen compute_extension_id must produce identical results to the
+        // runtime polyplug::abi::extension_id — both delegate to the same fn.
+        let codegen_id: u32 = compute_extension_id("trace");
+        let runtime_id: u32 = runtime_extension_id("trace");
+        assert_eq!(codegen_id, runtime_id);
     }
 
     #[test]

@@ -1057,7 +1057,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add loader/manifest unit tests`
   - Files: `crates/polyplug/src/loader/manifest.rs`, `crates/polyplug/src/loader/scanner.rs`
 
-- [ ] **Task 23: Graph Edge Case Unit Tests**
+- [x] **Task 23: Graph Edge Case Unit Tests**
 
   **What to do**: Unit tests for graph edge cases
 

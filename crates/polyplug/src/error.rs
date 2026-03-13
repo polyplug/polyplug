@@ -229,3 +229,300 @@ pub enum AllocatorError {
     #[error("invalid layout: size={size}, align={align}")]
     InvalidLayout { size: usize, align: usize },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AllocatorError, GraphError, LoaderError, PolyplugError, RegistryError};
+    use crate::version::Version;
+
+    // --- PolyplugError / RuntimeError ---
+
+    #[test]
+    fn polyplug_error_undeclared_dependency_display() {
+        let err: PolyplugError = PolyplugError::UndeclaredDependency {
+            bundle_id: 0xDEAD_BEEF_0000_0001,
+            contract_id: 0xCAFE_BABE_0000_0002,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("undeclared dependency"), "got: {s}");
+        assert!(s.contains("0xdeadbeef00000001") || s.contains("deadbeef") || s.contains("DEADBEEF") || s.to_lowercase().contains("deadbeef"), "got: {s}");
+        assert!(s.to_lowercase().contains("cafebabe") || s.contains("cafebabe") || s.contains("CAFEBABE"), "got: {s}");
+    }
+
+    #[test]
+    fn polyplug_error_dependency_not_found_display() {
+        let err: PolyplugError = PolyplugError::DependencyNotFound {
+            contract_name: "my_contract".to_owned(),
+            min_version: 3,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("dependency not found"), "got: {s}");
+        assert!(s.contains("my_contract"), "got: {s}");
+        assert!(s.contains('3'), "got: {s}");
+    }
+
+    #[test]
+    fn polyplug_error_bundle_not_found_display() {
+        let err: PolyplugError = PolyplugError::BundleNotFound {
+            bundle_name: "audio_plugin".to_owned(),
+            contract_name: "audio_contract".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("bundle not found"), "got: {s}");
+        assert!(s.contains("audio_plugin"), "got: {s}");
+        assert!(s.contains("audio_contract"), "got: {s}");
+    }
+
+    #[test]
+    fn polyplug_error_reload_failed_display() {
+        let err: PolyplugError = PolyplugError::ReloadFailed {
+            bundle: "my_bundle".to_owned(),
+            reason: "library locked".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("reload failed"), "got: {s}");
+        assert!(s.contains("my_bundle"), "got: {s}");
+        assert!(s.contains("library locked"), "got: {s}");
+    }
+
+    #[test]
+    fn polyplug_error_quiescence_timeout_display() {
+        let err: PolyplugError = PolyplugError::QuiescenceTimeout {
+            bundle: "slow_bundle".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("quiescence timeout"), "got: {s}");
+        assert!(s.contains("slow_bundle"), "got: {s}");
+    }
+
+    #[test]
+    fn polyplug_error_invalid_utf8_display() {
+        let err: PolyplugError = PolyplugError::InvalidUtf8 {
+            context: "plugin_name_field".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("invalid UTF-8") || s.contains("invalid utf-8") || s.contains("UTF-8"), "got: {s}");
+        assert!(s.contains("plugin_name_field"), "got: {s}");
+    }
+
+    // --- LoaderError ---
+
+    #[test]
+    fn loader_error_abi_version_mismatch_display() {
+        let err: LoaderError = LoaderError::AbiVersionMismatch {
+            bundle: "codec.bundle".to_owned(),
+            expected: 2,
+            found: 1,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("ABI version mismatch"), "got: {s}");
+        assert!(s.contains("codec.bundle"), "got: {s}");
+        assert!(s.contains('2'), "got: {s}");
+        assert!(s.contains('1'), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_missing_symbol_display() {
+        let err: LoaderError = LoaderError::MissingSymbol {
+            bundle: "renderer.so".to_owned(),
+            symbol: "polyplug_init".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("missing symbol"), "got: {s}");
+        assert!(s.contains("renderer.so"), "got: {s}");
+        assert!(s.contains("polyplug_init"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_init_failed_display() {
+        let err: LoaderError = LoaderError::InitFailed {
+            bundle: "init_bundle".to_owned(),
+            error: "null pointer dereference".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("init failed"), "got: {s}");
+        assert!(s.contains("init_bundle"), "got: {s}");
+        assert!(s.contains("null pointer dereference"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_manifest_parse_display() {
+        let err: LoaderError = LoaderError::ManifestParse {
+            path: "/opt/plugins/manifest.toml".to_owned(),
+            reason: "unexpected key `foobar`".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("manifest parse error"), "got: {s}");
+        assert!(s.contains("/opt/plugins/manifest.toml"), "got: {s}");
+        assert!(s.contains("foobar"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_duplicate_loader_display() {
+        let err: LoaderError = LoaderError::DuplicateLoader {
+            runtime_name: "python".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("duplicate loader"), "got: {s}");
+        assert!(s.contains("python"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_no_loader_for_runtime_display() {
+        let err: LoaderError = LoaderError::NoLoaderForRuntime {
+            bundle: "my.bundle".to_owned(),
+            runtime_name: "lua".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("no loader") || s.contains("loader is registered"), "got: {s}");
+        assert!(s.contains("my.bundle"), "got: {s}");
+        assert!(s.contains("lua"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_version_mismatch_display() {
+        let err: LoaderError = LoaderError::VersionMismatch {
+            contract: "audio_v2".to_owned(),
+            required: Version { major: 2, minor: 0 },
+            found: Version { major: 1, minor: 9 },
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("version mismatch"), "got: {s}");
+        assert!(s.contains("audio_v2"), "got: {s}");
+        assert!(s.contains("2.0"), "got: {s}");
+        assert!(s.contains("1.9"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_function_count_mismatch_display() {
+        let err: LoaderError = LoaderError::FunctionCountMismatch {
+            contract: "render_contract".to_owned(),
+            expected: 5,
+            found: 3,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("function count mismatch"), "got: {s}");
+        assert!(s.contains("render_contract"), "got: {s}");
+        assert!(s.contains('5'), "got: {s}");
+        assert!(s.contains('3'), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_bundle_not_a_directory_display() {
+        let err: LoaderError = LoaderError::BundleNotADirectory {
+            path: std::path::PathBuf::from("/usr/lib/plugins/myplugin.so"),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("not a directory"), "got: {s}");
+        assert!(s.contains("myplugin.so"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_manifest_missing_file_display() {
+        let err: LoaderError = LoaderError::ManifestMissingFile {
+            bundle: "orphan_bundle".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("missing") || s.contains("empty"), "got: {s}");
+        assert!(s.contains("orphan_bundle"), "got: {s}");
+    }
+
+    // --- RegistryError ---
+
+    #[test]
+    fn registry_error_contract_id_collision_display() {
+        let err: RegistryError = RegistryError::ContractIdCollision {
+            id: 0xABCD_EF01_2345_6789,
+            name_a: "plugin_alpha".to_owned(),
+            name_b: "plugin_beta".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("collision"), "got: {s}");
+        assert!(s.to_lowercase().contains("abcdef01"), "got: {s}");
+        assert!(s.contains("plugin_alpha"), "got: {s}");
+        assert!(s.contains("plugin_beta"), "got: {s}");
+    }
+
+    #[test]
+    fn registry_error_duplicate_provider_display() {
+        let err: RegistryError = RegistryError::DuplicateProvider {
+            contract: "logging_contract".to_owned(),
+            existing: "log4plug".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("duplicate provider"), "got: {s}");
+        assert!(s.contains("logging_contract"), "got: {s}");
+        assert!(s.contains("log4plug"), "got: {s}");
+    }
+
+    #[test]
+    fn registry_error_stale_handle_display() {
+        let err: RegistryError = RegistryError::StaleHandle {
+            index: 7,
+            expected: 42,
+            found: 99,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("stale"), "got: {s}");
+        assert!(s.contains('7'), "got: {s}");
+        assert!(s.contains("42"), "got: {s}");
+        assert!(s.contains("99"), "got: {s}");
+    }
+
+    #[test]
+    fn registry_error_plugin_not_found_display() {
+        let err: RegistryError = RegistryError::PluginNotFound {
+            contract_id: 0x1234_5678_9ABC_DEF0,
+            min_version: 5,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("no plugin found"), "got: {s}");
+        assert!(s.to_lowercase().contains("123456789abc") || s.to_lowercase().contains("12345678"), "got: {s}");
+        assert!(s.contains('5'), "got: {s}");
+    }
+
+    // --- GraphError ---
+
+    #[test]
+    fn graph_error_dependency_cycle_display() {
+        let err: GraphError = GraphError::DependencyCycle {
+            participants: vec!["alpha".to_owned(), "beta".to_owned(), "gamma".to_owned()],
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("cycle"), "got: {s}");
+        assert!(s.contains("alpha"), "got: {s}");
+        assert!(s.contains("beta"), "got: {s}");
+        assert!(s.contains("gamma"), "got: {s}");
+    }
+
+    #[test]
+    fn graph_error_unsatisfied_capability_display() {
+        let err: GraphError = GraphError::UnsatisfiedCapability {
+            requester: "ui_plugin".to_owned(),
+            capability: "gpu_render".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("unsatisfied capability"), "got: {s}");
+        assert!(s.contains("ui_plugin"), "got: {s}");
+        assert!(s.contains("gpu_render"), "got: {s}");
+    }
+
+    // --- AllocatorError ---
+
+    #[test]
+    fn allocator_error_allocation_failed_display() {
+        let err: AllocatorError = AllocatorError::AllocationFailed { size: 4096 };
+        let s: String = err.to_string();
+        assert!(s.contains("allocation failed"), "got: {s}");
+        assert!(s.contains("4096"), "got: {s}");
+    }
+
+    #[test]
+    fn allocator_error_invalid_layout_display() {
+        let err: AllocatorError = AllocatorError::InvalidLayout { size: 0, align: 3 };
+        let s: String = err.to_string();
+        assert!(s.contains("invalid layout"), "got: {s}");
+        assert!(s.contains('0'), "got: {s}");
+        assert!(s.contains('3'), "got: {s}");
+    }
+}

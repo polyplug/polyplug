@@ -381,8 +381,10 @@ mod tests {
 
     #[test]
     fn fnv1a_known_values() {
-        // Known FNV-1a 64-bit value for empty string
+        // Known FNV-1a 64-bit value for empty string (FNV offset basis)
         assert_eq!(fnv1a_64(b""), 0xcbf29ce484222325);
+        // Golden value: FNV-1a of "image.decode@1"
+        assert_eq!(fnv1a_64(b"image.decode@1"), 0xa1ba05dd7da18569_u64);
         // Verify determinism
         assert_eq!(fnv1a_64(b"image.decode@1"), fnv1a_64(b"image.decode@1"));
         // Different inputs produce different hashes
@@ -401,6 +403,38 @@ mod tests {
         // Different names produce different IDs
         let id4: u64 = contract_id("audio.decode", 1);
         assert_ne!(id1, id4);
+    }
+
+    #[test]
+    fn contract_id_golden_values() {
+        // Golden: FNV-1a of "image.decode@1"
+        assert_eq!(contract_id("image.decode", 1), 0xa1ba05dd7da18569_u64);
+        // Golden: FNV-1a of "audio.encode@2"
+        assert_eq!(contract_id("audio.encode", 2), 0x7a7958404b1d72a5_u64);
+    }
+
+    #[test]
+    fn bundle_id_stability() {
+        // Same input always yields same output
+        assert_eq!(bundle_id("my-bundle"), bundle_id("my-bundle"));
+        // Golden: FNV-1a of "my-bundle"
+        assert_eq!(bundle_id("my-bundle"), 0xfe6226876e3a35b2_u64);
+        // Golden: FNV-1a of "polyplug-core"
+        assert_eq!(bundle_id("polyplug-core"), 0x6ef4aee714f5f991_u64);
+        // Different bundle names produce different IDs
+        assert_ne!(bundle_id("bundle-a"), bundle_id("bundle-b"));
+    }
+
+    #[test]
+    fn extension_id_stability() {
+        // Same input always yields same output
+        assert_eq!(extension_id("trace"), extension_id("trace"));
+        // Golden: lower 32 bits of FNV-1a of "trace"
+        assert_eq!(extension_id("trace"), 0xc4eb9aee_u32);
+        // Golden: lower 32 bits of FNV-1a of "metrics"
+        assert_eq!(extension_id("metrics"), 0xb54e70d6_u32);
+        // Different names produce different IDs
+        assert_ne!(extension_id("trace"), extension_id("metrics"));
     }
 
     #[test]

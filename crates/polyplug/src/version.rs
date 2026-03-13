@@ -117,4 +117,31 @@ mod tests {
     fn compatibility_default_is_strict() {
         assert_eq!(Compatibility::default(), Compatibility::Strict);
     }
+
+    #[test]
+    fn version_parse_four_component_overflow() {
+        // "1.2.3.4" splits on first '.' giving minor_str = "2.3.4", which cannot
+        // be parsed as u32 — must be rejected.
+        assert!(Version::parse("1.2.3.4", "test").is_err());
+    }
+
+    #[test]
+    fn version_parse_prerelease_rejected() {
+        // Pre-release suffixes are not part of the "major.minor" format.
+        // "1.0.0-alpha" splits to minor_str = "0.0-alpha", not a valid u32.
+        assert!(Version::parse("1.0.0-alpha", "test").is_err());
+        // "1.0.0-rc.1" splits to minor_str = "0.0-rc.1", not a valid u32.
+        assert!(Version::parse("1.0.0-rc.1", "test").is_err());
+    }
+
+    #[test]
+    fn version_parse_wildcard_requirements_rejected() {
+        // Semver requirement strings must be rejected by the plain version parser.
+        // "^1.2.0": major_str = "^1", not a valid u32.
+        assert!(Version::parse("^1.2.0", "test").is_err());
+        // "~1.2.0": major_str = "~1", not a valid u32.
+        assert!(Version::parse("~1.2.0", "test").is_err());
+        // ">=1.0": split_once gives major_str ">" which is not a valid u32.
+        assert!(Version::parse(">=1.0", "test").is_err());
+    }
 }

@@ -142,11 +142,82 @@ impl ManifestData {
 
 #[cfg(test)]
 mod tests {
-    use super::{ManifestDependency, RawManifestDependency};
+    use super::{ManifestData, ManifestDependency, RawManifestDependency};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_manifest(file: &str, bundle_name: &str) -> ManifestData {
+        ManifestData {
+            runtime: "native".to_owned(),
+            bundle_name: bundle_name.to_owned(),
+            dependencies: Vec::new(),
+            bundle_id: 0,
+            name: String::new(),
+            version: String::new(),
+            file: file.to_owned(),
+            provides: Vec::new(),
+            function_count: HashMap::new(),
+            needs_reinit_on_dep_reload: false,
+            path: PathBuf::new(),
+        }
+    }
+
+    // ── validate_file edge cases ──────────────────────────────────────────
+
+    #[test]
+    fn validate_file_ok_when_file_is_set() {
+        let m: ManifestData = make_manifest("myplugin.so", "myplugin");
+        assert!(m.validate_file().is_ok(), "non-empty file must pass validation");
+    }
+
+    #[test]
+    fn validate_file_err_when_file_is_empty_string() {
+        let m: ManifestData = make_manifest("", "myplugin");
+        let result: Result<(), crate::error::LoaderError> = m.validate_file();
+        assert!(
+            result.is_err(),
+            "empty file field must fail validation"
+        );
+        match result.unwrap_err() {
+            crate::error::LoaderError::ManifestMissingFile { bundle } => {
+                assert_eq!(bundle, "myplugin");
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_file_err_when_file_is_whitespace_only() {
+        let m: ManifestData = make_manifest("   \t\n  ", "myplugin");
+        let result: Result<(), crate::error::LoaderError> = m.validate_file();
+        assert!(
+            result.is_err(),
+            "whitespace-only file field must fail validation"
+        );
+        match result.unwrap_err() {
+            crate::error::LoaderError::ManifestMissingFile { bundle } => {
+                assert_eq!(bundle, "myplugin");
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_file_err_carries_bundle_name() {
+        let m: ManifestData = make_manifest("", "special-bundle");
+        match m.validate_file().unwrap_err() {
+            crate::error::LoaderError::ManifestMissingFile { bundle } => {
+                assert_eq!(bundle, "special-bundle", "error must carry the correct bundle name");
+            }
+            other => panic!("unexpected error variant: {:?}", other),
+        }
+    }
+
+    // ── RawManifestDependency::resolve edge cases ─────────────────────────
 
     #[test]
     fn raw_dep_resolve_by_contract() {
-        let dep = RawManifestDependency {
+        let dep: RawManifestDependency = RawManifestDependency {
             kind: "contract".to_owned(),
             contract: "math".to_owned(),
             min_version: "1.0".to_owned(),
@@ -170,8 +241,28 @@ mod tests {
     }
 
     #[test]
+    fn raw_dep_resolve_by_contract_zero_contract_id() {
+        // contract_id=0 is allowed — the resolve path does not validate the id.
+        let dep: RawManifestDependency = RawManifestDependency {
+            kind: "contract".to_owned(),
+            contract: "audio".to_owned(),
+            min_version: "0.1".to_owned(),
+            bundle: None,
+            contract_id: 0,
+            bundle_id: None,
+        };
+        let resolved: Option<ManifestDependency> = dep.resolve();
+        match resolved.expect("should resolve even with contract_id=0") {
+            ManifestDependency::ByContract { contract_id, .. } => {
+                assert_eq!(contract_id, 0);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
     fn raw_dep_resolve_by_bundle() {
-        let dep = RawManifestDependency {
+        let dep: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
             contract: "math".to_owned(),
             min_version: "1.0".to_owned(),
@@ -200,7 +291,7 @@ mod tests {
 
     #[test]
     fn raw_dep_resolve_by_bundle_missing_bundle_id_returns_none() {
-        let dep = RawManifestDependency {
+        let dep: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
             contract: "math".to_owned(),
             min_version: "1.0".to_owned(),
@@ -213,5 +304,58 @@ mod tests {
             resolved.is_none(),
             "expected None when bundle_id is missing"
         );
+    }
+
+    #[test]
+    fn raw_dep_resolve_by_bundle_zero_bundle_id_is_valid() {
+        // bundle_id=Some(0) is a valid (if unusual) id — must NOT be treated as None.
+        let dep: RawManifestDependency = RawManifestDependency {
+            kind: "bundle".to_owned(),
+            contract: "video".to_owned(),
+            min_version: "2.0".to_owned(),
+            bundle: Some("video-bundle".to_owned()),
+            contract_id: 7,
+            bundle_id: Some(0),
+        };
+        let resolved: Option<ManifestDependency> = dep.resolve();
+        match resolved.expect("bundle_id=Some(0) must resolve") {
+            ManifestDependency::ByBundle { bundle_id, .. } => {
+                assert_eq!(bundle_id, 0);
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    // ── resolved_dependencies helper ──────────────────────────────────────
+
+    #[test]
+    fn resolved_dependencies_skips_bundle_dep_with_no_bundle_id() {
+        let mut m: ManifestData = make_manifest("p.so", "p");
+        m.dependencies = vec![
+            RawManifestDependency {
+                kind: "bundle".to_owned(),
+                contract: "x".to_owned(),
+                min_version: "1.0".to_owned(),
+                bundle: Some("x-bundle".to_owned()),
+                contract_id: 1,
+                bundle_id: None, // missing — must be skipped
+            },
+            RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "y".to_owned(),
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                contract_id: 2,
+                bundle_id: None,
+            },
+        ];
+        let deps: Vec<ManifestDependency> = m.resolved_dependencies();
+        assert_eq!(deps.len(), 1, "bundle dep without bundle_id must be skipped");
+        match &deps[0] {
+            ManifestDependency::ByContract { contract, .. } => {
+                assert_eq!(contract, "y");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
     }
 }
