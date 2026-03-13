@@ -6,6 +6,7 @@
 
 pub mod config;
 pub(crate) mod loader;
+pub mod ffi;
 
 pub use config::JsDenoConfig;
 pub use loader::JsDenoLoader;

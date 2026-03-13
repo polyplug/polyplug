@@ -17,7 +17,7 @@ use std::alloc::System;
 /// Callers must:
 /// - Free the returned pointer with `polyplug_host_free` using the SAME `size` and `align`.
 /// - Not use the returned pointer after calling `polyplug_host_free`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8 {
     if size == 0 {
         return core::ptr::null_mut();
@@ -42,7 +42,7 @@ pub extern "C" fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8 {
 /// - Pass the SAME `size` and `align` used in the original allocation.
 /// - Not use the pointer after this call.
 /// - Not call this twice with the same pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_host_free(ptr: *mut u8, size: usize, align: usize) {
     if ptr.is_null() || size == 0 {
         return;

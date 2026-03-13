@@ -15,13 +15,14 @@
 
 pub mod config;
 pub(crate) mod context;
+pub mod ffi;
 pub use config::PythonConfig;
 
 use std::path::Path;
 
-use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
+use pyo3::Python;
 
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginRegistrar;

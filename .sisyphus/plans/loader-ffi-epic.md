@@ -192,7 +192,7 @@ examples/
 
 ---
 
-- [ ] **Task 1: Add `polyplug_runtime_register_loader` to `crates/polyplug/src/ffi.rs`**
+- [x] **Task 1: Add `polyplug_runtime_register_loader` to `crates/polyplug/src/ffi.rs`**
 
   **What**: Add one new exported function to the existing C facade. Do NOT change any existing symbols.
 
@@ -249,7 +249,7 @@ examples/
 
 ---
 
-- [ ] **Task 2: `polyplug_dotnet` — add `src/ffi.rs` + `cdylib`**
+- [x] **Task 2: `polyplug_dotnet` — add `src/ffi.rs` + `cdylib`**
 
   **What**: Add `src/ffi.rs` with create/free exports. Add `cdylib` to `crate-type` in `Cargo.toml`.
 
@@ -313,7 +313,7 @@ examples/
 
   **Commit**: `feat(polyplug_dotnet): add loader FFI create/free exports`
 
-- [ ] **Task 3: `polyplug_python` — add `src/ffi.rs` + `cdylib`**
+- [x] **Task 3: `polyplug_python` — add `src/ffi.rs` + `cdylib`**
 
   **Same pattern as Task 2.**
 
@@ -338,7 +338,7 @@ examples/
 
   **Commit**: `feat(polyplug_python): add loader FFI create/free exports`
 
-- [ ] **Task 4: `polyplug_lua` — add `src/ffi.rs` + `cdylib`**
+- [x] **Task 4: `polyplug_lua` — add `src/ffi.rs` + `cdylib`**
 
   **Config struct** (no required fields):
   ```rust
@@ -360,7 +360,7 @@ examples/
 
   **Commit**: `feat(polyplug_lua): add loader FFI create/free exports`
 
-- [ ] **Task 5: `polyplug_js` — add `src/ffi.rs` + `cdylib`**
+- [x] **Task 5: `polyplug_js` — add `src/ffi.rs` + `cdylib`**
 
   **Config struct**:
   ```rust
@@ -414,7 +414,7 @@ examples/
 
 ---
 
-- [ ] **Task 7: `host-libs/cpp` — add `polyplug/loaders.hpp`**
+- [x] **Task 7: `host-libs/cpp` — add `polyplug/loaders.hpp`**
 
   **What**: Create `host-libs/cpp/polyplug/loaders.hpp`. Do NOT modify `runtime.hpp` or `abi.hpp`.
 
@@ -479,7 +479,7 @@ examples/
 
   **Commit**: `feat(host-libs/cpp): add loaders.hpp with loader registration`
 
-- [ ] **Task 8: `host-libs/python` — add `polyplug/loaders.py`**
+- [x] **Task 8: `host-libs/python` — add `polyplug/loaders.py`**
 
   **What**: Create `host-libs/python/polyplug/loaders.py`.
 
@@ -558,7 +558,7 @@ examples/
 
   **Commit**: `feat(host-libs/python): add loaders.py with loader registration`
 
-- [ ] **Task 9: `host-libs/lua` — add loader registration to `polyplug.lua`**
+- [x] **Task 9: `host-libs/lua` — add loader registration to `polyplug.lua`**
 
   **What**: Add 5 registration functions to the existing module table `M` at the bottom of `polyplug.lua`. Use `ffi.load()` with lazy caching per loader.
 
@@ -615,7 +615,7 @@ examples/
 
   **Commit**: `feat(host-libs/lua): add loader registration functions`
 
-- [ ] **Task 10: `host-libs/js` — add loader registration to `polyplug.ts`**
+- [x] **Task 10: `host-libs/js` — add loader registration to `polyplug.ts`**
 
   **What**: Add 5 exported functions to `polyplug.ts`. Open each loader `.so` lazily via `Deno.dlopen`. Cache at module level.
 
@@ -674,7 +674,7 @@ examples/
 
   **Commit**: `feat(host-libs/js): add loader registration functions`
 
-- [ ] **Task 11: `host-libs/csharp` — add loader registration to `Runtime.cs`**
+- [x] **Task 11: `host-libs/csharp` — add loader registration to `Runtime.cs`**
 
   **What**: Add P/Invoke declarations and 5 public `Register*Loader` methods to the `Runtime` class. No unsafe. Uses `IntPtr` throughout per existing pattern.
 
@@ -749,7 +749,7 @@ Each guest implements exactly one of the two shared contracts from `examples/api
 
 ---
 
-- [ ] **Task 12: Rust guests — `rust/decoder` (Transformer) + `rust/reporter` (Reporter)**
+- [x] **Task 12: Rust guests — `rust/decoder` (Transformer) + `rust/reporter` (Reporter)**
 
   These likely already exist. If so, verify they implement the correct contracts and return the correct strings. Update if needed. Do not rename existing directories.
 

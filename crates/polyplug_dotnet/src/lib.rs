@@ -2,6 +2,7 @@
 
 pub mod config;
 pub(crate) mod context;
+pub mod ffi;
 pub mod version;
 pub use config::DotnetConfig;
 pub use config::HostfxrLocation;
@@ -15,9 +16,9 @@ use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 
-use crate::context::CLR_CONTEXT;
-use crate::context::InitFn;
 use crate::context::init_context;
+use crate::context::InitFn;
+use crate::context::CLR_CONTEXT;
 
 pub struct DotnetLoader {
     config: DotnetConfig,

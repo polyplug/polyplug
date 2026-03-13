@@ -210,6 +210,132 @@ public sealed class Runtime {
     [DllImport(NativeLib, EntryPoint = "polyplug_error_message_len", CallingConvention = CallingConvention.Cdecl)]
     private static extern UIntPtr polyplug_error_message_len();
 
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_register_loader", CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint polyplug_runtime_register_loader(IntPtr rt, IntPtr loaderPtr);
+
+    [DllImport("polyplug_dotnet", EntryPoint = "polyplug_dotnet_loader_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_dotnet_loader_create(IntPtr cfgPtr);
+
+    [DllImport("polyplug_python", EntryPoint = "polyplug_python_loader_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_python_loader_create(IntPtr cfgPtr);
+
+    [DllImport("polyplug_lua", EntryPoint = "polyplug_lua_loader_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_lua_loader_create(IntPtr cfgPtr);
+
+    [DllImport("polyplug_js", EntryPoint = "polyplug_js_loader_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_js_loader_create(IntPtr cfgPtr);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DotnetLoaderConfig {
+        public IntPtr MinFrameworkPtr;
+        public UIntPtr MinFrameworkLen;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PythonLoaderConfig {
+        public IntPtr MinVersionPtr;
+        public UIntPtr MinVersionLen;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct EmptyLoaderConfig {
+        public byte Reserved;
+    }
+
+    public void RegisterDotnetLoader(string minFramework = "10.0") {
+        EnsureHandle();
+        byte[] bytes = Encoding.UTF8.GetBytes(minFramework);
+        GCHandle stringHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        try {
+            DotnetLoaderConfig cfg = new DotnetLoaderConfig {
+                MinFrameworkPtr = stringHandle.AddrOfPinnedObject(),
+                MinFrameworkLen = (UIntPtr)bytes.Length,
+            };
+            IntPtr cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<DotnetLoaderConfig>());
+            try {
+                Marshal.StructureToPtr(cfg, cfgPtr, false);
+                IntPtr loaderPtr = polyplug_dotnet_loader_create(cfgPtr);
+                if (loaderPtr == IntPtr.Zero) {
+                    throw new InvalidOperationException("polyplug: dotnet loader create failed");
+                }
+                uint err = polyplug_runtime_register_loader(_handle, loaderPtr);
+                if (err != 0u) {
+                    ThrowLastError($"polyplug: dotnet loader register failed: {err}");
+                }
+            } finally {
+                Marshal.FreeHGlobal(cfgPtr);
+            }
+        } finally {
+            stringHandle.Free();
+        }
+    }
+
+    public void RegisterPythonLoader(string minVersion = "3.11") {
+        EnsureHandle();
+        byte[] bytes = Encoding.UTF8.GetBytes(minVersion);
+        GCHandle stringHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        try {
+            PythonLoaderConfig cfg = new PythonLoaderConfig {
+                MinVersionPtr = stringHandle.AddrOfPinnedObject(),
+                MinVersionLen = (UIntPtr)bytes.Length,
+            };
+            IntPtr cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PythonLoaderConfig>());
+            try {
+                Marshal.StructureToPtr(cfg, cfgPtr, false);
+                IntPtr loaderPtr = polyplug_python_loader_create(cfgPtr);
+                if (loaderPtr == IntPtr.Zero) {
+                    throw new InvalidOperationException("polyplug: python loader create failed");
+                }
+                uint err = polyplug_runtime_register_loader(_handle, loaderPtr);
+                if (err != 0u) {
+                    ThrowLastError($"polyplug: python loader register failed: {err}");
+                }
+            } finally {
+                Marshal.FreeHGlobal(cfgPtr);
+            }
+        } finally {
+            stringHandle.Free();
+        }
+    }
+
+    public void RegisterLuaLoader() {
+        EnsureHandle();
+        EmptyLoaderConfig cfg = new EmptyLoaderConfig { Reserved = 0 };
+        IntPtr cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<EmptyLoaderConfig>());
+        try {
+            Marshal.StructureToPtr(cfg, cfgPtr, false);
+            IntPtr loaderPtr = polyplug_lua_loader_create(cfgPtr);
+            if (loaderPtr == IntPtr.Zero) {
+                throw new InvalidOperationException("polyplug: lua loader create failed");
+            }
+            uint err = polyplug_runtime_register_loader(_handle, loaderPtr);
+            if (err != 0u) {
+                ThrowLastError($"polyplug: lua loader register failed: {err}");
+            }
+        } finally {
+            Marshal.FreeHGlobal(cfgPtr);
+        }
+    }
+
+    public void RegisterJsLoader() {
+        EnsureHandle();
+        EmptyLoaderConfig cfg = new EmptyLoaderConfig { Reserved = 0 };
+        IntPtr cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<EmptyLoaderConfig>());
+        try {
+            Marshal.StructureToPtr(cfg, cfgPtr, false);
+            IntPtr loaderPtr = polyplug_js_loader_create(cfgPtr);
+            if (loaderPtr == IntPtr.Zero) {
+                throw new InvalidOperationException("polyplug: js loader create failed");
+            }
+            uint err = polyplug_runtime_register_loader(_handle, loaderPtr);
+            if (err != 0u) {
+                ThrowLastError($"polyplug: js loader register failed: {err}");
+            }
+        } finally {
+            Marshal.FreeHGlobal(cfgPtr);
+        }
+    }
+
 }
 
 public struct PluginGuard : IDisposable {

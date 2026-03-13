@@ -186,7 +186,7 @@ static DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     version_patch: 0_u32,
 };
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     POLYPLUG_ABI_VERSION
 }
@@ -196,7 +196,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     registrar: *mut PluginRegistrar,
     ctx: *const PluginContext,

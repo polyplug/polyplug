@@ -4,6 +4,7 @@
 //! One shared QuickJS VM per process. No subprocess. No IPC.
 
 pub mod config;
+pub mod ffi;
 pub(crate) mod loader;
 
 pub use config::JsConfig;

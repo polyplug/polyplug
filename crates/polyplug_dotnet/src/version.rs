@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use pelite::PeFile;
 use pelite::image::IMAGE_DATA_DIRECTORY;
+use pelite::PeFile;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;

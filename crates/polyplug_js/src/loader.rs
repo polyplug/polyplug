@@ -19,7 +19,6 @@ use rquickjs::Runtime;
 use rquickjs::Value;
 
 use crate::config::JsConfig;
-use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
 use polyplug::abi::PluginDescriptor;
@@ -27,6 +26,7 @@ use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::ABI_OK;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;

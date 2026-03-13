@@ -8,7 +8,7 @@ rust-version.workspace = true
 [lib]
 name = "polyplug_js"
 path = "src/lib.rs"
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 polyplug = { workspace = true }

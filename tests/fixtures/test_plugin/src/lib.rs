@@ -208,7 +208,7 @@ static TEST_ADD_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
 // ─── ABI Exports ─────────────────────────────────────────────────────────────
 
 /// ABI version sentinel — loader checks this before calling polyplug_init.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     1
 }
@@ -218,7 +218,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     registrar: *mut PluginRegistrar,
     ctx: *const PluginContext,
@@ -264,7 +264,7 @@ static LAST_BUNDLE_PATH_LEN: AtomicUsize = AtomicUsize::new(0);
 ///
 /// # Safety
 /// The returned StringView is valid as long as the bundle path memory is live.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_get_last_bundle_path() -> StringView {
     StringView {
         ptr: LAST_BUNDLE_PATH_PTR.load(Ordering::SeqCst),
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn polyplug_get_last_bundle_path() -> StringView {
 ///
 /// # Safety
 /// `_args` and `_out` are ignored but must follow standard ABI conventions.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_panicking_fn(_args: *const (), _out: *mut ()) -> AbiError {
     panic!("intentional test panic");
 }

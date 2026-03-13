@@ -146,4 +146,85 @@ function Runtime:resolve_plugin(packed_handle)
     return setmetatable({ _ptr = managed }, Guard)
 end
 
+-- ─── Loader Registration ──────────────────────────────────────────────────────
+-- Declare loader FFI types once at module load time, guarded with pcall to
+-- handle the case where this file is loaded multiple times in the same process.
+pcall(ffi.cdef, [[
+    typedef struct { const uint8_t* ptr; size_t len; } PolyplugDotnetCfg;
+    void* polyplug_dotnet_loader_create(const PolyplugDotnetCfg* cfg);
+
+    typedef struct { const uint8_t* ptr; size_t len; } PolyplugPythonCfg;
+    void* polyplug_python_loader_create(const PolyplugPythonCfg* cfg);
+
+    typedef struct { uint8_t _reserved; } PolyplugLuaCfg;
+    void* polyplug_lua_loader_create(const PolyplugLuaCfg* cfg);
+
+    typedef struct { uint8_t _reserved; } PolyplugJsCfg;
+    void* polyplug_js_loader_create(const PolyplugJsCfg* cfg);
+
+    uint32_t polyplug_runtime_register_loader(void* rt, void* loader);
+]])
+
+-- Lazy-loaded loader library handles, keyed by library name.
+local _loader_libs = {}
+
+local function get_loader_lib(name)
+    if not _loader_libs[name] then
+        _loader_libs[name] = ffi.load(name)
+    end
+    return _loader_libs[name]
+end
+
+-- Register a .NET loader with the runtime.
+-- rt: an OpaqueRuntime* cdata (from M._lib.polyplug_runtime_new).
+-- opts: optional table, may contain opts.min_framework (string, default "10.0").
+function M.register_dotnet_loader(rt, opts)
+    opts = opts or {}
+    local min_fw = opts.min_framework or "10.0"
+    local lib = get_loader_lib("polyplug_dotnet")
+    local fw_bytes = ffi.new("uint8_t[?]", #min_fw, min_fw)
+    local cfg = ffi.new("PolyplugDotnetCfg", fw_bytes, #min_fw)
+    local loader = lib.polyplug_dotnet_loader_create(cfg)
+    if loader == nil then error("polyplug: dotnet loader create failed") end
+    local err = M._lib.polyplug_runtime_register_loader(rt, loader)
+    if err ~= 0 then error("polyplug: dotnet loader register failed: " .. err) end
+end
+
+-- Register a Python loader with the runtime.
+-- rt: an OpaqueRuntime* cdata.
+-- opts: optional table, may contain opts.min_version (string, default "3.11").
+function M.register_python_loader(rt, opts)
+    opts = opts or {}
+    local min_ver = opts.min_version or "3.11"
+    local lib = get_loader_lib("polyplug_python")
+    local ver_bytes = ffi.new("uint8_t[?]", #min_ver, min_ver)
+    local cfg = ffi.new("PolyplugPythonCfg", ver_bytes, #min_ver)
+    local loader = lib.polyplug_python_loader_create(cfg)
+    if loader == nil then error("polyplug: python loader create failed") end
+    local err = M._lib.polyplug_runtime_register_loader(rt, loader)
+    if err ~= 0 then error("polyplug: python loader register failed: " .. err) end
+end
+
+-- Register a Lua loader with the runtime.
+-- rt: an OpaqueRuntime* cdata.
+function M.register_lua_loader(rt)
+    local lib = get_loader_lib("polyplug_lua")
+    local cfg = ffi.new("PolyplugLuaCfg", 0)
+    local loader = lib.polyplug_lua_loader_create(cfg)
+    if loader == nil then error("polyplug: lua loader create failed") end
+    local err = M._lib.polyplug_runtime_register_loader(rt, loader)
+    if err ~= 0 then error("polyplug: lua loader register failed: " .. err) end
+end
+
+-- Register a JS (QuickJS) loader with the runtime.
+-- rt: an OpaqueRuntime* cdata.
+function M.register_js_loader(rt)
+    local lib = get_loader_lib("polyplug_js")
+    local cfg = ffi.new("PolyplugJsCfg", 0)
+    local loader = lib.polyplug_js_loader_create(cfg)
+    if loader == nil then error("polyplug: js loader create failed") end
+    local err = M._lib.polyplug_runtime_register_loader(rt, loader)
+    if err ~= 0 then error("polyplug: js loader register failed: " .. err) end
+end
+
 return M

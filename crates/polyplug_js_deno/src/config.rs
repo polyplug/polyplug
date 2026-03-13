@@ -5,3 +5,9 @@
 /// No fields required — V8 is embedded in-process via deno_core.
 #[derive(Debug, Clone)]
 pub struct JsDenoConfig {}
+
+impl Default for JsDenoConfig {
+    fn default() -> Self {
+        Self {}
+    }
+}

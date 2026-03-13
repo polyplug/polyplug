@@ -2,6 +2,7 @@ use core::cell::Ref;
 use core::cell::RefCell;
 
 use crate::abi::PluginHandle;
+use crate::loader::BundleLoader;
 use crate::registry::PluginVTableGuard;
 use crate::runtime::Runtime;
 
@@ -42,7 +43,7 @@ fn unpack_handle(packed: u64) -> PluginHandle {
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_new() -> *mut OpaqueRuntime {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match Runtime::builder().build() {
@@ -63,7 +64,7 @@ pub unsafe extern "C" fn polyplug_runtime_new() -> *mut OpaqueRuntime {
 /// `rt` must be a non-null pointer previously returned by `polyplug_runtime_new`.
 /// Must not be called more than once for the same pointer.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_free(rt: *mut OpaqueRuntime) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !rt.is_null() {
@@ -80,7 +81,7 @@ pub unsafe extern "C" fn polyplug_runtime_free(rt: *mut OpaqueRuntime) {
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 /// `path` must point to `path_len` valid UTF-8 bytes for the duration of the call.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_load_bundle(
     rt: *mut OpaqueRuntime,
     path: *const u8,
@@ -124,7 +125,7 @@ pub unsafe extern "C" fn polyplug_load_bundle(
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 /// `path` must point to `path_len` valid UTF-8 bytes for the duration of the call.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_reload_bundle(
     rt: *mut OpaqueRuntime,
     path: *const u8,
@@ -167,7 +168,7 @@ pub unsafe extern "C" fn polyplug_reload_bundle(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_rt_find_by_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
@@ -193,7 +194,7 @@ pub unsafe extern "C" fn polyplug_rt_find_by_contract(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_rt_find_by_bundle(
     rt: *const OpaqueRuntime,
     bundle_id: u64,
@@ -224,7 +225,7 @@ pub unsafe extern "C" fn polyplug_rt_find_by_bundle(
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 /// `out` must be valid for writes of `out_cap` u64 elements.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
@@ -289,7 +290,7 @@ pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
@@ -326,7 +327,7 @@ pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
 /// `guard` must be a non-null pointer previously returned by `polyplug_rt_resolve_plugin`.
 /// Must not be called more than once for the same pointer.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_guard_free(guard: *mut OpaqueGuard) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !guard.is_null() {
@@ -342,7 +343,7 @@ pub unsafe extern "C" fn polyplug_guard_free(guard: *mut OpaqueGuard) {
 /// # Safety
 /// `guard` must be a valid pointer returned by `polyplug_rt_resolve_plugin`.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_get_vtable(guard: *const OpaqueGuard) -> *const () {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if guard.is_null() {
@@ -361,7 +362,7 @@ pub unsafe extern "C" fn polyplug_get_vtable(guard: *const OpaqueGuard) -> *cons
 /// # Safety
 /// `buf` must be valid for writes of `buf_len` bytes when non-null.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_last_error(buf: *mut u8, buf_len: usize) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let len: usize = LAST_ERROR.with(|e| {
@@ -386,7 +387,7 @@ pub unsafe extern "C" fn polyplug_last_error(buf: *mut u8, buf_len: usize) -> us
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
 #[allow(clippy::std_instead_of_core)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_error_message_len() -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         LAST_ERROR.with(|e| e.borrow().len())
@@ -394,6 +395,45 @@ pub unsafe extern "C" fn polyplug_error_message_len() -> usize {
     .unwrap_or_else(|_| {
         set_last_error("panic in polyplug_error_message_len");
         0usize
+    })
+}
+
+/// # Safety
+/// `rt` must be a valid non-null pointer returned by `polyplug_runtime_new`.
+/// `loader_ptr` must be a non-null `*mut c_void` produced by a loader cdylib's
+/// `polyplug_*_loader_create()` function compiled against the same polyplug rlib.
+/// This call transfers ownership — do not call `polyplug_*_loader_free()` after
+/// a successful registration (return value 0).
+#[allow(clippy::std_instead_of_core)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_register_loader(
+    rt: *mut OpaqueRuntime,
+    loader_ptr: *mut std::ffi::c_void,
+) -> u32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if rt.is_null() || loader_ptr.is_null() {
+            set_last_error("null argument in polyplug_runtime_register_loader");
+            return 1u32;
+        }
+        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_new per ABI contract.
+        // loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib compiled
+        // against the same polyplug rlib. The double-box pattern preserves the fat pointer through
+        // the c_void erasure. Reconstituting via Box::from_raw as *mut Box<dyn BundleLoader> is valid
+        // because both sides agree on the layout via the shared rlib. Ownership is transferred here.
+        let runtime: &mut Runtime = unsafe { &mut (*rt).0 };
+        let loader: Box<dyn BundleLoader> =
+            unsafe { *Box::from_raw(loader_ptr as *mut Box<dyn BundleLoader>) };
+        match runtime.register_loader(loader) {
+            Ok(()) => 0u32,
+            Err(e) => {
+                set_last_error(e.to_string());
+                2u32
+            }
+        }
+    }))
+    .unwrap_or_else(|_| {
+        set_last_error("panic in polyplug_runtime_register_loader");
+        1u32
     })
 }
 

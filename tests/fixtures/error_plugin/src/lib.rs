@@ -207,7 +207,7 @@ pub struct ChainArgs {
 extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiError {
     let msg: &[u8] = b"test error from plugin";
     let len: usize = msg.len(); // 22 bytes
-    // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
+                                // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
     let ptr: *mut u8 = unsafe { polyplug_host_alloc(len, 1) };
     if ptr.is_null() {
         return AbiError {
@@ -334,7 +334,7 @@ static ERROR_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
 // ─── ABI Exports ─────────────────────────────────────────────────────────────
 
 /// ABI version sentinel — loader checks this before calling polyplug_init.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     1
 }
@@ -344,7 +344,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     registrar: *mut PluginRegistrar,
     ctx: *const PluginContext,

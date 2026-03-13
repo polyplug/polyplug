@@ -27,7 +27,7 @@ pub use allocator::polyplug_host_free;
 
 /// ABI version sentinel. Bundles MUST export this function.
 /// The loader checks this before calling polyplug_init.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     abi::POLYPLUG_ABI_VERSION
 }
@@ -37,7 +37,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 //
 //  For MVP: creates a Runtime using RuntimeBuilder with empty config.
 //  Full implementation processes config.plugin_dirs and config.extensions.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn polyplug_runtime_init(
     _config: *const abi::RuntimeConfig,
 ) -> *mut runtime::Runtime {
@@ -55,7 +55,7 @@ pub extern "C" fn polyplug_runtime_init(
 /// # Safety
 /// `runtime` must be a valid non-null pointer previously returned by
 /// `polyplug_runtime_init`. Must not be called more than once.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_destroy(runtime: *mut runtime::Runtime) {
     if runtime.is_null() {
         return;
@@ -69,7 +69,7 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(runtime: *mut runtime::Runtime
 ///
 /// # Safety
 /// Callable from any thread after `polyplug_runtime_init` returns.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_find_by_contract(
     contract_id: u64,
     min_version: u32,
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn polyplug_find_by_contract(
 ///
 /// # Safety
 /// Callable from any thread after `polyplug_runtime_init` returns.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_find_by_bundle(
     bundle_id: u64,
     contract_id: u64,
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn polyplug_find_by_bundle(
 ///
 /// # Safety
 /// `out` must point to a valid buffer of at least `out_cap` `PluginHandle` elements.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_find_all_by_contract(
     contract_id: u64,
     min_version: u32,
@@ -114,7 +114,7 @@ pub unsafe extern "C" fn polyplug_find_all_by_contract(
 /// # Safety
 /// `handle` must be a valid, non-stale handle. The returned pointer is valid
 /// as long as the host runtime is alive.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_resolve_plugin(
     handle: abi::PluginHandle,
 ) -> *const abi::PluginVTable {
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn polyplug_resolve_plugin(
 ///
 /// # Safety
 /// `runtime` must be a valid non-null pointer to a live Runtime.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_get_extension(
     _runtime: *const runtime::Runtime,
     _extension_id: u32,

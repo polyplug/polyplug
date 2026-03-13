@@ -1,17 +1,24 @@
-CXX := g++
+CXX      := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -O2
 INCLUDES := -I../../.. -I../../../host-libs/cpp
-LDFLAGS := -L../../../examples/hosts/js/target/debug -lpolyplug_full -ldl -pthread -Wl,-rpath,'$$ORIGIN/../../../examples/hosts/js/target/debug'
+LDFLAGS  := -L../../../target/debug -lpolyplug -ldl -pthread \
+            -Wl,-rpath,'$$ORIGIN/../../../target/debug'
 
-TARGET := polyplug_host_cpp
-SRC := main.cpp
+PIPELINE_TARGET := polyplug_host_cpp
+PIPELINE_SRC    := main.cpp
 
-.PHONY: all clean
+HOST_TARGET := host
+HOST_SRC    := host.cpp
 
-all: $(TARGET)
+.PHONY: all host clean
 
-$(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $(SRC) $(LDFLAGS)
+all: $(PIPELINE_TARGET) $(HOST_TARGET)
+
+$(PIPELINE_TARGET): $(PIPELINE_SRC)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
+
+$(HOST_TARGET): $(HOST_SRC)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(PIPELINE_TARGET) $(HOST_TARGET)

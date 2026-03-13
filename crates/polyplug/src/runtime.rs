@@ -456,6 +456,32 @@ impl Runtime {
         &self.loaders
     }
 
+    /// Register an additional bundle loader into this runtime after build.
+    ///
+    /// `loader` must be a `Box<dyn BundleLoader>` produced by a loader cdylib compiled
+    /// against the same polyplug rlib. Ownership is transferred — the caller must not
+    /// free the loader after a successful call.
+    ///
+    /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
+    /// loader for the same runtime name is already registered.
+    pub fn register_loader(
+        &mut self,
+        loader: Box<dyn BundleLoader>,
+    ) -> Result<(), RuntimeError> {
+        let names: Vec<String> = loader.runtime_names();
+        for name in &names {
+            if self.loaders.contains_key(name.as_str()) {
+                return Err(RuntimeError::Loader(LoaderError::DuplicateLoader {
+                    runtime_name: name.clone(),
+                }));
+            }
+        }
+        if let Some(primary_name) = names.into_iter().next() {
+            self.loaders.insert(primary_name, loader);
+        }
+        Ok(())
+    }
+
     /// Test-only accessor for reload_libraries count. Used by integration tests.
     #[cfg(test)]
     pub fn test_reload_libraries_count(&self) -> usize {
