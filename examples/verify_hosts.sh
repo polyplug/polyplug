@@ -105,59 +105,38 @@ printf "\n"
 
 # ── Rust host ────────────────────────────────────────────────────────────────
 RUST_HOST_DIR="${HOSTS_DIR}/rust"
-if [[ -d "${RUST_HOST_DIR}" ]]; then
+if [[ -f "${RUST_HOST_DIR}/run.sh" ]]; then
     run_host "rust  rust" \
-        cargo run --quiet --manifest-path "${RUST_HOST_DIR}/Cargo.toml"
+        bash "${RUST_HOST_DIR}/run.sh"
 else
-    skip_host "rust  rust" "directory not found: ${RUST_HOST_DIR}"
+    skip_host "rust  rust" "run.sh not found: ${RUST_HOST_DIR}/run.sh"
 fi
 
 # ── C++ host ─────────────────────────────────────────────────────────────────
-CPP_HOST_BIN="${HOSTS_DIR}/cpp/host"
-if [[ -f "${CPP_HOST_BIN}" ]]; then
-    run_host "cpp   cpp/host" "${CPP_HOST_BIN}"
-elif command -v make &>/dev/null && [[ -f "${HOSTS_DIR}/cpp/Makefile" ]]; then
-    # Attempt to build first, then run
-    make --quiet -C "${HOSTS_DIR}/cpp" 2>/dev/null || true
-    if [[ -f "${CPP_HOST_BIN}" ]]; then
-        run_host "cpp   cpp/host" "${CPP_HOST_BIN}"
-    else
-        skip_host "cpp   cpp/host" "binary not found after make; run 'make' in hosts/cpp"
-    fi
+CPP_HOST_DIR="${HOSTS_DIR}/cpp"
+if [[ -f "${CPP_HOST_DIR}/run.sh" ]]; then
+    run_host "cpp   cpp" \
+        bash "${CPP_HOST_DIR}/run.sh"
 else
-    skip_host "cpp   cpp/host" "binary not found at hosts/cpp/host; build with 'make'"
+    skip_host "cpp   cpp" "run.sh not found: ${CPP_HOST_DIR}/run.sh"
 fi
 
 # ── Python host ──────────────────────────────────────────────────────────────
-PYTHON_HOST="${HOSTS_DIR}/python/host.py"
-if [[ -f "${PYTHON_HOST}" ]]; then
-    if command -v python3 &>/dev/null; then
-        run_host "python python/host.py" python3 "${PYTHON_HOST}"
-    else
-        skip_host "python python/host.py" "python3 not found"
-    fi
+PYTHON_HOST_DIR="${HOSTS_DIR}/python"
+if [[ -f "${PYTHON_HOST_DIR}/run.sh" ]]; then
+    run_host "python python" \
+        bash "${PYTHON_HOST_DIR}/run.sh"
 else
-    skip_host "python python/host.py" "file not found: ${PYTHON_HOST}"
+    skip_host "python python" "run.sh not found: ${PYTHON_HOST_DIR}/run.sh"
 fi
 
 # ── Lua host ─────────────────────────────────────────────────────────────────
-LUA_HOST="${HOSTS_DIR}/lua/host.lua"
-if [[ -f "${LUA_HOST}" ]]; then
-    # The Lua host may be backed by a Rust dylib — try lua / luajit
-    LUA_BIN=""
-    for candidate in luajit lua lua5.4 lua5.3; do
-        if command -v "${candidate}" &>/dev/null; then
-            LUA_BIN="${candidate}"
-            break
-        fi
-    done
-    if [[ -n "${LUA_BIN}" ]]; then
-        run_host "lua   lua/host.lua" "${LUA_BIN}" "${LUA_HOST}"
-    else
-        skip_host "lua   lua/host.lua" "no lua interpreter found (tried luajit, lua, lua5.4, lua5.3)"
-    fi
+LUA_HOST_DIR="${HOSTS_DIR}/lua"
+if [[ -f "${LUA_HOST_DIR}/run.sh" ]]; then
+    run_host "lua   lua" \
+        bash "${LUA_HOST_DIR}/run.sh"
 else
-    skip_host "lua   lua/host.lua" "file not found: ${LUA_HOST}"
+    skip_host "lua   lua" "run.sh not found: ${LUA_HOST_DIR}/run.sh"
 fi
 
 # ── C# host ──────────────────────────────────────────────────────────────────
