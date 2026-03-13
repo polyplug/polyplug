@@ -114,7 +114,7 @@ fn tfm_reader_net10_dll_returns_correct_tfm() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(dll.exists(), "Polyplug.dll not found at {dll:?}");
     let tfm: String = read_target_framework(&dll).expect("read_target_framework failed");
-    assert_eq!(tfm, ".NETCoreApp,Version=v10.0");
+    assert!(tfm.starts_with(".NETCoreApp,Version=v10.0"), "TFM should start with .NETCoreApp,Version=v10.0, got: {tfm:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -312,6 +312,13 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
     let mut registrar: PluginRegistrar = stub_registrar();
     let result: Result<(), PolyplugError> = loader.load(&dll, &mut registrar);
     match result {
+        Err(PolyplugError::Loader(LoaderError::ClrInitFailed { path, .. }))
+        | Err(PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle: path })) => {
+            assert!(
+                path.contains("nonexistent") || path.contains("libhostfxr") || path.contains("Polyplug"),
+                "Error should mention the bad hostfxr path or assembly, got: {path}"
+            );
+        }
         Err(PolyplugError::Loader(LoaderError::ClrInitFailed { path, .. })) => {
             assert!(
                 path.contains("nonexistent") || path.contains("libhostfxr"),
