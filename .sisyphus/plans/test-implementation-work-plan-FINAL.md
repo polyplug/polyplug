@@ -779,7 +779,7 @@ Wave FINAL (Verification & Documentation - After ALL):
 
 ### Wave 5: Codegen & Integration
 
-- [ ] **Task 16: Cross-Language Type Mapping Tests (FOCUSED)**
+- [x] **Task 16: Cross-Language Type Mapping Tests (FOCUSED)**
 
   **What to do**: Verify type mappings for UNCOVERED edge cases (NOT general verification)
 
@@ -821,7 +821,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add cross-language type mapping edge case tests`
   - Files: `crates/polyplug_codegen/tests/type_mapping_edge_cases.rs`
 
-- [ ] **Task 17: Generator Output Correctness Tests (FOCUSED)**
+- [x] **Task 17: Generator Output Correctness Tests (FOCUSED)**
 
   **What to do**: Verify specific UNCOVERED correctness aspects
 
@@ -858,7 +858,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add generator correctness edge case tests`
   - Files: `crates/polyplug_codegen/tests/generator_correctness.rs`
 
-- [ ] **Task 18: Pack Command Tests**
+- [x] **Task 18: Pack Command Tests**
 
   **What to do**: Test pack command scaffold generation
 
