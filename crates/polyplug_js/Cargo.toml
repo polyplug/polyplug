@@ -15,5 +15,7 @@ polyplug = { workspace = true }
 rquickjs = { workspace = true, features = ["parallel"] }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+tempfile = { workspace = true }
 [lints]
 workspace = true

@@ -619,7 +619,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add .NET loader tests`
   - Files: `crates/polyplug_dotnet/tests/dotnet_loader.rs`
 
-- [ ] **Task 12: QuickJS Loader Tests**
+- [x] **Task 12: QuickJS Loader Tests**
 
   **What to do**: Test polyplug_js loader
 
