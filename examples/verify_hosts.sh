@@ -104,12 +104,12 @@ printf "%-50s\n" "$(printf '%.0s─' {1..50})"
 printf "\n"
 
 # ── Rust host ────────────────────────────────────────────────────────────────
-RUST_HOST_DIR="${HOSTS_DIR}/rust_host"
+RUST_HOST_DIR="${HOSTS_DIR}/rust_minimal"
 if [[ -d "${RUST_HOST_DIR}" ]]; then
-    run_host "rust  rust_host" \
+    run_host "rust  rust_minimal" \
         cargo run --quiet --manifest-path "${RUST_HOST_DIR}/Cargo.toml"
 else
-    skip_host "rust  rust_host" "directory not found: ${RUST_HOST_DIR}"
+    skip_host "rust  rust_minimal" "directory not found: ${RUST_HOST_DIR}"
 fi
 
 # ── C++ host ─────────────────────────────────────────────────────────────────
@@ -194,11 +194,11 @@ else
     skip_host "js    js/host.ts (deno)" "file not found: ${JS_HOST}"
 fi
 
-# ── Rust host (rust/) ─────────────────────────────────────────────────────────
-# Some repos also have a separate hosts/rust/ directory
-RUST_ALT_DIR="${HOSTS_DIR}/rust"
+# ── Rust host (rust_showcase/) ────────────────────────────────────────────────
+# Full showcase host that runs all plugins and pipelines
+RUST_ALT_DIR="${HOSTS_DIR}/rust_showcase"
 if [[ -d "${RUST_ALT_DIR}" && -f "${RUST_ALT_DIR}/Cargo.toml" ]]; then
-    run_host "rust  rust/host" \
+    run_host "rust  rust_showcase/host" \
         cargo run --quiet --manifest-path "${RUST_ALT_DIR}/Cargo.toml"
 fi
 

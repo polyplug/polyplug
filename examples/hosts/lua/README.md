@@ -25,13 +25,13 @@ This produces `examples/hosts/lua/target/debug/libpolyplug_lua_host.so`.
 ## Build the guest plugins
 
 ```bash
-./examples/build.sh
+./examples/build_guests.sh
 ```
 
 Or build specific languages:
 
 ```bash
-./examples/build.sh rust cpp lua
+./examples/build_guests.sh rust cpp lua
 ```
 
 ## Running

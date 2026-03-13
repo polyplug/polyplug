@@ -16,7 +16,7 @@ This example demonstrates the full polyplug hosting workflow from C#:
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - The `libpolyplug.so` native library (built from the Rust crate in `crates/polyplug/`)
-- Guest plugins built (see `examples/build.sh`)
+- Guest plugins built (see `examples/build_guests.sh`)
 
 ## Building
 
@@ -25,7 +25,7 @@ This example demonstrates the full polyplug hosting workflow from C#:
 cargo build -p polyplug
 
 # Build all guest plugins
-./examples/build.sh
+./examples/build_guests.sh
 
 # Build this host
 dotnet build examples/hosts/csharp/Host.csproj

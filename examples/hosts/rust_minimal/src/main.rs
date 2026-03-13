@@ -67,7 +67,7 @@ unsafe fn call_transform(
 }
 
 fn main() -> Result<(), HostError> {
-    println!("=== polyplug rust_host example ===");
+    println!("=== polyplug rust_minimal example ===");
 
     let plugin_dir: PathBuf = PathBuf::from("examples/guests/rust");
     println!("Scanning: {}", plugin_dir.display());
@@ -85,7 +85,7 @@ fn main() -> Result<(), HostError> {
             println!(
                 "  cargo build --release --manifest-path examples/guests/rust/decoder/Cargo.toml"
             );
-            println!("=== rust_host example complete (no guests loaded) ===");
+            println!("=== rust_minimal example complete (no guests loaded) ===");
             return Ok(());
         }
     };
@@ -93,7 +93,7 @@ fn main() -> Result<(), HostError> {
 
     let vtable: *const PluginVTable = runtime.resolve_plugin(handle)?;
 
-    let input_str: &str = "hello from rust_host";
+    let input_str: &str = "hello from rust_minimal";
     let input_sv: StringView = StringView {
         ptr: input_str.as_ptr(),
         len: input_str.len(),
@@ -118,6 +118,6 @@ fn main() -> Result<(), HostError> {
         println!("Plugin result: {result}");
     }
 
-    println!("=== rust_host example complete ===");
+    println!("=== rust_minimal example complete ===");
     Ok(())
 }

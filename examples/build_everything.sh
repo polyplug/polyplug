@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# examples/build_all.sh — Build all polyplug guest examples with PASS/FAIL reporting
+# examples/build_everything.sh — Build all polyplug guest examples with PASS/FAIL reporting
 #
 # Compiles or verifies all 12 guest plugin examples across all languages:
 #   Native   : polyplug_native crate      (cargo build --release -p polyplug_native)
@@ -14,8 +14,8 @@
 # Exits 0 if all examples pass, non-zero if any fail.
 #
 # Usage:
-#   bash examples/build_all.sh
-#   ./examples/build_all.sh
+#   bash examples/build_everything.sh
+#   ./examples/build_everything.sh
 
 set -uo pipefail
 

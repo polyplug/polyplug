@@ -1,4 +1,4 @@
-=== polyplug rust_host example ===
+=== polyplug rust_minimal example ===
 Scanning: examples/guests/rust
 Found plugin for contract 0x133E62ABD6E7D5BE
 Error: CallFailed { code: 1 }

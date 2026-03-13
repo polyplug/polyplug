@@ -1,10 +1,10 @@
 [package]
-name = "rust_host"
+name = "rust_minimal"
 version = "0.1.0"
 edition = { workspace = true }
 
 [[bin]]
-name = "rust_host"
+name = "rust_minimal"
 path = "src/main.rs"
 
 [dependencies]

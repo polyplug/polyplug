@@ -2505,7 +2505,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_host"
+name = "rust_minimal"
 version = "0.1.0"
 dependencies = [
  "polyplug",

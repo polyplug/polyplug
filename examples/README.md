@@ -7,7 +7,7 @@ This directory contains the canonical examples for the **polyplug** plugin runti
 - **`hosts/`**: Host runtimes that load and execute polyplug bundles.
 - **`guests/`**: Guest plugins implementing specific contracts.
 - **`abi_types.md`**: Canonical reference for the `DataRecord` ABI type used by these examples.
-- **`build.sh`**: Master build script for all guest plugins.
+- **`build_guests.sh`**: Master build script for all guest plugins.
 - **`contract_ids.txt`**: Registry of contract IDs used across these examples.
 - **`api.toml`**: The API definition used by `polyplugc` to generate bindings.
 
@@ -103,13 +103,13 @@ In contrast, **QuickJS uses no TLS**. It allocates all state on the heap and pas
 To build all guest plugins across all languages, run the master build script from the repository root:
 
 ```bash
-./examples/build.sh
+./examples/build_guests.sh
 ```
 
 You can also build specific languages:
 
 ```bash
-./examples/build.sh rust cpp
+./examples/build_guests.sh rust cpp
 ```
 
 Individual language build scripts are located at `examples/guests/<lang>/build.sh`.

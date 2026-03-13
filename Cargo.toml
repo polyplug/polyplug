@@ -12,7 +12,7 @@ members = [
     "host-libs/rust",
     "guest-libs/rust",
     "tests/integration",
-    "examples/hosts/rust_host",
+    "examples/hosts/rust_minimal",
 ]
 
 [workspace.package]

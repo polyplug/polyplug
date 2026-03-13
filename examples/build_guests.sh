@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# examples/build.sh — Master build script for all polyplug example guests
+# examples/build_guests.sh — Master build script for all polyplug example guests
 #
 # Delegates to per-language build scripts under examples/guests/<lang>/build.sh
 # Run from the repository root or from within examples/.
