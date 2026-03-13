@@ -405,7 +405,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add parser error handling tests`
   - Files: `crates/polyplug_codegen/tests/parser_errors.rs`
 
-- [ ] **Task 7: TOML Malformed Input Tests**
+- [x] **Task 7: TOML Malformed Input Tests**
 
   **What to do**: Test TOML parsing edge cases
 
