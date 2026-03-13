@@ -2,6 +2,8 @@
 # examples/build_all.sh — Build all polyplug guest examples with PASS/FAIL reporting
 #
 # Compiles or verifies all 12 guest plugin examples across all languages:
+#   Native   : polyplug_native crate      (cargo build --release -p polyplug_native)
+#   Native   : native example plugin      (cargo build --release)
 #   Rust     : decoder, encoder           (cargo build --release)
 #   C++      : transformer, validator     (make)
 #   C#       : encoder, reporter          (dotnet build --configuration Release)
@@ -185,12 +187,89 @@ run_js_example() {
     fi
 }
 
+# ---------------------------------------------------------------------------
+# run_workspace_crate LABEL CMD...
+#   Runs CMD from the repository root (for workspace-level crates).
+# ---------------------------------------------------------------------------
+run_workspace_crate() {
+    local label="$1"
+    shift
+    local cmd=("$@")
+    local repo_root
+    repo_root="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+    printf "  %-28s " "${label} ..."
+
+    local log
+    log=$(
+        cd "${repo_root}" || exit 1
+        "${cmd[@]}" 2>&1
+    )
+    local exit_code=$?
+
+    if [[ ${exit_code} -eq 0 ]]; then
+        printf "${GREEN}PASS${RESET}\n"
+        RESULTS+=("PASS  ${label}")
+        (( PASS_COUNT += 1 ))
+    else
+        printf "${RED}FAIL${RESET}\n"
+        RESULTS+=("FAIL  ${label}")
+        (( FAIL_COUNT += 1 ))
+        echo "${log}" | sed 's/^/        /' >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# run_dir_example LABEL DIR CMD...
+#   Runs CMD in an arbitrary directory (not constrained to GUESTS_DIR layout).
+# ---------------------------------------------------------------------------
+run_dir_example() {
+    local label="$1"
+    local dir="$2"
+    shift 2
+    local cmd=("$@")
+
+    printf "  %-28s " "${label} ..."
+
+    if [[ ! -d "${dir}" ]]; then
+        printf "${YELLOW}SKIP${RESET} (directory not found: %s)\n" "${dir}"
+        RESULTS+=("SKIP  ${label}")
+        return
+    fi
+
+    local log
+    log=$(
+        cd "${dir}" || exit 1
+        "${cmd[@]}" 2>&1
+    )
+    local exit_code=$?
+
+    if [[ ${exit_code} -eq 0 ]]; then
+        printf "${GREEN}PASS${RESET}\n"
+        RESULTS+=("PASS  ${label}")
+        (( PASS_COUNT += 1 ))
+    else
+        printf "${RED}FAIL${RESET}\n"
+        RESULTS+=("FAIL  ${label}")
+        (( FAIL_COUNT += 1 ))
+        echo "${log}" | sed 's/^/        /' >&2
+    fi
+}
+
 # ===========================================================================
 # MAIN
 # ===========================================================================
 
 printf "\n${BOLD}polyplug — build all guest examples${RESET}\n"
 printf "%-30s\n" "$(printf '%.0s─' {1..50})"
+
+# ── Native loader ───────────────────────────────────────────────────────────
+printf "\n${BOLD}[native loader]${RESET}  cargo build --release -p polyplug_native\n"
+run_workspace_crate polyplug_native  cargo build --release -p polyplug_native
+
+# ── Native example plugin ────────────────────────────────────────────────────
+printf "\n${BOLD}[native example]${RESET}  cargo build --release\n"
+run_dir_example "native/plugin" "${GUESTS_DIR}/native"  cargo build --release
 
 # ── Rust ────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}[rust]${RESET}  cargo build --release\n"
