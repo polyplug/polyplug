@@ -45,12 +45,12 @@ fn so_filename() -> &'static str {
     }
 }
 
-/// Run `polyplugc generate --api <api_toml> --lang rust --out <out_dir>`.
-fn run_polyplugc_rust(api_toml: &Path, out_dir: &Path) -> Output {
+/// Run `polyplugc generate --bundle <bundle_toml> --lang rust --out <out_dir>`.
+fn run_polyplugc_rust(bundle_toml: &Path, out_dir: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_polyplugc"))
         .arg("generate")
-        .arg("--api")
-        .arg(api_toml)
+        .arg("--bundle")
+        .arg(bundle_toml)
         .arg("--lang")
         .arg("rust")
         .arg("--out")
@@ -59,12 +59,12 @@ fn run_polyplugc_rust(api_toml: &Path, out_dir: &Path) -> Output {
         .expect("failed to spawn polyplugc")
 }
 
-/// Run `polyplugc generate --api <api_toml> --lang cpp --out <out_dir>`.
-fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
+/// Run `polyplugc generate --bundle <bundle_toml> --lang cpp --out <out_dir>`.
+fn run_polyplugc_cpp(bundle_toml: &Path, out_dir: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_polyplugc"))
         .arg("generate")
-        .arg("--api")
-        .arg(api_toml)
+        .arg("--bundle")
+        .arg(bundle_toml)
         .arg("--lang")
         .arg("cpp")
         .arg("--out")
@@ -214,16 +214,16 @@ fn smoke_rust_codegen_dispatch() {
     // ── 1. Paths ──────────────────────────────────────────────────────────────
     let tmp_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_rust_test");
     let src_dir: PathBuf = tmp_dir.join("src");
-    let api_toml: PathBuf = workspace_root()
+    let bundle_toml: PathBuf = workspace_root()
         .join("tests")
         .join("fixtures")
-        .join("test_api.toml");
+        .join("test_bundle.toml");
     let guest_lib_path: PathBuf = workspace_root().join("guest-libs").join("rust");
 
     std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
     // ── 2. Run polyplugc to generate Rust bindings into tmp_dir/src/ ──────────
-    let gen_output: Output = run_polyplugc_rust(&api_toml, &src_dir);
+    let gen_output: Output = run_polyplugc_rust(&bundle_toml, &src_dir);
     assert!(
         gen_output.status.success(),
         "polyplugc generate --lang rust failed:\nstdout: {}\nstderr: {}",
@@ -350,15 +350,15 @@ fn smoke_rust_codegen_dispatch() {
 fn smoke_cpp_codegen_dispatch() {
     // ── 1. Paths ──────────────────────────────────────────────────────────────
     let out_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_gen");
-    let api_toml: PathBuf = workspace_root()
+    let bundle_toml: PathBuf = workspace_root()
         .join("tests")
         .join("fixtures")
-        .join("test_api.toml");
+        .join("test_bundle.toml");
 
     std::fs::create_dir_all(&out_dir).expect("failed to create cpp out_dir");
 
     // ── 2. Run polyplugc to generate C++ bindings ─────────────────────────────
-    let gen_output: Output = run_polyplugc_cpp(&api_toml, &out_dir);
+    let gen_output: Output = run_polyplugc_cpp(&bundle_toml, &out_dir);
     assert!(
         gen_output.status.success(),
         "polyplugc generate --lang cpp failed:\nstdout: {}\nstderr: {}",
@@ -366,29 +366,34 @@ fn smoke_cpp_codegen_dispatch() {
         String::from_utf8_lossy(&gen_output.stderr),
     );
 
-    // ── 3. Assert all 6 expected files exist ─────────────────────────────────
-    let expected_files: [&str; 6] = [
+    let guest_dir: PathBuf = out_dir.join("guest");
+
+    // ── 3. Assert all 5 expected guest files exist ──────────────────────────
+    let expected_guest_files: [&str; 4] = [
         "types.hpp",
         "contracts.hpp",
         "vtables.hpp",
         "init.hpp",
-        "host_callers.hpp",
-        "manifest.toml",
     ];
-    for filename in expected_files {
-        let file_path: PathBuf = out_dir.join(filename);
+    for filename in expected_guest_files {
+        let file_path: PathBuf = guest_dir.join(filename);
         assert!(
             file_path.exists(),
-            "expected generated C++ file not found: {}",
+            "expected generated C++ guest file not found: {}",
             file_path.display()
         );
     }
-
-    println!(
-        "smoke_cpp_codegen_dispatch: all 6 C++ files present in {} ✓",
-        out_dir.display()
+    let manifest_path: PathBuf = out_dir.join("manifest.toml");
+    assert!(
+        manifest_path.exists(),
+        "expected manifest.toml not found: {}",
+        manifest_path.display()
     );
 
+    println!(
+        "smoke_cpp_codegen_dispatch: all 5 C++ guest files present in {} ✓",
+        out_dir.display()
+    );
     // ── 4. Attempt g++ compile of vtables.hpp (skip if g++ not found) ────────
     let gpp_version_result: std::io::Result<std::process::Output> =
         Command::new("g++").args(["--version"]).output();
@@ -396,14 +401,14 @@ fn smoke_cpp_codegen_dispatch() {
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
             let host_libs_cpp: PathBuf = workspace_root().join("host-libs").join("cpp");
-            let vtables_hpp: PathBuf = out_dir.join("vtables.hpp");
+            let vtables_hpp: PathBuf = guest_dir.join("vtables.hpp");
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_vtables.o");
 
             let compile_result: std::process::Output = Command::new("g++")
                 .arg("-std=c++20")
                 .arg(format!("-I{}", host_libs_cpp.display()))
-                .arg(format!("-I{}", out_dir.display()))
+                .arg(format!("-I{}", guest_dir.display()))
                 .arg(&vtables_hpp)
                 .arg("-c")
                 .arg("-o")

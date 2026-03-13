@@ -4,6 +4,7 @@ pub mod ir;
 pub mod pack;
 pub mod parser;
 
+use std::fs;
 use std::path::PathBuf;
 
 pub use error::PolyplugcError;
@@ -71,7 +72,10 @@ pub struct PackConfig {
 pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
     use crate::generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
 
-    let ir: ValidatedIr = if config.api_toml.ends_with("bundle.toml") {
+    let file_content: String = fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
+        PolyplugcError::ReadFailed { path: config.api_toml.to_string_lossy().to_string(), source: e }
+    })?;
+    let ir: ValidatedIr = if file_content.contains("[bundle]") {
         parser::parse_bundle_with_api(&config.api_toml)?
     } else {
         parser::parse_api(&config.api_toml)?

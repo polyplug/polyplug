@@ -128,15 +128,24 @@ struct AddArgs {
 fn test_cpp_codegen_files_exist() {
     // ── 1. Paths ──────────────────────────────────────────────────────────────
     let out_dir: PathBuf = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("gen_cpp_codegen");
-    let api_toml: PathBuf = workspace_root()
+    let bundle_toml: PathBuf = workspace_root()
         .join("tests")
         .join("fixtures")
-        .join("test_api.toml");
+        .join("test_bundle.toml");
 
     std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
     // ── 2. Run polyplugc to generate C++ bindings ─────────────────────────────
-    let gen_output: Output = run_polyplugc_cpp(&api_toml, &out_dir);
+    let gen_output: Output = Command::new(env!("CARGO_BIN_EXE_polyplugc"))
+        .arg("generate")
+        .arg("--bundle")
+        .arg(&bundle_toml)
+        .arg("--lang")
+        .arg("cpp")
+        .arg("--out")
+        .arg(&out_dir)
+        .output()
+        .expect("failed to spawn polyplugc");
     assert!(
         gen_output.status.success(),
         "polyplugc generate --lang cpp failed:\nstdout: {}\nstderr: {}",
@@ -144,10 +153,8 @@ fn test_cpp_codegen_files_exist() {
         String::from_utf8_lossy(&gen_output.stderr),
     );
 
-    // ── 3. Assert all 7 expected files exist ─────────────────────────────
-    let expected_files: [&str; 7] = [
-        "host/types.hpp",
-        "host/host_callers.hpp",
+    // ── 3. Assert all 5 expected guest-side files exist ─────────────────────
+    let expected_files: [&str; 5] = [
         "guest/types.hpp",
         "guest/contracts.hpp",
         "guest/vtables.hpp",
@@ -164,7 +171,7 @@ fn test_cpp_codegen_files_exist() {
     }
 
     println!(
-        "test_cpp_codegen_files_exist: all 7 files present in {} ✓",
+        "test_cpp_codegen_files_exist: all 5 guest files present in {} ✓",
         out_dir.display()
     );
 

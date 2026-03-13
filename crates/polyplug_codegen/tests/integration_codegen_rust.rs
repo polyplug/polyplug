@@ -42,11 +42,11 @@ fn so_filename() -> &'static str {
 // ─── Helper: generate code using library API ─────────────────────────────────
 
 /// Use polyplug_codegen::generate() to generate Rust bindings.
-fn generate_rust_bindings(api_toml: &Path, out_dir: &Path) {
+fn generate_rust_bindings(api_toml: &Path, out_dir: &Path, side: Side) {
     let config = GenerateConfig {
         api_toml: api_toml.to_path_buf(),
         lang: Lang::Rust,
-        side: Side::Host,
+        side,
         out_dir: out_dir.to_path_buf(),
     };
 
@@ -214,13 +214,13 @@ fn test_rust_codegen_compile_and_run() {
     let api_toml: PathBuf = workspace_root()
         .join("tests")
         .join("fixtures")
-        .join("test_api.toml");
+        .join("test_bundle.toml");
     let guest_lib_path: PathBuf = workspace_root().join("guest-libs").join("rust");
 
     std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
     // ── 2. Generate Rust bindings using library API ───────────────────────────
-    generate_rust_bindings(&api_toml, &src_dir);
+    generate_rust_bindings(&api_toml, &src_dir, Side::Guest);
 
     // ── 3. Write Cargo.toml + src/lib.rs ─────────────────────────────────────
     write_plugin_cargo_toml(&tmp_dir, &guest_lib_path);
@@ -345,12 +345,12 @@ fn test_rust_codegen_generates_enum_types() {
     let api_toml: PathBuf = workspace_root()
         .join("tests")
         .join("fixtures")
-        .join("test_api.toml");
+        .join("test_bundle.toml");
 
     std::fs::create_dir_all(&out_dir).expect("failed to create out_dir");
 
     // ── 2. Generate Rust bindings using library API ───────────────────────────
-    generate_rust_bindings(&api_toml, &out_dir);
+    generate_rust_bindings(&api_toml, &out_dir, Side::Host);
 
     // ── 3. Read host/types.rs and assert enum content ─────────────────────────
     let types_file: PathBuf = out_dir.join("host").join("types.rs");
