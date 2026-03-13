@@ -9,6 +9,7 @@ local REPO_ROOT = script_dir .. "../../.."
 package.path = REPO_ROOT .. "/host-libs/lua/?.lua;" .. package.path
 
 local polyplug = require("polyplug")
+local M = polyplug
 
 local function resolve_polyplug_so()
     local env_path = os.getenv("POLYPLUG_SO")
@@ -233,11 +234,11 @@ local function main()
 
     local rt = polyplug.Runtime.new()
     if not uses_full then
-        polyplug.register_native_loader(rt._ptr)
-        polyplug.register_dotnet_loader(rt._ptr, { min_framework = "10.0" })
-        polyplug.register_python_loader(rt._ptr, { min_version = "3.11" })
-        polyplug.register_lua_loader(rt._ptr)
-        polyplug.register_js_loader(rt._ptr)
+        M.register_native_loader(rt._ptr)
+        M.register_dotnet_loader(rt._ptr, { min_framework = "10.0" })
+        M.register_python_loader(rt._ptr, { min_version = "3.11" })
+        M.register_lua_loader(rt._ptr)
+        M.register_js_loader(rt._ptr)
     end
 
     local bundles = {

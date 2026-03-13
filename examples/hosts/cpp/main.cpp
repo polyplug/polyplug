@@ -11,6 +11,7 @@
 
 
 #include "../../../host-libs/cpp/polyplug/abi.hpp"
+#include "../../../host-libs/cpp/polyplug/loaders.hpp"
 
 struct DataRecord {
     StringView name;
@@ -317,6 +318,12 @@ int main() {
         std::cerr << msg << std::endl;
         return 1;
     }
+
+    polyplug::register_native_loader(runtime);
+    polyplug::register_dotnet_loader(runtime, "8.0");
+    polyplug::register_python_loader(runtime, "3.11");
+    polyplug::register_lua_loader(runtime);
+    polyplug::register_js_loader(runtime);
 
     try {
         std::vector<std::string> bundles = {
