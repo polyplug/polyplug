@@ -1,4 +1,26 @@
-=== polyplug rust_minimal example ===
-Scanning: examples/guests/rust
-Found plugin for contract 0x133E62ABD6E7D5BE
-Error: CallFailed { code: 1 }
+=== polyplug C# host example ===
+Loading 12 guest plugins...
+  [OK]   1/12 rust/decoder
+  [OK]   2/12 rust/encoder
+  [OK]   3/12 cpp/transformer
+  [OK]   4/12 cpp/validator
+  [OK]   5/12 csharp/encoder
+  [OK]   6/12 csharp/reporter
+  [OK]   7/12 python/decoder
+  [OK]   8/12 python/reporter
+  [OK]   9/12 lua/transformer
+  [OK]  10/12 lua/validator
+  [OK]  11/12 js/validator
+  [OK]  12/12 js/reporter
+--- Run 1: Rust decoder, C++ transformer, Rust encoder, C# reporter, C++ validator ---
+Run output: ALICE,HELLO,3
+Run summary: [REPORT] name=ALICE value=HELLO count=3
+Validation: ok (ok)
+--- Run 2: Python decoder, Lua transformer, C# encoder, Python reporter, Lua validator ---
+Run output: boB,dlrow,4
+Run summary: Summary: name=boB value=dlrow count=4
+Validation: ok (ok)
+--- Run 3: Rust decoder, C++ transformer, C# encoder, JS reporter, JS validator ---
+Run output: CARA,POLYPLUG,5
+Validation: invalid ()
+pipeline complete

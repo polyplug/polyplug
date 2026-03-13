@@ -1,10 +1,4 @@
 local ffi = require("ffi")
-local bit = require("bit")
-
-local band = bit.band
-local bxor = bit.bxor
-local lshift = bit.lshift
-local rshift = bit.rshift
 
 local script_dir = debug.getinfo(1, "S").source:match("^@(.*/)")
     or debug.getinfo(1, "S").source:match("^@(.*[/\\])")
@@ -30,7 +24,9 @@ local function resolve_polyplug_so()
     return REPO_ROOT .. "/target/debug/libpolyplug.so"
 end
 
-polyplug.load_lib(resolve_polyplug_so())
+local polyplug_so = resolve_polyplug_so()
+local uses_full = polyplug_so:match("libpolyplug_full%.so$") ~= nil
+polyplug.load_lib(polyplug_so)
 
 ffi.cdef([[
     typedef struct {
@@ -86,54 +82,27 @@ local VALIDATOR_CONTRACT_ID = u64(0x027ABCEB, 0xF8020D90)
 
 local ABI_OK = 0
 
-local function fnv1a_64(bytes)
-    local FNV_OFFSET_HI = 0xCBF29CE4
-    local FNV_OFFSET_LO = 0x84222325
-    local FNV_PRIME_HI = 0x00000100
-    local FNV_PRIME_LO = 0x000001B3
-
-    local function mul_u32(a, b)
-        local a0 = band(a, 0xFFFF)
-        local a1 = rshift(a, 16)
-        local b0 = band(b, 0xFFFF)
-        local b1 = rshift(b, 16)
-
-        local p0 = a0 * b0
-        local p1 = a0 * b1
-        local p2 = a1 * b0
-        local p3 = a1 * b1
-
-        local mid = p1 + p2
-        local mid_low = band(mid, 0xFFFF)
-        local mid_high = rshift(mid, 16)
-
-        local sum = p0 + lshift(mid_low, 16)
-        local low = band(sum, 0xFFFFFFFF)
-        local carry = math.floor(sum / 4294967296)
-        local high = band(p3 + mid_high + carry, 0xFFFFFFFF)
-        return high, low
-    end
-
-    local function mul_fnv(hi, lo)
-        local h0, l0 = mul_u32(lo, FNV_PRIME_LO)
-        local _, l1 = mul_u32(hi, FNV_PRIME_LO)
-        local _, l2 = mul_u32(lo, FNV_PRIME_HI)
-        local high = band(h0 + l1 + l2, 0xFFFFFFFF)
-        return high, l0
-    end
-
-    local hi = FNV_OFFSET_HI
-    local lo = FNV_OFFSET_LO
-    for i = 1, #bytes do
-        local b = bytes:byte(i)
-        lo = bxor(lo, b)
-        hi, lo = mul_fnv(hi, lo)
-    end
-    return u64(hi, lo)
-end
+local BUNDLE_IDS = {
+    csv_decoder = u64(0xD6F53BA8, 0x3407F000),
+    csv_encoder_rust = u64(0xC7446CF5, 0x7201A7C7),
+    uppercase_transformer = u64(0xFBBE8F11, 0x9042251F),
+    cpp_validator = u64(0x1713D101, 0x7E145ACB),
+    csv_encoder_csharp = u64(0xB6E9070A, 0x30405352),
+    csharp_reporter = u64(0x98DF9FDF, 0x2ED9A862),
+    python_decoder = u64(0xD3A0108C, 0xA8EE51B8),
+    summary_reporter = u64(0xC86FF959, 0x9218C091),
+    reverse_transformer = u64(0xE60135BE, 0x5CFA19D1),
+    lua_validator = u64(0xDD7F4D24, 0xD308A490),
+    js_reporter = u64(0x2B1A3DF0, 0x9EB4BA0A),
+    field_validator = u64(0x69D76824, 0x71854676),
+}
 
 local function bundle_id(name)
-    return fnv1a_64(name)
+    local id = BUNDLE_IDS[name]
+    if not id then
+        error("unknown bundle id for " .. name)
+    end
+    return id
 end
 
 local function call_vtable_fn(vtable_ptr, fn_index, args_ptr, out_ptr)
@@ -182,7 +151,7 @@ local function resolve_by_bundle(rt, bundle_name, contract_id)
     return get_vtable(rt, handle)
 end
 
-local function run_pipeline(label, decoder_vt, encoder_vt, transformer_vt, reporter_vt, validator_vt, input_csv)
+local function run_pipeline(label, decoder_vt, transformer_vt, encoder_vt, reporter_vt, validator_vt, input_csv)
     print("--- " .. label .. " ---")
 
     local input_buf = ffi.new("Buffer")
@@ -244,7 +213,7 @@ local function run_pipeline(label, decoder_vt, encoder_vt, transformer_vt, repor
         error(string.format("report failed: %s (code %d)", msg, report_err.code))
     end
     local report_str = string_view_to_str(report_sv)
-    if #report_str > 0 then
+    if report_str:match("%S") then
         print("Run summary: " .. report_str)
     end
 
@@ -263,11 +232,13 @@ local function main()
     print("=== polyplug C# host example ===")
 
     local rt = polyplug.Runtime.new()
-    polyplug.register_native_loader(rt._ptr)
-    polyplug.register_dotnet_loader(rt._ptr, { min_framework = "10.0" })
-    polyplug.register_python_loader(rt._ptr, { min_version = "3.11" })
-    polyplug.register_lua_loader(rt._ptr)
-    polyplug.register_js_loader(rt._ptr)
+    if not uses_full then
+        polyplug.register_native_loader(rt._ptr)
+        polyplug.register_dotnet_loader(rt._ptr, { min_framework = "10.0" })
+        polyplug.register_python_loader(rt._ptr, { min_version = "3.11" })
+        polyplug.register_lua_loader(rt._ptr)
+        polyplug.register_js_loader(rt._ptr)
+    end
 
     local bundles = {
         REPO_ROOT .. "/examples/guests/rust/decoder",
@@ -302,8 +273,8 @@ local function main()
     run_pipeline(
         "Run 1: Rust decoder, C++ transformer, Rust encoder, C# reporter, C++ validator",
         decoder_rust_vt,
-        encoder_rust_vt,
         transformer_cpp_vt,
+        encoder_rust_vt,
         reporter_csharp_vt,
         validator_cpp_vt,
         "Alice,hello,3\n"
@@ -312,8 +283,8 @@ local function main()
     run_pipeline(
         "Run 2: Python decoder, Lua transformer, C# encoder, Python reporter, Lua validator",
         decoder_python_vt,
-        encoder_csharp_vt,
         transformer_lua_vt,
+        encoder_csharp_vt,
         reporter_python_vt,
         validator_lua_vt,
         "Bob,world,4\n"
@@ -322,8 +293,8 @@ local function main()
     run_pipeline(
         "Run 3: Rust decoder, C++ transformer, C# encoder, JS reporter, JS validator",
         decoder_rust_vt,
-        encoder_csharp_vt,
         transformer_cpp_vt,
+        encoder_csharp_vt,
         reporter_js_vt,
         validator_js_vt,
         "Cara,polyplug,5\n"
