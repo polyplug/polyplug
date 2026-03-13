@@ -29,7 +29,10 @@ impl DotnetLoader {
     }
 }
 
-fn check_version_compatibility(tfm: &str, min_framework: &str) -> Result<(), PolyplugError> {
+pub(crate) fn check_version_compatibility(
+    tfm: &str,
+    min_framework: &str,
+) -> Result<(), PolyplugError> {
     if tfm.is_empty() {
         return Ok(());
     }
@@ -156,5 +159,154 @@ impl BundleLoader for DotnetLoader {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use polyplug::error::LoaderError;
+    use polyplug::error::PolyplugError;
+
+    use super::check_version_compatibility;
+
+    // --- empty TFM (non-.NET DLL) is always compatible ---
+
+    #[test]
+    fn empty_tfm_always_ok() {
+        let result: Result<(), PolyplugError> = check_version_compatibility("", "net10.0");
+        assert!(result.is_ok(), "empty TFM must be unconditionally accepted");
+    }
+
+    #[test]
+    fn empty_tfm_empty_min_framework_ok() {
+        let result: Result<(), PolyplugError> = check_version_compatibility("", "");
+        assert!(result.is_ok());
+    }
+
+    // --- same major version is compatible ---
+
+    #[test]
+    fn same_major_version_ok() {
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.0", "net6.0");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn same_major_minor_within_window_ok() {
+        // found minor (2) == required minor (0) + 2 → at the boundary → ok (not a warning trigger)
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.2", "net6.0");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn higher_minor_beyond_window_still_ok() {
+        // found minor (5) > required minor (0) + 2 → triggers eprintln warning but still Ok
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.5", "net6.0");
+        assert!(
+            result.is_ok(),
+            "version compat still succeeds despite minor warning"
+        );
+    }
+
+    #[test]
+    fn net7_assembly_against_net6_requirement_fails() {
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v7.0", "net6.0");
+        match result {
+            Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
+                assert_eq!(required, "net6.0");
+                assert_eq!(found, ".NETCoreApp,Version=v7.0");
+            }
+            other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn net6_assembly_against_net7_requirement_fails() {
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.0", "net7.0");
+        match result {
+            Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
+            other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn net10_assembly_against_net10_requirement_ok() {
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v10.0", "net10.0");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn tfm_without_prefix_parsed_as_raw_version() {
+        // When no ".NETCoreApp,Version=v" prefix is present, the TFM is parsed directly.
+        // "6.0" should parse as major=6 against net6.0 → ok.
+        let result: Result<(), PolyplugError> = check_version_compatibility("6.0", "net6.0");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn tfm_without_prefix_major_mismatch_fails() {
+        let result: Result<(), PolyplugError> = check_version_compatibility("7.0", "net6.0");
+        match result {
+            Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
+            other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+        }
+    }
+
+    // --- invalid framework strings ---
+
+    #[test]
+    fn invalid_min_framework_non_numeric_major_returns_error() {
+        // min_framework with non-numeric major after stripping "net" prefix.
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.0", "netXYZ.0");
+        match result {
+            Err(PolyplugError::Loader(LoaderError::InvalidFrameworkVersion { .. })) => {}
+            other => panic!("expected InvalidFrameworkVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_tfm_non_numeric_major_returns_error() {
+        // TFM with non-numeric major after stripping ".NETCoreApp,Version=v" prefix.
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=vBAD.0", "net6.0");
+        match result {
+            Err(PolyplugError::Loader(LoaderError::InvalidFrameworkVersion { .. })) => {}
+            other => panic!("expected InvalidFrameworkVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn min_framework_missing_major_returns_error() {
+        // Empty string after stripping "net" prefix — next() returns None → error.
+        // Input: "net" alone after strip_prefix gives "", split('.').next() = Some("") which parse fails.
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.0", "net");
+        match result {
+            Err(PolyplugError::Loader(LoaderError::InvalidFrameworkVersion { .. })) => {}
+            other => panic!("expected InvalidFrameworkVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn min_framework_no_minor_version_defaults_to_zero() {
+        // "net6" has no minor component — minor defaults to 0.
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6.0", "net6");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn tfm_no_minor_version_defaults_to_zero() {
+        // TFM with no minor component — found minor defaults to 0.
+        let result: Result<(), PolyplugError> =
+            check_version_compatibility(".NETCoreApp,Version=v6", "net6.0");
+        assert!(result.is_ok());
     }
 }
