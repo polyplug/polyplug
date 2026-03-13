@@ -14,7 +14,6 @@ export LD_PRELOAD="${REPO_ROOT}/target/debug/libpolyplug.so${LD_PRELOAD:+:${LD_P
 
 # Build the host binary if it doesn't exist yet
 if [ ! -f "${SCRIPT_DIR}/polyplug_host_cpp" ]; then
-    echo "[run.sh] Binary not found — running make..."
     make -C "${SCRIPT_DIR}" polyplug_host_cpp
 fi
 

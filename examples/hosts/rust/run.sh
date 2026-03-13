@@ -18,7 +18,6 @@ elif [[ -f "${DEBUG_BIN}" ]]; then
     HOST_BIN="${DEBUG_BIN}"
     LIB_DIR="${REPO_ROOT}/target/debug"
 else
-    echo "[run.sh] Binary not found — building in debug mode..."
     cargo build --manifest-path "${MANIFEST}"
     HOST_BIN="${DEBUG_BIN}"
     LIB_DIR="${REPO_ROOT}/target/debug"
@@ -30,9 +29,5 @@ export LD_LIBRARY_PATH="${LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 # Export LD_PRELOAD so libpolyplug.so symbols (e.g. polyplug_host_alloc) are
 # globally visible to plugins loaded with RTLD_LOCAL by the runtime
 export LD_PRELOAD="${LIB_DIR}/libpolyplug.so${LD_PRELOAD:+:${LD_PRELOAD}}"
-
-echo "[run.sh] Using binary : ${HOST_BIN}"
-echo "[run.sh] LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
-echo ""
 
 exec "${HOST_BIN}" "$@"
