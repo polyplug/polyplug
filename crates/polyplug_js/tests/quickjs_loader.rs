@@ -10,6 +10,7 @@ use core::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
 use polyplug::abi::PluginDescriptor;
@@ -17,7 +18,6 @@ use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
 use polyplug::loader::BundleLoader;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
@@ -112,7 +112,11 @@ unsafe extern "C" fn capture_register(
     // SAFETY: vtable is valid for the duration of this call (ABI contract).
     // contract_id, contract_version, and function_count are plain u32/u64 fields.
     let (contract_id, contract_version, function_count): (u64, u32, u32) = unsafe {
-        ((*vtable).contract_id, (*vtable).contract_version, (*vtable).function_count)
+        (
+            (*vtable).contract_id,
+            (*vtable).contract_version,
+            (*vtable).function_count,
+        )
     };
 
     CAPTURED.with(|cell: &RefCell<Option<CapturedRegistration>>| {
@@ -305,7 +309,9 @@ fn load_syntax_error_returns_error() {
     assert!(result.is_err(), "syntax error bundle must return Err");
 
     // The error must be a JsRuntimePanic mentioning the eval failure.
-    let err_str: String = result.expect_err("syntax error bundle must return Err").to_string();
+    let err_str: String = result
+        .expect_err("syntax error bundle must return Err")
+        .to_string();
     assert!(
         err_str.contains("js-quickjs"),
         "error must mention runtime name: {err_str}"
@@ -326,7 +332,9 @@ fn load_runtime_error_returns_error() {
     let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &mut registrar);
     assert!(result.is_err(), "runtime error bundle must return Err");
 
-    let err_str: String = result.expect_err("runtime error bundle must return Err").to_string();
+    let err_str: String = result
+        .expect_err("runtime error bundle must return Err")
+        .to_string();
     assert!(
         err_str.contains("js-quickjs"),
         "error must mention runtime name: {err_str}"
@@ -350,7 +358,9 @@ fn load_bundle_without_register_vtable_returns_error() {
         "bundle without registerVtable must return Err"
     );
 
-    let err_str: String = result.expect_err("bundle without registerVtable must return Err").to_string();
+    let err_str: String = result
+        .expect_err("bundle without registerVtable must return Err")
+        .to_string();
     assert!(
         err_str.contains("registerVtable"),
         "error must mention registerVtable: {err_str}"
@@ -375,7 +385,9 @@ fn load_bundle_null_vtable_pointer_returns_error() {
     let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &mut registrar);
     assert!(result.is_err(), "null vtable pointer must return Err");
 
-    let err_str: String = result.expect_err("null vtable pointer must return Err").to_string();
+    let err_str: String = result
+        .expect_err("null vtable pointer must return Err")
+        .to_string();
     assert!(
         err_str.contains("null vtable"),
         "error must mention null vtable: {err_str}"
@@ -519,7 +531,6 @@ fn vtable_contract_id_roundtrip() {
 
 // ── Trampoline dispatch ───────────────────────────────────────────────────────
 
-
 thread_local! {
     static TRAMPOLINE_VTABLE: RefCell<Option<*const PluginVTable>> =
         const { RefCell::new(None) };
@@ -627,8 +638,8 @@ unsafe extern "C" fn tracking_alloc(size: usize, align: usize) -> *mut u8 {
         guard.alloc_calls += 1;
     }
     // Delegate to the system allocator.
-    let layout: core::alloc::Layout =
-        core::alloc::Layout::from_size_align(size, align).unwrap_or(core::alloc::Layout::new::<u8>());
+    let layout: core::alloc::Layout = core::alloc::Layout::from_size_align(size, align)
+        .unwrap_or(core::alloc::Layout::new::<u8>());
     // SAFETY: layout is valid (size > 0 handled by caller; align is power-of-two by ABI).
     unsafe { std::alloc::alloc(layout) }
 }
@@ -642,8 +653,8 @@ unsafe extern "C" fn tracking_free(ptr: *mut u8, size: usize, align: usize) {
     if ptr.is_null() || size == 0 {
         return;
     }
-    let layout: core::alloc::Layout =
-        core::alloc::Layout::from_size_align(size, align).unwrap_or(core::alloc::Layout::new::<u8>());
+    let layout: core::alloc::Layout = core::alloc::Layout::from_size_align(size, align)
+        .unwrap_or(core::alloc::Layout::new::<u8>());
     // SAFETY: ptr was allocated via tracking_alloc with the same layout.
     unsafe { std::alloc::dealloc(ptr, layout) };
 }

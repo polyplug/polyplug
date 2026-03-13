@@ -19,13 +19,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;

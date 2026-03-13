@@ -105,9 +105,9 @@ struct ExtensionEntry {
     const void* vtable;        ///< pointer to extension vtable struct
 };
 
-/// Configuration passed to polyplug_runtime_init.
-/// OWNERSHIP: borrowed for the duration of polyplug_runtime_init only.
-/// Caller may free all pointed-to memory after polyplug_runtime_init returns.
+/// Configuration passed to the runtime — currently unused; reserved for future extension support.
+/// OWNERSHIP: borrowed for the duration of polyplug_runtime_new only.
+/// Caller may free all pointed-to memory after polyplug_runtime_new returns.
 struct RuntimeConfig {
     const StringView*    plugin_dirs;      ///< array of plugin_dir_count directories
     size_t               plugin_dir_count;
@@ -123,16 +123,18 @@ struct PluginContext {
     StringView bundle_path;  ///< Absolute canonical path to bundle directory
 };
 
-// ─── Opaque runtime handle ───────────────────────────────────────────────────
+// ─── Opaque handle types ─────────────────────────────────────────────────────
 
-/// Opaque pointer to a runtime instance.
-struct PolyplugRuntime;
-using RuntimeHandle = PolyplugRuntime*;
+/// Opaque pointer to a runtime instance. Allocated by polyplug_runtime_new,
+/// freed by polyplug_runtime_free. Never dereference from host code.
+struct OpaqueRuntime;
+using RuntimeHandle = OpaqueRuntime*;
+
+/// Opaque guard returned by polyplug_rt_resolve_plugin.
+/// Holds a lock on the plugin slot; free with polyplug_guard_free.
+struct OpaqueGuard;
 
 // ─── C ABI exports ───────────────────────────────────────────────────────────
-
-/// ABI version sentinel. Must be called before polyplug_init.
-uint32_t polyplug_abi_version();
 
 /// Allocate memory via the host allocator.
 void* polyplug_host_alloc(size_t size, size_t align);
@@ -140,45 +142,60 @@ void* polyplug_host_alloc(size_t size, size_t align);
 /// Free memory previously allocated by polyplug_host_alloc.
 void polyplug_host_free(void* ptr, size_t size, size_t align);
 
-/// Initialize the runtime.
-RuntimeHandle polyplug_runtime_init(const RuntimeConfig* config);
+/// Create a new runtime instance. Returns null on failure; check polyplug_last_error.
+OpaqueRuntime* polyplug_runtime_new();
 
-/// Destroy the runtime and free resources.
-void polyplug_runtime_destroy(RuntimeHandle runtime);
+/// Destroy a runtime instance. Must be called exactly once per pointer from polyplug_runtime_new.
+void polyplug_runtime_free(OpaqueRuntime* rt);
 
-/// Find a plugin by contract_id and minimum version.
-PluginHandle polyplug_find_by_contract(uint64_t contract_id, uint32_t min_version);
+/// Load a plugin bundle from the given UTF-8 path. Returns 0 on success, non-zero on failure.
+/// On failure, polyplug_last_error contains a description.
+uint32_t polyplug_load_bundle(OpaqueRuntime* rt, const uint8_t* path, size_t path_len);
 
-                                   /// Find a specific bundle's implementation of a contract.
-PluginHandle polyplug_find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+/// Reload a previously loaded bundle. Returns 0 on success, non-zero on failure.
+uint32_t polyplug_reload_bundle(OpaqueRuntime* rt, const uint8_t* path, size_t path_len);
 
-/// Enumerate all providers of a contract into caller-provided buffer. Returns count written.
-                               size_t polyplug_find_all_by_contract(uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
+/// Find the best plugin satisfying contract_id at min_version.
+/// Returns a packed u64 handle (UINT64_MAX == not found).
+uint64_t polyplug_rt_find_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version);
 
-                               /// Resolve a plugin handle to its raw vtable pointer.
-                               const PluginVTable* polyplug_resolve_plugin(PluginHandle handle);
+/// Find a specific bundle's implementation of a contract.
+/// Returns a packed u64 handle (UINT64_MAX == not found).
+uint64_t polyplug_rt_find_by_bundle(const OpaqueRuntime* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
 
-/// Retrieve an extension vtable by extension_id.
-const void* polyplug_get_extension(RuntimeHandle runtime, uint32_t extension_id);
+/// Enumerate all providers of a contract into caller-provided buffer.
+/// Returns the number of handles written (each is a packed u64).
+size_t polyplug_rt_find_all_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
+
+/// Resolve a packed handle to an OpaqueGuard that holds a vtable pointer.
+/// Returns null if the handle is stale or null. Free the guard with polyplug_guard_free.
+OpaqueGuard* polyplug_rt_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
+
+/// Retrieve the raw vtable pointer from a guard returned by polyplug_rt_resolve_plugin.
+const void* polyplug_get_vtable(const OpaqueGuard* guard);
+
+/// Release an OpaqueGuard previously returned by polyplug_rt_resolve_plugin.
+/// Must be called exactly once per pointer.
+void polyplug_guard_free(OpaqueGuard* guard);
+
+/// Copy the last error message into buf (up to buf_len bytes). Returns bytes written.
+/// Clears the stored error after reading.
+size_t polyplug_last_error(uint8_t* buf, size_t buf_len);
+
+/// Return the byte length of the last error message without clearing it.
+size_t polyplug_error_message_len();
 
 }  // extern "C"
 
 #ifdef __cplusplus
 #include <string>
 #include <string_view>
-#include <span>
 
 inline std::string_view StringView_as_string_view(const StringView& sv) noexcept {
     return {reinterpret_cast<const char*>(sv.ptr), sv.len};
 }
 inline std::string StringView_to_string(const StringView& sv) {
     return std::string(reinterpret_cast<const char*>(sv.ptr), sv.len);
-}
-inline std::span<const uint8_t> Buffer_as_span(const Buffer& b) noexcept {
-    return {static_cast<const uint8_t*>(b.ptr), b.len};
-}
-inline std::span<uint8_t> Buffer_as_mut_span(Buffer& b) noexcept {
-    return {static_cast<uint8_t*>(b.ptr), b.cap};
 }
 #endif // __cplusplus
 

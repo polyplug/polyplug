@@ -537,19 +537,21 @@ impl Runtime {
                     runtime_name: runtime_name.to_owned(),
                 })
             })?;
-        // Build registrar and dispatch
-        let mut registrar: PluginRegistrar = PluginRegistrar {
-            register_plugin: crate::loader::registrar_callback,
-            host: self.host_vtable as *const HostVTable,
-        };
-        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
+        // Build registrar and dispatch — use make_registrar_context to set REGISTRAR_REGISTRY_PTR
+        // and REGISTRAR_BUNDLE_ID thread-locals. This is required for non-native loaders
+        // (Python, Lua, JS, dotnet) whose register_plugin callbacks depend on these TLS values.
+        let (mut registrar, _guard): (PluginRegistrar, crate::loader::BundleInitGuard) =
+            crate::loader::make_registrar_context(
+                &self.registry,
+                manifest.bundle_id,
+                self.host_vtable,
+            );
         let effective_path: PathBuf = if !manifest.file.is_empty() {
             path.join(&manifest.file)
         } else {
             path.to_path_buf()
         };
         let result: Result<(), PolyplugError> = loader.load(&effective_path, &mut registrar);
-        crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(0_u64));
         if result.is_ok() {
             let bundle_name: String = manifest.bundle_name.clone();
             let mut manifests: std::sync::MutexGuard<

@@ -8,20 +8,20 @@
 
 #![allow(clippy::expect_used)]
 
-use core::time::Duration;
-use std::path::PathBuf;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
+use core::time::Duration;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use polyplug::ReloadEvent;
 use polyplug::abi::PluginVTable;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
-use polyplug::ReloadEvent;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 

@@ -2,11 +2,11 @@
 
 use core::hint::spin_loop;
 use core::time::Duration;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::time::Instant;
 
 use polyplug::abi::PluginDescriptor;

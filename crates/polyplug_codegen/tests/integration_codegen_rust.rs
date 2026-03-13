@@ -4,14 +4,14 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
-use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -137,7 +137,7 @@ impl TestAddPlugin for MyPlugin {
 
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a `PluginRegistrar`.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     // Set the OnceLock impl before any vtable function can be called.
     TEST_ADD_IMPL.get_or_init(|| Box::new(MyPlugin));

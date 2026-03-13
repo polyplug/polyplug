@@ -6303,3 +6303,539 @@ VERIFICATION CHECKLIST
 - Before/after size numbers recorded in workspace root Cargo.toml — verified
 - target-cpu=native either set with documented rationale or explicitly absent — verified
 ```
+
+
+---
+
+## Epic 27 — Loader Registration FFI + Real Multi-Language Hosts + Uniform Examples
+
+```
+You are the PLANNER agent for the `polyplug` project.
+
+This is a v1-blocking epic. It fixes the architectural gap that prevents
+non-Rust host applications from loading non-native guests (Python, Lua,
+.NET, JS). It also replaces fake example hosts with real ones, and
+establishes a uniform contract that makes every host produce identical
+output. All architectural decisions are fully pre-answered below.
+
+---
+
+READ FIRST — ALL OF THESE IN FULL
+
+- AGENTS.md
+- TRUST_MODEL.md
+- PRD.md — sections 8 (Host Libraries), 10 (Adapters), 23 (MVP Language
+  Support), 24 (Package Ecosystem), 25 (C Facade)
+- crates/polyplug/src/ffi.rs          — existing C facade
+- crates/polyplug/src/runtime.rs      — Runtime struct, register_loader method
+- crates/polyplug_dotnet/src/lib.rs   — DotnetLoader, DotnetConfig
+- crates/polyplug_python/src/lib.rs   — PythonLoader, PythonConfig
+- crates/polyplug_lua/src/lib.rs      — LuaLoader, LuaConfig
+- crates/polyplug_js/src/lib.rs       — JsLoader, JsConfig
+- crates/polyplug_js_deno/src/lib.rs  — JsDenoLoader, JsDenoConfig
+- host-libs/cpp/polyplug/runtime.hpp  — existing C++ host lib
+- host-libs/python/polyplug/runtime.py — existing Python host lib
+- host-libs/lua/polyplug.lua          — existing Lua host lib
+- host-libs/js/polyplug.ts            — existing Deno host lib
+- host-libs/csharp/src/Runtime.cs     — existing C# host lib
+- examples/hosts/lua/src/lib.rs       — the fake Lua host to delete
+- examples/hosts/js/src/lib.rs        — the fake JS host to delete
+- examples/api.toml                   — existing shared contract definitions
+
+---
+
+THE PROBLEM (read before implementing)
+
+The BundleLoader trait is Rust-only. Non-Rust hosts (C++, Python, Lua,
+Deno/JS) call libpolyplug.so via FFI, which only contains NativeBundleLoader.
+They cannot load non-native guests (Python, Lua, .NET, JS). This contradicts
+the north star: "any language can be a host that loads any guest."
+
+The current examples/hosts/lua/ and examples/hosts/js/ are Rust cdylibs with
+Lua/JS scripts as thin FFI callers. They are not real language hosts. They
+must be deleted and replaced with real implementations.
+
+QuickJS cannot be a host — it is an embedded VM with no standalone executable.
+Only Deno can be a JS host. There are 6 host languages: Rust, C++, C#,
+Python, Lua, JS(Deno).
+
+---
+
+PRE-ANSWERED DECISIONS
+
+─────────────────────────────────────────────────────────────
+DECISION 1 — OpaqueLoader type and polyplug_runtime_register_loader
+─────────────────────────────────────────────────────────────
+
+Add to crates/polyplug/src/ffi.rs ONE new exported function:
+
+  /// Registers a loader (created by a loader crate's FFI) into the runtime.
+  /// Takes ownership of the Box<dyn BundleLoader> passed as a raw pointer.
+  /// loader_ptr must be a valid *mut OpaqueLoader produced by a
+  /// polyplug_*_loader_create() function. Calling this transfers ownership —
+  /// do not free loader_ptr after this call.
+  #[no_mangle]
+  pub unsafe extern "C" fn polyplug_runtime_register_loader(
+      rt: *mut OpaqueRuntime,
+      loader_ptr: *mut c_void,   // Box<dyn BundleLoader> as raw pointer
+  ) -> u32 {                     // 0 = ok, non-zero = error code
+      // null checks → return error code
+      // let loader: Box<dyn BundleLoader> = Box::from_raw(loader_ptr as *mut _)
+      // get &mut Runtime from rt
+      // call runtime.register_loader(loader)
+      // return 0
+  }
+
+This is the single point where loader crates hand ownership of their
+BundleLoader to the runtime. It lives in libpolyplug.so so the Runtime
+struct is never exposed across the ABI boundary.
+
+─────────────────────────────────────────────────────────────
+DECISION 2 — Per-loader FFI create functions
+─────────────────────────────────────────────────────────────
+
+Each loader crate adds src/ffi.rs with ONE exported function that creates
+the loader and returns it as a raw pointer for polyplug_runtime_register_loader
+to consume. Each loader crate adds crate-type = ["rlib", "cdylib"] to its
+Cargo.toml.
+
+The four config FFI structs and four create functions:
+
+── polyplug_dotnet ──
+  #[repr(C)]
+  pub struct PolyplugDotnetConfig {
+      pub min_framework_ptr: *const u8,   // UTF-8, not null-terminated
+      pub min_framework_len: usize,        // e.g. "10.0" → len 4
+  }
+
+  #[no_mangle]
+  pub unsafe extern "C" fn polyplug_dotnet_loader_create(
+      config: *const PolyplugDotnetConfig,
+  ) -> *mut c_void {
+      // null check → return null
+      // build DotnetConfig from ffi config
+      // Box::into_raw(Box::new(DotnetLoader::new(config))) as *mut c_void
+  }
+
+  #[no_mangle]
+  pub unsafe extern "C" fn polyplug_dotnet_loader_free(ptr: *mut c_void) {
+      // if ptr.is_null() { return; }
+      // drop(Box::from_raw(ptr as *mut DotnetLoader))
+      // only needed if caller wants to discard without registering
+  }
+
+── polyplug_python ──
+  #[repr(C)]
+  pub struct PolyplugPythonConfig {
+      pub min_version_ptr: *const u8,
+      pub min_version_len: usize,
+  }
+
+  polyplug_python_loader_create(config) -> *mut c_void
+  polyplug_python_loader_free(ptr)
+
+── polyplug_lua ──
+  #[repr(C)]
+  pub struct PolyplugLuaConfig {
+      // LuaConfig has no required fields — empty struct is valid
+      // pad to at least 1 byte for C ABI compliance
+      pub _reserved: u8,
+  }
+
+  polyplug_lua_loader_create(config) -> *mut c_void
+  polyplug_lua_loader_free(ptr)
+
+── polyplug_js (QuickJS) ──
+  #[repr(C)]
+  pub struct PolyplugJsConfig {
+      pub _reserved: u8,
+  }
+
+  polyplug_js_loader_create(config) -> *mut c_void
+  polyplug_js_loader_free(ptr)
+
+── polyplug_js_deno ──
+  #[repr(C)]
+  pub struct PolyplugJsDenoConfig {
+      pub _reserved: u8,
+  }
+
+  polyplug_js_deno_loader_create(config) -> *mut c_void
+  polyplug_js_deno_loader_free(ptr)
+
+SAFETY requirements:
+  - Every function that takes a pointer must null-check at entry
+  - Every create function that returns non-null transfers ownership
+  - Every *_free function accepts null as a no-op (C convention)
+  - Every unsafe block must have a // SAFETY: comment
+
+─────────────────────────────────────────────────────────────
+DECISION 3 — Host lib loader registration additions
+─────────────────────────────────────────────────────────────
+
+Each host lib gets loader registration functions. These are THIN wrappers
+that call the two-step pattern: create loader → register loader.
+
+Pattern in every language (pseudocode):
+  function register_dotnet_loader(rt, min_framework):
+      config = DotnetConfigFfi(min_framework)
+      loader_ptr = polyplug_dotnet_loader_create(&config)
+      if loader_ptr == null: raise error
+      err = polyplug_runtime_register_loader(rt, loader_ptr)
+      if err != 0: raise error
+
+── host-libs/cpp/polyplug/loaders.hpp (NEW FILE) ──
+
+  #pragma once
+  #include "runtime.hpp"
+
+  namespace polyplug {
+
+  // Link requirements: -lpolyplug_dotnet -lpolyplug_python
+  //                    -lpolyplug_lua -lpolyplug_js -lpolyplug_js_deno
+
+  struct DotnetLoaderConfig { std::string_view min_framework = "10.0"; };
+  struct PythonLoaderConfig { std::string_view min_version = "3.11"; };
+  struct LuaLoaderConfig {};
+  struct JsLoaderConfig {};
+  struct JsDenoLoaderConfig {};
+
+  void register_dotnet_loader(Runtime& rt, DotnetLoaderConfig cfg = {});
+  void register_python_loader(Runtime& rt, PythonLoaderConfig cfg = {});
+  void register_lua_loader(Runtime& rt, LuaLoaderConfig cfg = {});
+  void register_js_loader(Runtime& rt, JsLoaderConfig cfg = {});
+  void register_js_deno_loader(Runtime& rt, JsDenoLoaderConfig cfg = {});
+
+  } // namespace polyplug
+
+  // Inline implementations call polyplug_dotnet_loader_create +
+  // polyplug_runtime_register_loader — throw PolyplugError on failure.
+
+── host-libs/python/polyplug/loaders.py (NEW FILE) ──
+
+  """Loader registration for polyplug non-native guests."""
+  import ctypes
+  from . import _lib  # the libpolyplug.so ctypes handle
+
+  def _load_loader_lib(name: str) -> ctypes.CDLL:
+      # try LD_LIBRARY_PATH / rpath / same dir as libpolyplug.so
+      return ctypes.CDLL(f"lib{name}.so")
+
+  _dotnet_lib = None
+  def register_dotnet_loader(runtime, min_framework: str = "10.0") -> None: ...
+
+  _python_lib = None
+  def register_python_loader(runtime, min_version: str = "3.11") -> None: ...
+
+  _lua_lib = None
+  def register_lua_loader(runtime) -> None: ...
+
+  _js_lib = None
+  def register_js_loader(runtime) -> None: ...
+
+  _js_deno_lib = None
+  def register_js_deno_loader(runtime) -> None: ...
+
+  # Each function: lazy-load the shared library on first call, create config
+  # struct, call polyplug_*_loader_create, call polyplug_runtime_register_loader
+  # Raise RuntimeError on null return or non-zero error code.
+
+── host-libs/lua/polyplug.lua (ADDITIONS) ──
+
+  -- Add to the existing M (module table) at the end of polyplug.lua:
+
+  function M.register_dotnet_loader(rt, opts)
+      -- opts = { min_framework = "10.0" } or nil
+      -- ffi.load("polyplug_dotnet") — lazy, cached
+      -- create config cdata, call polyplug_dotnet_loader_create
+      -- call polyplug_runtime_register_loader
+      -- error() on failure
+  end
+
+  function M.register_python_loader(rt, opts) ... end
+  function M.register_lua_loader(rt, opts) ... end
+  function M.register_js_loader(rt, opts) ... end
+  function M.register_js_deno_loader(rt, opts) ... end
+
+  -- Each function lazy-loads its shared library on first call and caches
+  -- the ffi handle. Use ffi.load() with the library name only — let the
+  -- OS find it via LD_LIBRARY_PATH / DYLD_LIBRARY_PATH.
+  -- Declare FFI types inline per function (not global) to avoid conflicts.
+
+── host-libs/js/polyplug.ts (ADDITIONS) ──
+
+  // Add to existing polyplug.ts after the Runtime class:
+
+  interface DotnetLoaderConfig { minFramework?: string; }
+  interface PythonLoaderConfig { minVersion?: string; }
+
+  export function registerDotnetLoader(
+      rt: RuntimeHandle,
+      config: DotnetLoaderConfig = {}
+  ): void {
+      // Deno.dlopen("libpolyplug_dotnet.so", { polyplug_dotnet_loader_create: ...,
+      //                                        polyplug_dotnet_loader_free: ... })
+      // create config struct, call create, call polyplug_runtime_register_loader
+      // throw on error
+  }
+
+  export function registerPythonLoader(rt: RuntimeHandle, config?: PythonLoaderConfig): void
+  export function registerLuaLoader(rt: RuntimeHandle): void
+  export function registerJsLoader(rt: RuntimeHandle): void
+  export function registerJsDenoLoader(rt: RuntimeHandle): void
+
+  // Each function opens its loader .so via Deno.dlopen on first call.
+  // Cache the opened library at module level.
+  // Throw on null loader_ptr or non-zero register error.
+
+── host-libs/csharp/src/Runtime.cs (ADDITIONS) ──
+
+  // Add P/Invoke declarations and public methods to the Runtime class:
+
+  [DllImport("polyplug_dotnet", EntryPoint = "polyplug_dotnet_loader_create")]
+  private static extern IntPtr PolyplugDotnetLoaderCreate(ref DotnetConfigFfi config);
+
+  [DllImport("polyplug_dotnet", EntryPoint = "polyplug_dotnet_loader_free")]
+  private static extern void PolyplugDotnetLoaderFree(IntPtr ptr);
+
+  [DllImport("polyplug", EntryPoint = "polyplug_runtime_register_loader")]
+  private static extern uint PolyplugRuntimeRegisterLoader(IntPtr rt, IntPtr loader);
+
+  public void RegisterDotnetLoader(string minFramework = "10.0") {
+      var cfg = new DotnetConfigFfi(minFramework);
+      var loader = PolyplugDotnetLoaderCreate(ref cfg);
+      if (loader == IntPtr.Zero) throw new PolyplugException("dotnet loader create failed");
+      var err = PolyplugRuntimeRegisterLoader(_handle, loader);
+      if (err != 0) throw new PolyplugException($"register loader failed: {err}");
+  }
+
+  public void RegisterPythonLoader(string minVersion = "3.11") { ... }
+  public void RegisterLuaLoader() { ... }
+  public void RegisterJsLoader() { ... }
+  public void RegisterJsDenoLoader() { ... }
+
+  // Config FFI structs (blittable, no unsafe needed):
+  [StructLayout(LayoutKind.Sequential)]
+  private struct DotnetConfigFfi {
+      public IntPtr Ptr;   // min_framework UTF-8 bytes
+      public UIntPtr Len;
+      public DotnetConfigFfi(string s) { /* pin string, set Ptr+Len */ }
+  }
+
+─────────────────────────────────────────────────────────────
+DECISION 4 — Delete fake hosts, create real ones
+─────────────────────────────────────────────────────────────
+
+DELETE entirely:
+  examples/hosts/lua/Cargo.toml
+  examples/hosts/lua/Cargo.lock
+  examples/hosts/lua/src/lib.rs
+  examples/hosts/lua/polyplug_full.lua
+  examples/hosts/js/Cargo.toml
+  examples/hosts/js/Cargo.lock
+  examples/hosts/js/src/lib.rs
+  examples/hosts/js/polyplug_full.map
+
+The examples/hosts/lua/ directory keeps ONLY host.lua.
+The examples/hosts/js/ directory is RENAMED to examples/hosts/js_deno/ and keeps ONLY host.ts.
+
+After deletion, NO example host directory may contain a Cargo.toml or src/.
+Every host uses its language's host-lib only.
+
+─────────────────────────────────────────────────────────────
+DECISION 5 — Uniform contract and examples structure
+─────────────────────────────────────────────────────────────
+
+All examples share ONE api.toml defining TWO contracts.
+Read examples/api.toml — if it already has these two contracts, keep it.
+If not, update it to match exactly:
+
+  [[contract]]
+  name    = "data.Transformer"
+  version = 1
+  [[contract.function]]
+  name    = "transform"
+  params  = [{ name = "input", type = "string" }]
+  returns = "string"
+
+  [[contract]]
+  name    = "data.Reporter"
+  version = 1
+  [[contract.function]]
+  name   = "report"
+  params = [{ name = "value", type = "string" }]
+  returns = "string"
+
+GUEST LAYOUT — 7 directories, 2 guests each (14 total):
+  examples/guests/rust/
+      decoder/    → implements data.Transformer  (returns "rust:transform({input})")
+      reporter/   → implements data.Reporter     (returns "rust:report({value})")
+  examples/guests/cpp/
+      decoder/    → implements data.Transformer  (returns "cpp:transform({input})")
+      reporter/   → implements data.Reporter     (returns "cpp:report({value})")
+  examples/guests/csharp/
+      encoder/    → implements data.Transformer  (returns "csharp:transform({input})")
+      reporter/   → implements data.Reporter     (returns "csharp:report({value})")
+  examples/guests/python/
+      decoder/    → implements data.Transformer  (returns "python:transform({input})")
+      reporter/   → implements data.Reporter     (returns "python:report({value})")
+  examples/guests/lua/
+      transformer/ → implements data.Transformer (returns "lua:transform({input})")
+      reporter/    → implements data.Reporter    (returns "lua:report({value})")
+  examples/guests/js_quickjs/
+      transformer/ → implements data.Transformer (returns "js_quickjs:transform({input})")
+      reporter/    → implements data.Reporter    (returns "js_quickjs:report({value})")
+  examples/guests/js_deno/
+      transformer/ → implements data.Transformer (returns "js_deno:transform({input})")
+      reporter/    → implements data.Reporter    (returns "js_deno:report({value})")
+
+Each guest returns a string prefixed with its language/runtime tag so the
+output clearly identifies who handled each call.
+
+HOST LAYOUT — 6 directories:
+  examples/hosts/rust/          pure Rust, uses polyplug crate
+  examples/hosts/cpp/           pure C++, uses host-libs/cpp
+  examples/hosts/csharp/        pure C#, uses host-libs/csharp
+  examples/hosts/python/        pure Python, uses host-libs/python
+  examples/hosts/lua/           pure Lua, uses host-libs/lua
+  examples/hosts/js_deno/       pure TypeScript, uses host-libs/js
+
+EVERY host must:
+  1. Create runtime
+  2. Register ALL 5 loaders (dotnet, python, lua, js/quickjs, js/deno)
+     in this fixed order: dotnet → python → lua → js → js_deno
+  3. Load ALL 14 guests in this fixed order:
+       rust/decoder, rust/reporter
+       cpp/decoder, cpp/reporter
+       csharp/encoder, csharp/reporter
+       python/decoder, python/reporter
+       lua/transformer, lua/reporter
+       js_quickjs/transformer, js_quickjs/reporter
+       js_deno/transformer, js_deno/reporter
+  4. For every Transformer guest: call transform("hello")
+  5. For every Reporter guest: call report("hello")
+  6. Print each result in this EXACT format:
+       [{guest_dir}]  {fn}("hello") = "{result}"
+     Example:
+       [rust/decoder]          transform("hello") = "rust:transform(hello)"
+       [cpp/decoder]           transform("hello") = "cpp:transform(hello)"
+       [csharp/encoder]        transform("hello") = "csharp:transform(hello)"
+       [python/decoder]        transform("hello") = "python:transform(hello)"
+       [lua/transformer]       transform("hello") = "lua:transform(hello)"
+       [js_quickjs/transformer] transform("hello") = "js_quickjs:transform(hello)"
+       [js_deno/transformer]   transform("hello") = "js_deno:transform(hello)"
+       [rust/reporter]         report("hello")    = "rust:report(hello)"
+       ... (all 14 lines)
+
+EVERY host must produce IDENTICAL output — same lines, same order, same
+format. If you run the Rust host and the Python host on the same machine,
+their stdout must be byte-for-byte identical.
+
+─────────────────────────────────────────────────────────────
+DECISION 6 — examples/build.sh
+─────────────────────────────────────────────────────────────
+
+Update examples/build.sh to:
+  1. Build all Rust guests (cargo build --release in each)
+  2. Build all C++ guests (make in each)
+  3. Build all C# guests (dotnet build in each)
+  4. Build all Python guests (no build needed — Python is interpreted)
+  5. Build all Lua guests (no build needed)
+  6. Build all JS QuickJS guests (rolldown — or pre-built bundle.js committed)
+  7. Build all JS Deno guests (no build needed — index.ts runs natively)
+  8. Build all loader shared libraries:
+       cargo build --release -p polyplug_dotnet
+       cargo build --release -p polyplug_python
+       cargo build --release -p polyplug_lua
+       cargo build --release -p polyplug_js
+       cargo build --release -p polyplug_js_deno
+  9. Build Rust host (cargo build --release in examples/hosts/rust/)
+  10. Build C++ host (make in examples/hosts/cpp/)
+  11. Build C# host (dotnet build in examples/hosts/csharp/)
+
+Python, Lua, Deno hosts need no build — they are interpreted.
+
+The script prints what it is building at each step.
+
+─────────────────────────────────────────────────────────────
+DECISION 7 — examples/README.md update
+─────────────────────────────────────────────────────────────
+
+Rewrite examples/README.md to contain:
+
+  # polyplug examples
+
+  ## What this shows
+  Every host language loading every guest language.
+  6 hosts × 14 guests = each host makes 14 plugin calls.
+  All hosts produce identical output — same lines, same order.
+
+  ## Hosts (6)
+  | Host | Language | Mechanism |
+  |---|---|---|
+  | hosts/rust | Rust | polyplug crate (native) |
+  | hosts/cpp | C++ | host-libs/cpp → libpolyplug.so |
+  | hosts/csharp | C# | host-libs/csharp → P/Invoke libpolyplug.so |
+  | hosts/python | Python | host-libs/python → ctypes libpolyplug.so |
+  | hosts/lua | Lua | host-libs/lua → LuaJIT FFI libpolyplug.so |
+  | hosts/js_deno | TypeScript | host-libs/js → Deno.dlopen libpolyplug.so |
+
+  ## Guests (14)
+  | Guest | Runtime tag | Notes |
+  |---|---|---|
+  | rust/decoder, rust/reporter | native | |
+  | cpp/decoder, cpp/reporter | native | |
+  | csharp/encoder, csharp/reporter | dotnet | requires .NET 10+ |
+  | python/decoder, python/reporter | python | requires Python 3.11+ |
+  | lua/transformer, lua/reporter | lua | requires LuaJIT |
+  | js_quickjs/transformer, js_quickjs/reporter | js-quickjs | pre-bundled |
+  | js_deno/transformer, js_deno/reporter | js-deno | requires Deno |
+
+  Note: QuickJS cannot be a host — it is an embedded VM. Only Deno can
+  be a JS host. QuickJS is guest-only.
+
+  ## Running
+  ./build.sh
+  cargo run --release --manifest-path hosts/rust/Cargo.toml
+  ./hosts/cpp/polyplug_host
+  dotnet run --project hosts/csharp/
+  python hosts/python/host.py
+  luajit hosts/lua/host.lua
+  deno run --allow-ffi --allow-read hosts/js_deno/host.ts
+
+---
+
+THINGS TO NOT CHANGE
+
+- crates/polyplug/src/ffi.rs existing symbols — add only, never modify
+- ABI structs (StringView, Buffer, PluginHandle, AbiError) — frozen
+- guest-libs/ — no changes
+- All existing tests under crates/polyplug/tests/ — must still pass
+- tests/integration/ — must still pass
+- TRUST_MODEL.md — no changes
+- PRD.md — will be updated separately
+
+---
+
+VERIFICATION CHECKLIST
+
+- cargo build --release -p polyplug generates libpolyplug.so with
+  polyplug_runtime_register_loader exported — verified with nm -D
+- cargo build --release -p polyplug_dotnet generates libpolyplug_dotnet.so
+  with polyplug_dotnet_loader_create exported — verified with nm -D
+- Same for polyplug_python, polyplug_lua, polyplug_js, polyplug_js_deno
+- No Cargo.toml or src/ directory inside any examples/hosts/* directory
+  except examples/hosts/rust/ — verified
+- examples/hosts/js_deno/ exists, examples/hosts/js/ does not
+- examples/guests/js_quickjs/ and examples/guests/js_deno/ both exist
+- Rust host runs and produces 14 output lines — verified
+- Python host runs and produces identical 14 output lines — verified
+- Lua host runs and produces identical 14 output lines — verified
+- Deno host runs and produces identical 14 output lines — verified
+- C++ host runs and produces identical 14 output lines — verified
+- C# host runs and produces identical 14 output lines — verified
+- cargo test --workspace passes — verified
+- No .unwrap() added in production code — verified
+- Every new unsafe block has // SAFETY: comment — verified
+- clippy passes with zero warnings — verified
+```

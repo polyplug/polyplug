@@ -150,7 +150,7 @@ fn test_panic_returns_abi_error_panic() {
         "///\n",
         "/// # Safety\n",
         "/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n",
-        "#[unsafe(no_mangle)]\n",
+        "#[no_mangle]\n",
         "pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n",
         "    TEST_PANIC_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
         "    if registrar.is_null() {\n",

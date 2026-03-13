@@ -8,9 +8,11 @@ use std::fs;
 use std::path::PathBuf;
 
 pub use error::PolyplugcError;
-pub use ir::{EnumDef, EnumVariant, ReprType, ResolvedBundle, ResolvedContract, ResolvedDependency,
-             ResolvedField, ResolvedFunction, ResolvedParam, ResolvedPlugin, ResolvedType,
-             ResolvedTypeRef, ValidatedIr, Version};
+pub use ir::{
+    EnumDef, EnumVariant, ReprType, ResolvedBundle, ResolvedContract, ResolvedDependency,
+    ResolvedField, ResolvedFunction, ResolvedParam, ResolvedPlugin, ResolvedType, ResolvedTypeRef,
+    ValidatedIr, Version,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -70,11 +72,17 @@ pub struct PackConfig {
 }
 
 pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
-    use crate::generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
+    use crate::generators::{
+        CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles,
+    };
 
-    let file_content: String = fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
-        PolyplugcError::ReadFailed { path: config.api_toml.to_string_lossy().to_string(), source: e }
-    })?;
+    let file_content: String =
+        fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
+            PolyplugcError::ReadFailed {
+                path: config.api_toml.to_string_lossy().to_string(),
+                source: e,
+            }
+        })?;
     let ir: ValidatedIr = if file_content.contains("[bundle]") {
         parser::parse_bundle_with_api(&config.api_toml)?
     } else {

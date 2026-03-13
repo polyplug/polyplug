@@ -156,7 +156,10 @@ mod tests {
             bundle_name: "shared_types".to_owned(),
         };
         let s: String = err.to_string();
-        assert!(s.contains("conflict") || s.contains("conflicts"), "got: {s}");
+        assert!(
+            s.contains("conflict") || s.contains("conflicts"),
+            "got: {s}"
+        );
         assert!(s.contains("shared_types"), "got: {s}");
     }
 
@@ -180,7 +183,10 @@ mod tests {
             expr: "???".to_owned(),
         };
         let s: String = err.to_string();
-        assert!(s.contains("invalid token") || s.contains("invalid"), "got: {s}");
+        assert!(
+            s.contains("invalid token") || s.contains("invalid"),
+            "got: {s}"
+        );
         assert!(s.contains("Status"), "got: {s}");
         assert!(s.contains("Pending"), "got: {s}");
         assert!(s.contains("???"), "got: {s}");

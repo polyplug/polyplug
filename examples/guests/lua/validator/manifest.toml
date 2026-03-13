@@ -1,0 +1,8 @@
+bundle_name = "lua_validator"
+runtime     = "lua"
+version     = "1.0"
+file        = "validator.lua"
+provides    = ["pipeline.validator"]
+
+[function_count]
+"pipeline.validator@1" = 1

@@ -692,14 +692,14 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     }
     out.push('\n');
 
-    out.push_str("#[unsafe(no_mangle)]\n");
+    out.push_str("#[no_mangle]\n");
     out.push_str("pub extern \"C\" fn polyplug_abi_version() -> u32 { 1 }\n\n");
 
     out.push_str("/// Register all plugin vtables with the host.\n");
     out.push_str("///\n");
     out.push_str("/// # Safety\n");
     out.push_str("/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n");
-    out.push_str("#[unsafe(no_mangle)]\n");
+    out.push_str("#[no_mangle]\n");
     out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
     out.push_str("    registrar: *mut PluginRegistrar,\n");
     out.push_str("    ctx: *const PluginContext,\n");

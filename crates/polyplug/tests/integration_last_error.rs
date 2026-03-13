@@ -5,12 +5,12 @@
 //! These tests exercise `polyplug_last_error` and `polyplug_error_message_len`
 //! as defined in `crates/polyplug/src/ffi.rs:361-380` and `11-17`.
 
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_error_message_len;
 use polyplug::ffi::polyplug_last_error;
 use polyplug::ffi::polyplug_load_bundle;
 use polyplug::ffi::polyplug_runtime_free;
 use polyplug::ffi::polyplug_runtime_new;
-use polyplug::ffi::OpaqueRuntime;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 

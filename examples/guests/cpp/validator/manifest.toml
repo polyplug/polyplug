@@ -1,0 +1,8 @@
+bundle_name = "cpp_validator"
+runtime     = "native"
+version     = "1.0"
+file        = "libvalidator.so"
+provides    = ["pipeline.validator"]
+
+[function_count]
+"pipeline.validator@1" = 1

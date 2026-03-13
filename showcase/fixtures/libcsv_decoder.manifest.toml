@@ -1,5 +1,0 @@
-bundle_name    = "csv_decoder"
-runtime        = "native"
-version        = "1.0"
-provides       = ["pipeline.decoder"]
-function_count = { "pipeline.decoder@1" = 1 }

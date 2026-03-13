@@ -144,10 +144,11 @@ pub(crate) struct RawDependency {
 
 /// Parse and validate an `api.toml` file, producing a `ValidatedIr`.
 pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
-    let content: String = std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
-        path: path.to_string_lossy().into_owned(),
-        source: e,
-    })?;
+    let content: String =
+        std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
+            path: path.to_string_lossy().into_owned(),
+            source: e,
+        })?;
     parse_api_str(&content)
 }
 
@@ -163,10 +164,11 @@ pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
 /// Parse and validate a `bundle.toml` file.
 #[allow(dead_code)]
 pub fn parse_bundle(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
-    let content: String = std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
-        path: path.to_string_lossy().into_owned(),
-        source: e,
-    })?;
+    let content: String =
+        std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
+            path: path.to_string_lossy().into_owned(),
+            source: e,
+        })?;
     parse_bundle_str(&content)
 }
 
@@ -186,10 +188,11 @@ pub fn parse_bundle_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
 /// bundle file's parent directory and calls `parse_api()` to load types + contracts.
 /// Returns a `ValidatedIr` with the bundle metadata merged with the API types/contracts.
 pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
-    let content: String = std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
-        path: path.to_string_lossy().into_owned(),
-        source: e,
-    })?;
+    let content: String =
+        std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
+            path: path.to_string_lossy().into_owned(),
+            source: e,
+        })?;
     let raw: RawBundleSchema =
         toml::from_str(&content).map_err(|e| PolyplugcError::ValidationFailed {
             message: format!("TOML parse error: {e}"),
@@ -345,7 +348,10 @@ fn validate_enum_value_expr(
 
 /// Check that no variant references another variant that itself contains a reference.
 /// Enforces the "one level deep" rule.
-fn check_enum_chained_refs(enum_name: &str, variants: &[EnumVariant]) -> Result<(), PolyplugcError> {
+fn check_enum_chained_refs(
+    enum_name: &str,
+    variants: &[EnumVariant],
+) -> Result<(), PolyplugcError> {
     // Helper: check if an expression string contains any variant name token
     let expr_contains_variant_ref = |expr: &str, variant_names: &[&str]| -> bool {
         let chars: Vec<char> = expr.chars().collect();

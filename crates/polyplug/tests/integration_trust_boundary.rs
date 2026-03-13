@@ -3,19 +3,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::abi::contract_id;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::contract_id;
 use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
-use polyplug::runtime::set_global_registry;
 use polyplug::runtime::LoadOptions;
 use polyplug::runtime::Runtime;
+use polyplug::runtime::set_global_registry;
 use polyplug::version::Compatibility;
 use tempfile::TempDir;
 
@@ -474,8 +474,7 @@ mod tests {
         // INIT_BUNDLE_ID must be 0 after all loads complete (TLS not corrupted).
         let init_id_after: u64 = polyplug::runtime::testing::read_init_bundle_id();
         assert_eq!(
-            init_id_after,
-            0_u64,
+            init_id_after, 0_u64,
             "lazy load must not corrupt TLS: INIT_BUNDLE_ID must be 0 after all loads"
         );
     }

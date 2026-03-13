@@ -1,0 +1,22 @@
+# polyplug_full.map — linker version script
+# Ensure only the symbols exported by polyplug_full are visible.
+# This prevents polyplug's own #[no_mangle] ffi symbols from conflicting.
+{
+  global:
+    polyplug_runtime_new;
+    polyplug_runtime_free;
+    polyplug_load_bundle;
+    polyplug_reload_bundle;
+    polyplug_rt_find_by_contract;
+    polyplug_rt_find_by_bundle;
+    polyplug_rt_find_all_by_contract;
+    polyplug_rt_resolve_plugin;
+    polyplug_guard_free;
+    polyplug_get_vtable;
+    polyplug_last_error;
+    polyplug_error_message_len;
+    polyplug_host_alloc;
+    polyplug_host_free;
+    polyplug_abi_version;
+  local: *;
+};

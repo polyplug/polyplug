@@ -5,11 +5,15 @@ use crate::abi::PluginHandle;
 use crate::registry::PluginVTableGuard;
 use crate::runtime::Runtime;
 
-pub struct OpaqueRuntime(pub(crate) Runtime);
+pub struct OpaqueRuntime(pub Runtime);
 pub struct OpaqueGuard(pub(crate) PluginVTableGuard);
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+pub fn set_last_error_pub(msg: &str) {
+    set_last_error(msg);
 }
 
 fn set_last_error(msg: impl Into<String>) {
@@ -38,7 +42,7 @@ fn unpack_handle(packed: u64) -> PluginHandle {
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_runtime_new() -> *mut OpaqueRuntime {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match Runtime::builder().build() {
@@ -59,7 +63,7 @@ pub unsafe extern "C" fn polyplug_runtime_new() -> *mut OpaqueRuntime {
 /// `rt` must be a non-null pointer previously returned by `polyplug_runtime_new`.
 /// Must not be called more than once for the same pointer.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_runtime_free(rt: *mut OpaqueRuntime) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !rt.is_null() {
@@ -76,7 +80,7 @@ pub unsafe extern "C" fn polyplug_runtime_free(rt: *mut OpaqueRuntime) {
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 /// `path` must point to `path_len` valid UTF-8 bytes for the duration of the call.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_load_bundle(
     rt: *mut OpaqueRuntime,
     path: *const u8,
@@ -120,7 +124,7 @@ pub unsafe extern "C" fn polyplug_load_bundle(
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 /// `path` must point to `path_len` valid UTF-8 bytes for the duration of the call.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_reload_bundle(
     rt: *mut OpaqueRuntime,
     path: *const u8,
@@ -163,7 +167,7 @@ pub unsafe extern "C" fn polyplug_reload_bundle(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_rt_find_by_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
@@ -189,7 +193,7 @@ pub unsafe extern "C" fn polyplug_rt_find_by_contract(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_rt_find_by_bundle(
     rt: *const OpaqueRuntime,
     bundle_id: u64,
@@ -220,7 +224,7 @@ pub unsafe extern "C" fn polyplug_rt_find_by_bundle(
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 /// `out` must be valid for writes of `out_cap` u64 elements.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
@@ -285,7 +289,7 @@ pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
@@ -322,7 +326,7 @@ pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
 /// `guard` must be a non-null pointer previously returned by `polyplug_rt_resolve_plugin`.
 /// Must not be called more than once for the same pointer.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_guard_free(guard: *mut OpaqueGuard) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !guard.is_null() {
@@ -338,7 +342,7 @@ pub unsafe extern "C" fn polyplug_guard_free(guard: *mut OpaqueGuard) {
 /// # Safety
 /// `guard` must be a valid pointer returned by `polyplug_rt_resolve_plugin`.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_get_vtable(guard: *const OpaqueGuard) -> *const () {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if guard.is_null() {
@@ -357,7 +361,7 @@ pub unsafe extern "C" fn polyplug_get_vtable(guard: *const OpaqueGuard) -> *cons
 /// # Safety
 /// `buf` must be valid for writes of `buf_len` bytes when non-null.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_last_error(buf: *mut u8, buf_len: usize) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let len: usize = LAST_ERROR.with(|e| {
@@ -382,7 +386,7 @@ pub unsafe extern "C" fn polyplug_last_error(buf: *mut u8, buf_len: usize) -> us
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
 #[allow(clippy::std_instead_of_core)]
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_error_message_len() -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         LAST_ERROR.with(|e| e.borrow().len())

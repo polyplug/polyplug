@@ -8,7 +8,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{pack, Lang, PackConfig};
+use polyplug_codegen::{Lang, PackConfig, pack};
 use std::fs;
 use std::path::PathBuf;
 
@@ -69,8 +69,8 @@ fn rust_scaffold_cargo_toml_is_valid_toml() {
 
     let cargo_toml: String = read_file(&out_dir, "Cargo.toml");
     // Must be parseable as TOML.
-    let parsed: toml::Value = toml::from_str::<toml::Value>(&cargo_toml)
-        .expect("Cargo.toml must be valid TOML");
+    let parsed: toml::Value =
+        toml::from_str::<toml::Value>(&cargo_toml).expect("Cargo.toml must be valid TOML");
     // [package].name must equal the bundle name.
     let name: &str = parsed["package"]["name"]
         .as_str()
@@ -400,8 +400,16 @@ fn js_quickjs_package_json_contains_name_version_and_dep() {
     pack(config).expect("pack js-quickjs succeeded");
 
     let package_json: String = read_file(&out_dir, "package.json");
-    assert_contains(&package_json, "\"my-plugin\"", "package.json must contain bundle name");
-    assert_contains(&package_json, "\"1.2.3\"", "package.json must contain bundle version");
+    assert_contains(
+        &package_json,
+        "\"my-plugin\"",
+        "package.json must contain bundle name",
+    );
+    assert_contains(
+        &package_json,
+        "\"1.2.3\"",
+        "package.json must contain bundle version",
+    );
     assert_contains(
         &package_json,
         "polyplug_guest",
@@ -439,8 +447,16 @@ fn js_deno_json_contains_name_and_version() {
     pack(config).expect("pack js-deno succeeded");
 
     let deno_json: String = read_file(&out_dir, "deno.json");
-    assert_contains(&deno_json, "\"my-plugin\"", "deno.json must contain bundle name");
-    assert_contains(&deno_json, "\"1.2.3\"", "deno.json must contain bundle version");
+    assert_contains(
+        &deno_json,
+        "\"my-plugin\"",
+        "deno.json must contain bundle name",
+    );
+    assert_contains(
+        &deno_json,
+        "\"1.2.3\"",
+        "deno.json must contain bundle version",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -450,8 +466,7 @@ fn js_deno_json_contains_name_and_version() {
 #[test]
 fn rust_pack_defaults_when_no_bundle_section() {
     // An api.toml without a [bundle] section triggers default name/version.
-    let api_toml: &str =
-        "[[contract]]\nname = \"test.math\"\nversion = \"1.0\"\n\n[[contract.functions]]\nname = \"add\"\n";
+    let api_toml: &str = "[[contract]]\nname = \"test.math\"\nversion = \"1.0\"\n\n[[contract.functions]]\nname = \"add\"\n";
     let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let out_dir: PathBuf = tmp.path().join("out");
     let manifest_dir: PathBuf = tmp.path().join("manifest");
@@ -498,8 +513,16 @@ fn lua_init_lua_has_generated_header_and_module_table() {
     pack(config).expect("pack lua succeeded");
 
     let init_lua: String = read_file(&out_dir, "init.lua");
-    assert_contains(&init_lua, "polyplugc", "init.lua must have generated header");
-    assert_contains(&init_lua, "return M", "init.lua must return the module table");
+    assert_contains(
+        &init_lua,
+        "polyplugc",
+        "init.lua must have generated header",
+    );
+    assert_contains(
+        &init_lua,
+        "return M",
+        "init.lua must return the module table",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

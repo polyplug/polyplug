@@ -1,0 +1,12 @@
+[package]
+name    = "csv_decoder"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+# IMPORTANT: NO polyplug dependency — cdylib cannot depend on it (circular dep)
+# All ABI types are mirrored inline (see tests/fixtures/test_plugin/src/lib.rs pattern)
+
+[workspace]

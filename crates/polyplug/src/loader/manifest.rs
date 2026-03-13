@@ -167,17 +167,17 @@ mod tests {
     #[test]
     fn validate_file_ok_when_file_is_set() {
         let m: ManifestData = make_manifest("myplugin.so", "myplugin");
-        assert!(m.validate_file().is_ok(), "non-empty file must pass validation");
+        assert!(
+            m.validate_file().is_ok(),
+            "non-empty file must pass validation"
+        );
     }
 
     #[test]
     fn validate_file_err_when_file_is_empty_string() {
         let m: ManifestData = make_manifest("", "myplugin");
         let result: Result<(), crate::error::LoaderError> = m.validate_file();
-        assert!(
-            result.is_err(),
-            "empty file field must fail validation"
-        );
+        assert!(result.is_err(), "empty file field must fail validation");
         match result.unwrap_err() {
             crate::error::LoaderError::ManifestMissingFile { bundle } => {
                 assert_eq!(bundle, "myplugin");
@@ -207,7 +207,10 @@ mod tests {
         let m: ManifestData = make_manifest("", "special-bundle");
         match m.validate_file().unwrap_err() {
             crate::error::LoaderError::ManifestMissingFile { bundle } => {
-                assert_eq!(bundle, "special-bundle", "error must carry the correct bundle name");
+                assert_eq!(
+                    bundle, "special-bundle",
+                    "error must carry the correct bundle name"
+                );
             }
             other => panic!("unexpected error variant: {:?}", other),
         }
@@ -350,7 +353,11 @@ mod tests {
             },
         ];
         let deps: Vec<ManifestDependency> = m.resolved_dependencies();
-        assert_eq!(deps.len(), 1, "bundle dep without bundle_id must be skipped");
+        assert_eq!(
+            deps.len(),
+            1,
+            "bundle dep without bundle_id must be skipped"
+        );
         match &deps[0] {
             ManifestDependency::ByContract { contract, .. } => {
                 assert_eq!(contract, "y");

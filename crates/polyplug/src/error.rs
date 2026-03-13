@@ -245,8 +245,19 @@ mod tests {
         };
         let s: String = err.to_string();
         assert!(s.contains("undeclared dependency"), "got: {s}");
-        assert!(s.contains("0xdeadbeef00000001") || s.contains("deadbeef") || s.contains("DEADBEEF") || s.to_lowercase().contains("deadbeef"), "got: {s}");
-        assert!(s.to_lowercase().contains("cafebabe") || s.contains("cafebabe") || s.contains("CAFEBABE"), "got: {s}");
+        assert!(
+            s.contains("0xdeadbeef00000001")
+                || s.contains("deadbeef")
+                || s.contains("DEADBEEF")
+                || s.to_lowercase().contains("deadbeef"),
+            "got: {s}"
+        );
+        assert!(
+            s.to_lowercase().contains("cafebabe")
+                || s.contains("cafebabe")
+                || s.contains("CAFEBABE"),
+            "got: {s}"
+        );
     }
 
     #[test]
@@ -301,7 +312,10 @@ mod tests {
             context: "plugin_name_field".to_owned(),
         };
         let s: String = err.to_string();
-        assert!(s.contains("invalid UTF-8") || s.contains("invalid utf-8") || s.contains("UTF-8"), "got: {s}");
+        assert!(
+            s.contains("invalid UTF-8") || s.contains("invalid utf-8") || s.contains("UTF-8"),
+            "got: {s}"
+        );
         assert!(s.contains("plugin_name_field"), "got: {s}");
     }
 
@@ -374,7 +388,10 @@ mod tests {
             runtime_name: "lua".to_owned(),
         };
         let s: String = err.to_string();
-        assert!(s.contains("no loader") || s.contains("loader is registered"), "got: {s}");
+        assert!(
+            s.contains("no loader") || s.contains("loader is registered"),
+            "got: {s}"
+        );
         assert!(s.contains("my.bundle"), "got: {s}");
         assert!(s.contains("lua"), "got: {s}");
     }
@@ -477,7 +494,10 @@ mod tests {
         };
         let s: String = err.to_string();
         assert!(s.contains("no plugin found"), "got: {s}");
-        assert!(s.to_lowercase().contains("123456789abc") || s.to_lowercase().contains("12345678"), "got: {s}");
+        assert!(
+            s.to_lowercase().contains("123456789abc") || s.to_lowercase().contains("12345678"),
+            "got: {s}"
+        );
         assert!(s.contains('5'), "got: {s}");
     }
 

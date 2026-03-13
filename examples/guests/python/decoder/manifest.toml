@@ -1,0 +1,8 @@
+bundle_name = "python_decoder"
+runtime     = "python"
+version     = "1.0"
+file        = "decoder.py"
+provides    = ["pipeline.decoder"]
+
+[function_count]
+"pipeline.decoder@1" = 1

@@ -1,0 +1,8 @@
+bundle_name = "uppercase_transformer"
+runtime     = "native"
+version     = "1.0"
+file        = "libuppercase_transformer.so"
+provides    = ["pipeline.transformer"]
+
+[function_count]
+"pipeline.transformer@1" = 1

@@ -2,7 +2,7 @@
 //! Used to test LoaderError::MissingSymbol { symbol: "polyplug_init" }.
 
 /// ABI version constant — makes this a recognisable polyplug plugin binary.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub extern "C" fn polyplug_abi_version() -> u32 {
     1_u32
 }

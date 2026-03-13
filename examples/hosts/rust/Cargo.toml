@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "examples-host"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "examples-host"
+path = "src/main.rs"
+
+[dependencies]
+polyplug = { path = "../../../crates/polyplug" }
+polyplug_python = { path = "../../../crates/polyplug_python" }
+polyplug_lua = { path = "../../../crates/polyplug_lua" }
+polyplug_js = { path = "../../../crates/polyplug_js" }
+polyplug_dotnet = { path = "../../../crates/polyplug_dotnet" }

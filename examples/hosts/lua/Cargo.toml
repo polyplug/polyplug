@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name    = "polyplug-lua-host"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name       = "polyplug_lua_host"
+crate-type = ["cdylib"]
+
+[dependencies]
+polyplug        = { path = "../../../crates/polyplug" }
+polyplug_lua    = { path = "../../../crates/polyplug_lua" }
+polyplug_python = { path = "../../../crates/polyplug_python" }
+polyplug_js     = { path = "../../../crates/polyplug_js" }
+polyplug_dotnet = { path = "../../../crates/polyplug_dotnet" }

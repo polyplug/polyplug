@@ -211,15 +211,18 @@ mod tests {
             let d: PathBuf = tmp.path().join(name);
             std::fs::create_dir_all(&d).expect("create bundle dir");
             std::fs::write(d.join(format!("{name}.so")), b"").expect("write stub so");
-            let content: String = format!(
-                "bundle_name = \"{name}\"\nruntime = \"native\"\nfile = \"{name}.so\"\n"
-            );
+            let content: String =
+                format!("bundle_name = \"{name}\"\nruntime = \"native\"\nfile = \"{name}.so\"\n");
             std::fs::write(d.join("manifest.toml"), content).expect("write manifest");
         }
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 3);
         let names: Vec<&str> = result.iter().map(|(_, m)| m.bundle_name.as_str()).collect();
-        assert_eq!(names, vec!["apple", "mango", "zebra"], "results must be sorted by bundle_name");
+        assert_eq!(
+            names,
+            vec!["apple", "mango", "zebra"],
+            "results must be sorted by bundle_name"
+        );
     }
 
     // ── Permission errors: scan_dir returns empty vec when dir is unreadable ────────
@@ -232,18 +235,12 @@ mod tests {
         let restricted_dir: PathBuf = tmp.path().join("no_access");
         std::fs::create_dir_all(&restricted_dir).expect("create dir");
         // Remove all permissions so read_dir will fail
-        std::fs::set_permissions(
-            &restricted_dir,
-            std::fs::Permissions::from_mode(0o000),
-        )
-        .expect("set permissions");
+        std::fs::set_permissions(&restricted_dir, std::fs::Permissions::from_mode(0o000))
+            .expect("set permissions");
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(&restricted_dir);
         // Restore permissions so tempdir cleanup can succeed
-        std::fs::set_permissions(
-            &restricted_dir,
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .expect("restore permissions");
+        std::fs::set_permissions(&restricted_dir, std::fs::Permissions::from_mode(0o700))
+            .expect("restore permissions");
         assert!(
             result.is_empty(),
             "unreadable directory must return empty vec, not panic"
@@ -262,7 +259,8 @@ mod tests {
         std::fs::write(real_bundle.join("real_plugin.so"), b"").expect("write stub so");
         let manifest_content: &str =
             "bundle_name = \"real_plugin\"\nruntime = \"native\"\nfile = \"real_plugin.so\"\n";
-        std::fs::write(real_bundle.join("manifest.toml"), manifest_content).expect("write manifest");
+        std::fs::write(real_bundle.join("manifest.toml"), manifest_content)
+            .expect("write manifest");
 
         // Setup: scan root with a symlink pointing to the real bundle directory.
         let scan_tmp: tempfile::TempDir = tempfile::TempDir::new().expect("scan root tmp");

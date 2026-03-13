@@ -1,0 +1,8 @@
+bundle_name = "reverse_transformer"
+runtime     = "lua"
+version     = "1.0"
+file        = "reverse_transformer.lua"
+provides    = ["pipeline.transformer"]
+
+[function_count]
+"pipeline.transformer@1" = 1

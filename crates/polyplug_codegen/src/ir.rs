@@ -424,9 +424,15 @@ mod tests {
     #[test]
     fn contract_id_golden_values() {
         // Golden: FNV-1a of "image.decode@1" — must match runtime abi::contract_id
-        assert_eq!(compute_contract_id("image.decode", 1), 0xa1ba05dd7da18569_u64);
+        assert_eq!(
+            compute_contract_id("image.decode", 1),
+            0xa1ba05dd7da18569_u64
+        );
         // Golden: FNV-1a of "audio.encode@2"
-        assert_eq!(compute_contract_id("audio.encode", 2), 0x7a7958404b1d72a5_u64);
+        assert_eq!(
+            compute_contract_id("audio.encode", 2),
+            0x7a7958404b1d72a5_u64
+        );
     }
 
     #[test]
@@ -475,7 +481,10 @@ mod tests {
         // Golden: lower 32 bits of FNV-1a of "metrics"
         assert_eq!(compute_extension_id("metrics"), 0xb54e70d6_u32);
         // Different names produce different IDs
-        assert_ne!(compute_extension_id("trace"), compute_extension_id("metrics"));
+        assert_ne!(
+            compute_extension_id("trace"),
+            compute_extension_id("metrics")
+        );
     }
 
     #[test]

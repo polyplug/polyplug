@@ -142,7 +142,7 @@ impl TestAddPlugin for MyPlugin {
 
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a `PluginRegistrar`.
-#[unsafe(no_mangle)]
+#[no_mangle]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     // Set the OnceLock impl before any vtable function can be called.
     TEST_ADD_IMPL.get_or_init(|| Box::new(MyPlugin));
@@ -369,12 +369,7 @@ fn smoke_cpp_codegen_dispatch() {
     let guest_dir: PathBuf = out_dir.join("guest");
 
     // ── 3. Assert all 5 expected guest files exist ──────────────────────────
-    let expected_guest_files: [&str; 4] = [
-        "types.hpp",
-        "contracts.hpp",
-        "vtables.hpp",
-        "init.hpp",
-    ];
+    let expected_guest_files: [&str; 4] = ["types.hpp", "contracts.hpp", "vtables.hpp", "init.hpp"];
     for filename in expected_guest_files {
         let file_path: PathBuf = guest_dir.join(filename);
         assert!(
