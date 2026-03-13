@@ -533,7 +533,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add FFI robustness tests for uncovered edge cases`
   - Files: `crates/polyplug/tests/integration_ffi_robustness.rs`
 
-- [ ] **Task 10: LAST_ERROR Thread Isolation Tests**
+- [x] **Task 10: LAST_ERROR Thread Isolation Tests**
 
   **What to do**: Test thread-local error handling at `crates/polyplug/src/ffi.rs:361`
 

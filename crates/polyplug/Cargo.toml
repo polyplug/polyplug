@@ -44,3 +44,6 @@ required-features = ["testing"]
 [[test]]
 name = "integration_registrar_security"
 required-features = ["testing"]
+
+[[test]]
+name = "integration_last_error"
