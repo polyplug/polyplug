@@ -1,0 +1,12 @@
+[package]
+name    = "string_transformer"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+# IMPORTANT: NO polyplug dependency — cdylib cannot depend on it (circular dep)
+# All ABI types are mirrored inline (see examples/guests/rust/decoder/src/lib.rs)
+
+[workspace]

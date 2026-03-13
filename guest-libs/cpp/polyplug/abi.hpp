@@ -151,3 +151,51 @@ inline std::span<uint8_t> Buffer_as_mut_span(Buffer& b) noexcept {
     return {static_cast<uint8_t*>(b.ptr), b.cap};
 }
 #endif // __cplusplus
+
+// ─── Compile-time contract ID computation ────────────────────────────────────
+//
+// Computes FNV-1a 64-bit hash of the canonical string "name@major_version".
+// Identical algorithm to the Rust implementation in polyplug::abi::contract_id.
+//
+// Usage:
+//   constexpr uint64_t MY_CONTRACT = polyplug::fnv1a_contract_id("my.contract", 1);
+namespace polyplug {
+
+namespace detail {
+
+/// FNV-1a 64-bit hash of a NUL-terminated string prefix.
+/// Internal helper — prefer fnv1a_contract_id for contract IDs.
+constexpr uint64_t fnv1a_64_str(const char* s, uint64_t hash) noexcept {
+    return (*s == '\0') ? hash : fnv1a_64_str(s + 1, (hash ^ static_cast<uint64_t>(static_cast<unsigned char>(*s))) * UINT64_C(0x00000100000001B3));
+}
+
+/// Append a decimal uint32 to the hash without heap allocation.
+constexpr uint64_t fnv1a_64_u32(uint32_t v, uint64_t hash) noexcept {
+    if (v < 10U) {
+        uint64_t h2 = hash ^ static_cast<uint64_t>('0' + v);
+        return h2 * UINT64_C(0x00000100000001B3);
+    }
+    uint64_t h2 = fnv1a_64_u32(v / 10U, hash);
+    uint64_t h3 = h2 ^ static_cast<uint64_t>('0' + (v % 10U));
+    return h3 * UINT64_C(0x00000100000001B3);
+}
+
+}  // namespace detail
+
+/// Compute the polyplug contract ID for "name@major_version" using FNV-1a 64-bit.
+/// Produces the same value as `polyplug::abi::contract_id(name, major_version)` in Rust.
+///
+/// Known values:
+///   fnv1a_contract_id("test.add",    1) == 0xCC4232FAB0410D2BU
+///   fnv1a_contract_id("image.decode", 1) == 0xA1BA05DD7DA18569U
+constexpr uint64_t fnv1a_contract_id(const char* name, uint32_t major_version) noexcept {
+    constexpr uint64_t FNV_OFFSET = UINT64_C(0xcbf29ce484222325);
+    uint64_t h = detail::fnv1a_64_str(name, FNV_OFFSET);
+    // hash '@'
+    h = (h ^ static_cast<uint64_t>('@')) * UINT64_C(0x00000100000001B3);
+    // hash decimal digits of major_version
+    h = detail::fnv1a_64_u32(major_version, h);
+    return h;
+}
+
+}  // namespace polyplug
