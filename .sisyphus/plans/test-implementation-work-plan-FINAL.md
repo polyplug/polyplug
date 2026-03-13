@@ -899,7 +899,7 @@ Wave FINAL (Verification & Documentation - After ALL):
 
 ### Wave 6: Unit Tests
 
-- [ ] **Task 19: Version Parsing Unit Tests (FOCUSED)**
+- [x] **Task 19: Version Parsing Unit Tests (FOCUSED)**
 
   **What to do**: Test UNCOVERED edge cases (basic parsing covered in integration_version.rs)
 
@@ -937,7 +937,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add version parsing edge case unit tests`
   - Files: `crates/polyplug/src/version.rs` (inline tests)
 
-- [ ] **Task 20: Error Formatting Unit Tests**
+- [x] **Task 20: Error Formatting Unit Tests**
 
   **What to do**: Unit tests for error Display implementations
 
@@ -977,7 +977,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add error formatting unit tests`
   - Files: `crates/polyplug/src/error.rs`, `crates/polyplug_codegen/src/error.rs`
 
-- [ ] **Task 21: Hash Function Stability Tests (CORRECTED)**
+- [x] **Task 21: Hash Function Stability Tests (CORRECTED)**
 
   **What to do**: Unit tests for FNV-1a hash stability
 
@@ -1017,7 +1017,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `test: add hash function stability tests`
   - Files: `crates/polyplug/src/abi.rs`, `crates/polyplug_codegen/src/ir.rs`
 
-- [ ] **Task 22: Loader/Manifest Unit Tests**
+- [x] **Task 22: Loader/Manifest Unit Tests**
 
   **What to do**: Unit tests for loader module
 
@@ -1099,7 +1099,7 @@ Wave FINAL (Verification & Documentation - After ALL):
 
 ### Wave FINAL: Verification & Documentation
 
-- [ ] **Task F1: Plan Compliance Audit**
+- [x] **Task F1: Plan Compliance Audit**
 
   **What to do**: Verify all critical paths from plan are tested
 
@@ -1134,7 +1134,7 @@ Wave FINAL (Verification & Documentation - After ALL):
 
   **Commit**: NO
 
-- [ ] **Task F2: Test Isolation Documentation**
+- [x] **Task F2: Test Isolation Documentation**
 
   **What to do**: Document OnceLock global state constraints
 
@@ -1167,7 +1167,7 @@ Wave FINAL (Verification & Documentation - After ALL):
   - Message: `docs: add test isolation guidelines`
   - Files: `crates/polyplug/TESTING.md`
 
-- [ ] **Task F3: CI Configuration for Stress Tests**
+- [x] **Task F3: CI Configuration for Stress Tests**
 
   **What to do**: Configure CI to run stress tests separately
 
