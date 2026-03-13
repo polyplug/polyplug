@@ -2133,6 +2133,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyplug-rust-host"
+version = "0.1.0"
+dependencies = [
+ "polyplug",
+ "polyplug_dotnet",
+ "polyplug_js",
+ "polyplug_lua",
+ "polyplug_python",
+]
+
+[[package]]
 name = "polyplug_codegen"
 version = "0.1.0"
 dependencies = [
@@ -2502,13 +2513,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27344601ef27460e82d6a4e1ecb9e7e99f518122095f3c51296da8e9be2b9d83"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "rust_minimal"
-version = "0.1.0"
-dependencies = [
- "polyplug",
 ]
 
 [[package]]

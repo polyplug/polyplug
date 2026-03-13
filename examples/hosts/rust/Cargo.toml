@@ -1,0 +1,21 @@
+[package]
+name = "polyplug-rust-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Rust host example for the polyplug plugin runtime"
+
+[[bin]]
+name = "rust"
+path = "src/main.rs"
+
+[dependencies]
+polyplug = { workspace = true }
+polyplug_dotnet = { workspace = true }
+polyplug_js = { workspace = true }
+polyplug_lua = { workspace = true }
+polyplug_python = { workspace = true }
+
+[lints]
+workspace = true

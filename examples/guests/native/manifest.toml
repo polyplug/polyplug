@@ -1,8 +1,0 @@
-bundle_name = "string_transformer"
-runtime     = "native"
-version     = "1.0"
-file        = "libstring_transformer.so"
-provides    = ["pipeline.transformer"]
-
-[function_count]
-"pipeline.transformer@1" = 1
