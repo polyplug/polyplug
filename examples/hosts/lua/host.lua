@@ -1,35 +1,49 @@
--- examples/hosts/lua/host.lua
--- Lua host example for polyplug.
---
--- Loads all 12 guest plugins (2 per language: Rust, C++, C#, Python, Lua, JS)
--- and runs the full pipeline: decode → validate → transform → encode → report.
---
--- Requires LuaJIT (for the ffi module). Run with:
---   luajit examples/hosts/lua/host.lua
+local ffi = require("ffi")
+local bit = require("bit")
 
-local ffi    = require("ffi")
+local band = bit.band
+local bxor = bit.bxor
+local lshift = bit.lshift
+local rshift = bit.rshift
+
 local script_dir = debug.getinfo(1, "S").source:match("^@(.*/)")
     or debug.getinfo(1, "S").source:match("^@(.*[/\\])")
     or "./"
 
--- ─── ABI type declarations ────────────────────────────────────────────────────
--- Mirrors the frozen ABI from crates/polyplug/src/abi.rs
+local REPO_ROOT = script_dir .. "../../.."
+
+package.path = REPO_ROOT .. "/host-libs/lua/?.lua;" .. package.path
+
+local polyplug = require("polyplug")
+
+local function resolve_polyplug_so()
+    local env_path = os.getenv("POLYPLUG_SO")
+    if env_path and #env_path > 0 then
+        return env_path
+    end
+    local full_path = REPO_ROOT .. "/examples/hosts/js/target/debug/libpolyplug_full.so"
+    local f = io.open(full_path, "rb")
+    if f then
+        f:close()
+        return full_path
+    end
+    return REPO_ROOT .. "/target/debug/libpolyplug.so"
+end
+
+polyplug.load_lib(resolve_polyplug_so())
+
 ffi.cdef([[
-    // StringView: non-owning UTF-8 string slice.
     typedef struct {
         const uint8_t* ptr;
         size_t         len;
     } StringView;
 
-    // Buffer: byte buffer (may be host-allocated).
     typedef struct {
         uint8_t* ptr;
         size_t   len;
         size_t   cap;
     } Buffer;
 
-    // DataRecord: decoded CSV row passed between pipeline stages.
-    // Layout: name(16) + value(16) + count(4) + _pad(4) = 40 bytes.
     typedef struct {
         StringView name;
         StringView value;
@@ -37,8 +51,6 @@ ffi.cdef([[
         uint32_t   _pad;
     } DataRecord;
 
-    // AbiError: returned by every ABI function.
-    // Layout: code(4) + _pad(4) + message.ptr(8) + message.len(8) = 24 bytes.
     typedef struct {
         uint32_t   code;
         uint32_t   _pad;
@@ -46,11 +58,8 @@ ffi.cdef([[
         size_t         msg_len;
     } AbiError;
 
-    // Generic ABI function pointer: fn(args: *const (), out: *mut ()) -> AbiError.
     typedef AbiError (*AbiFunc)(const void* args, void* out);
 
-    // PluginVTable: layout mirrors polyplug::abi::PluginVTable.
-    // Layout: contract_id(8) + contract_version(4) + function_count(4) + functions(8) = 24 bytes.
     typedef struct {
         uint64_t  contract_id;
         uint32_t  contract_version;
@@ -58,8 +67,6 @@ ffi.cdef([[
         AbiFunc*  functions;
     } PluginVTable;
 
-    // ValidationResult: output type of pipeline.validator@1 plugins.
-    // Layout: valid(1) + _pad(7) + reason.ptr(8) + reason.len(8) = 24 bytes.
     typedef struct {
         uint8_t    valid;
         uint8_t    _pad[7];
@@ -67,46 +74,74 @@ ffi.cdef([[
     } ValidationResult;
 ]])
 
-local function u64(hi, lo) return ffi.cast("uint64_t", hi) * 0x100000000ULL + lo end
--- ─── Contract IDs (FNV-1a 64-bit of "pipeline.<name>@1") ─────────────────────
-local DECODER_CONTRACT_ID     = u64(0x133E62AB, 0xD6E7D5BE)
+local function u64(hi, lo)
+    return ffi.cast("uint64_t", hi) * 0x100000000ULL + lo
+end
+
+local DECODER_CONTRACT_ID = u64(0x133E62AB, 0xD6E7D5BE)
 local TRANSFORMER_CONTRACT_ID = u64(0x0E304413, 0x3E12EB05)
-local ENCODER_CONTRACT_ID     = u64(0x12AD37F4, 0x3386F752)
-local REPORTER_CONTRACT_ID    = u64(0xD50E539C, 0xAE219A15)
-local VALIDATOR_CONTRACT_ID   = u64(0x027ABCEB, 0xF8020D90)
+local ENCODER_CONTRACT_ID = u64(0x12AD37F4, 0x3386F752)
+local REPORTER_CONTRACT_ID = u64(0xD50E539C, 0xAE219A15)
+local VALIDATOR_CONTRACT_ID = u64(0x027ABCEB, 0xF8020D90)
 
 local ABI_OK = 0
 
--- ─── Helper: construct a null StringView ─────────────────────────────────────
-local function null_sv()
-    local sv = ffi.new("StringView")
-    sv.ptr = nil
-    sv.len = 0
-    return sv
+local function fnv1a_64(bytes)
+    local FNV_OFFSET_HI = 0xCBF29CE4
+    local FNV_OFFSET_LO = 0x84222325
+    local FNV_PRIME_HI = 0x00000100
+    local FNV_PRIME_LO = 0x000001B3
+
+    local function mul_u32(a, b)
+        local a0 = band(a, 0xFFFF)
+        local a1 = rshift(a, 16)
+        local b0 = band(b, 0xFFFF)
+        local b1 = rshift(b, 16)
+
+        local p0 = a0 * b0
+        local p1 = a0 * b1
+        local p2 = a1 * b0
+        local p3 = a1 * b1
+
+        local mid = p1 + p2
+        local mid_low = band(mid, 0xFFFF)
+        local mid_high = rshift(mid, 16)
+
+        local sum = p0 + lshift(mid_low, 16)
+        local low = band(sum, 0xFFFFFFFF)
+        local carry = math.floor(sum / 4294967296)
+        local high = band(p3 + mid_high + carry, 0xFFFFFFFF)
+        return high, low
+    end
+
+    local function mul_fnv(hi, lo)
+        local h0, l0 = mul_u32(lo, FNV_PRIME_LO)
+        local _, l1 = mul_u32(hi, FNV_PRIME_LO)
+        local _, l2 = mul_u32(lo, FNV_PRIME_HI)
+        local high = band(h0 + l1 + l2, 0xFFFFFFFF)
+        return high, l0
+    end
+
+    local hi = FNV_OFFSET_HI
+    local lo = FNV_OFFSET_LO
+    for i = 1, #bytes do
+        local b = bytes:byte(i)
+        lo = bxor(lo, b)
+        hi, lo = mul_fnv(hi, lo)
+    end
+    return u64(hi, lo)
 end
 
--- ─── Helper: construct a null Buffer ─────────────────────────────────────────
-local function null_buf()
-    local buf = ffi.new("Buffer")
-    buf.ptr = nil
-    buf.len = 0
-    buf.cap = 0
-    return buf
+local function bundle_id(name)
+    return fnv1a_64(name)
 end
 
--- ─── Helper: call a vtable function ──────────────────────────────────────────
--- vtable_ptr: void* pointing to a PluginVTable
--- fn_index:   0-based index into vtable.functions
--- args_ptr:   const void* — pointer to the input argument struct
--- out_ptr:    void* — pointer to the output struct
--- Returns: AbiError
 local function call_vtable_fn(vtable_ptr, fn_index, args_ptr, out_ptr)
     local vt = ffi.cast("const PluginVTable*", vtable_ptr)
     local fn_ptr = vt.functions[fn_index]
     return fn_ptr(args_ptr, out_ptr)
 end
 
--- ─── Helper: get vtable from a guard ────────────────────────────────────────
 local function get_vtable(rt, handle)
     local guard, err = rt:resolve_plugin(handle)
     if not guard then
@@ -115,211 +150,204 @@ local function get_vtable(rt, handle)
     return guard:vtable(), guard
 end
 
--- ─── Load the companion shared library ───────────────────────────────────────
--- The companion cdylib (built from examples/hosts/lua/src/lib.rs) provides
--- polyplug_runtime_new_full() — a runtime with all language loaders registered.
-local so_path = script_dir .. "target/debug/libpolyplug_lua_host.so"
-
--- Add path to polyplug_full module search path
-package.path = script_dir .. "?.lua;" .. package.path
-
-local polyplug = require("polyplug_full")
-polyplug.load_lib(so_path)
-
--- ─── Build runtime ────────────────────────────────────────────────────────────
-print("=== polyplug lua host ===")
-local rt = polyplug.Runtime.new()
-
--- ─── Resolve guest plugin paths ───────────────────────────────────────────────
--- All paths are relative to the repo root (run from repo root).
-local REPO_ROOT = script_dir .. "../../.."
-local function guest_path(lang, name)
-    return REPO_ROOT .. "/examples/guests/" .. lang .. "/" .. name
+local function string_view_to_str(sv)
+    if sv.ptr == nil or sv.len == 0 then
+        return ""
+    end
+    return ffi.string(sv.ptr, sv.len)
 end
 
--- 12 guest plugin directories:
-local guest_dirs = {
-    -- C# guests loaded first: CLR must initialize before native guests are dlopen'd,
-    -- otherwise the C++ .so symbols interfere with CLR startup (segfault).
-    guest_path("csharp",  "encoder"),       -- 1: C# csv_encoder
-    guest_path("csharp",  "reporter"),      -- 2: C# reporter
-    guest_path("rust",    "decoder"),       -- 3: Rust csv_decoder
-    guest_path("rust",    "encoder"),       -- 4: Rust csv_encoder
-    guest_path("cpp",     "transformer"),   -- 5: C++ uppercase_transformer
-    guest_path("cpp",     "validator"),     -- 6: C++ validator
-    guest_path("python",  "decoder"),       -- 7: Python decoder
-    guest_path("python",  "reporter"),      -- 8: Python reporter
-    guest_path("lua",     "transformer"),   -- 9: Lua reverse_transformer
-    guest_path("lua",     "validator"),     -- 10: Lua validator
-    guest_path("js",      "validator"),     -- 11: JS field_validator
-    guest_path("js",      "reporter"),      -- 12: JS reporter
-}
+local function abi_error_message(err, fallback)
+    if err.msg_ptr == nil or err.msg_len == 0 then
+        return fallback
+    end
+    return ffi.string(err.msg_ptr, err.msg_len)
+end
 
--- ─── Load all 12 guests ───────────────────────────────────────────────────────
-local loaded_count = 0
-local load_errors  = {}
-
-for i, dir in ipairs(guest_dirs) do
-    local ok, err = pcall(function()
-        rt:load_bundle(dir)
-    end)
-    if ok then
-        loaded_count = loaded_count + 1
-        print(string.format("[load] guest %2d OK: %s", i, dir:match("[^/]+/[^/]+$") or dir))
-    else
-        table.insert(load_errors, { index = i, dir = dir, err = err })
-        print(string.format("[load] guest %2d WARN: %s — %s", i, dir:match("[^/]+/[^/]+$") or dir, err))
+local function load_bundles(rt, bundles)
+    print("Loading 12 guest plugins...")
+    for i, path in ipairs(bundles) do
+        rt:load_bundle(path)
+        local lang = path:match("examples/guests/([^/]+)/") or "?"
+        local name = path:match("/([^/]+)$") or path
+        print(string.format("  [OK]  %2d/12 %s/%s", i, lang, name))
     end
 end
 
-print(string.format("[load] %d/12 guests loaded", loaded_count))
-
--- ─── Run pipeline ─────────────────────────────────────────────────────────────
--- The pipeline requires: decoder, validator, transformer, encoder, reporter.
--- We pick the first available provider of each contract.
-
-local function find_first(contract_id, label)
-    local handle = rt:find_by_contract(contract_id, 0)
+local function resolve_by_bundle(rt, bundle_name, contract_id)
+    local handle = rt:find_by_bundle(bundle_id(bundle_name), contract_id, 0)
     if ffi.cast("uint64_t", handle) == polyplug.NULL_HANDLE then
-        error("no plugin found for contract: " .. label)
+        error("plugin not found for bundle: " .. bundle_name)
     end
-    return handle
+    return get_vtable(rt, handle)
 end
 
-local decoder_h     = find_first(DECODER_CONTRACT_ID,     "pipeline.decoder")
-local validator_h   = find_first(VALIDATOR_CONTRACT_ID,   "pipeline.validator")
-local transformer_h = find_first(TRANSFORMER_CONTRACT_ID, "pipeline.transformer")
-local encoder_h     = find_first(ENCODER_CONTRACT_ID,     "pipeline.encoder")
-local reporter_h    = find_first(REPORTER_CONTRACT_ID,    "pipeline.reporter")
+local function run_pipeline(label, decoder_vt, encoder_vt, transformer_vt, reporter_vt, validator_vt, input_csv)
+    print("--- " .. label .. " ---")
 
--- Resolve guards and vtables (keep guards alive for the duration of the pipeline).
-local decoder_vt,     decoder_guard     = get_vtable(rt, decoder_h)
-local validator_vt,   validator_guard   = get_vtable(rt, validator_h)
-local transformer_vt, transformer_guard = get_vtable(rt, transformer_h)
-local encoder_vt,     encoder_guard     = get_vtable(rt, encoder_h)
-local reporter_vt,    reporter_guard    = get_vtable(rt, reporter_h)
+    local input_buf = ffi.new("Buffer")
+    local input_bytes = ffi.cast("uint8_t*", input_csv)
+    input_buf.ptr = input_bytes
+    input_buf.len = #input_csv
+    input_buf.cap = #input_csv
 
--- ─── Stage 1: decode ──────────────────────────────────────────────────────────
-local csv_input   = "Alice,hello,3\n"
-local input_bytes = ffi.cast("uint8_t*", csv_input)
-local input_buf   = ffi.new("Buffer")
-input_buf.ptr     = input_bytes
-input_buf.len     = #csv_input
-input_buf.cap     = #csv_input
+    local record = ffi.new("DataRecord")
+    record.name.ptr = nil
+    record.name.len = 0
+    record.value.ptr = nil
+    record.value.len = 0
+    record.count = 0
+    record._pad = 0
 
-local record = ffi.new("DataRecord")
-record.name.ptr  = nil ; record.name.len  = 0
-record.value.ptr = nil ; record.value.len = 0
-record.count     = 0
-record._pad      = 0
-
-local decode_err = call_vtable_fn(decoder_vt, 0, input_buf, record)
-if decode_err.code ~= ABI_OK then
-    error(string.format("decode failed: code=%d", decode_err.code))
-end
-
-local name_str  = ffi.string(record.name.ptr,  record.name.len)
-local value_str = ffi.string(record.value.ptr, record.value.len)
-print(string.format("[decode]    name=%s  value=%s  count=%d", name_str, value_str, record.count))
-
--- ─── Stage 2: validate ────────────────────────────────────────────────────────
--- ValidationResult is 24 bytes (valid:1 + pad:7 + reason:StringView:16).
--- Using uint64_t[1] (8 bytes) would corrupt the heap — must use correct type.
-local validate_out = ffi.new("ValidationResult")
-local _validate_err = call_vtable_fn(validator_vt, 0, record, validate_out)
--- Validation errors are non-fatal in this example.
-if _validate_err.code ~= ABI_OK then
-    print(string.format("[validate]  WARN code=%d (continuing)", _validate_err.code))
-elseif validate_out.valid == 0 then
-    local reason = validate_out.reason.ptr ~= nil
-        and ffi.string(validate_out.reason.ptr, validate_out.reason.len) or "?"
-    print(string.format("[validate]  INVALID: %s (continuing)", reason))
-else
-    print("[validate]  OK")
-end
-
--- ─── Stage 3: transform ───────────────────────────────────────────────────────
-local transformed = ffi.new("DataRecord")
-transformed.name.ptr  = nil ; transformed.name.len  = 0
-transformed.value.ptr = nil ; transformed.value.len = 0
-transformed.count     = 0
-transformed._pad      = 0
-
-local _transform_err = call_vtable_fn(transformer_vt, 0, record, transformed)
-if _transform_err.code ~= ABI_OK then
-    print(string.format("[transform] WARN code=%d (using original record)", _transform_err.code))
-    -- Fall back to original record if transform fails
-    transformed = record
-else
-    local t_name  = transformed.name.ptr  ~= nil and ffi.string(transformed.name.ptr,  transformed.name.len)  or "(nil)"
-    local t_value = transformed.value.ptr ~= nil and ffi.string(transformed.value.ptr, transformed.value.len) or "(nil)"
-    print(string.format("[transform] name=%s  value=%s  count=%d", t_name, t_value, transformed.count))
-end
-
--- ─── Stage 4: encode ──────────────────────────────────────────────────────────
-local encoded_buf = ffi.new("Buffer")
-encoded_buf.ptr   = nil
-encoded_buf.len   = 0
-encoded_buf.cap   = 0
-
-local encode_err = call_vtable_fn(encoder_vt, 0, transformed, encoded_buf)
-if encode_err.code ~= ABI_OK then
-    error(string.format("encode failed: code=%d", encode_err.code))
-end
-local encoded_str = ffi.string(encoded_buf.ptr, encoded_buf.len)
-print("[encode]    " .. encoded_str:gsub("\n", ""))
-
--- ─── Stage 5: report ─────────────────────────────────────────────────────────
-local report_sv = ffi.new("StringView")
-report_sv.ptr   = nil
-report_sv.len   = 0
-
-local report_err = call_vtable_fn(reporter_vt, 0, transformed, report_sv)
-if report_err.code ~= ABI_OK then
-    print(string.format("[report]    WARN code=%d", report_err.code))
-elseif report_sv.ptr ~= nil and report_sv.len > 0 then
-    local report_str = ffi.string(report_sv.ptr, report_sv.len)
-    print("[report]    " .. report_str:gsub("\n", ""))
-else
-    print("[report]    (empty)")
-end
-
--- ─── Free guards ─────────────────────────────────────────────────────────────
-decoder_guard:free()
-validator_guard:free()
-transformer_guard:free()
-encoder_guard:free()
-reporter_guard:free()
-
--- ─── Error scenario: malformed input ─────────────────────────────────────────
-print("--- error scenario: malformed input ---")
-local bad_input   = "INVALID\n"
-local bad_bytes   = ffi.cast("uint8_t*", bad_input)
-local bad_buf     = ffi.new("Buffer")
-bad_buf.ptr       = bad_bytes
-bad_buf.len       = #bad_input
-bad_buf.cap       = #bad_input
-
-local bad_record  = ffi.new("DataRecord")
-bad_record.name.ptr  = nil ; bad_record.name.len  = 0
-bad_record.value.ptr = nil ; bad_record.value.len = 0
-bad_record.count     = 0
-bad_record._pad      = 0
-
-local err_h2 = find_first(DECODER_CONTRACT_ID, "pipeline.decoder")
-local err_vt, err_guard = get_vtable(rt, err_h2)
-local bad_err = call_vtable_fn(err_vt, 0, bad_buf, bad_record)
-if bad_err.code ~= ABI_OK then
-    local msg = ""
-    if bad_err.msg_ptr ~= nil and bad_err.msg_len > 0 then
-        msg = ffi.string(bad_err.msg_ptr, bad_err.msg_len)
-    else
-        msg = "unknown error"
+    local decode_err = call_vtable_fn(decoder_vt, 0, input_buf, record)
+    if decode_err.code ~= ABI_OK then
+        local msg = abi_error_message(decode_err, "decode failed")
+        error(string.format("decode failed: %s (code %d)", msg, decode_err.code))
     end
-    print(string.format("[error]     decode failed: %s (code %d)", msg, bad_err.code))
-end
-err_guard:free()
 
--- ─── Done ─────────────────────────────────────────────────────────────────────
-rt:free()
-print("pipeline complete")
+    local transformed = ffi.new("DataRecord")
+    transformed.name.ptr = nil
+    transformed.name.len = 0
+    transformed.value.ptr = nil
+    transformed.value.len = 0
+    transformed.count = 0
+    transformed._pad = 0
+
+    local transform_err = call_vtable_fn(transformer_vt, 0, record, transformed)
+    if transform_err.code ~= ABI_OK then
+        local msg = abi_error_message(transform_err, "transform failed")
+        error(string.format("transform failed: %s (code %d)", msg, transform_err.code))
+    end
+
+    local encoded = ffi.new("Buffer")
+    encoded.ptr = nil
+    encoded.len = 0
+    encoded.cap = 0
+
+    local encode_err = call_vtable_fn(encoder_vt, 0, transformed, encoded)
+    if encode_err.code ~= ABI_OK then
+        local msg = abi_error_message(encode_err, "encode failed")
+        error(string.format("encode failed: %s (code %d)", msg, encode_err.code))
+    end
+    local output = ""
+    if encoded.ptr ~= nil and encoded.len > 0 then
+        output = ffi.string(encoded.ptr, encoded.len)
+    end
+    print("Run output: " .. output:gsub("\n", ""))
+
+    local report_sv = ffi.new("StringView")
+    report_sv.ptr = nil
+    report_sv.len = 0
+    local report_err = call_vtable_fn(reporter_vt, 0, transformed, report_sv)
+    if report_err.code ~= ABI_OK then
+        local msg = abi_error_message(report_err, "report failed")
+        error(string.format("report failed: %s (code %d)", msg, report_err.code))
+    end
+    local report_str = string_view_to_str(report_sv)
+    if #report_str > 0 then
+        print("Run summary: " .. report_str)
+    end
+
+    local validation = ffi.new("ValidationResult")
+    local validate_err = call_vtable_fn(validator_vt, 0, transformed, validation)
+    if validate_err.code ~= ABI_OK then
+        local msg = abi_error_message(validate_err, "validate failed")
+        error(string.format("validate failed: %s (code %d)", msg, validate_err.code))
+    end
+    local reason = string_view_to_str(validation.reason)
+    local status = validation.valid ~= 0 and "ok" or "invalid"
+    print(string.format("Validation: %s (%s)", status, reason))
+end
+
+local function main()
+    print("=== polyplug C# host example ===")
+
+    local rt = polyplug.Runtime.new()
+    polyplug.register_native_loader(rt._ptr)
+    polyplug.register_dotnet_loader(rt._ptr, { min_framework = "10.0" })
+    polyplug.register_python_loader(rt._ptr, { min_version = "3.11" })
+    polyplug.register_lua_loader(rt._ptr)
+    polyplug.register_js_loader(rt._ptr)
+
+    local bundles = {
+        REPO_ROOT .. "/examples/guests/rust/decoder",
+        REPO_ROOT .. "/examples/guests/rust/encoder",
+        REPO_ROOT .. "/examples/guests/cpp/transformer",
+        REPO_ROOT .. "/examples/guests/cpp/validator",
+        REPO_ROOT .. "/examples/guests/csharp/encoder",
+        REPO_ROOT .. "/examples/guests/csharp/reporter",
+        REPO_ROOT .. "/examples/guests/python/decoder",
+        REPO_ROOT .. "/examples/guests/python/reporter",
+        REPO_ROOT .. "/examples/guests/lua/transformer",
+        REPO_ROOT .. "/examples/guests/lua/validator",
+        REPO_ROOT .. "/examples/guests/js/validator",
+        REPO_ROOT .. "/examples/guests/js/reporter",
+    }
+
+    load_bundles(rt, bundles)
+
+    local decoder_rust_vt, decoder_rust_guard = resolve_by_bundle(rt, "csv_decoder", DECODER_CONTRACT_ID)
+    local encoder_rust_vt, encoder_rust_guard = resolve_by_bundle(rt, "csv_encoder_rust", ENCODER_CONTRACT_ID)
+    local transformer_cpp_vt, transformer_cpp_guard = resolve_by_bundle(rt, "uppercase_transformer", TRANSFORMER_CONTRACT_ID)
+    local validator_cpp_vt, validator_cpp_guard = resolve_by_bundle(rt, "cpp_validator", VALIDATOR_CONTRACT_ID)
+    local encoder_csharp_vt, encoder_csharp_guard = resolve_by_bundle(rt, "csv_encoder_csharp", ENCODER_CONTRACT_ID)
+    local reporter_csharp_vt, reporter_csharp_guard = resolve_by_bundle(rt, "csharp_reporter", REPORTER_CONTRACT_ID)
+    local decoder_python_vt, decoder_python_guard = resolve_by_bundle(rt, "python_decoder", DECODER_CONTRACT_ID)
+    local reporter_python_vt, reporter_python_guard = resolve_by_bundle(rt, "summary_reporter", REPORTER_CONTRACT_ID)
+    local transformer_lua_vt, transformer_lua_guard = resolve_by_bundle(rt, "reverse_transformer", TRANSFORMER_CONTRACT_ID)
+    local validator_lua_vt, validator_lua_guard = resolve_by_bundle(rt, "lua_validator", VALIDATOR_CONTRACT_ID)
+    local reporter_js_vt, reporter_js_guard = resolve_by_bundle(rt, "js_reporter", REPORTER_CONTRACT_ID)
+    local validator_js_vt, validator_js_guard = resolve_by_bundle(rt, "field_validator", VALIDATOR_CONTRACT_ID)
+
+    run_pipeline(
+        "Run 1: Rust decoder, C++ transformer, Rust encoder, C# reporter, C++ validator",
+        decoder_rust_vt,
+        encoder_rust_vt,
+        transformer_cpp_vt,
+        reporter_csharp_vt,
+        validator_cpp_vt,
+        "Alice,hello,3\n"
+    )
+
+    run_pipeline(
+        "Run 2: Python decoder, Lua transformer, C# encoder, Python reporter, Lua validator",
+        decoder_python_vt,
+        encoder_csharp_vt,
+        transformer_lua_vt,
+        reporter_python_vt,
+        validator_lua_vt,
+        "Bob,world,4\n"
+    )
+
+    run_pipeline(
+        "Run 3: Rust decoder, C++ transformer, C# encoder, JS reporter, JS validator",
+        decoder_rust_vt,
+        encoder_csharp_vt,
+        transformer_cpp_vt,
+        reporter_js_vt,
+        validator_js_vt,
+        "Cara,polyplug,5\n"
+    )
+
+    decoder_rust_guard:free()
+    encoder_rust_guard:free()
+    transformer_cpp_guard:free()
+    validator_cpp_guard:free()
+    encoder_csharp_guard:free()
+    reporter_csharp_guard:free()
+    decoder_python_guard:free()
+    reporter_python_guard:free()
+    transformer_lua_guard:free()
+    validator_lua_guard:free()
+    reporter_js_guard:free()
+    validator_js_guard:free()
+
+    rt:free()
+    print("pipeline complete")
+end
+
+local ok, err = pcall(main)
+if not ok then
+    io.stderr:write("error: " .. tostring(err) .. "\n")
+    os.exit(1)
+end

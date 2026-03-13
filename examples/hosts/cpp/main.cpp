@@ -2,6 +2,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <iomanip>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -177,6 +178,35 @@ static std::string string_view_to_string(const StringView& sv) {
     return std::string(reinterpret_cast<const char*>(sv.ptr), sv.len);
 }
 
+static std::string trim_line_endings(const std::string& value) {
+    if (value.empty()) {
+        return value;
+    }
+    std::string trimmed = value;
+    while (!trimmed.empty()) {
+        char tail = trimmed.back();
+        if (tail != '\n' && tail != '\r') {
+            break;
+        }
+        trimmed.pop_back();
+    }
+    return trimmed;
+}
+
+static std::string bundle_display_name(const std::string& path) {
+    size_t last = path.find_last_of('/');
+    if (last == std::string::npos || last == 0U) {
+        return path;
+    }
+    size_t prev = path.find_last_of('/', last - 1U);
+    if (prev == std::string::npos) {
+        return path.substr(0U, last) + "/" + path.substr(last + 1U);
+    }
+    std::string parent = path.substr(prev + 1U, last - prev - 1U);
+    std::string leaf = path.substr(last + 1U);
+    return parent + "/" + leaf;
+}
+
 static void run_pipeline(
     const std::string& label,
     const PluginRef& decoder,
@@ -241,7 +271,7 @@ static void run_pipeline(
             encoded.len
         );
     }
-    std::cout << "Run output: " << encoded_str << std::endl;
+    std::cout << "Run output: " << trim_line_endings(encoded_str) << std::endl;
 
     StringView report_sv = null_sv();
     AbiError report_err = call_fn(
@@ -276,7 +306,7 @@ static void run_pipeline(
 }
 
 int main() {
-    std::cout << "=== polyplug C++ host example ===" << std::endl;
+    std::cout << "=== polyplug C# host example ===" << std::endl;
 
     OpaqueRuntime* runtime = polyplug_runtime_new();
     if (runtime == nullptr) {
@@ -304,8 +334,13 @@ int main() {
             "examples/guests/js/reporter",
         };
 
+        std::cout << "Loading 12 guest plugins..." << std::endl;
+        std::size_t index = 0U;
         for (const std::string& path : bundles) {
+            index += 1U;
             load_bundle(runtime, path);
+            std::cout << "  [OK]  " << std::setw(2) << index << "/12 "
+                      << bundle_display_name(path) << std::endl;
         }
 
         std::unordered_map<std::string, PluginRef> plugins;

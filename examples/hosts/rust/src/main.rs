@@ -164,7 +164,7 @@ unsafe fn call_fn(
 // ─── format error message from AbiError ─────────────────────────────────────
 fn format_abi_error(err: AbiError) -> String {
     if err.message.ptr.is_null() || err.message.len == 0 {
-        return format!("ABI error code {}", err.code);
+        return format!("unknown error (code {})", err.code);
     }
     // SAFETY: error message is valid UTF-8 for message.len bytes, allocated by guest.
     let msg: &str = unsafe {
@@ -174,7 +174,10 @@ fn format_abi_error(err: AbiError) -> String {
         ))
         .unwrap_or("(invalid utf-8)")
     };
-    format!("code {}: {}", err.code, msg)
+    if msg.trim().is_empty() {
+        return format!("unknown error (code {})", err.code);
+    }
+    format!("{} (code {})", msg, err.code)
 }
 
 // ─── run one pipeline ────────────────────────────────────────────────────────
@@ -288,14 +291,18 @@ unsafe fn run_pipeline(
         )?
     };
     if report_err.code != ABI_OK {
-        eprintln!("  report warn: {}", format_abi_error(report_err));
-    } else if !report_sv.ptr.is_null() && report_sv.len > 0 {
+        return Err(format!("report failed: {}", format_abi_error(report_err)));
+    }
+
+    if !report_sv.ptr.is_null() && report_sv.len > 0 {
         // SAFETY: report_sv.ptr is valid UTF-8 for report_sv.len bytes.
         let report_str: &str = unsafe {
             core::str::from_utf8(core::slice::from_raw_parts(report_sv.ptr, report_sv.len))
                 .unwrap_or("(invalid utf-8)")
         };
-        println!("Run summary: {}", report_str.trim_end());
+        if !report_str.trim().is_empty() {
+            println!("Run summary: {}", report_str);
+        }
     }
 
     // Stage 5: validate — DataRecord → ValidationResult
@@ -315,27 +322,30 @@ unsafe fn run_pipeline(
         )?
     };
     if validate_err.code != ABI_OK {
-        eprintln!("  validate warn: {}", format_abi_error(validate_err));
-    } else {
-        let reason_str: &str = if validation.reason.ptr.is_null() || validation.reason.len == 0 {
-            ""
-        } else {
-            // SAFETY: reason.ptr is valid UTF-8 for reason.len bytes.
-            unsafe {
-                core::str::from_utf8(core::slice::from_raw_parts(
-                    validation.reason.ptr,
-                    validation.reason.len,
-                ))
-                .unwrap_or("(invalid utf-8)")
-            }
-        };
-        let status: &str = if validation.valid != 0_u8 {
-            "ok"
-        } else {
-            "invalid"
-        };
-        println!("Validation: {status} ({reason_str})");
+        return Err(format!(
+            "validate failed: {}",
+            format_abi_error(validate_err)
+        ));
     }
+
+    let reason_str: &str = if validation.reason.ptr.is_null() || validation.reason.len == 0 {
+        ""
+    } else {
+        // SAFETY: reason.ptr is valid UTF-8 for reason.len bytes.
+        unsafe {
+            core::str::from_utf8(core::slice::from_raw_parts(
+                validation.reason.ptr,
+                validation.reason.len,
+            ))
+            .unwrap_or("(invalid utf-8)")
+        }
+    };
+    let status: &str = if validation.valid != 0_u8 {
+        "ok"
+    } else {
+        "invalid"
+    };
+    println!("Validation: {status} ({reason_str})");
 
     Ok(())
 }
@@ -364,8 +374,18 @@ fn find_repo_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== polyplug Rust host example ===");
+fn main() {
+    match run() {
+        Ok(()) => {}
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1_i32);
+        }
+    }
+}
+
+fn run() -> Result<(), String> {
+    println!("=== polyplug C# host example ===");
 
     let repo_root: PathBuf = find_repo_root();
 
@@ -381,12 +401,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ─── Load all 12 guest plugins ───────────────────────────────────────────
     // C# guests first: CLR must init before native guests dlopen'd.
     let bundle_dirs: [(&str, &str); 12] = [
-        ("csharp", "encoder"),
-        ("csharp", "reporter"),
         ("rust", "decoder"),
         ("rust", "encoder"),
         ("cpp", "transformer"),
         ("cpp", "validator"),
+        ("csharp", "encoder"),
+        ("csharp", "reporter"),
         ("python", "decoder"),
         ("python", "reporter"),
         ("lua", "transformer"),
@@ -406,7 +426,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(()) => println!("  [OK]  {:2}/12 {lang}/{name}", idx + 1),
             Err(e) => {
                 eprintln!("  [ERR] {:2}/12 {lang}/{name}: {e}", idx + 1);
-                return Err(format!("failed to load {lang}/{name}: {e}").into());
+                return Err(format!("failed to load {lang}/{name}: {e}"));
             }
         }
     }

@@ -35,6 +35,10 @@ export class Runtime {
     this.#lib.symbols.polyplug_runtime_free(this.#ptr);
   }
 
+  ptr(): Deno.PointerValue {
+    return this.#ptr;
+  }
+
   lastError(): string {
     const len = Number(this.#lib.symbols.polyplug_error_message_len());
     if (len === 0) return "";

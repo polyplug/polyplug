@@ -1,8 +1,19 @@
+# pyright: reportMissingImports=false
+# pyright: reportDeprecated=false
+# pyright: reportUnknownVariableType=false
+# pyright: reportUnknownParameterType=false
+# pyright: reportUnknownMemberType=false
+# pyright: reportUnannotatedClassAttribute=false
+# pyright: reportAny=false
+# pyright: reportInvalidTypeForm=false
+# pyright: reportCallIssue=false
+# pyright: reportArgumentType=false
+# pyright: reportUnknownArgumentType=false
 from __future__ import annotations
 
 import ctypes
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 from polyplug import Runtime
 
@@ -129,11 +140,17 @@ def lookup_by_bundle(
 
 
 def load_bundles(runtime: Runtime, bundles: Iterable[Path]) -> None:
-    for bundle in bundles:
+    bundle_list: list[Path] = list(bundles)
+    print(f"Loading {len(bundle_list)} guest plugins...")
+    for index, bundle in enumerate(bundle_list, start=1):
         runtime.load_bundle(bundle)
+        parent_name: str = bundle.parent.name
+        bundle_name: str = bundle.name
+        print(f"  [OK]  {index:2d}/{len(bundle_list)} {parent_name}/{bundle_name}")
 
 
 def run_pipeline(
+    label: str,
     decoder_vt: ctypes.c_void_p,
     transformer_vt: ctypes.c_void_p,
     encoder_vt: ctypes.c_void_p,
@@ -141,6 +158,7 @@ def run_pipeline(
     validator_vt: ctypes.c_void_p,
     input_csv: bytes,
 ) -> None:
+    print(f"--- {label} ---")
     input_buf = ctypes.create_string_buffer(input_csv)
     buffer = Buffer(
         ptr=ctypes.cast(input_buf, ctypes.c_void_p).value,
@@ -195,7 +213,7 @@ def run_pipeline(
         msg = abi_error_message(report_err, "report failed")
         raise RuntimeError(f"report failed: {msg} (code {report_err.code})")
     report_str: str = string_view_to_str(report_sv)
-    if report_str:
+    if report_str.strip():
         print("Run summary:", report_str)
 
     validation = ValidationResult()
@@ -209,9 +227,8 @@ def run_pipeline(
         msg = abi_error_message(validate_err, "validate failed")
         raise RuntimeError(f"validate failed: {msg} (code {validate_err.code})")
     reason: str = string_view_to_str(validation.reason)
-    print("Validation:", "ok" if validation.valid else "invalid", reason)
-
-    print("pipeline complete")
+    status: str = "ok" if validation.valid else "invalid"
+    print(f"Validation: {status} ({reason})")
 
 
 def main() -> None:
@@ -229,44 +246,85 @@ def main() -> None:
         guests_dir / "python" / "reporter",
         guests_dir / "lua" / "transformer",
         guests_dir / "lua" / "validator",
-        guests_dir / "js" / "reporter",
         guests_dir / "js" / "validator",
+        guests_dir / "js" / "reporter",
     ]
-    bundles_extra: list[Path] = []
 
+    print("=== polyplug C# host example ===")
     runtime_main = Runtime()
     load_bundles(runtime_main, bundles_main)
 
-    runtime_extra = Runtime()
-    load_bundles(runtime_extra, bundles_extra)
-
     guards: list[object] = []
-    decoder_vt = lookup_by_bundle(
-        runtime_main, "csv_decoder", DECODER_CONTRACT_ID, guards
-    )
-    transformer_vt = lookup_by_bundle(
-        runtime_main, "uppercase_transformer", TRANSFORMER_CONTRACT_ID, guards
-    )
-    encoder_vt = lookup_by_bundle(
-        runtime_main, "csv_encoder_rust", ENCODER_CONTRACT_ID, guards
-    )
-    reporter_vt = lookup_by_bundle(
-        runtime_main, "summary_reporter", REPORTER_CONTRACT_ID, guards
-    )
-    validator_vt = lookup_by_bundle(
-        runtime_main, "lua_validator", VALIDATOR_CONTRACT_ID, guards
-    )
+    plugins: dict[str, ctypes.c_void_p] = {
+        "decoder_rust": lookup_by_bundle(
+            runtime_main, "csv_decoder", DECODER_CONTRACT_ID, guards
+        ),
+        "encoder_rust": lookup_by_bundle(
+            runtime_main, "csv_encoder_rust", ENCODER_CONTRACT_ID, guards
+        ),
+        "transformer_cpp": lookup_by_bundle(
+            runtime_main, "uppercase_transformer", TRANSFORMER_CONTRACT_ID, guards
+        ),
+        "validator_cpp": lookup_by_bundle(
+            runtime_main, "cpp_validator", VALIDATOR_CONTRACT_ID, guards
+        ),
+        "encoder_csharp": lookup_by_bundle(
+            runtime_main, "csv_encoder_csharp", ENCODER_CONTRACT_ID, guards
+        ),
+        "reporter_csharp": lookup_by_bundle(
+            runtime_main, "csharp_reporter", REPORTER_CONTRACT_ID, guards
+        ),
+        "decoder_python": lookup_by_bundle(
+            runtime_main, "python_decoder", DECODER_CONTRACT_ID, guards
+        ),
+        "reporter_python": lookup_by_bundle(
+            runtime_main, "summary_reporter", REPORTER_CONTRACT_ID, guards
+        ),
+        "transformer_lua": lookup_by_bundle(
+            runtime_main, "reverse_transformer", TRANSFORMER_CONTRACT_ID, guards
+        ),
+        "validator_lua": lookup_by_bundle(
+            runtime_main, "lua_validator", VALIDATOR_CONTRACT_ID, guards
+        ),
+        "validator_js": lookup_by_bundle(
+            runtime_main, "field_validator", VALIDATOR_CONTRACT_ID, guards
+        ),
+        "reporter_js": lookup_by_bundle(
+            runtime_main, "js_reporter", REPORTER_CONTRACT_ID, guards
+        ),
+    }
 
     run_pipeline(
-        decoder_vt,
-        transformer_vt,
-        encoder_vt,
-        reporter_vt,
-        validator_vt,
+        "Run 1: Rust decoder, C++ transformer, Rust encoder, C# reporter, C++ validator",
+        plugins["decoder_rust"],
+        plugins["transformer_cpp"],
+        plugins["encoder_rust"],
+        plugins["reporter_csharp"],
+        plugins["validator_cpp"],
         b"Alice,hello,3\n",
     )
 
-    _ = runtime_extra
+    run_pipeline(
+        "Run 2: Python decoder, Lua transformer, C# encoder, Python reporter, Lua validator",
+        plugins["decoder_python"],
+        plugins["transformer_lua"],
+        plugins["encoder_csharp"],
+        plugins["reporter_python"],
+        plugins["validator_lua"],
+        b"Bob,world,4\n",
+    )
+
+    run_pipeline(
+        "Run 3: Rust decoder, C++ transformer, C# encoder, JS reporter, JS validator",
+        plugins["decoder_rust"],
+        plugins["transformer_cpp"],
+        plugins["encoder_csharp"],
+        plugins["reporter_js"],
+        plugins["validator_js"],
+        b"Cara,polyplug,5\n",
+    )
+
+    print("pipeline complete")
 
 
 if __name__ == "__main__":
