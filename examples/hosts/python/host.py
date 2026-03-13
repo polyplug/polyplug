@@ -16,6 +16,13 @@ from pathlib import Path
 from collections.abc import Iterable
 
 from polyplug import Runtime
+from polyplug.loaders import (
+    register_native_loader,
+    register_dotnet_loader,
+    register_python_loader,
+    register_lua_loader,
+    register_js_loader,
+)
 
 ABI_OK: int = 0
 NULL_HANDLE: int = (1 << 64) - 1
@@ -252,6 +259,12 @@ def main() -> None:
 
     print("=== polyplug C# host example ===")
     runtime_main = Runtime()
+    register_native_loader(runtime_main)
+    register_dotnet_loader(runtime_main, "8.0")
+    register_python_loader(runtime_main, "3.11")
+    register_lua_loader(runtime_main)
+    register_js_loader(runtime_main)
+
     load_bundles(runtime_main, bundles_main)
 
     guards: list[object] = []
