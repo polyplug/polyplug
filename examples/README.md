@@ -33,6 +33,70 @@ Available in `examples/guests/`:
 - **Lua**: `processor`, `mapper`
 - **JavaScript**: `fetcher`, `parser`
 
+## JavaScript Support
+
+polyplug provides **two distinct JavaScript integrations** that serve different roles. Understanding the difference is essential before using either.
+
+### js_quickjs — For Writing Guest Plugins
+
+`js_quickjs` uses the [QuickJS](https://bellard.org/quickjs/) engine (a pure-C, embeddable JavaScript VM) to execute guest plugins written in JavaScript.
+
+- **Use case:** Write a guest plugin in JavaScript that can be loaded by *any* polyplug host (Rust, C++, C#, Python, Lua, or Deno).
+- **Shared library:** `libpolyplug_js.so`
+- **Loader function:** `register_js_loader` / `polyplug_js_loader_create`
+- **No TLS issues:** QuickJS is pure C with no thread-local storage requirements. It links cleanly as a `cdylib` and loads into any host process.
+
+**When to use:** You have a JavaScript plugin and want it to be loadable by all host languages.
+
+```
+guests/js/fetcher/     ← QuickJS guest (loaded by any host via libpolyplug_js.so)
+guests/js/parser/      ← QuickJS guest (loaded by any host via libpolyplug_js.so)
+```
+
+---
+
+### js_deno — For Writing Hosts in Deno
+
+`js_deno` uses [Deno](https://deno.land/) (V8-based) to write the *host* runtime itself in TypeScript/JavaScript. The Deno host can load guest plugins written in all supported languages (Rust, C++, C#, Python, Lua, and QuickJS JavaScript).
+
+- **Use case:** Write a polyplug host application in Deno/TypeScript.
+- **Host library:** `host-libs/js/polyplug.ts`
+- **Can load guests:** Rust, C++, C#, Python, Lua, QuickJS JavaScript
+- **Cannot load:** Deno/V8 guests (see limitation below)
+
+**When to use:** You are building a host application and want to write it in TypeScript/Deno.
+
+```
+hosts/js/              ← Deno host (TypeScript, loads QuickJS guests among others)
+```
+
+---
+
+### The V8 TLS Limitation — Why js_deno Guests Don't Exist
+
+> **TL;DR:** V8 cannot be loaded as a shared library on Linux. There is no `libpolyplug_js_deno.so` and no `registerDenoLoader`. This is a hard platform limitation, not a design choice.
+
+**The technical reason:**
+
+V8 (the JavaScript engine used by Deno and Chrome) makes heavy use of **thread-local storage (TLS)** — a mechanism that stores per-thread data at a fixed offset from a thread-control register. When V8 is compiled, it reserves specific TLS slots for its internal state.
+
+On Linux, when you load a shared library (`cdylib` / `.so`) via `dlopen` at runtime, the dynamic linker **cannot** honour pre-allocated TLS slots for that library. TLS for dynamically loaded libraries must be allocated lazily, and V8 does not support this mode. The result is a linker error or a runtime crash when the TLS slots overflow.
+
+In contrast, **QuickJS uses no TLS**. It allocates all state on the heap and passes it explicitly, making it trivially loadable as a shared library.
+
+**Consequence for polyplug:**
+
+| Scenario | Works? | Why |
+|----------|--------|-----|
+| QuickJS guest loaded by any host | ✅ Yes | QuickJS has no TLS requirements |
+| Deno host loading QuickJS guests | ✅ Yes | V8 runs in the main executable, not a `.so` |
+| Deno host loading Rust/C/C# guests | ✅ Yes | Native loaders link cleanly as `.so` |
+| Deno/V8 guest loaded by any host | ❌ No | V8 cannot be a `cdylib` on Linux |
+
+**If you need JavaScript guest plugins:** Use QuickJS (`libpolyplug_js.so`). It is ECMAScript 2023-compatible and handles the vast majority of use cases. For performance-sensitive code, consider a Rust or C guest instead.
+
+---
+
 ## Building the Examples
 
 ### Guest Plugins
@@ -60,12 +124,15 @@ All examples in this directory use a shared `DataRecord` structure for data exch
 
 ## Loader FFI
 
-polyplug's runtime is **native-only by default** — it can load Rust, C, and C++ guest plugins out of the box. To load guests written in managed or interpreted languages (.NET, Python, Lua, JavaScript), you must register the appropriate **guest loader** with the runtime before loading bundles.
+polyplug's runtime supports multiple guest languages through a pluggable **loader** system. Every loader — including the native loader for Rust, C, and C++ guests — must be **explicitly registered** before loading bundles. No loader is built into the runtime automatically.
+
+> **Migration note (pre-1.0):** Earlier versions of polyplug loaded native (Rust/C/C++) guests automatically without any loader registration. This implicit behaviour has been removed. You must now call `register_native_loader` explicitly, just like any other loader.
 
 ### Available Loaders
 
 | Loader | Shared Library | Guest Language |
 |--------|---------------|----------------|
+| `native` | `libpolyplug_native.so` | Rust / C / C++ (compiled native code) |
 | `dotnet` | `libpolyplug_dotnet.so` | C# / .NET (any CLR-compatible language) |
 | `python` | `libpolyplug_python.so` | Python 3.x (via CPython) |
 | `lua` | `libpolyplug_lua.so` | Lua (via LuaJIT) |
@@ -94,13 +161,16 @@ Include `<polyplug/loaders.hpp>` and link against the desired loader libraries.
 #include <polyplug/runtime.hpp>
 #include <polyplug/loaders.hpp>
 
-// Build: -lpolyplug -lpolyplug_dotnet -lpolyplug_python -lpolyplug_lua -lpolyplug_js
+// Build: -lpolyplug -lpolyplug_native -lpolyplug_dotnet -lpolyplug_python -lpolyplug_lua -lpolyplug_js
 
 auto rt = polyplug::Runtime::builder()
     .plugin_dir("/usr/lib/myplugins")
     .build();
 
-// Register non-native guest loaders before loading bundles
+// Register native loader for Rust/C/C++ guest plugins (no longer implicit — must be explicit)
+polyplug::register_native_loader(rt.handle());
+
+// Register other guest loaders as needed
 polyplug::register_dotnet_loader(rt.handle(), "10.0");  // min .NET version
 polyplug::register_python_loader(rt.handle(), "3.11");  // min Python version
 polyplug::register_lua_loader(rt.handle());
@@ -116,7 +186,7 @@ Each function throws `std::runtime_error` on failure.
 
 ### C\#
 
-Call the `Register*Loader()` methods on the `Runtime` instance after construction. The C# host library links against `polyplug_dotnet`, `polyplug_python`, `polyplug_lua`, and `polyplug_js` via P/Invoke.
+Call the `Register*Loader()` methods on the `Runtime` instance after construction. The C# host library links against `polyplug_native`, `polyplug_dotnet`, `polyplug_python`, `polyplug_lua`, and `polyplug_js` via P/Invoke.
 
 ```csharp
 using Polyplug;
@@ -125,7 +195,10 @@ var rt = Runtime.Builder()
     .PluginDir("/usr/lib/myplugins")
     .Init();
 
-// Register non-native guest loaders before loading bundles
+// Register native loader for Rust/C/C++ guest plugins (no longer implicit — must be explicit)
+rt.RegisterNativeLoader();
+
+// Register other guest loaders as needed
 rt.RegisterDotnetLoader("10.0");  // optional: min .NET framework version
 rt.RegisterPythonLoader("3.11"); // optional: min Python version
 rt.RegisterLuaLoader();
@@ -146,6 +219,7 @@ Import the loader helpers from `polyplug.loaders` and call them after creating a
 ```python
 from polyplug import Runtime
 from polyplug.loaders import (
+    register_native_loader,
     register_dotnet_loader,
     register_python_loader,
     register_lua_loader,
@@ -154,7 +228,10 @@ from polyplug.loaders import (
 
 rt = Runtime()
 
-# Register non-native guest loaders before loading bundles
+# Register native loader for Rust/C/C++ guest plugins (no longer implicit — must be explicit)
+register_native_loader(rt)
+
+# Register other guest loaders as needed
 register_dotnet_loader(rt, min_framework="10.0")
 register_python_loader(rt, min_version="3.11")
 register_lua_loader(rt)
@@ -178,8 +255,11 @@ polyplug.load_lib("/usr/local/lib/libpolyplug.so")
 
 local rt = polyplug.Runtime.new()
 
--- Register non-native guest loaders before loading bundles
+-- Register native loader for Rust/C/C++ guest plugins (no longer implicit — must be explicit)
 -- Pass the internal OpaqueRuntime* cdata pointer
+polyplug.register_native_loader(rt._ptr)
+
+-- Register other guest loaders as needed
 polyplug.register_dotnet_loader(rt._ptr, { min_framework = "10.0" })
 polyplug.register_python_loader(rt._ptr, { min_version = "3.11" })
 polyplug.register_lua_loader(rt._ptr)
@@ -189,7 +269,7 @@ polyplug.register_js_loader(rt._ptr)
 rt:load_bundle("/path/to/my/plugin_bundle")
 ```
 
-Each function calls `error()` on failure. The loader libraries (`libpolyplug_dotnet.so`, etc.) are loaded lazily on first use.
+Each function calls `error()` on failure. The loader libraries (`libpolyplug_native.so`, `libpolyplug_dotnet.so`, etc.) are loaded lazily on first use.
 
 ---
 
@@ -201,6 +281,7 @@ The Deno host library (`host-libs/js/polyplug.ts`) includes exported functions f
 import {
   openPolyplug,
   runtimeNew,
+  registerNativeLoader,
   registerDotnetLoader,
   registerPythonLoader,
   registerLuaLoader,
@@ -210,8 +291,11 @@ import {
 const lib = openPolyplug("/usr/local/lib/libpolyplug.so");
 const rt = runtimeNew(lib);
 
-// Register non-native guest loaders before loading bundles
+// Register native loader for Rust/C/C++ guest plugins (no longer implicit — must be explicit)
 // Note: pass lib and the rt.#ptr (internal pointer) — see Deno host docs
+registerNativeLoader(lib, rt_ptr);
+
+// Register other guest loaders as needed
 registerDotnetLoader(lib, rt_ptr, "10.0");
 registerPythonLoader(lib, rt_ptr, "3.11");
 registerLuaLoader(lib, rt_ptr);
@@ -233,6 +317,7 @@ If you are integrating from a language not listed above, the raw C ABI for loade
 // From <polyplug/loaders.hpp> or polyplug.h:
 
 // Step 1: create the loader (links against libpolyplug_<lang>.so)
+void* polyplug_native_loader_create(const PolyplugNativeConfig* config);
 void* polyplug_dotnet_loader_create(const PolyplugDotnetConfig* config);
 void* polyplug_python_loader_create(const PolyplugPythonConfig* config);
 void* polyplug_lua_loader_create(const PolyplugLuaConfig* config);
@@ -245,6 +330,9 @@ uint32_t polyplug_runtime_register_loader(OpaqueRuntime* rt, void* loader_ptr);
 Config structs:
 
 ```c
+// Native loader: no configuration required
+struct PolyplugNativeConfig { uint8_t _reserved; };  // set _reserved = 0
+
 // .NET loader: specify minimum framework version
 struct PolyplugDotnetConfig {
     const uint8_t* min_framework_ptr;  // UTF-8 string
