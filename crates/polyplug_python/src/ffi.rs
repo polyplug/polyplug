@@ -2,6 +2,7 @@ use std::ffi::c_void;
 
 use crate::config::PythonConfig;
 use crate::PythonLoader;
+use polyplug::loader::BundleLoader;
 
 /// C-visible configuration passed to `polyplug_python_loader_create`.
 ///
@@ -49,7 +50,10 @@ pub unsafe extern "C" fn polyplug_python_loader_create(
         None => return std::ptr::null_mut(),
     };
     let loader: PythonLoader = PythonLoader::new(PythonConfig { min_version });
-    Box::into_raw(Box::new(loader)) as *mut c_void
+    // Double-box: inner Box<dyn BundleLoader> preserves the fat pointer (data + vtable),
+    // outer Box stores it on the heap so we can pass a thin *mut c_void across FFI.
+    let trait_obj: Box<dyn BundleLoader> = Box::new(loader);
+    Box::into_raw(Box::new(trait_obj)) as *mut c_void
 }
 
 /// Free a `PythonLoader` previously returned by `polyplug_python_loader_create`.
@@ -65,9 +69,14 @@ pub unsafe extern "C" fn polyplug_python_loader_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: ptr was produced by Box::into_raw(Box::new(PythonLoader)) inside
-    // polyplug_python_loader_create. Caller guarantees it has not been freed.
-    unsafe { drop(Box::<PythonLoader>::from_raw(ptr as *mut PythonLoader)) };
+    // SAFETY: ptr was produced by Box::into_raw(Box::new(trait_obj)) inside
+    // polyplug_python_loader_create where trait_obj: Box<dyn BundleLoader>.
+    // Caller guarantees it has not been freed.
+    unsafe {
+        drop(Box::<Box<dyn BundleLoader>>::from_raw(
+            ptr as *mut Box<dyn BundleLoader>,
+        ))
+    };
 }
 
 fn parse_version(s: &str) -> Option<(u32, u32)> {

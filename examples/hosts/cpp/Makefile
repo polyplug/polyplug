@@ -1,7 +1,10 @@
 CXX      := g++
 CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -O2
 INCLUDES := -I../../.. -I../../../host-libs/cpp
-LDFLAGS  := -L../../../target/debug -lpolyplug -ldl -pthread \
+LDFLAGS  := -L../../../target/debug \
+            -lpolyplug -lpolyplug_native -lpolyplug_dotnet \
+            -lpolyplug_python -lpolyplug_lua -lpolyplug_js \
+            -ldl -pthread \
             -Wl,-rpath,'$$ORIGIN/../../../target/debug'
 
 PIPELINE_TARGET := polyplug_host_cpp

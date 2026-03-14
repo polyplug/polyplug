@@ -1,4 +1,5 @@
 use crate::{LuaConfig, LuaLoader};
+use polyplug::loader::BundleLoader;
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -10,10 +11,12 @@ pub struct PolyplugLuaConfig {
 pub unsafe extern "C" fn polyplug_lua_loader_create(
     config: *const PolyplugLuaConfig,
 ) -> *mut c_void {
-    // Config is optional for Lua (no required fields)
-    let _ = config; // may be null, we don't need it
+    let _ = config;
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    Box::into_raw(Box::new(loader)) as *mut c_void
+    // Double-box: inner Box<dyn BundleLoader> preserves the fat pointer (data + vtable),
+    // outer Box stores it on the heap so we can pass a thin *mut c_void across FFI.
+    let trait_obj: Box<dyn BundleLoader> = Box::new(loader);
+    Box::into_raw(Box::new(trait_obj)) as *mut c_void
 }
 
 #[unsafe(no_mangle)]
@@ -21,7 +24,8 @@ pub unsafe extern "C" fn polyplug_lua_loader_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: ptr was produced by polyplug_lua_loader_create via Box::into_raw.
+    // SAFETY: ptr was produced by polyplug_lua_loader_create via
+    // Box::into_raw(Box::new(trait_obj)) where trait_obj: Box<dyn BundleLoader>.
     // The caller guarantees ptr is not used after this call.
-    drop(unsafe { Box::<LuaLoader>::from_raw(ptr as *mut LuaLoader) });
+    drop(unsafe { Box::<Box<dyn BundleLoader>>::from_raw(ptr as *mut Box<dyn BundleLoader>) });
 }

@@ -4,6 +4,7 @@ use std::ffi::c_void;
 
 use crate::JsDenoConfig;
 use crate::JsDenoLoader;
+use polyplug::loader::BundleLoader;
 
 /// Opaque C-compatible config for the JS Deno loader (no required fields).
 #[repr(C)]
@@ -21,7 +22,10 @@ pub unsafe extern "C" fn polyplug_js_deno_loader_create(
 ) -> *mut c_void {
     let _ = config;
     let loader: JsDenoLoader = JsDenoLoader::new(JsDenoConfig::default());
-    Box::into_raw(Box::new(loader)) as *mut c_void
+    // Double-box: inner Box<dyn BundleLoader> preserves the fat pointer (data + vtable),
+    // outer Box stores it on the heap so we can pass a thin *mut c_void across FFI.
+    let trait_obj: Box<dyn BundleLoader> = Box::new(loader);
+    Box::into_raw(Box::new(trait_obj)) as *mut c_void
 }
 
 /// Free a `JsDenoLoader` created by `polyplug_js_deno_loader_create`.
@@ -34,6 +38,11 @@ pub unsafe extern "C" fn polyplug_js_deno_loader_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: ptr is a valid Box<JsDenoLoader> from polyplug_js_deno_loader_create.
-    unsafe { drop(Box::<JsDenoLoader>::from_raw(ptr as *mut JsDenoLoader)) };
+    // SAFETY: ptr was produced by polyplug_js_deno_loader_create via
+    // Box::into_raw(Box::new(trait_obj)) where trait_obj: Box<dyn BundleLoader>.
+    unsafe {
+        drop(Box::<Box<dyn BundleLoader>>::from_raw(
+            ptr as *mut Box<dyn BundleLoader>,
+        ))
+    };
 }

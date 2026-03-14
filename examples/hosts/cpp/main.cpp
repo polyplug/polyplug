@@ -319,7 +319,8 @@ int main() {
         return 1;
     }
 
-    polyplug::register_native_loader(runtime);
+    // Native loader is built-in — do NOT register it explicitly.
+    // Only register non-native loaders via their companion shared libraries.
     polyplug::register_dotnet_loader(runtime, "8.0");
     polyplug::register_python_loader(runtime, "3.11");
     polyplug::register_lua_loader(runtime);

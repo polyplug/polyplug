@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use crate::config::HostfxrLocation;
 use crate::DotnetConfig;
 use crate::DotnetLoader;
+use polyplug::loader::BundleLoader;
 
 /// C-visible configuration passed to `polyplug_dotnet_loader_create`.
 ///
@@ -49,7 +50,11 @@ pub unsafe extern "C" fn polyplug_dotnet_loader_create(
         min_framework,
         hostfxr: HostfxrLocation::Auto,
     });
-    Box::into_raw(Box::new(loader)) as *mut c_void
+    // Double-box: inner Box<dyn BundleLoader> is a fat pointer (data + vtable),
+    // outer Box stores it on the heap so we can pass a thin *mut c_void across FFI.
+    // polyplug_runtime_register_loader reconstitutes via Box::from_raw(*mut Box<dyn BundleLoader>).
+    let trait_obj: Box<dyn BundleLoader> = Box::new(loader);
+    Box::into_raw(Box::new(trait_obj)) as *mut c_void
 }
 
 /// Free a `DotnetLoader` previously created by `polyplug_dotnet_loader_create`.
@@ -66,7 +71,8 @@ pub unsafe extern "C" fn polyplug_dotnet_loader_free(ptr: *mut c_void) {
     if ptr.is_null() {
         return;
     }
-    // SAFETY: ptr was created by Box::into_raw(Box::new(DotnetLoader)) in
-    // polyplug_dotnet_loader_create and has not been freed yet (caller contract).
-    drop(unsafe { Box::<DotnetLoader>::from_raw(ptr as *mut DotnetLoader) });
+    // SAFETY: ptr was created by Box::into_raw(Box::new(trait_obj)) in
+    // polyplug_dotnet_loader_create where trait_obj: Box<dyn BundleLoader>.
+    // Caller guarantees it has not been freed yet.
+    drop(unsafe { Box::<Box<dyn BundleLoader>>::from_raw(ptr as *mut Box<dyn BundleLoader>) });
 }
