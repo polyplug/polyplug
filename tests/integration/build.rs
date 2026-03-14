@@ -117,4 +117,20 @@ fn main() {
         "cargo:rustc-env=TEST_JS_DENO_PLUGIN={}",
         fixtures_dir.join("test_plugin_js_deno").display()
     );
+
+    // RELOAD_PLUGIN_V1_DIR, RELOAD_PLUGIN_V2_DIR — reload test plugin directories
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V1_DIR={}",
+        fixtures_dir.join("reload_plugin_v1").display()
+    );
+    println!(
+        "cargo:rustc-env=RELOAD_PLUGIN_V2_DIR={}",
+        fixtures_dir.join("reload_plugin_v2").display()
+    );
+
+    // DEPENDER_PLUGIN_DIR — depender test plugin directory
+    println!(
+        "cargo:rustc-env=DEPENDER_PLUGIN_DIR={}",
+        fixtures_dir.join("depender_plugin").display()
+    );
 }

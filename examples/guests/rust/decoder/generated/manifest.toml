@@ -3,8 +3,11 @@ name = "rust_transformer"
 bundle_name = "rust_transformer"
 version = "1.0.0"
 runtime = "native"
-# file is relative to this bundle directory
-file = "librust_transformer.so"
+[file]
+linux.aarch64 = "libcsv_decoder.so"
+linux.x86_64 = "libcsv_decoder.so"
+macos.aarch64 = "libcsv_decoder.dylib"
+windows.x86_64 = "csv_decoder.dll"
 provides = ["data.Transformer@1.0"]
-function_count = { "data.Transformer@1" = 1, "data.Reporter@1" = 1 }
+function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false

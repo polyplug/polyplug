@@ -322,9 +322,17 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
         )
     };
 
+    // Build function_count inline table: only for contracts this bundle PROVIDES
+    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
+        .filter(|c: &&ResolvedContract| {
+            provides_set.contains(&format!(
+                "{}@{}.{}",
+                c.name, c.version.major, c.version.minor
+            ))
+        })
         .map(|c: &ResolvedContract| {
             let fn_count: u32 = c.functions.len() as u32;
             format!("\"{}@{}\" = {}", c.name, c.version.major, fn_count)
@@ -333,6 +341,8 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
     let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
+    let file_field: String = super::format_manifest_file_field(&bundle.file);
+    let runtime: &str = &bundle.runtime;
 
     let mut dep_toml: String = String::new();
     for dep in &bundle.dependencies {
@@ -366,8 +376,8 @@ fn generate_manifest_toml(ir: &ValidatedIr) -> String {
          name = \"{name}\"\n\
          bundle_name = \"{name}\"\n\
          version = \"{version}\"\n\
-         runtime = \"js-quickjs\"\n\
-         file = \"bundle.js\"\n\
+         runtime = \"{runtime}\"\n\
+         {file_field}\n\
          provides = {provides_toml}\n\
          function_count = {function_count_toml}\n\
          needs_reinit_on_dep_reload = {reinit}\n\

@@ -40,28 +40,73 @@ fn deserialize_file_field<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum FileField {
-        Single(String),
-        PlatformMap(HashMap<String, String>),
-    }
+    use serde::de::MapAccess;
+    use serde::de::Visitor;
 
-    match FileField::deserialize(deserializer)? {
-        FileField::Single(s) => Ok(s),
-        FileField::PlatformMap(map) => {
-            let key: String = format!("{}.{}", current_os(), current_arch());
-            match map.get(&key) {
-                Some(path) => Ok(path.clone()),
-                None => {
-                    let available: Vec<&String> = map.keys().collect();
-                    Err(serde::de::Error::custom(format!(
-                        "no file entry for platform `{key}`, available: {available:?}"
-                    )))
+    struct FileFieldVisitor;
+
+    impl<'de> Visitor<'de> for FileFieldVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or a table with platform keys")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(v)
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let target_os: &str = current_os();
+            let target_arch: &str = current_arch();
+
+            // Try to parse as nested map: {"linux": {"x86_64": "file.so"}}
+            let mut os_arch_map: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+            while let Some(key) = map.next_key::<String>()? {
+                // Try to get the value as a nested table first
+                let value: Result<HashMap<String, String>, _> = map.next_value();
+                if let Ok(nested) = value {
+                    os_arch_map.insert(key, nested);
                 }
             }
+
+            // Try nested map
+            if let Some(arch_map) = os_arch_map.get(target_os) {
+                if let Some(path) = arch_map.get(target_arch) {
+                    return Ok(path.clone());
+                }
+            }
+
+            // Not found
+            let available: Vec<String> = os_arch_map
+                .iter()
+                .flat_map(|(os, arch_map)| {
+                    arch_map.keys().map(move |arch| format!("{}.{}", os, arch))
+                })
+                .collect();
+
+            Err(serde::de::Error::custom(format!(
+                "no file entry for platform {}.{}, available: {:?}",
+                target_os, target_arch, available
+            )))
         }
     }
+
+    deserializer.deserialize_any(FileFieldVisitor)
 }
 
 /// Raw dependency declaration from a `[[dependency]]` table in `manifest.toml`.
@@ -417,6 +462,42 @@ mod tests {
                 assert_eq!(contract, "y");
             }
             other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn manifest_file_field_nested_table() {
+        // Test that [file] table with dotted keys deserializes correctly
+        let toml = r#"
+name = "test"
+bundle_name = "test"
+runtime = "native"
+file = "fallback.so"
+provides = ["data.Test@1.0"]
+function_count = { "data.Test@1" = 1 }
+"#;
+        let m: ManifestData = toml::from_str(toml).expect("flat file field should parse");
+        assert_eq!(m.file, "fallback.so");
+    }
+
+    #[test]
+    fn manifest_file_field_platform_table() {
+        // Test that [file] table with dotted keys deserializes correctly
+        // Note: TOML linux.x86_64 = "..." creates nested structure {"linux": {"x86_64": "..."}}
+        let toml = r#"
+name = "test"
+bundle_name = "test"
+runtime = "native"
+[file]
+linux.x86_64 = "libtest.so"
+macos.aarch64 = "libtest.dylib"
+provides = ["data.Test@1.0"]
+function_count = { "data.Test@1" = 1 }
+"#;
+        let m: ManifestData = toml::from_str(toml).expect("platform file table should parse");
+        // On linux x86_64, should resolve to libtest.so
+        if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+            assert_eq!(m.file, "libtest.so");
         }
     }
 }

@@ -10,13 +10,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug::abi::ABI_ERROR_PANIC;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::ABI_ERROR_PANIC;
 
 // ─── Registrar callback that stores the vtable pointer ───────────────────────
 
@@ -73,12 +73,29 @@ fn test_panic_returns_abi_error_panic() {
     std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
     std::fs::create_dir_all(tmp_dir.join("src")).expect("create tmp src dir");
 
+    // ── Step 2b: Create a minimal bundle.toml referencing the API ─────────────
+    let bundle_toml_content: String = format!(
+        "[bundle]\n\
+         name = \"panic_plugin\"\n\
+         version = \"1.0.0\"\n\
+         runtime = \"native\"\n\
+         api = \"{}\"\n\
+         \n\
+         [[plugin]]\n\
+         name = \"panic_plugin\"\n\
+         version = \"1.0.0\"\n\
+         implements = [\"test.panic@1.0\"]\n",
+        api_toml.display()
+    );
+    let bundle_toml_path: PathBuf = tmp_dir.join("bundle.toml");
+    std::fs::write(&bundle_toml_path, bundle_toml_content).expect("write bundle.toml");
+
     // ── Step 3: Run polyplugc generate into tmp_dir/src ───────────────────────
     let polyplugc_bin: &str = env!("CARGO_BIN_EXE_polyplugc");
     let gen_status: ExitStatus = Command::new(polyplugc_bin)
         .arg("generate")
-        .arg("--api")
-        .arg(&api_toml)
+        .arg("--bundle")
+        .arg(&bundle_toml_path)
         .arg("--lang")
         .arg("rust")
         .arg("--out")
@@ -150,7 +167,7 @@ fn test_panic_returns_abi_error_panic() {
         "///\n",
         "/// # Safety\n",
         "/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n",
-        "#[no_mangle]\n",
+        "#[unsafe(no_mangle)]\n",
         "pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n",
         "    TEST_PANIC_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
         "    if registrar.is_null() {\n",

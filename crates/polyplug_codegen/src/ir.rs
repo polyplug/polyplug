@@ -282,6 +282,10 @@ pub struct ResolvedBundle {
     #[allow(dead_code)]
     pub version: Version,
     #[allow(dead_code)]
+    pub runtime: String,
+    #[allow(dead_code)]
+    pub file: crate::generators::ResolvedBundleFile,
+    #[allow(dead_code)]
     pub plugins: Vec<ResolvedPlugin>,
     #[allow(dead_code)]
     pub bundle_id: u64,

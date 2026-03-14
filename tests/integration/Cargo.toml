@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dev-dependencies]
-polyplug = { workspace = true }
+polyplug = { workspace = true, features = ["hot-reload"] }
 polyplug_native = { workspace = true }
 polyplug_dotnet = { workspace = true }
 polyplug_python = { workspace = true }

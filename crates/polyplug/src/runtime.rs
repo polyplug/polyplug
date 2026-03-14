@@ -518,11 +518,16 @@ impl Runtime {
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {
             for contract in &manifest.provides {
-                let major_str: &str = match manifest.version.split_once('.') {
+                // Parse contract name and major version from provides entry (e.g., "data.Reporter@1.0")
+                let (contract_name, contract_version): (&str, &str) = match contract.split_once('@') {
+                    Some((name, ver)) => (name, ver),
+                    None => (contract, "0.0.0"),
+                };
+                let major_str: &str = match contract_version.split_once('.') {
                     Some((maj, _)) => maj,
                     None => "0",
                 };
-                let key: String = format!("{}@{}", contract, major_str);
+                let key: String = format!("{}@{}", contract_name, major_str);
                 if !manifest.function_count.contains_key(&key)
                     && opts.compatibility != Compatibility::Yolo
                 {

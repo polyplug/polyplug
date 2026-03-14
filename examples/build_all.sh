@@ -99,8 +99,13 @@ install_plugin() {
     local file_field
     file_field=$(get_file_field "${generated_manifest}")
 
-    if [[ -n "${file_field}" ]] && [[ -f "${guest_dir}/${file_field}" ]]; then
-        cp "${guest_dir}/${file_field}" "${dest}/"
+    if [[ -n "${file_field}" ]]; then
+        if [[ -f "${guest_dir}/${file_field}" ]]; then
+            cp "${guest_dir}/${file_field}" "${dest}/"
+        elif [[ -f "${guest_dir}/bin/Release/net10.0/${file_field}" ]]; then
+            # C# output location
+            cp "${guest_dir}/bin/Release/net10.0/${file_field}" "${dest}/"
+        fi
     fi
 }
 

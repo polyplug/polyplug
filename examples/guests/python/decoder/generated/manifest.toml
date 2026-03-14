@@ -3,7 +3,7 @@ name = "python_transformer"
 bundle_name = "python_transformer"
 version = "1.0.0"
 runtime = "python"
-file = "python_transformer.py"
+file = "decoder.py"
 provides = ["data.Transformer@1.0"]
-function_count = { "data.Transformer@1" = 1, "data.Reporter@1" = 1 }
+function_count = { "data.Transformer@1" = 1 }
 needs_reinit_on_dep_reload = false

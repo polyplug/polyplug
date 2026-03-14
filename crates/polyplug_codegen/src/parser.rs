@@ -9,6 +9,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::PolyplugcError;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -23,9 +26,6 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::resolve_type_ref;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -110,7 +110,28 @@ pub(crate) struct RawBundleMeta {
     #[serde(default)]
     pub api: Option<String>,
     #[serde(default)]
+    pub runtime: String,
+    pub file: RawBundleFile,
+    #[serde(default)]
     pub needs_reinit_on_dep_reload: bool,
+}
+
+/// Bundle file field — either flat string or [bundle.file] table.
+/// Uses untagged enum to accept both forms.
+/// The [bundle.file] table deserializes as nested HashMap: {"linux": {"x86_64": "file.so"}}
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RawBundleFile {
+    /// Flat string: file = "path"
+    Single(String),
+    /// Table: [bundle.file] with platform entries as nested map
+    PlatformMap(HashMap<String, HashMap<String, String>>),
+}
+
+impl Default for RawBundleFile {
+    fn default() -> Self {
+        RawBundleFile::Single(String::new())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -568,6 +589,29 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
         };
         resolved_deps.push(resolved);
     }
+    // Parse file field — either flat string or platform table
+    let resolved_file: crate::generators::ResolvedBundleFile = match &raw.bundle.file {
+        RawBundleFile::Single(path) if !path.is_empty() => {
+            crate::generators::ResolvedBundleFile::Single(path.clone())
+        }
+        RawBundleFile::PlatformMap(os_map) => {
+            let mut map: std::collections::HashMap<crate::generators::PlatformKey, String> =
+                std::collections::HashMap::new();
+            for (os, arch_map) in os_map {
+                for (arch, path) in arch_map {
+                    map.insert(
+                        crate::generators::PlatformKey {
+                            os: os.clone(),
+                            arch: arch.clone(),
+                        },
+                        path.clone(),
+                    );
+                }
+            }
+            crate::generators::ResolvedBundleFile::PlatformMap(map)
+        }
+        _ => crate::generators::ResolvedBundleFile::Single(format!("lib{}.so", raw.bundle.name)),
+    };
     Ok(ValidatedIr {
         types: Vec::new(),
         enums: Vec::new(),
@@ -575,6 +619,8 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
         bundle: Some(ResolvedBundle {
             name: raw.bundle.name.clone(),
             version: bundle_version,
+            runtime: raw.bundle.runtime.clone(),
+            file: resolved_file,
             bundle_id: dep_bundle_id,
             plugins,
             dependencies: resolved_deps,
