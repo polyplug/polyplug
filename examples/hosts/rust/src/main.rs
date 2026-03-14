@@ -1,8 +1,11 @@
 //! examples/hosts/rust/src/main.rs
-//! Rust host example — loads all 14 guest plugins and calls their functions.
+//! Rust host example — discovers plugins via scanner, calls their functions.
 //!
-//! Demonstrates explicit loader registration for all 6 language runtimes,
-//! then loads guests and invokes transform/report via vtable dispatch.
+//! Real-world workflow:
+//!   1. Read POLYPLUG_PLUGIN_PATH env var (or default to examples/plugins/)
+//!   2. Use polyplug scanner to discover all bundles
+//!   3. Load each discovered bundle
+//!   4. Resolve and call plugin functions
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,6 +15,8 @@ use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
 use polyplug::abi::ABI_OK;
+use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::scanner;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::runtime::Runtime;
 use polyplug_dotnet::DotnetConfig;
@@ -32,224 +37,8 @@ use polyplug_python::PythonLoader;
 const TRANSFORMER_CONTRACT_ID: u64 = 0x3D53C682F3F5A9EF_u64;
 const REPORTER_CONTRACT_ID: u64 = 0x81D41D43E511D297_u64;
 
-// ─── FNV-1a 64-bit hash ─────────────────────────────────────────────────────
-fn fnv1a_64(data: &[u8]) -> u64 {
-    const FNV_OFFSET: u64 = 0xCBF29CE484222325_u64;
-    const FNV_PRIME: u64 = 0x00000100000001B3_u64;
-    let mut hash: u64 = FNV_OFFSET;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
-fn bundle_id(name: &str) -> u64 {
-    fnv1a_64(name.as_bytes())
-}
-
 // ─── ABI types ───────────────────────────────────────────────────────────────
 type AbiFn = unsafe extern "C" fn(*const (), *mut ()) -> AbiError;
-
-struct PluginEntry {
-    label: &'static str,
-    _guard: PluginVTableGuard,
-    vtable: *const PluginVTable,
-}
-
-// ─── Guest descriptor ────────────────────────────────────────────────────────
-struct GuestSpec {
-    dir: &'static str,
-    bundle_name: &'static str,
-    contract_id: u64,
-    fn_name: &'static str,
-}
-
-const GUESTS: [GuestSpec; 14] = [
-    GuestSpec {
-        dir: "rust/decoder",
-        bundle_name: "rust_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "rust/reporter",
-        bundle_name: "rust_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-    GuestSpec {
-        dir: "cpp/transformer",
-        bundle_name: "cpp_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "cpp/reporter",
-        bundle_name: "cpp_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-    GuestSpec {
-        dir: "csharp/encoder",
-        bundle_name: "csharp_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "csharp/reporter",
-        bundle_name: "csharp_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-    GuestSpec {
-        dir: "python/decoder",
-        bundle_name: "python_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "python/reporter",
-        bundle_name: "python_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-    GuestSpec {
-        dir: "lua/transformer",
-        bundle_name: "lua_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "lua/reporter",
-        bundle_name: "lua_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-    GuestSpec {
-        dir: "js_quickjs/transformer",
-        bundle_name: "js_quickjs_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "js_quickjs/reporter",
-        bundle_name: "js_quickjs_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-    GuestSpec {
-        dir: "js_deno/transformer",
-        bundle_name: "js_deno_transformer",
-        contract_id: TRANSFORMER_CONTRACT_ID,
-        fn_name: "transform",
-    },
-    GuestSpec {
-        dir: "js_deno/reporter",
-        bundle_name: "js_deno_reporter",
-        contract_id: REPORTER_CONTRACT_ID,
-        fn_name: "report",
-    },
-];
-
-// ─── Find repo root ──────────────────────────────────────────────────────────
-fn find_repo_root() -> PathBuf {
-    let candidates: [PathBuf; 2] = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-    ];
-
-    for seed in &candidates {
-        let mut dir: PathBuf = seed.clone();
-        for _ in 0..8 {
-            let examples_path: PathBuf = dir.join("examples").join("guests");
-            if examples_path.is_dir() {
-                return dir;
-            }
-            match dir.parent() {
-                Some(p) => dir = p.to_path_buf(),
-                None => break,
-            }
-        }
-    }
-
-    PathBuf::from(".")
-}
-
-// ─── Resolve a plugin by bundle name ─────────────────────────────────────────
-fn resolve_plugin(runtime: &Runtime, guest: &GuestSpec) -> Result<PluginEntry, String> {
-    let bid: u64 = bundle_id(guest.bundle_name);
-    let handle: PluginHandle = runtime
-        .find_by_bundle(bid, guest.contract_id, 0_u32)
-        .map_err(|e| format!("find_by_bundle({}): {e}", guest.bundle_name))?;
-
-    if handle.is_null() {
-        return Err(format!(
-            "plugin not found for bundle: {}",
-            guest.bundle_name
-        ));
-    }
-
-    let guard: PluginVTableGuard = runtime
-        .registry()
-        .resolve_guard(handle)
-        .map_err(|e| format!("resolve_guard({}): {e}", guest.bundle_name))?;
-
-    let vtable: *const PluginVTable = guard.vtable();
-    if vtable.is_null() {
-        return Err(format!("null vtable for bundle: {}", guest.bundle_name));
-    }
-
-    Ok(PluginEntry {
-        label: guest.dir,
-        _guard: guard,
-        vtable,
-    })
-}
-
-// ─── Call a vtable function ──────────────────────────────────────────────────
-/// # Safety
-/// `entry.vtable` must be non-null and valid. `args` and `out` must be valid.
-unsafe fn call_fn(entry: &PluginEntry, args: *const (), out: *mut ()) -> Result<(), String> {
-    // SAFETY: vtable is non-null and valid for the lifetime of _guard.
-    let vt: &PluginVTable = unsafe { &*entry.vtable };
-
-    if vt.function_count == 0_u32 || vt.functions.is_null() {
-        return Err(format!("no functions in vtable for {}", entry.label));
-    }
-
-    // SAFETY: functions[0] is valid per vtable contract.
-    let fn_ptr_raw: *const () = unsafe { *vt.functions.add(0_usize) };
-    if fn_ptr_raw.is_null() {
-        return Err(format!("null function pointer for {}", entry.label));
-    }
-
-    // SAFETY: fn_ptr_raw conforms to ABI signature.
-    let func: AbiFn = unsafe { core::mem::transmute(fn_ptr_raw) };
-    // SAFETY: args and out are valid pointers.
-    let err: AbiError = unsafe { func(args, out) };
-
-    if err.code != ABI_OK {
-        let msg: &str = if err.message.ptr.is_null() || err.message.len == 0 {
-            "unknown error"
-        } else {
-            // SAFETY: error message is valid UTF-8 for message.len bytes.
-            unsafe {
-                core::str::from_utf8(core::slice::from_raw_parts(
-                    err.message.ptr,
-                    err.message.len,
-                ))
-                .unwrap_or("(invalid utf-8)")
-            }
-        };
-        return Err(format!(
-            "{} failed: {} (code {})",
-            entry.label, msg, err.code
-        ));
-    }
-
-    Ok(())
-}
 
 // ─── Read a StringView as &str ───────────────────────────────────────────────
 fn string_view_to_str(sv: &StringView) -> &str {
@@ -263,6 +52,34 @@ fn string_view_to_str(sv: &StringView) -> &str {
     }
 }
 
+// ─── Resolve plugin path from env or default ─────────────────────────────────
+fn resolve_plugin_path() -> PathBuf {
+    if let Ok(path) = std::env::var("POLYPLUG_PLUGIN_PATH") {
+        return PathBuf::from(path);
+    }
+
+    let candidates: [PathBuf; 2] = [
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+    ];
+
+    for seed in &candidates {
+        let mut dir: PathBuf = seed.clone();
+        for _ in 0..8_u32 {
+            let plugins_path: PathBuf = dir.join("examples").join("plugins");
+            if plugins_path.is_dir() {
+                return plugins_path;
+            }
+            match dir.parent() {
+                Some(p) => dir = p.to_path_buf(),
+                None => break,
+            }
+        }
+    }
+
+    PathBuf::from("examples/plugins")
+}
+
 fn main() {
     match run() {
         Ok(()) => {}
@@ -274,10 +91,10 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    let repo_root: PathBuf = find_repo_root();
+    let plugin_path: PathBuf = resolve_plugin_path();
+    eprintln!("plugin directory: {}", plugin_path.display());
 
-    // ─── Build runtime with all 6 loaders ────────────────────────────────────
-    // Order: native → dotnet → python → lua → js → js_deno
+    // ─── Build runtime with all loaders ──────────────────────────────────────
     let runtime: Runtime = Runtime::builder()
         .loader(NativeLoader::new(NativeConfig {}))
         .loader(DotnetLoader::new(DotnetConfig::default()))
@@ -288,17 +105,63 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|e| format!("runtime build failed: {e}"))?;
 
-    // ─── Load all 14 guests ──────────────────────────────────────────────────
-    for guest in &GUESTS {
-        let path: PathBuf = repo_root.join("examples").join("guests").join(guest.dir);
-        runtime
-            .load_bundle(Path::new(&path))
-            .map_err(|e| format!("failed to load {}: {e}", guest.dir))?;
+    // ─── Scan for plugins ────────────────────────────────────────────────────
+    let bundles: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(&plugin_path);
+
+    if bundles.is_empty() {
+        return Err(format!(
+            "no plugins found in {}. Run examples/build_all.sh first.",
+            plugin_path.display()
+        ));
     }
 
-    // ─── Resolve and call each guest ─────────────────────────────────────────
-    for guest in &GUESTS {
-        let entry: PluginEntry = resolve_plugin(&runtime, guest)?;
+    eprintln!("discovered {} bundles", bundles.len());
+
+    // ─── Load all discovered bundles ─────────────────────────────────────────
+    for (bundle_path, manifest) in &bundles {
+        runtime
+            .load_bundle(Path::new(bundle_path))
+            .map_err(|e| format!("failed to load {}: {e}", manifest.bundle_name))?;
+        eprintln!("  loaded: {}", manifest.bundle_name);
+    }
+
+    // ─── Call each loaded plugin ─────────────────────────────────────────────
+    for (_bundle_path, manifest) in &bundles {
+        let contract_id: u64 = if manifest.provides.iter().any(|c| c == "data.Transformer") {
+            TRANSFORMER_CONTRACT_ID
+        } else if manifest.provides.iter().any(|c| c == "data.Reporter") {
+            REPORTER_CONTRACT_ID
+        } else {
+            continue;
+        };
+
+        let fn_name: &str = if contract_id == TRANSFORMER_CONTRACT_ID {
+            "transform"
+        } else {
+            "report"
+        };
+
+        let bid: u64 = polyplug::abi::bundle_id(&manifest.bundle_name);
+        let handle: PluginHandle = runtime
+            .find_by_bundle(bid, contract_id, 0_u32)
+            .map_err(|e| format!("find_by_bundle({}): {e}", manifest.bundle_name))?;
+
+        if handle.is_null() {
+            return Err(format!(
+                "plugin not found for bundle: {}",
+                manifest.bundle_name
+            ));
+        }
+
+        let guard: PluginVTableGuard = runtime
+            .registry()
+            .resolve_guard(handle)
+            .map_err(|e| format!("resolve_guard({}): {e}", manifest.bundle_name))?;
+
+        let vtable: *const PluginVTable = guard.vtable();
+        if vtable.is_null() {
+            return Err(format!("null vtable for bundle: {}", manifest.bundle_name));
+        }
 
         let input_str: &str = "hello";
         let input_sv: StringView = StringView {
@@ -307,20 +170,56 @@ fn run() -> Result<(), String> {
         };
         let mut output_sv: StringView = StringView::null();
 
-        // SAFETY: input_sv and output_sv are valid stack-allocated structs.
+        // SAFETY: vtable is non-null and valid for the lifetime of _guard.
         unsafe {
-            call_fn(
-                &entry,
+            let vt: &PluginVTable = &*vtable;
+            if vt.function_count == 0_u32 || vt.functions.is_null() {
+                return Err(format!(
+                    "no functions in vtable for {}",
+                    manifest.bundle_name
+                ));
+            }
+
+            // SAFETY: functions[0] is valid per vtable contract.
+            let fn_ptr_raw: *const () = *vt.functions.add(0_usize);
+            if fn_ptr_raw.is_null() {
+                return Err(format!(
+                    "null function pointer for {}",
+                    manifest.bundle_name
+                ));
+            }
+
+            // SAFETY: fn_ptr_raw conforms to ABI signature.
+            let func: AbiFn = core::mem::transmute(fn_ptr_raw);
+            // SAFETY: input_sv and output_sv are valid stack-allocated structs.
+            let err: AbiError = func(
                 core::ptr::addr_of!(input_sv).cast::<()>(),
                 core::ptr::addr_of_mut!(output_sv).cast::<()>(),
-            )?;
+            );
+
+            if err.code != ABI_OK {
+                let msg: &str = if err.message.ptr.is_null() || err.message.len == 0 {
+                    "unknown error"
+                } else {
+                    // SAFETY: error message is valid UTF-8 for message.len bytes.
+                    core::str::from_utf8(core::slice::from_raw_parts(
+                        err.message.ptr,
+                        err.message.len,
+                    ))
+                    .unwrap_or("(invalid utf-8)")
+                };
+                return Err(format!(
+                    "{} failed: {} (code {})",
+                    manifest.bundle_name, msg, err.code
+                ));
+            }
         }
 
         let result: &str = string_view_to_str(&output_sv);
-        let padded_dir: String = format!("[{}]", guest.dir);
+        let label: String = format!("[{}]", manifest.bundle_name);
         println!(
             "{:<30} {}(\"{}\") = \"{}\"",
-            padded_dir, guest.fn_name, input_str, result
+            label, fn_name, input_str, result
         );
     }
 

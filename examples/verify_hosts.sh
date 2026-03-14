@@ -98,8 +98,12 @@ skip_host() {
 # MAIN
 # ===========================================================================
 
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+export POLYPLUG_PLUGIN_PATH="${POLYPLUG_PLUGIN_PATH:-${REPO_ROOT}/examples/plugins}"
+
 printf "\n${BOLD}polyplug — verify all hosts against golden.txt${RESET}\n"
-printf "Golden: %s\n" "${GOLDEN}"
+printf "Golden:      %s\n" "${GOLDEN}"
+printf "Plugin path: %s\n" "${POLYPLUG_PLUGIN_PATH}"
 printf "%-50s\n" "$(printf '%.0s─' {1..50})"
 printf "\n"
 

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using Polyplug;
@@ -16,46 +18,20 @@ internal static class Program
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate AbiError AbiFn(IntPtr argsPtr, IntPtr outPtr);
 
-    private readonly struct GuestSpec
+    private sealed class DiscoveredBundle
     {
-        public GuestSpec(string dir, string bundleName, ulong contractId, string fnName)
-        {
-            Dir = dir;
-            BundleName = bundleName;
-            ContractId = contractId;
-            FnName = fnName;
-        }
-
-        public string Dir { get; }
-        public string BundleName { get; }
-        public ulong ContractId { get; }
-        public string FnName { get; }
+        public string Path { get; init; } = "";
+        public string BundleName { get; init; } = "";
+        public List<string> Provides { get; init; } = new();
     }
-
-    private static readonly GuestSpec[] Guests = new GuestSpec[]
-    {
-        new GuestSpec("rust/decoder",           "rust_transformer",       TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("rust/reporter",          "rust_reporter",          REPORTER_CONTRACT_ID,    "report"),
-        new GuestSpec("cpp/transformer",        "cpp_transformer",        TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("cpp/reporter",           "cpp_reporter",           REPORTER_CONTRACT_ID,    "report"),
-        new GuestSpec("csharp/encoder",         "csharp_transformer",     TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("csharp/reporter",        "csharp_reporter",        REPORTER_CONTRACT_ID,    "report"),
-        new GuestSpec("python/decoder",         "python_transformer",     TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("python/reporter",        "python_reporter",        REPORTER_CONTRACT_ID,    "report"),
-        new GuestSpec("lua/transformer",        "lua_transformer",        TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("lua/reporter",           "lua_reporter",           REPORTER_CONTRACT_ID,    "report"),
-        new GuestSpec("js_quickjs/transformer", "js_quickjs_transformer", TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("js_quickjs/reporter",    "js_quickjs_reporter",    REPORTER_CONTRACT_ID,    "report"),
-        new GuestSpec("js_deno/transformer",    "js_deno_transformer",    TRANSFORMER_CONTRACT_ID, "transform"),
-        new GuestSpec("js_deno/reporter",       "js_deno_reporter",       REPORTER_CONTRACT_ID,    "report"),
-    };
 
     private static int Main()
     {
         try
         {
-            string repoRoot = FindRepoRoot();
-            ConfigureNativeResolver(repoRoot);
+            string pluginDir = ResolvePluginPath();
+            ConfigureNativeResolver(pluginDir);
+            Console.Error.WriteLine($"plugin directory: {pluginDir}");
 
             Runtime runtime = Runtime.Builder().Init();
 
@@ -66,15 +42,42 @@ internal static class Program
             runtime.RegisterJsLoader();
             runtime.RegisterJsDenoLoader();
 
-            foreach (GuestSpec guest in Guests)
+            List<DiscoveredBundle> bundles = ScanPluginDir(pluginDir);
+            if (bundles.Count == 0)
             {
-                string path = Path.Combine(repoRoot, "examples", "guests", guest.Dir.Replace('/', Path.DirectorySeparatorChar));
-                runtime.LoadBundle(path);
+                Console.Error.WriteLine($"no plugins found in {pluginDir}. Run examples/build_all.sh first.");
+                return 1;
             }
 
-            foreach (GuestSpec guest in Guests)
+            Console.Error.WriteLine($"discovered {bundles.Count} bundles");
+
+            foreach (DiscoveredBundle b in bundles)
             {
-                CallGuest(runtime, guest);
+                runtime.LoadBundle(b.Path);
+                Console.Error.WriteLine($"  loaded: {b.BundleName}");
+            }
+
+            foreach (DiscoveredBundle b in bundles)
+            {
+                ulong contractId = 0;
+                string fnName = "";
+
+                if (b.Provides.Contains("data.Transformer"))
+                {
+                    contractId = TRANSFORMER_CONTRACT_ID;
+                    fnName = "transform";
+                }
+                else if (b.Provides.Contains("data.Reporter"))
+                {
+                    contractId = REPORTER_CONTRACT_ID;
+                    fnName = "report";
+                }
+                else
+                {
+                    continue;
+                }
+
+                CallGuest(runtime, b.BundleName, contractId, fnName);
             }
 
             return 0;
@@ -86,13 +89,13 @@ internal static class Program
         }
     }
 
-    private static unsafe void CallGuest(Runtime runtime, GuestSpec guest)
+    private static unsafe void CallGuest(Runtime runtime, string bundleName, ulong contractId, string fnName)
     {
-        ulong bundleId = BundleId(guest.BundleName);
-        ulong handle = runtime.FindByBundle(bundleId, guest.ContractId, 0u);
+        ulong bundleId = BundleId(bundleName);
+        ulong handle = runtime.FindByBundle(bundleId, contractId, 0u);
         if (handle == ulong.MaxValue)
         {
-            throw new InvalidOperationException($"plugin not found: {guest.BundleName}");
+            throw new InvalidOperationException($"plugin not found: {bundleName}");
         }
 
         PluginGuard guard = runtime.ResolvePlugin(handle);
@@ -101,13 +104,13 @@ internal static class Program
             IntPtr vtablePtr = guard.GetVTable();
             if (vtablePtr == IntPtr.Zero)
             {
-                throw new InvalidOperationException($"null vtable: {guest.BundleName}");
+                throw new InvalidOperationException($"null vtable: {bundleName}");
             }
 
             PluginVTable vtable = Marshal.PtrToStructure<PluginVTable>(vtablePtr);
             if (vtable.FunctionsPtr == IntPtr.Zero || vtable.FunctionCount == 0u)
             {
-                throw new InvalidOperationException($"no functions: {guest.BundleName}");
+                throw new InvalidOperationException($"no functions: {bundleName}");
             }
 
             byte[] inputBytes = Encoding.UTF8.GetBytes("hello");
@@ -128,12 +131,12 @@ internal static class Program
 
                 if (err.Code != AbiConstants.ABI_OK)
                 {
-                    throw new InvalidOperationException($"call failed for {guest.Dir}: code {err.Code}");
+                    throw new InvalidOperationException($"call failed for {bundleName}: code {err.Code}");
                 }
 
                 string result = outputSv.ToString();
-                string label = $"[{guest.Dir}]";
-                Console.WriteLine($"{label,-30} {guest.FnName}(\"hello\") = \"{result}\"");
+                string label = $"[{bundleName}]";
+                Console.WriteLine($"{label,-30} {fnName}(\"hello\") = \"{result}\"");
             }
             finally
             {
@@ -162,6 +165,146 @@ internal static class Program
         return hash;
     }
 
+    private static string ResolvePluginPath()
+    {
+        string? envPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH");
+        if (!string.IsNullOrWhiteSpace(envPath) && Directory.Exists(envPath))
+        {
+            return envPath;
+        }
+
+        string[] seeds = { AppContext.BaseDirectory, Directory.GetCurrentDirectory() };
+        foreach (string seed in seeds)
+        {
+            string dir = Path.GetFullPath(seed);
+            for (int i = 0; i < 8; i++)
+            {
+                string pluginsPath = Path.Combine(dir, "examples", "plugins");
+                if (Directory.Exists(pluginsPath))
+                {
+                    return pluginsPath;
+                }
+                DirectoryInfo? parent = Directory.GetParent(dir);
+                if (parent == null)
+                {
+                    break;
+                }
+                dir = parent.FullName;
+            }
+        }
+
+        return Path.Combine(Directory.GetCurrentDirectory(), "examples", "plugins");
+    }
+
+    private static List<DiscoveredBundle> ScanPluginDir(string dir)
+    {
+        List<DiscoveredBundle> bundles = new();
+        if (!Directory.Exists(dir))
+        {
+            return bundles;
+        }
+
+        foreach (string entry in Directory.GetDirectories(dir))
+        {
+            string manifestPath = Path.Combine(entry, "manifest.toml");
+            if (!File.Exists(manifestPath))
+            {
+                continue;
+            }
+
+            string content = File.ReadAllText(manifestPath);
+            string bundleName = "";
+            List<string> provides = new();
+
+            foreach (string line in content.Split('\n'))
+            {
+                string trimmed = line.Trim();
+                if (trimmed.StartsWith("bundle_name"))
+                {
+                    int eq = trimmed.IndexOf('=');
+                    if (eq >= 0)
+                    {
+                        string val = trimmed.Substring(eq + 1).Trim().Trim('"');
+                        bundleName = val;
+                    }
+                }
+                else if (trimmed.StartsWith("provides"))
+                {
+                    int start = trimmed.IndexOf('[');
+                    int end = trimmed.IndexOf(']');
+                    if (start >= 0 && end >= 0)
+                    {
+                        string items = trimmed.Substring(start + 1, end - start - 1);
+                        foreach (string item in items.Split(','))
+                        {
+                            string contract = item.Trim().Trim('"');
+                            if (!string.IsNullOrEmpty(contract))
+                            {
+                                provides.Add(contract);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(bundleName))
+            {
+                bundles.Add(new DiscoveredBundle
+                {
+                    Path = entry,
+                    BundleName = bundleName,
+                    Provides = provides,
+                });
+            }
+        }
+
+        bundles.Sort((a, b) => string.Compare(a.BundleName, b.BundleName, StringComparison.Ordinal));
+        return bundles;
+    }
+
+    private static void ConfigureNativeResolver(string pluginDir)
+    {
+        string repoRoot = FindRepoRoot();
+
+        DllImportResolver resolver = (string name, System.Reflection.Assembly assembly, DllImportSearchPath? path) =>
+        {
+            string[] knownLibs = { "polyplug", "polyplug_native", "polyplug_dotnet", "polyplug_python", "polyplug_lua", "polyplug_js", "polyplug_js_deno" };
+            bool isKnown = false;
+            foreach (string known in knownLibs)
+            {
+                if (string.Equals(name, known, StringComparison.Ordinal))
+                {
+                    isKnown = true;
+                    break;
+                }
+            }
+
+            if (!isKnown)
+            {
+                return IntPtr.Zero;
+            }
+
+            string? envSoPath = Environment.GetEnvironmentVariable("POLYPLUG_SO");
+            if (string.Equals(name, "polyplug", StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(envSoPath) && File.Exists(envSoPath))
+            {
+                return NativeLibrary.Load(envSoPath);
+            }
+
+            string soName = $"lib{name}.so";
+            string debugPath = Path.Combine(repoRoot, "target", "debug", soName);
+            if (File.Exists(debugPath))
+            {
+                return NativeLibrary.Load(debugPath);
+            }
+
+            return NativeLibrary.Load(soName);
+        };
+
+        NativeLibrary.SetDllImportResolver(typeof(Runtime).Assembly, resolver);
+        NativeLibrary.SetDllImportResolver(System.Reflection.Assembly.GetExecutingAssembly(), resolver);
+    }
+
     private static string FindRepoRoot()
     {
         string[] seeds = { AppContext.BaseDirectory, Directory.GetCurrentDirectory() };
@@ -185,46 +328,5 @@ internal static class Program
         }
 
         return Directory.GetCurrentDirectory();
-    }
-
-    private static void ConfigureNativeResolver(string repoRoot)
-    {
-        DllImportResolver resolver = (string name, System.Reflection.Assembly assembly, DllImportSearchPath? path) =>
-        {
-            string[] knownLibs = { "polyplug", "polyplug_native", "polyplug_dotnet", "polyplug_python", "polyplug_lua", "polyplug_js", "polyplug_js_deno" };
-            bool isKnown = false;
-            foreach (string known in knownLibs)
-            {
-                if (string.Equals(name, known, StringComparison.Ordinal))
-                {
-                    isKnown = true;
-                    break;
-                }
-            }
-
-            if (!isKnown)
-            {
-                return IntPtr.Zero;
-            }
-
-            string? envPath = Environment.GetEnvironmentVariable("POLYPLUG_SO");
-            if (string.Equals(name, "polyplug", StringComparison.Ordinal)
-                && !string.IsNullOrWhiteSpace(envPath) && File.Exists(envPath))
-            {
-                return NativeLibrary.Load(envPath);
-            }
-
-            string soName = $"lib{name}.so";
-            string debugPath = Path.Combine(repoRoot, "target", "debug", soName);
-            if (File.Exists(debugPath))
-            {
-                return NativeLibrary.Load(debugPath);
-            }
-
-            return NativeLibrary.Load(soName);
-        };
-
-        NativeLibrary.SetDllImportResolver(typeof(Runtime).Assembly, resolver);
-        NativeLibrary.SetDllImportResolver(System.Reflection.Assembly.GetExecutingAssembly(), resolver);
     }
 }

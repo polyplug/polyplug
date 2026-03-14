@@ -23,29 +23,11 @@ const SZ_STRING_VIEW: number = 16;
 
 const ABI_FN_RESULT_STRUCT = { struct: ["u32", "u32", "pointer", "usize"] } as const;
 
-interface GuestSpec {
-  dir: string;
+interface DiscoveredBundle {
+  path: string;
   bundleName: string;
-  contractId: bigint;
-  fnName: string;
+  provides: string[];
 }
-
-const GUESTS: GuestSpec[] = [
-  { dir: "rust/decoder",           bundleName: "rust_transformer",       contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "rust/reporter",          bundleName: "rust_reporter",          contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-  { dir: "cpp/transformer",        bundleName: "cpp_transformer",        contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "cpp/reporter",           bundleName: "cpp_reporter",           contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-  { dir: "csharp/encoder",         bundleName: "csharp_transformer",     contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "csharp/reporter",        bundleName: "csharp_reporter",        contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-  { dir: "python/decoder",         bundleName: "python_transformer",     contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "python/reporter",        bundleName: "python_reporter",        contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-  { dir: "lua/transformer",        bundleName: "lua_transformer",        contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "lua/reporter",           bundleName: "lua_reporter",           contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-  { dir: "js_quickjs/transformer", bundleName: "js_quickjs_transformer", contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "js_quickjs/reporter",    bundleName: "js_quickjs_reporter",    contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-  { dir: "js_deno/transformer",    bundleName: "js_deno_transformer",    contractId: TRANSFORMER_CONTRACT_ID, fnName: "transform" },
-  { dir: "js_deno/reporter",       bundleName: "js_deno_reporter",       contractId: REPORTER_CONTRACT_ID,    fnName: "report" },
-];
 
 function bundleId(name: string): bigint {
   const data: Uint8Array = new TextEncoder().encode(name);
@@ -93,6 +75,58 @@ function callVtableFn(
   return result[0];
 }
 
+function resolvePluginPath(): string {
+  const envPath: string | undefined = Deno.env.get("POLYPLUG_PLUGIN_PATH");
+  if (envPath && envPath.length > 0) {
+    return envPath;
+  }
+  const repoRoot: string = new URL("../../..", import.meta.url).pathname;
+  return `${repoRoot}examples/plugins`;
+}
+
+function scanPluginDir(dir: string): DiscoveredBundle[] {
+  const bundles: DiscoveredBundle[] = [];
+
+  try {
+    for (const entry of Deno.readDirSync(dir)) {
+      if (!entry.isDirectory) continue;
+
+      const manifestPath: string = `${dir}/${entry.name}/manifest.toml`;
+      let content: string;
+      try {
+        content = Deno.readTextFileSync(manifestPath);
+      } catch {
+        continue;
+      }
+
+      const bnMatch: RegExpMatchArray | null = content.match(/bundle_name\s*=\s*"([^"]+)"/);
+      if (!bnMatch) continue;
+
+      const provides: string[] = [];
+      const provMatch: RegExpMatchArray | null = content.match(/provides\s*=\s*\[([^\]]+)\]/);
+      if (provMatch) {
+        const items: RegExpMatchArray | null = provMatch[1].match(/"([^"]+)"/g);
+        if (items) {
+          for (const item of items) {
+            provides.push(item.replace(/"/g, ""));
+          }
+        }
+      }
+
+      bundles.push({
+        path: `${dir}/${entry.name}`,
+        bundleName: bnMatch[1],
+        provides,
+      });
+    }
+  } catch {
+    return [];
+  }
+
+  bundles.sort((a, b) => a.bundleName.localeCompare(b.bundleName));
+  return bundles;
+}
+
 const REGISTER_SYMBOLS = {
   polyplug_runtime_register_loader: {
     parameters: ["pointer", "pointer"] as const,
@@ -101,9 +135,11 @@ const REGISTER_SYMBOLS = {
 } as const satisfies Deno.ForeignLibraryInterface;
 
 function main(): void {
-  const repoRoot: string = new URL("../../..", import.meta.url).pathname;
+  const pluginDir: string = resolvePluginPath();
   const soPath: string = Deno.env.get("POLYPLUG_SO") ??
-    `${repoRoot}target/debug/libpolyplug.so`;
+    `${new URL("../../..", import.meta.url).pathname}target/debug/libpolyplug.so`;
+
+  console.error(`plugin directory: ${pluginDir}`);
 
   const lib = openPolyplug(soPath);
   const registerLib = Deno.dlopen(soPath, REGISTER_SYMBOLS);
@@ -123,22 +159,43 @@ function main(): void {
       registerJsLoader(rtPtr, registerFn);
       registerJsDenoLoader(rtPtr, registerFn);
 
-      for (const g of GUESTS) {
-        rt.loadBundle(`${repoRoot}examples/guests/${g.dir}`);
+      const bundles: DiscoveredBundle[] = scanPluginDir(pluginDir);
+      if (bundles.length === 0) {
+        throw new Error(`no plugins found in ${pluginDir}. Run examples/build_all.sh first.`);
       }
 
-      for (const g of GUESTS) {
-        const bid: bigint = bundleId(g.bundleName);
-        const handle: bigint = rt.findByBundle(bid, g.contractId);
+      console.error(`discovered ${bundles.length} bundles`);
+
+      for (const b of bundles) {
+        rt.loadBundle(b.path);
+        console.error(`  loaded: ${b.bundleName}`);
+      }
+
+      for (const b of bundles) {
+        let contractId: bigint = 0n;
+        let fnName: string = "";
+
+        if (b.provides.includes("data.Transformer")) {
+          contractId = TRANSFORMER_CONTRACT_ID;
+          fnName = "transform";
+        } else if (b.provides.includes("data.Reporter")) {
+          contractId = REPORTER_CONTRACT_ID;
+          fnName = "report";
+        } else {
+          continue;
+        }
+
+        const bid: bigint = bundleId(b.bundleName);
+        const handle: bigint = rt.findByBundle(bid, contractId);
         if (handle === NULL_HANDLE) {
-          throw new Error(`plugin not found: ${g.bundleName}`);
+          throw new Error(`plugin not found: ${b.bundleName}`);
         }
 
         const guard: Guard = rt.resolvePlugin(handle);
         try {
           const vtable: Deno.PointerValue = guard.vtable();
           if (vtable === null) {
-            throw new Error(`null vtable: ${g.bundleName}`);
+            throw new Error(`null vtable: ${b.bundleName}`);
           }
 
           const inputStr: string = "hello";
@@ -158,12 +215,12 @@ function main(): void {
             Deno.UnsafePointer.of(outputSvBuf),
           );
           if (errCode !== 0) {
-            throw new Error(`call failed for ${g.dir}: code ${errCode}`);
+            throw new Error(`call failed for ${b.bundleName}: code ${errCode}`);
           }
 
           const result: string = readStringViewAt(outputSvView, 0);
-          const label: string = `[${g.dir}]`;
-          console.log(`${label.padEnd(30)} ${g.fnName}("hello") = "${result}"`);
+          const label: string = `[${b.bundleName}]`;
+          console.log(`${label.padEnd(30)} ${fnName}("hello") = "${result}"`);
         } finally {
           guard[Symbol.dispose]();
         }

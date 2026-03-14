@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <iomanip>
@@ -7,36 +8,13 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <filesystem>
 
 #include "../../../host-libs/cpp/polyplug/runtime.hpp"
 #include "../../../host-libs/cpp/polyplug/loaders.hpp"
 
-struct GuestSpec {
-    const char* dir;
-    const char* bundle_name;
-    uint64_t    contract_id;
-    const char* fn_name;
-};
-
 static constexpr uint64_t TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL;
 static constexpr uint64_t REPORTER_CONTRACT_ID    = 0x81D41D43E511D297ULL;
-
-static constexpr GuestSpec GUESTS[] = {
-    { "rust/decoder",           "rust_transformer",       TRANSFORMER_CONTRACT_ID, "transform" },
-    { "rust/reporter",          "rust_reporter",          REPORTER_CONTRACT_ID,    "report" },
-    { "cpp/transformer",        "cpp_transformer",        TRANSFORMER_CONTRACT_ID, "transform" },
-    { "cpp/reporter",           "cpp_reporter",           REPORTER_CONTRACT_ID,    "report" },
-    { "csharp/encoder",         "csharp_transformer",     TRANSFORMER_CONTRACT_ID, "transform" },
-    { "csharp/reporter",        "csharp_reporter",        REPORTER_CONTRACT_ID,    "report" },
-    { "python/decoder",         "python_transformer",     TRANSFORMER_CONTRACT_ID, "transform" },
-    { "python/reporter",        "python_reporter",        REPORTER_CONTRACT_ID,    "report" },
-    { "lua/transformer",        "lua_transformer",        TRANSFORMER_CONTRACT_ID, "transform" },
-    { "lua/reporter",           "lua_reporter",           REPORTER_CONTRACT_ID,    "report" },
-    { "js_quickjs/transformer", "js_quickjs_transformer", TRANSFORMER_CONTRACT_ID, "transform" },
-    { "js_quickjs/reporter",    "js_quickjs_reporter",    REPORTER_CONTRACT_ID,    "report" },
-    { "js_deno/transformer",    "js_deno_transformer",    TRANSFORMER_CONTRACT_ID, "transform" },
-    { "js_deno/reporter",       "js_deno_reporter",       REPORTER_CONTRACT_ID,    "report" },
-};
 
 static uint64_t fnv1a_64(std::string_view s) {
     constexpr uint64_t FNV_OFFSET = 0xCBF29CE484222325ULL;
@@ -75,7 +53,92 @@ static std::string string_view_to_string(const StringView& sv) {
     return std::string(reinterpret_cast<const char*>(sv.ptr), sv.len);
 }
 
+static std::string resolve_plugin_path() {
+    const char* env = std::getenv("POLYPLUG_PLUGIN_PATH");
+    if (env != nullptr && std::strlen(env) > 0U) {
+        return std::string(env);
+    }
+    return "examples/plugins";
+}
+
+struct DiscoveredBundle {
+    std::string path;
+    std::string bundle_name;
+    std::string runtime;
+    std::vector<std::string> provides;
+};
+
+static std::vector<DiscoveredBundle> scan_plugin_dir(const std::string& dir) {
+    std::vector<DiscoveredBundle> bundles;
+    namespace fs = std::filesystem;
+
+    if (!fs::is_directory(dir)) return bundles;
+
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_directory()) continue;
+
+        auto manifest_path = entry.path() / "manifest.toml";
+        if (!fs::exists(manifest_path)) continue;
+
+        DiscoveredBundle b;
+        b.path = entry.path().string();
+
+        std::ifstream manifest_file(manifest_path);
+        if (!manifest_file.is_open()) continue;
+
+        std::string line;
+        while (std::getline(manifest_file, line)) {
+            auto extract_value = [&](const std::string& key) -> std::string {
+                auto pos = line.find(key);
+                if (pos == std::string::npos) return "";
+                auto eq = line.find('=', pos + key.size());
+                if (eq == std::string::npos) return "";
+                auto start = line.find('"', eq);
+                if (start == std::string::npos) return "";
+                auto end = line.find('"', start + 1);
+                if (end == std::string::npos) return "";
+                return line.substr(start + 1, end - start - 1);
+            };
+
+            auto bn = extract_value("bundle_name");
+            if (!bn.empty()) b.bundle_name = bn;
+
+            auto rt = extract_value("runtime");
+            if (!rt.empty()) b.runtime = rt;
+
+            if (line.find("provides") != std::string::npos) {
+                auto start = line.find('[');
+                auto end = line.find(']');
+                if (start != std::string::npos && end != std::string::npos) {
+                    std::string items = line.substr(start + 1, end - start - 1);
+                    size_t pos = 0;
+                    while ((pos = items.find('"')) != std::string::npos) {
+                        auto close = items.find('"', pos + 1);
+                        if (close == std::string::npos) break;
+                        b.provides.push_back(items.substr(pos + 1, close - pos - 1));
+                        items = items.substr(close + 1);
+                    }
+                }
+            }
+        }
+
+        if (!b.bundle_name.empty()) {
+            bundles.push_back(std::move(b));
+        }
+    }
+
+    std::sort(bundles.begin(), bundles.end(),
+        [](const DiscoveredBundle& a, const DiscoveredBundle& b) {
+            return a.bundle_name < b.bundle_name;
+        });
+
+    return bundles;
+}
+
 int main() {
+    std::string plugin_dir = resolve_plugin_path();
+    std::cerr << "plugin directory: " << plugin_dir << std::endl;
+
     auto rt = polyplug::Runtime::builder().build();
 
     polyplug::loaders::register_native(rt);
@@ -86,27 +149,53 @@ int main() {
     polyplug::loaders::register_js_deno(rt);
 
     try {
-        for (const GuestSpec& g : GUESTS) {
-            std::string path = std::string("examples/guests/") + g.dir;
-            load_bundle(rt.handle(), path);
+        auto bundles = scan_plugin_dir(plugin_dir);
+        if (bundles.empty()) {
+            std::cerr << "no plugins found in " << plugin_dir
+                      << ". Run examples/build_all.sh first." << std::endl;
+            return 1;
         }
 
-        for (const GuestSpec& g : GUESTS) {
-            uint64_t bid = fnv1a_64(g.bundle_name);
-            uint64_t packed = polyplug_rt_find_by_bundle(rt.handle(), bid, g.contract_id, 0U);
+        std::cerr << "discovered " << bundles.size() << " bundles" << std::endl;
+
+        for (const auto& b : bundles) {
+            load_bundle(rt.handle(), b.path);
+            std::cerr << "  loaded: " << b.bundle_name << std::endl;
+        }
+
+        for (const auto& b : bundles) {
+            uint64_t contract_id = 0;
+            const char* fn_name = nullptr;
+
+            for (const auto& contract : b.provides) {
+                if (contract == "data.Transformer") {
+                    contract_id = TRANSFORMER_CONTRACT_ID;
+                    fn_name = "transform";
+                    break;
+                } else if (contract == "data.Reporter") {
+                    contract_id = REPORTER_CONTRACT_ID;
+                    fn_name = "report";
+                    break;
+                }
+            }
+
+            if (contract_id == 0 || fn_name == nullptr) continue;
+
+            uint64_t bid = fnv1a_64(b.bundle_name);
+            uint64_t packed = polyplug_rt_find_by_bundle(rt.handle(), bid, contract_id, 0U);
             if (packed == std::numeric_limits<uint64_t>::max()) {
-                throw std::runtime_error(std::string("plugin not found: ") + g.bundle_name);
+                throw std::runtime_error(std::string("plugin not found: ") + b.bundle_name);
             }
 
             OpaqueGuard* guard = polyplug_rt_resolve_plugin(rt.handle(), packed);
             if (guard == nullptr) {
-                throw std::runtime_error(std::string("resolve failed: ") + g.bundle_name);
+                throw std::runtime_error(std::string("resolve failed: ") + b.bundle_name);
             }
 
             const PluginVTable* vtable = static_cast<const PluginVTable*>(polyplug_get_vtable(guard));
             if (vtable == nullptr || vtable->functions == nullptr || vtable->function_count == 0U) {
                 polyplug_guard_free(guard);
-                throw std::runtime_error(std::string("null vtable: ") + g.bundle_name);
+                throw std::runtime_error(std::string("null vtable: ") + b.bundle_name);
             }
 
             using FnPtr = AbiError (*)(const void*, void*);
@@ -124,14 +213,13 @@ int main() {
             AbiError err = fn_ptr(&input_sv, &output_sv);
             if (err.code != ABI_OK) {
                 polyplug_guard_free(guard);
-                throw std::runtime_error(std::string("call failed for ") + g.dir);
+                throw std::runtime_error(std::string("call failed for ") + b.bundle_name);
             }
 
             std::string result = string_view_to_string(output_sv);
-
-            std::string label = std::string("[") + g.dir + "]";
+            std::string label = std::string("[") + b.bundle_name + "]";
             std::cout << std::left << std::setw(30) << label
-                      << g.fn_name << "(\"hello\") = \"" << result << "\""
+                      << fn_name << "(\"hello\") = \"" << result << "\""
                       << std::endl;
 
             polyplug_guard_free(guard);

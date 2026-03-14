@@ -57,22 +57,6 @@ local REPORTER_CONTRACT_ID    = ffi.cast("uint64_t", 0x81D41D43E511D297ULL)
 
 local ABI_OK = 0
 
-local function fnv1a_64(str)
-    local FNV_OFFSET = ffi.cast("uint64_t", 0xCBF29CE484222325ULL)
-    local FNV_PRIME  = ffi.cast("uint64_t", 0x00000100000001B3ULL)
-    local hash = FNV_OFFSET
-    for i = 1, #str do
-        hash = ffi.cast("uint64_t", bit.bxor(tonumber(hash % 256), str:byte(i)))
-              + ffi.cast("uint64_t", hash - hash % 256)
-        hash = hash * FNV_PRIME
-    end
-    return hash
-end
-
-local function u64(hi, lo)
-    return ffi.cast("uint64_t", hi) * 0x100000000ULL + lo
-end
-
 local BUNDLE_IDS = {}
 local function bundle_id(name)
     if not BUNDLE_IDS[name] then
@@ -89,22 +73,50 @@ local function bundle_id(name)
     return BUNDLE_IDS[name]
 end
 
-local GUESTS = {
-    { dir = "rust/decoder",           bundle_name = "rust_transformer",       contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "rust/reporter",          bundle_name = "rust_reporter",          contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-    { dir = "cpp/transformer",        bundle_name = "cpp_transformer",        contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "cpp/reporter",           bundle_name = "cpp_reporter",           contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-    { dir = "csharp/encoder",         bundle_name = "csharp_transformer",     contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "csharp/reporter",        bundle_name = "csharp_reporter",        contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-    { dir = "python/decoder",         bundle_name = "python_transformer",     contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "python/reporter",        bundle_name = "python_reporter",        contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-    { dir = "lua/transformer",        bundle_name = "lua_transformer",        contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "lua/reporter",           bundle_name = "lua_reporter",           contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-    { dir = "js_quickjs/transformer", bundle_name = "js_quickjs_transformer", contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "js_quickjs/reporter",    bundle_name = "js_quickjs_reporter",    contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-    { dir = "js_deno/transformer",    bundle_name = "js_deno_transformer",    contract_id = TRANSFORMER_CONTRACT_ID, fn_name = "transform" },
-    { dir = "js_deno/reporter",       bundle_name = "js_deno_reporter",       contract_id = REPORTER_CONTRACT_ID,    fn_name = "report" },
-}
+local function resolve_plugin_path()
+    local env_path = os.getenv("POLYPLUG_PLUGIN_PATH")
+    if env_path and #env_path > 0 then
+        return env_path
+    end
+    return REPO_ROOT .. "/examples/plugins"
+end
+
+local function scan_plugin_dir(dir)
+    local bundles = {}
+    local p = io.popen('ls -1 "' .. dir .. '" 2>/dev/null')
+    if not p then return bundles end
+
+    for entry in p:lines() do
+        local bundle_dir = dir .. "/" .. entry
+        local manifest_path = bundle_dir .. "/manifest.toml"
+        local f = io.open(manifest_path, "r")
+        if f then
+            local content = f:read("*all")
+            f:close()
+
+            local bname = content:match('bundle_name%s*=%s*"([^"]+)"')
+            local provides = {}
+            local provides_str = content:match('provides%s*=%s*%[([^%]]+)%]')
+            if provides_str then
+                for contract in provides_str:gmatch('"([^"]+)"') do
+                    provides[#provides + 1] = contract
+                end
+            end
+
+            if bname then
+                bundles[#bundles + 1] = {
+                    path = bundle_dir,
+                    bundle_name = bname,
+                    provides = provides,
+                }
+            end
+        end
+    end
+    p:close()
+
+    table.sort(bundles, function(a, b) return a.bundle_name < b.bundle_name end)
+    return bundles
+end
 
 local function string_view_to_str(sv)
     if sv.ptr == nil or sv.len == 0 then
@@ -114,6 +126,9 @@ local function string_view_to_str(sv)
 end
 
 local function main()
+    local plugin_dir = resolve_plugin_path()
+    io.stderr:write("plugin directory: " .. plugin_dir .. "\n")
+
     local rt = polyplug.Runtime.new()
 
     polyplug.register_native_loader(rt._ptr)
@@ -123,15 +138,40 @@ local function main()
     polyplug.register_js_loader(rt._ptr)
     js_deno_loader.register(rt._ptr)
 
-    for _, g in ipairs(GUESTS) do
-        rt:load_bundle(REPO_ROOT .. "/examples/guests/" .. g.dir)
+    local bundles = scan_plugin_dir(plugin_dir)
+    if #bundles == 0 then
+        error("no plugins found in " .. plugin_dir .. ". Run examples/build_all.sh first.")
     end
 
-    for _, g in ipairs(GUESTS) do
-        local bid = bundle_id(g.bundle_name)
-        local handle = rt:find_by_bundle(bid, g.contract_id, 0)
+    io.stderr:write("discovered " .. #bundles .. " bundles\n")
+
+    for _, b in ipairs(bundles) do
+        rt:load_bundle(b.path)
+        io.stderr:write("  loaded: " .. b.bundle_name .. "\n")
+    end
+
+    for _, b in ipairs(bundles) do
+        local contract_id = nil
+        local fn_name = nil
+
+        for _, contract in ipairs(b.provides) do
+            if contract == "data.Transformer" then
+                contract_id = TRANSFORMER_CONTRACT_ID
+                fn_name = "transform"
+                break
+            elseif contract == "data.Reporter" then
+                contract_id = REPORTER_CONTRACT_ID
+                fn_name = "report"
+                break
+            end
+        end
+
+        if not contract_id then goto continue end
+
+        local bid = bundle_id(b.bundle_name)
+        local handle = rt:find_by_bundle(bid, contract_id, 0)
         if ffi.cast("uint64_t", handle) == polyplug.NULL_HANDLE then
-            error("plugin not found: " .. g.bundle_name)
+            error("plugin not found: " .. b.bundle_name)
         end
 
         local guard, err = rt:resolve_plugin(handle)
@@ -154,14 +194,16 @@ local function main()
         local abi_err = vt.functions[0](input_sv, output_sv)
         if abi_err.code ~= ABI_OK then
             guard:free()
-            error(string.format("call failed for %s: code %d", g.dir, abi_err.code))
+            error(string.format("call failed for %s: code %d", b.bundle_name, abi_err.code))
         end
 
         local result = string_view_to_str(output_sv)
-        local label = "[" .. g.dir .. "]"
-        print(string.format("%-30s %s(\"hello\") = \"%s\"", label, g.fn_name, result))
+        local label = "[" .. b.bundle_name .. "]"
+        print(string.format("%-30s %s(\"hello\") = \"%s\"", label, fn_name, result))
 
         guard:free()
+
+        ::continue::
     end
 
     rt:free()

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from pathlib import Path
 
 from polyplug import Runtime
@@ -23,6 +24,11 @@ from polyplug.loaders import (
     register_js_loader,
     register_js_deno_loader,
 )
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
 
 ABI_OK: int = 0
 NULL_HANDLE: int = (1 << 64) - 1
@@ -61,34 +67,6 @@ class PluginVTable(ctypes.Structure):
 ABI_FN_TYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
 
 
-GUESTS: list[tuple[str, str, int, str]] = [
-    ("rust/decoder", "rust_transformer", TRANSFORMER_CONTRACT_ID, "transform"),
-    ("rust/reporter", "rust_reporter", REPORTER_CONTRACT_ID, "report"),
-    ("cpp/transformer", "cpp_transformer", TRANSFORMER_CONTRACT_ID, "transform"),
-    ("cpp/reporter", "cpp_reporter", REPORTER_CONTRACT_ID, "report"),
-    ("csharp/encoder", "csharp_transformer", TRANSFORMER_CONTRACT_ID, "transform"),
-    ("csharp/reporter", "csharp_reporter", REPORTER_CONTRACT_ID, "report"),
-    ("python/decoder", "python_transformer", TRANSFORMER_CONTRACT_ID, "transform"),
-    ("python/reporter", "python_reporter", REPORTER_CONTRACT_ID, "report"),
-    ("lua/transformer", "lua_transformer", TRANSFORMER_CONTRACT_ID, "transform"),
-    ("lua/reporter", "lua_reporter", REPORTER_CONTRACT_ID, "report"),
-    (
-        "js_quickjs/transformer",
-        "js_quickjs_transformer",
-        TRANSFORMER_CONTRACT_ID,
-        "transform",
-    ),
-    ("js_quickjs/reporter", "js_quickjs_reporter", REPORTER_CONTRACT_ID, "report"),
-    (
-        "js_deno/transformer",
-        "js_deno_transformer",
-        TRANSFORMER_CONTRACT_ID,
-        "transform",
-    ),
-    ("js_deno/reporter", "js_deno_reporter", REPORTER_CONTRACT_ID, "report"),
-]
-
-
 def fnv1a_64(data: bytes) -> int:
     value: int = FNV_OFFSET
     for byte in data:
@@ -120,9 +98,53 @@ def call_fn(vtable_ptr: ctypes.c_void_p, args_ptr: int, out_ptr: int) -> AbiErro
     return func(ctypes.c_void_p(args_ptr), ctypes.c_void_p(out_ptr))
 
 
-def main() -> None:
+def resolve_plugin_path() -> Path:
+    env_path: str | None = os.environ.get("POLYPLUG_PLUGIN_PATH")
+    if env_path:
+        return Path(env_path)
+
     repo_root: Path = Path(__file__).resolve().parents[3]
-    guests_dir: Path = repo_root / "examples" / "guests"
+    default_path: Path = repo_root / "examples" / "plugins"
+    if default_path.is_dir():
+        return default_path
+
+    return Path("examples/plugins")
+
+
+def scan_plugin_dir(plugin_dir: Path) -> list[dict]:
+    bundles: list[dict] = []
+    if not plugin_dir.is_dir():
+        return bundles
+
+    for entry in sorted(plugin_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        manifest_path: Path = entry / "manifest.toml"
+        if not manifest_path.exists():
+            continue
+
+        with open(manifest_path, "rb") as f:
+            manifest: dict = tomllib.load(f)
+
+        bundle_name: str = manifest.get("bundle_name", "")
+        if not bundle_name:
+            continue
+
+        bundles.append(
+            {
+                "path": entry,
+                "bundle_name": bundle_name,
+                "provides": manifest.get("provides", []),
+            }
+        )
+
+    bundles.sort(key=lambda b: b["bundle_name"])
+    return bundles
+
+
+def main() -> None:
+    plugin_dir: Path = resolve_plugin_path()
+    print(f"plugin directory: {plugin_dir}", file=__import__("sys").stderr)
 
     runtime = Runtime()
 
@@ -133,16 +155,38 @@ def main() -> None:
     register_js_loader(runtime)
     register_js_deno_loader(runtime)
 
-    for guest_dir, _bundle_name, _contract_id, _fn_name in GUESTS:
-        parts: list[str] = guest_dir.split("/")
-        path: Path = guests_dir / parts[0] / parts[1]
-        runtime.load_bundle(path)
+    bundles: list[dict] = scan_plugin_dir(plugin_dir)
+    if not bundles:
+        raise RuntimeError(
+            f"no plugins found in {plugin_dir}. Run examples/build_all.sh first."
+        )
+
+    print(f"discovered {len(bundles)} bundles", file=__import__("sys").stderr)
+
+    for b in bundles:
+        runtime.load_bundle(b["path"])
+        print(f"  loaded: {b['bundle_name']}", file=__import__("sys").stderr)
 
     guards: list[object] = []
-    for guest_dir, guest_bundle, contract_id, fn_name in GUESTS:
-        packed: int = runtime.find_by_bundle(bundle_id(guest_bundle), contract_id, 0)
+    for b in bundles:
+        provides: list[str] = b["provides"]
+        contract_id: int = 0
+        fn_name: str = ""
+
+        if "data.Transformer" in provides:
+            contract_id = TRANSFORMER_CONTRACT_ID
+            fn_name = "transform"
+        elif "data.Reporter" in provides:
+            contract_id = REPORTER_CONTRACT_ID
+            fn_name = "report"
+        else:
+            continue
+
+        packed: int = runtime.find_by_bundle(
+            bundle_id(b["bundle_name"]), contract_id, 0
+        )
         if packed == NULL_HANDLE:
-            raise RuntimeError(f"plugin not found: {guest_bundle}")
+            raise RuntimeError(f"plugin not found: {b['bundle_name']}")
 
         guard = runtime.resolve_plugin(packed)
         guards.append(guard)
@@ -162,10 +206,10 @@ def main() -> None:
             ctypes.addressof(output_sv),
         )
         if err.code != ABI_OK:
-            raise RuntimeError(f"call failed for {guest_dir}: code {err.code}")
+            raise RuntimeError(f"call failed for {b['bundle_name']}: code {err.code}")
 
         result: str = string_view_to_str(output_sv)
-        label: str = f"[{guest_dir}]"
+        label: str = f"[{b['bundle_name']}]"
         print(f'{label:<30} {fn_name}("hello") = "{result}"')
 
 

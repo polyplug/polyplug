@@ -1,0 +1,12 @@
+# bundle.toml — C# reporter guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang csharp --out generated/
+
+[bundle]
+name    = "csharp_reporter"
+version = "1.0.0"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "csharp_reporter"
+version    = "1.0.0"
+implements = ["data.Reporter@1.0"]

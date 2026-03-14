@@ -4,12 +4,14 @@ This directory contains the canonical examples for the **polyplug** plugin runti
 
 ## Directory Structure
 
-- **`hosts/`**: Host runtimes that load and execute polyplug bundles.
-- **`guests/`**: Guest plugins implementing specific contracts.
-- **`abi_types.md`**: Canonical reference for the `DataRecord` ABI type used by these examples.
-- **`build_guests.sh`**: Master build script for all guest plugins.
-- **`contract_ids.txt`**: Registry of contract IDs used across these examples.
+- **`hosts/`**: Host runtimes that discover and load polyplug bundles via the scanner.
+- **`guests/`**: Guest plugins, each with a `bundle.toml` manifest for code generation.
+- **`plugins/`**: Built plugin bundles (gitignored). Hosts discover plugins here via `POLYPLUG_PLUGIN_PATH`.
 - **`api.toml`**: The API definition used by `polyplugc` to generate bindings.
+- **`build_all.sh`**: Master build script — builds `polyplugc`, generates bindings, compiles guests, and installs to `plugins/`.
+- **`verify_hosts.sh`**: Runs all hosts and diffs output against `hosts/golden.txt`.
+- **`abi_types.md`**: Canonical reference for the `DataRecord` ABI type used by these examples.
+- **`contract_ids.txt`**: Registry of contract IDs used across these examples.
 
 ## Supported Languages
 
@@ -26,12 +28,39 @@ Available in `examples/hosts/`:
 
 ### Guests
 Available in `examples/guests/`:
-- **Rust**: `decoder`, `encoder`
-- **C++**: `transformer`, `validator`
-- **C#**: `reporter`, `logger`
-- **Python**: `analyzer`, `filter`
-- **Lua**: `processor`, `mapper`
-- **JavaScript**: `fetcher`, `parser`
+- **Rust**: `decoder`, `reporter`
+- **C++**: `transformer`, `reporter`
+- **C#**: `encoder`, `reporter`
+- **Python**: `decoder`, `reporter`
+- **Lua**: `transformer`, `reporter`
+- **JavaScript (QuickJS)**: `transformer`, `reporter`
+- **JavaScript (Deno)**: `transformer`, `reporter`
+
+### How Guests Work
+
+Each guest plugin directory contains:
+
+1. **`bundle.toml`** — Declares the plugin's name, version, API reference, and which contracts it implements.
+2. **Source code** — The plugin implementation in its native language.
+3. **`manifest.toml`** — Runtime metadata (bundle name, file path, provided contracts). Used by the scanner at load time.
+
+Code generation uses `polyplugc`:
+
+```bash
+polyplugc generate --bundle bundle.toml --lang rust --out generated/
+```
+
+This generates type-safe bindings from `api.toml` that the plugin source imports.
+
+### How Hosts Work
+
+Hosts discover plugins at runtime via the **scanner** — no hardcoded paths. Each host:
+
+1. Reads `POLYPLUG_PLUGIN_PATH` (defaults to `examples/plugins/`).
+2. Scans subdirectories for `manifest.toml` files.
+3. Loads each discovered bundle and resolves plugins by contract ID.
+
+This mirrors how a real application would discover plugins.
 
 ## JavaScript Support
 
@@ -99,23 +128,50 @@ In contrast, **QuickJS uses no TLS**. It allocates all state on the heap and pas
 
 ## Building the Examples
 
-### Guest Plugins
-To build all guest plugins across all languages, run the master build script from the repository root:
+The single build script handles everything: building `polyplugc`, generating bindings, compiling guests, and installing to `examples/plugins/`.
 
 ```bash
-./examples/build_guests.sh
+./examples/build_all.sh
 ```
 
-You can also build specific languages:
+This runs:
+1. `cargo build -p polyplugc` — builds the code generator
+2. `cargo build` — builds the runtime and loader libraries
+3. For each guest: `polyplugc generate` + language-specific compile + install to `plugins/<bundle_name>/`
+
+### Running Hosts
+
+After building, run any host:
 
 ```bash
-./examples/build_guests.sh rust cpp
+# Rust host (auto-sets POLYPLUG_PLUGIN_PATH)
+./examples/hosts/rust/run.sh
+
+# C++ host
+./examples/hosts/cpp/run.sh
+
+# Python host
+./examples/hosts/python/run.sh
+
+# Lua host
+./examples/hosts/lua/run.sh
+
+# C# host
+dotnet run --project examples/hosts/csharp/
+
+# Deno host
+POLYPLUG_PLUGIN_PATH=examples/plugins deno run --allow-read --allow-ffi --allow-env examples/hosts/js_deno/host.ts
 ```
 
-Individual language build scripts are located at `examples/guests/<lang>/build.sh`.
+All hosts read `POLYPLUG_PLUGIN_PATH` to find plugins. The `run.sh` scripts default it to `examples/plugins/`.
 
-### Host Runtimes
-Host runtimes are typically built using their respective language's standard build tools (e.g., `cargo build` for Rust, `cmake` for C++). See the README within each host directory for specific instructions.
+### Verifying All Hosts
+
+```bash
+./examples/verify_hosts.sh
+```
+
+Runs every host and diffs output against `examples/hosts/golden.txt`.
 
 ## ABI Reference
 All examples in this directory use a shared `DataRecord` structure for data exchange. For detailed memory layouts and language-specific struct definitions, see [abi_types.md](./abi_types.md).

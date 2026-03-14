@@ -1,0 +1,12 @@
+# bundle.toml — C# transformer guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang csharp --out generated/
+
+[bundle]
+name    = "csharp_transformer"
+version = "1.0.0"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "csharp_transformer"
+version    = "1.0.0"
+implements = ["data.Transformer@1.0"]

@@ -1,0 +1,12 @@
+# bundle.toml — JS/QuickJS transformer guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang js-quickjs --out generated/
+
+[bundle]
+name    = "js_quickjs_transformer"
+version = "1.0.0"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "js_quickjs_transformer"
+version    = "1.0.0"
+implements = ["data.Transformer@1.0"]
