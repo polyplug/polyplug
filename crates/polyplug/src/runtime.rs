@@ -37,7 +37,6 @@ use crate::extensions::SendPtr;
 use crate::graph::CapabilityGraph;
 use crate::loader::BundleInitGuard;
 use crate::loader::BundleLoader;
-use crate::loader::NativeBundleLoader;
 use crate::loader::manifest::ManifestData;
 use crate::version::Compatibility;
 use crate::version::Version;
@@ -93,7 +92,7 @@ pub fn set_global_registry(registry: Arc<Registry>) {
 }
 
 /// Return the global registry for dispatching, or `None` if not yet initialised.
-pub(crate) fn global_registry() -> Option<Arc<Registry>> {
+pub fn global_registry() -> Option<Arc<Registry>> {
     GLOBAL_REGISTRY.get().cloned()
 }
 
@@ -167,14 +166,14 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Register an additional bundle loader for a non-native runtime.
+    /// Register a bundle loader for a runtime.
     ///
     /// The loader is identified by `loader.runtime_name()`. Duplicate registrations
     /// (same runtime name) are detected in `build()` and cause `build()` to return
     /// `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))`.
     ///
-    /// Native bundles do not require calling this method — `NativeBundleLoader` is
-    /// registered automatically.
+    /// All loaders — including the native loader for Rust/C/C++ plugins — must be
+    /// registered explicitly. No loader is built into the runtime automatically.
     pub fn loader(mut self, loader: impl BundleLoader + 'static) -> RuntimeBuilder {
         self.loaders.push(Box::new(loader));
         self
@@ -256,14 +255,7 @@ impl RuntimeBuilder {
             get_extension: host_get_extension,
         }));
 
-        // Build loader dispatch map. Start with the built-in NativeBundleLoader.
-        let native_loader: NativeBundleLoader =
-            NativeBundleLoader::new(Arc::clone(&registry), host_vtable);
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
-        loader_map.insert(
-            native_loader.runtime_name().to_owned(),
-            Box::new(native_loader),
-        );
 
         // Register user-provided loaders, checking for duplicates.
         for loader in self.loaders {

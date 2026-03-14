@@ -4,6 +4,8 @@
 [bundle]
 name    = "python_transformer"
 version = "1.0.0"
+runtime = "python"
+file    = "decoder.py"
 api     = "../../../api.toml"
 
 [[plugin]]

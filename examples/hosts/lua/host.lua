@@ -17,7 +17,6 @@ local dotnet_loader = require("dotnet")
 local python_loader = require("python")
 local lua_loader = require("lua")
 local js_loader = require("js")
-local js_deno_loader = require("js_deno")
 
 local function resolve_polyplug_so()
     local env_path = os.getenv("POLYPLUG_SO")
@@ -136,7 +135,6 @@ local function main()
     polyplug.register_python_loader(rt._ptr, { min_version = "3.11" })
     polyplug.register_lua_loader(rt._ptr)
     polyplug.register_js_loader(rt._ptr)
-    js_deno_loader.register(rt._ptr)
 
     local bundles = scan_plugin_dir(plugin_dir)
     if #bundles == 0 then

@@ -11,6 +11,7 @@ pub(crate) mod python;
 pub(crate) mod rust;
 
 use crate::error::CodegenError;
+use crate::ir::ResolvedBundleFile;
 use crate::ir::ValidatedIr;
 
 /// A single generated file (path + content).
@@ -29,6 +30,25 @@ pub(crate) struct GeneratedFile {
 #[derive(Debug, Default)]
 pub(crate) struct GeneratedFiles {
     pub files: Vec<GeneratedFile>,
+}
+
+pub(crate) fn format_manifest_file_field(file: &ResolvedBundleFile) -> String {
+    match file {
+        ResolvedBundleFile::Single(path) => format!("file = \"{path}\""),
+        ResolvedBundleFile::PlatformMap(map) => {
+            let mut lines: Vec<String> = Vec::with_capacity(map.len() + 1);
+            lines.push(String::from("[file]"));
+            let mut entries: Vec<(&str, &str, &str)> = map
+                .iter()
+                .map(|(k, v)| (k.os.as_str(), k.arch.as_str(), v.as_str()))
+                .collect();
+            entries.sort();
+            for (os, arch, path) in entries {
+                lines.push(format!("{os}.{arch} = \"{path}\""));
+            }
+            lines.join("\n")
+        }
+    }
 }
 
 /// Trait for language-specific code generators.

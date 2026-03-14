@@ -122,7 +122,7 @@ impl Registry {
     ///
     /// `loaded_libraries` is declared as the first field in `Registry`, so it drops
     /// last during `Registry` drop — after all `RegistrySlot` vtable pointers are gone.
-    pub(crate) fn push_library(&self, library: libloading::Library) {
+    pub fn push_library(&self, library: libloading::Library) {
         self.loaded_libraries
             .lock()
             .unwrap_or_else(|e| e.into_inner())

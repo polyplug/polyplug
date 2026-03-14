@@ -22,7 +22,6 @@ from polyplug.loaders import (
     register_python_loader,
     register_lua_loader,
     register_js_loader,
-    register_js_deno_loader,
 )
 
 try:
@@ -153,7 +152,6 @@ def main() -> None:
     register_python_loader(runtime)
     register_lua_loader(runtime)
     register_js_loader(runtime)
-    register_js_deno_loader(runtime)
 
     bundles: list[dict] = scan_plugin_dir(plugin_dir)
     if not bundles:

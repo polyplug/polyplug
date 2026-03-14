@@ -261,7 +261,7 @@ examples/
 
   **`src/ffi.rs`**:
   ```rust
-  use std::ffi::c_void;
+  use core::ffi::c_void;
   use crate::{DotnetLoader, DotnetConfig};
 
   #[repr(C)]

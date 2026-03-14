@@ -101,7 +101,7 @@ fn run() -> Result<(), String> {
         .loader(PythonLoader::new(PythonConfig::default()))
         .loader(LuaLoader::new(LuaConfig::default()))
         .loader(JsLoader::new(JsConfig {}))
-        .loader(JsDenoLoader::new(JsDenoConfig {}))
+        .loader(JsDenoLoader::new(JsDenoConfig::default()))
         .build()
         .map_err(|e| format!("runtime build failed: {e}"))?;
 

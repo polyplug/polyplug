@@ -351,6 +351,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     );
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
+    out.push_str("        unsafe {\n");
     if has_trace {
         out.push_str("            const uint ExtTraceId = 0xC4EB9AEEu;\n");
         out.push_str("            // Optional: trace extension\n");
@@ -414,6 +415,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("            return AbiConstants.ABI_OK;\n");
+    out.push_str("        } // unsafe\n");
     out.push_str("        } catch {\n");
     out.push_str("            return AbiConstants.ABI_ERROR_PANIC;\n");
     out.push_str("        } finally {\n");
@@ -525,6 +527,8 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
     let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
 
     let reinit: bool = bundle.needs_reinit_on_dep_reload;
+    let file_field: String = super::format_manifest_file_field(&bundle.file);
+    let runtime: &str = &bundle.runtime;
 
     // Collect provides: all implements from all plugins, deduplicated
     let mut provides: Vec<String> = bundle
@@ -582,8 +586,8 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
 name = \"{name}\"\n\
 bundle_name = \"{name}\"\n\
 version = \"{version}\"\n\
-runtime = \"dotnet\"\n\
-file = \"{name}.dll\"\n\
+runtime = \"{runtime}\"\n\
+{file_field}\n\
 provides = {provides_toml}\n\
 function_count = {function_count_toml}\n\
 needs_reinit_on_dep_reload = {reinit}\n\
@@ -642,7 +646,7 @@ impl CodeGenerator for CSharpGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Init.cs"),
             content: generate_cs_guest_init(ir),
-            force_regenerate: false,
+            force_regenerate: true,
         });
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {

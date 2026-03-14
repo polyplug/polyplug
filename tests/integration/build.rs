@@ -47,6 +47,13 @@ fn main() {
         println!("cargo:rustc-env=TEST_PLUGIN_SO=");
     }
 
+    // TEST_PLUGIN_DIR — directory containing manifest.toml + .so for the native test plugin
+    let test_plugin_dir: PathBuf = fixtures_dir.join("test_plugin_dir");
+    println!(
+        "cargo:rustc-env=TEST_PLUGIN_DIR={}",
+        test_plugin_dir.display()
+    );
+
     // TEST_PLUGIN_CPP_SO — C++ test plugin (built by crates/polyplug/build.rs via g++)
     let cpp_so_filename: &str = if cfg!(target_os = "macos") {
         "libtest_plugin_cpp.dylib"

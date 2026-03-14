@@ -1,6 +1,8 @@
-use crate::{LuaConfig, LuaLoader};
+use core::ffi::c_void;
+
 use polyplug::loader::BundleLoader;
-use std::ffi::c_void;
+
+use crate::{LuaConfig, LuaLoader};
 
 #[repr(C)]
 pub struct PolyplugLuaConfig {

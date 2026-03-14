@@ -4,6 +4,8 @@
 [bundle]
 name    = "js_quickjs_reporter"
 version = "1.0.0"
+runtime = "js-quickjs"
+file    = "bundle.js"
 api     = "../../../api.toml"
 
 [[plugin]]

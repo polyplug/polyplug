@@ -4,6 +4,8 @@
 [bundle]
 name    = "lua_transformer"
 version = "1.0.0"
+runtime = "lua"
+file    = "reverse_transformer.lua"
 api     = "../../../api.toml"
 
 [[plugin]]

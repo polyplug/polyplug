@@ -11,7 +11,6 @@ import { registerDotnetLoader } from "../../../host-libs/js/loaders/dotnet.ts";
 import { registerPythonLoader } from "../../../host-libs/js/loaders/python.ts";
 import { registerLuaLoader } from "../../../host-libs/js/loaders/lua.ts";
 import { registerJsLoader } from "../../../host-libs/js/loaders/js.ts";
-import { registerJsDenoLoader } from "../../../host-libs/js/loaders/js_deno.ts";
 
 const TRANSFORMER_CONTRACT_ID: bigint = 0x3D53C682F3F5A9EFn;
 const REPORTER_CONTRACT_ID: bigint = 0x81D41D43E511D297n;
@@ -157,7 +156,6 @@ function main(): void {
       registerPythonLoader(rtPtr, registerFn);
       registerLuaLoader(rtPtr, registerFn);
       registerJsLoader(rtPtr, registerFn);
-      registerJsDenoLoader(rtPtr, registerFn);
 
       const bundles: DiscoveredBundle[] = scanPluginDir(pluginDir);
       if (bundles.length === 0) {

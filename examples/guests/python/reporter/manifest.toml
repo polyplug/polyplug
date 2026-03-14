@@ -1,8 +1,0 @@
-bundle_name = "python_reporter"
-runtime     = "python"
-version     = "1.0"
-file        = "summary_reporter.py"
-provides    = ["data.Reporter"]
-
-[function_count]
-"data.Reporter@1" = 1

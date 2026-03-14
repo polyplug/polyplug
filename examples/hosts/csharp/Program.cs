@@ -5,7 +5,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using Polyplug;
-using Polyplug.Loaders;
 
 internal static class Program
 {
@@ -40,7 +39,6 @@ internal static class Program
             runtime.RegisterPythonLoader();
             runtime.RegisterLuaLoader();
             runtime.RegisterJsLoader();
-            runtime.RegisterJsDenoLoader();
 
             List<DiscoveredBundle> bundles = ScanPluginDir(pluginDir);
             if (bundles.Count == 0)
@@ -268,7 +266,7 @@ internal static class Program
 
         DllImportResolver resolver = (string name, System.Reflection.Assembly assembly, DllImportSearchPath? path) =>
         {
-            string[] knownLibs = { "polyplug", "polyplug_native", "polyplug_dotnet", "polyplug_python", "polyplug_lua", "polyplug_js", "polyplug_js_deno" };
+            string[] knownLibs = { "polyplug", "polyplug_native", "polyplug_dotnet", "polyplug_python", "polyplug_lua", "polyplug_js" };
             bool isKnown = false;
             foreach (string known in knownLibs)
             {

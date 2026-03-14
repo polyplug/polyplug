@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 LIB_DIR="${REPO_ROOT}/target/debug"
 POLYPLUG_SO="${LIB_DIR}/libpolyplug.so"
+PYTHON_HOST_LIB="${REPO_ROOT}/host-libs/python"
 
 if [[ ! -f "${POLYPLUG_SO}" ]]; then
     echo "error: libpolyplug.so not found at ${POLYPLUG_SO}" >&2

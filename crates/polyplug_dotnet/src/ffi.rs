@@ -1,9 +1,8 @@
-use std::ffi::c_void;
+use core::ffi::c_void;
 
-use crate::config::HostfxrLocation;
-use crate::DotnetConfig;
-use crate::DotnetLoader;
 use polyplug::loader::BundleLoader;
+
+use crate::{DotnetConfig, DotnetLoader, config::HostfxrLocation};
 
 /// C-visible configuration passed to `polyplug_dotnet_loader_create`.
 ///

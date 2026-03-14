@@ -1,8 +1,0 @@
-bundle_name = "lua_reporter"
-runtime     = "lua"
-version     = "1.0"
-file        = "reporter.lua"
-provides    = ["data.Reporter"]
-
-[function_count]
-"data.Reporter@1" = 1

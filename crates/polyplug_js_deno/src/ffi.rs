@@ -1,10 +1,10 @@
 //! FFI exports for polyplug_js_deno — `polyplug_js_deno_loader_create` and `polyplug_js_deno_loader_free`.
 
-use std::ffi::c_void;
+use core::ffi::c_void;
 
-use crate::JsDenoConfig;
-use crate::JsDenoLoader;
 use polyplug::loader::BundleLoader;
+
+use crate::{JsDenoConfig, JsDenoLoader};
 
 /// Opaque C-compatible config for the JS Deno loader (no required fields).
 #[repr(C)]

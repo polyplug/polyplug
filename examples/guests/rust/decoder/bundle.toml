@@ -4,7 +4,14 @@
 [bundle]
 name    = "rust_transformer"
 version = "1.0.0"
+runtime = "native"
 api     = "../../../api.toml"
+
+[bundle.file]
+linux.x86_64   = "libcsv_decoder.so"
+linux.aarch64  = "libcsv_decoder.so"
+macos.aarch64  = "libcsv_decoder.dylib"
+windows.x86_64 = "csv_decoder.dll"
 
 [[plugin]]
 name       = "rust_transformer"

@@ -9,23 +9,39 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::CodegenError;
-use crate::ir::EnumDef;
-use crate::ir::EnumVariant;
-use crate::ir::ReprType;
-use crate::ir::ResolvedBundle;
-use crate::ir::ResolvedContract;
-use crate::ir::ResolvedDependency;
-use crate::ir::ResolvedField;
-use crate::ir::ResolvedFunction;
-use crate::ir::ResolvedParam;
-use crate::ir::ResolvedPlugin;
-use crate::ir::ResolvedType;
-use crate::ir::ResolvedTypeRef;
-use crate::ir::ValidatedIr;
-use crate::ir::Version;
 use crate::ir::compute_bundle_id;
 use crate::ir::compute_contract_id;
 use crate::ir::resolve_type_ref;
+use crate::ir::EnumDef;
+use crate::ir::EnumDef;
+use crate::ir::EnumVariant;
+use crate::ir::EnumVariant;
+use crate::ir::PlatformKey;
+use crate::ir::ReprType;
+use crate::ir::ReprType;
+use crate::ir::ResolvedBundle;
+use crate::ir::ResolvedBundle;
+use crate::ir::ResolvedBundleFile;
+use crate::ir::ResolvedContract;
+use crate::ir::ResolvedContract;
+use crate::ir::ResolvedDependency;
+use crate::ir::ResolvedDependency;
+use crate::ir::ResolvedField;
+use crate::ir::ResolvedField;
+use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedParam;
+use crate::ir::ResolvedParam;
+use crate::ir::ResolvedPlugin;
+use crate::ir::ResolvedPlugin;
+use crate::ir::ResolvedType;
+use crate::ir::ResolvedType;
+use crate::ir::ResolvedTypeRef;
+use crate::ir::ResolvedTypeRef;
+use crate::ir::ValidatedIr;
+use crate::ir::ValidatedIr;
+use crate::ir::Version;
+use crate::ir::Version;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -103,9 +119,18 @@ pub(crate) struct RawBundleSchema {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RawBundleFile {
+    PlatformMap(HashMap<String, String>),
+    Single(String),
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct RawBundleMeta {
     pub name: String,
     pub version: String,
+    pub runtime: String,
+    pub file: RawBundleFile,
     /// Path or package name to the api.toml for this bundle.
     #[serde(default)]
     pub api: Option<String>,
@@ -569,12 +594,106 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, CodegenError> {
         bundle: Some(ResolvedBundle {
             name: raw.bundle.name.clone(),
             version: bundle_version,
+            runtime: raw.bundle.runtime.clone(),
+            file: resolve_bundle_file(&raw.bundle.runtime, &raw.bundle.file, &raw.bundle.name)?,
             bundle_id: dep_bundle_id,
             plugins,
             dependencies: resolved_deps,
             needs_reinit_on_dep_reload: raw.bundle.needs_reinit_on_dep_reload,
         }),
     })
+}
+
+const VALID_OS: &[&str] = &["linux", "windows", "macos"];
+const VALID_ARCH: &[&str] = &["x86_64", "aarch64"];
+
+fn validate_file_path(path: &str, bundle_name: &str) -> Result<(), CodegenError> {
+    if path.trim().is_empty() {
+        return Err(CodegenError::ValidationFailed {
+            message: format!("bundle `{bundle_name}`: file path is empty"),
+        });
+    }
+    if std::path::Path::new(path).is_absolute() {
+        return Err(CodegenError::ValidationFailed {
+            message: format!("bundle `{bundle_name}`: file path must be relative, got `{path}`"),
+        });
+    }
+    if path.contains("..") {
+        return Err(CodegenError::ValidationFailed {
+            message: format!(
+                "bundle `{bundle_name}`: file path must not contain `..`, got `{path}`"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn resolve_bundle_file(
+    runtime: &str,
+    raw: &RawBundleFile,
+    bundle_name: &str,
+) -> Result<ResolvedBundleFile, CodegenError> {
+    match (runtime, raw) {
+        ("native", RawBundleFile::Single(_)) => Err(CodegenError::ValidationFailed {
+            message: format!(
+                "bundle `{bundle_name}`: runtime \"native\" requires [bundle.file] table, not a flat string"
+            ),
+        }),
+        ("native", RawBundleFile::PlatformMap(map)) => {
+            if map.is_empty() {
+                return Err(CodegenError::ValidationFailed {
+                    message: format!(
+                        "bundle `{bundle_name}`: [bundle.file] table must have at least one os.arch entry"
+                    ),
+                });
+            }
+            let mut resolved: HashMap<PlatformKey, String> = HashMap::new();
+            for (key, path) in map {
+                validate_file_path(path, bundle_name)?;
+                let parts: Vec<&str> = key.split('.').collect();
+                if parts.len() != 2 {
+                    return Err(CodegenError::ValidationFailed {
+                        message: format!(
+                            "bundle `{bundle_name}`: invalid platform key `{key}`, expected `os.arch`"
+                        ),
+                    });
+                }
+                let os: &str = parts[0];
+                let arch: &str = parts[1];
+                if !VALID_OS.contains(&os) {
+                    return Err(CodegenError::ValidationFailed {
+                        message: format!(
+                            "bundle `{bundle_name}`: unknown os `{os}` in `{key}`, valid: {VALID_OS:?}"
+                        ),
+                    });
+                }
+                if !VALID_ARCH.contains(&arch) {
+                    return Err(CodegenError::ValidationFailed {
+                        message: format!(
+                            "bundle `{bundle_name}`: unknown arch `{arch}` in `{key}`, valid: {VALID_ARCH:?}"
+                        ),
+                    });
+                }
+                resolved.insert(
+                    PlatformKey {
+                        os: os.to_owned(),
+                        arch: arch.to_owned(),
+                    },
+                    path.clone(),
+                );
+            }
+            Ok(ResolvedBundleFile::PlatformMap(resolved))
+        }
+        (_, RawBundleFile::PlatformMap(_)) => Err(CodegenError::ValidationFailed {
+            message: format!(
+                "bundle `{bundle_name}`: runtime \"{runtime}\" requires flat `file = \"...\"`, not [bundle.file] table"
+            ),
+        }),
+        (_, RawBundleFile::Single(path)) => {
+            validate_file_path(path, bundle_name)?;
+            Ok(ResolvedBundleFile::Single(path.clone()))
+        }
+    }
 }
 
 #[cfg(test)]

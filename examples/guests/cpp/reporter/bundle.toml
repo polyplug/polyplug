@@ -4,7 +4,14 @@
 [bundle]
 name    = "cpp_reporter"
 version = "1.0.0"
+runtime = "native"
 api     = "../../../api.toml"
+
+[bundle.file]
+linux.x86_64   = "libreporter.so"
+linux.aarch64  = "libreporter.so"
+macos.aarch64  = "libreporter.dylib"
+windows.x86_64 = "reporter.dll"
 
 [[plugin]]
 name       = "cpp_reporter"

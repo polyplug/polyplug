@@ -5,7 +5,7 @@ INCLUDES := -I../../.. -I../../../host-libs/cpp
 LIB_DIR  := ../../../target/debug
 LDFLAGS  := -L$(LIB_DIR) \
             -lpolyplug -lpolyplug_native -lpolyplug_dotnet \
-            -lpolyplug_python -lpolyplug_lua -lpolyplug_js -lpolyplug_js_deno \
+            -lpolyplug_python -lpolyplug_lua -lpolyplug_js \
             -ldl -pthread \
             -Wl,-rpath,'$$ORIGIN/../../../target/debug'
 

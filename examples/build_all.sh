@@ -43,40 +43,62 @@ skip() {
 printf "\n${BOLD}polyplug — build all examples${RESET}\n"
 printf "%-50s\n\n" "$(printf '%.0s─' {1..50})"
 
-printf "${BOLD}Step 1: Build polyplugc${RESET}\n"
-printf "  %-40s " "cargo build -p polyplugc ..."
-if cargo build -p polyplugc 2>/dev/null; then
-    pass "polyplugc"
-else
-    fail "polyplugc"
-    printf "\n${RED}Cannot continue without polyplugc.${RESET}\n"
-    exit 1
-fi
-
-printf "\n${BOLD}Step 2: Build polyplug runtime + loaders${RESET}\n"
-printf "  %-40s " "cargo build (workspace) ..."
+printf "${BOLD}Step 1: Build workspace (polyplugc + runtime + loaders)${RESET}\n"
+printf "  %-40s " "cargo build ..."
 if cargo build 2>/dev/null; then
     pass "workspace"
 else
     fail "workspace"
-    printf "\n${RED}Cannot continue without runtime libraries.${RESET}\n"
+    printf "\n${RED}Cannot continue without workspace build.${RESET}\n"
     exit 1
 fi
 
 rm -rf "${PLUGINS_DIR:?}"/*
 mkdir -p "${PLUGINS_DIR}"
 
+get_bundle_name() {
+    local manifest="$1"
+    grep '^bundle_name' "${manifest}" | sed 's/bundle_name.*=.*"\(.*\)"/\1/'
+}
+
+get_file_field() {
+    local manifest="$1"
+    local flat
+    flat=$(grep '^file ' "${manifest}" | sed 's/file.*=.*"\(.*\)"/\1/' || true)
+    if [[ -n "${flat}" ]]; then
+        echo "${flat}"
+        return
+    fi
+    local os arch key
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case "${os}" in
+        darwin) os="macos" ;;
+    esac
+    arch=$(uname -m)
+    case "${arch}" in
+        arm64) arch="aarch64" ;;
+    esac
+    key="${os}.${arch}"
+    grep "^${key}" "${manifest}" | sed 's/.*=.*"\(.*\)"/\1/' || true
+}
+
 install_plugin() {
     local bundle_name="$1"
     local guest_dir="$2"
-    local manifest_file="${guest_dir}/manifest.toml"
     local dest="${PLUGINS_DIR}/${bundle_name}"
+    local generated_manifest="${guest_dir}/generated/manifest.toml"
+
+    if [[ ! -f "${generated_manifest}" ]]; then
+        echo "ERROR: generated manifest not found: ${generated_manifest}" >&2
+        return 1
+    fi
 
     mkdir -p "${dest}"
-    cp "${manifest_file}" "${dest}/manifest.toml"
+    cp "${generated_manifest}" "${dest}/manifest.toml"
 
     local file_field
-    file_field=$(grep '^file ' "${manifest_file}" | sed 's/file.*=.*"\(.*\)"/\1/' || true)
+    file_field=$(get_file_field "${generated_manifest}")
+
     if [[ -n "${file_field}" ]] && [[ -f "${guest_dir}/${file_field}" ]]; then
         cp "${guest_dir}/${file_field}" "${dest}/"
     fi
@@ -99,7 +121,7 @@ generate_bindings() {
     return 0
 }
 
-printf "\n${BOLD}Step 3: Build guest plugins → examples/plugins/${RESET}\n"
+printf "\n${BOLD}Step 2: Build guest plugins → examples/plugins/${RESET}\n"
 
 printf "\n  ${BOLD}[rust]${RESET}\n"
 for guest in decoder reporter; do
@@ -115,9 +137,9 @@ for guest in decoder reporter; do
     generate_bindings "${label}" "${guest_dir}/bundle.toml" rust "${guest_dir}/generated" || continue
 
     if cargo build --release --manifest-path "${guest_dir}/Cargo.toml" 2>/dev/null; then
-        bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
+        bundle_name=$(get_bundle_name "${guest_dir}/generated/manifest.toml")
         install_plugin "${bundle_name}" "${guest_dir}"
-        so_file=$(grep '^file ' "${guest_dir}/manifest.toml" | sed 's/file.*=.*"\(.*\)"/\1/')
+        so_file=$(get_file_field "${guest_dir}/generated/manifest.toml")
         release_so="${guest_dir}/target/release/${so_file}"
         if [[ -f "${release_so}" ]]; then
             cp "${release_so}" "${PLUGINS_DIR}/${bundle_name}/"
@@ -142,7 +164,7 @@ for guest in transformer reporter; do
     generate_bindings "${label}" "${guest_dir}/bundle.toml" cpp "${guest_dir}/generated" || continue
 
     if make -C "${guest_dir}" 2>/dev/null; then
-        bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
+        bundle_name=$(get_bundle_name "${guest_dir}/generated/manifest.toml")
         install_plugin "${bundle_name}" "${guest_dir}"
         pass "${label}"
     else
@@ -169,7 +191,7 @@ for guest in encoder reporter; do
     generate_bindings "${label}" "${guest_dir}/bundle.toml" csharp "${guest_dir}/generated" || continue
 
     if dotnet build "${guest_dir}" --configuration Release 2>/dev/null; then
-        bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
+        bundle_name=$(get_bundle_name "${guest_dir}/generated/manifest.toml")
         install_plugin "${bundle_name}" "${guest_dir}"
         pass "${label}"
     else
@@ -190,9 +212,9 @@ for guest in decoder reporter; do
 
     generate_bindings "${label}" "${guest_dir}/bundle.toml" python "${guest_dir}/generated" || continue
 
-    bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
+    bundle_name=$(get_bundle_name "${guest_dir}/generated/manifest.toml")
     install_plugin "${bundle_name}" "${guest_dir}"
-    py_file=$(grep '^file ' "${guest_dir}/manifest.toml" | sed 's/file.*=.*"\(.*\)"/\1/')
+    py_file=$(get_file_field "${guest_dir}/generated/manifest.toml")
     if [[ -n "${py_file}" ]] && [[ -f "${guest_dir}/${py_file}" ]]; then
         cp "${guest_dir}/${py_file}" "${PLUGINS_DIR}/${bundle_name}/"
     fi
@@ -212,9 +234,9 @@ for guest in transformer reporter; do
 
     generate_bindings "${label}" "${guest_dir}/bundle.toml" lua "${guest_dir}/generated" || continue
 
-    bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
+    bundle_name=$(get_bundle_name "${guest_dir}/generated/manifest.toml")
     install_plugin "${bundle_name}" "${guest_dir}"
-    lua_file=$(grep '^file ' "${guest_dir}/manifest.toml" | sed 's/file.*=.*"\(.*\)"/\1/')
+    lua_file=$(get_file_field "${guest_dir}/generated/manifest.toml")
     if [[ -n "${lua_file}" ]] && [[ -f "${guest_dir}/${lua_file}" ]]; then
         cp "${guest_dir}/${lua_file}" "${PLUGINS_DIR}/${bundle_name}/"
     fi
@@ -234,33 +256,11 @@ for guest in transformer reporter; do
 
     generate_bindings "${label}" "${guest_dir}/bundle.toml" js-quickjs "${guest_dir}/generated" || continue
 
-    bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
+    bundle_name=$(get_bundle_name "${guest_dir}/generated/manifest.toml")
     install_plugin "${bundle_name}" "${guest_dir}"
-    js_file=$(grep '^file ' "${guest_dir}/manifest.toml" | sed 's/file.*=.*"\(.*\)"/\1/')
+    js_file=$(get_file_field "${guest_dir}/generated/manifest.toml")
     if [[ -n "${js_file}" ]] && [[ -f "${guest_dir}/${js_file}" ]]; then
         cp "${guest_dir}/${js_file}" "${PLUGINS_DIR}/${bundle_name}/"
-    fi
-    pass "${label}"
-done
-
-printf "\n  ${BOLD}[js_deno]${RESET}\n"
-for guest in transformer reporter; do
-    guest_dir="${GUESTS_DIR}/js_deno/${guest}"
-    label="js_deno/${guest}"
-    printf "  %-40s " "${label} ..."
-
-    if [[ ! -d "${guest_dir}" ]]; then
-        skip "${label}" "directory not found"
-        continue
-    fi
-
-    generate_bindings "${label}" "${guest_dir}/bundle.toml" js-deno "${guest_dir}/generated" || continue
-
-    bundle_name=$(grep '^bundle_name' "${guest_dir}/manifest.toml" | sed 's/bundle_name.*=.*"\(.*\)"/\1/')
-    install_plugin "${bundle_name}" "${guest_dir}"
-    ts_file=$(grep '^file ' "${guest_dir}/manifest.toml" | sed 's/file.*=.*"\(.*\)"/\1/')
-    if [[ -n "${ts_file}" ]] && [[ -f "${guest_dir}/${ts_file}" ]]; then
-        cp "${guest_dir}/${ts_file}" "${PLUGINS_DIR}/${bundle_name}/"
     fi
     pass "${label}"
 done

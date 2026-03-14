@@ -4,6 +4,8 @@
 [bundle]
 name    = "python_reporter"
 version = "1.0.0"
+runtime = "python"
+file    = "summary_reporter.py"
 api     = "../../../api.toml"
 
 [[plugin]]

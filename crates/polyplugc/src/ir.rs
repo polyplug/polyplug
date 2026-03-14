@@ -3,6 +3,8 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
+use std::collections::HashMap;
+
 use polyplug::abi::bundle_id as runtime_bundle_id;
 use polyplug::abi::contract_id as runtime_contract_id;
 use polyplug::abi::extension_id as runtime_extension_id;
@@ -275,12 +277,28 @@ pub(crate) struct ResolvedPlugin {
     pub optional: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PlatformKey {
+    pub os: String,
+    pub arch: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ResolvedBundleFile {
+    Single(String),
+    PlatformMap(HashMap<PlatformKey, String>),
+}
+
 #[derive(Debug)]
 pub(crate) struct ResolvedBundle {
     #[allow(dead_code)]
     pub name: String,
     #[allow(dead_code)]
     pub version: Version,
+    #[allow(dead_code)]
+    pub runtime: String,
+    #[allow(dead_code)]
+    pub file: ResolvedBundleFile,
     #[allow(dead_code)]
     pub plugins: Vec<ResolvedPlugin>,
     #[allow(dead_code)]

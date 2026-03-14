@@ -4,6 +4,8 @@
 [bundle]
 name    = "csharp_reporter"
 version = "1.0.0"
+runtime = "dotnet"
+file    = "Reporter.dll"
 api     = "../../../api.toml"
 
 [[plugin]]

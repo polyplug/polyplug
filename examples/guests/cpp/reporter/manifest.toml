@@ -1,8 +1,0 @@
-bundle_name = "cpp_reporter"
-runtime     = "native"
-version     = "1.0"
-file        = "libreporter.so"
-provides    = ["data.Reporter"]
-
-[function_count]
-"data.Reporter@1" = 1

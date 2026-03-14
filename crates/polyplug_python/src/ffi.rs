@@ -1,8 +1,8 @@
-use std::ffi::c_void;
+use core::ffi::c_void;
 
-use crate::config::PythonConfig;
-use crate::PythonLoader;
 use polyplug::loader::BundleLoader;
+
+use crate::{PythonLoader, config::PythonConfig};
 
 /// C-visible configuration passed to `polyplug_python_loader_create`.
 ///

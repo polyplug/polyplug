@@ -4,7 +4,14 @@
 [bundle]
 name    = "rust_reporter"
 version = "1.0.0"
+runtime = "native"
 api     = "../../../api.toml"
+
+[bundle.file]
+linux.x86_64   = "libcsv_encoder.so"
+linux.aarch64  = "libcsv_encoder.so"
+macos.aarch64  = "libcsv_encoder.dylib"
+windows.x86_64 = "csv_encoder.dll"
 
 [[plugin]]
 name       = "rust_reporter"

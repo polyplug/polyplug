@@ -1,8 +1,0 @@
-bundle_name = "js_deno_reporter"
-runtime     = "js-deno"
-version     = "1.0"
-file        = "index.ts"
-provides    = ["data.Reporter"]
-
-[function_count]
-"data.Reporter@1" = 1

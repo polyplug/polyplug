@@ -351,6 +351,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     );
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
+    out.push_str("        unsafe {\n");
     if has_trace {
         out.push_str("            const uint ExtTraceId = 0xC4EB9AEEu;\n");
         out.push_str("            // Optional: trace extension\n");
@@ -414,6 +415,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("            return AbiConstants.ABI_OK;\n");
+    out.push_str("        } // unsafe\n");
     out.push_str("        } catch {\n");
     out.push_str("            return AbiConstants.ABI_ERROR_PANIC;\n");
     out.push_str("        } finally {\n");
@@ -642,7 +644,7 @@ impl CodeGenerator for CSharpGenerator {
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/Init.cs"),
             content: generate_cs_guest_init(ir),
-            force_regenerate: false,
+            force_regenerate: true,
         });
         if ir.bundle.is_some() {
             files.files.push(GeneratedFile {

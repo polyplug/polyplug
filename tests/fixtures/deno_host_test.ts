@@ -3,6 +3,7 @@ import { openPolyplug, runtimeNew, NULL_HANDLE } from "../../host-libs/js/polypl
 const POLYPLUG_SO = Deno.env.get("POLYPLUG_SO") ?? "";
 const TEST_PLUGIN_DIR = Deno.env.get("TEST_PLUGIN_DIR") ?? "";
 const TEST_ADD_CONTRACT_ID = 0xCC4232FAB0410D2Bn;
+const NATIVE_AVAILABLE = Deno.env.get("POLYPLUG_NATIVE_LIB") !== undefined;
 
 let passed = 0;
 let failed = 0;
@@ -19,6 +20,14 @@ function runTest(name: string, fn: () => void): void {
     }
 }
 
+function skipUnlessNative(name: string, fn: () => void): void {
+    if (NATIVE_AVAILABLE) {
+        runTest(name, fn);
+    } else {
+        console.log(`  SKIP: ${name} (native loader not available)`);
+    }
+}
+
 runTest("runtime_new_succeeds", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
@@ -29,7 +38,7 @@ runTest("runtime_new_succeeds", () => {
     }
 });
 
-runTest("load_bundle_succeeds", () => {
+skipUnlessNative("load_bundle_succeeds", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
@@ -38,7 +47,7 @@ runTest("load_bundle_succeeds", () => {
     } finally { lib.close(); }
 });
 
-runTest("find_by_contract_returns_valid_handle", () => {
+skipUnlessNative("find_by_contract_returns_valid_handle", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
@@ -50,7 +59,7 @@ runTest("find_by_contract_returns_valid_handle", () => {
     } finally { lib.close(); }
 });
 
-runTest("resolve_plugin_returns_guard", () => {
+skipUnlessNative("resolve_plugin_returns_guard", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
@@ -63,7 +72,7 @@ runTest("resolve_plugin_returns_guard", () => {
     } finally { lib.close(); }
 });
 
-runTest("guard_vtable_nonnull", () => {
+skipUnlessNative("guard_vtable_nonnull", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);

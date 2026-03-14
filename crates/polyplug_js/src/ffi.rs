@@ -1,8 +1,8 @@
-use std::ffi::c_void;
+use core::ffi::c_void;
 
-use crate::JsConfig;
-use crate::JsLoader;
 use polyplug::loader::BundleLoader;
+
+use crate::{JsConfig, JsLoader};
 
 #[repr(C)]
 pub struct PolyplugJsConfig {

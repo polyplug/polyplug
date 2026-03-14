@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <iomanip>
 #include <limits>
@@ -146,7 +148,6 @@ int main() {
     polyplug::loaders::register_python(rt);
     polyplug::loaders::register_lua(rt);
     polyplug::loaders::register_js(rt);
-    polyplug::loaders::register_js_deno(rt);
 
     try {
         auto bundles = scan_plugin_dir(plugin_dir);

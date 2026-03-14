@@ -4,6 +4,8 @@
 [bundle]
 name    = "csharp_transformer"
 version = "1.0.0"
+runtime = "dotnet"
+file    = "CsvEncoder.dll"
 api     = "../../../api.toml"
 
 [[plugin]]

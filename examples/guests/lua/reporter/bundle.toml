@@ -4,6 +4,8 @@
 [bundle]
 name    = "lua_reporter"
 version = "1.0.0"
+runtime = "lua"
+file    = "reporter.lua"
 api     = "../../../api.toml"
 
 [[plugin]]

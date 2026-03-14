@@ -6,17 +6,17 @@
 
 use std::path::Path;
 
-use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
+use polyplug::abi::ABI_OK;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_lua::LuaLoader;
@@ -114,18 +114,15 @@ fn duplicate_loader_detected_in_build() {
 }
 
 #[test]
-fn duplicate_native_loader_detected_in_build() {
-    // Attempting to register a loader for "native" duplicates the built-in.
+fn single_native_loader_succeeds_in_build() {
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
         .loader(StubLoader { name: "native" })
         .build();
-    match result {
-        Err(RuntimeError::Loader(LoaderError::DuplicateLoader { runtime_name })) => {
-            assert_eq!(runtime_name, "native");
-        }
-        Err(e) => panic!("expected DuplicateLoader for \"native\", got: {e:?}"),
-        Ok(_) => panic!("expected DuplicateLoader for \"native\", got Ok"),
-    }
+    assert!(
+        result.is_ok(),
+        "single native loader must succeed: {:?}",
+        result.err()
+    );
 }
 
 // ─── Stub adapter crate behavior ─────────────────────────────────────────────────────

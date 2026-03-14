@@ -1,8 +1,0 @@
-bundle_name = "python_transformer"
-runtime     = "python"
-version     = "1.0"
-file        = "decoder.py"
-provides    = ["data.Transformer"]
-
-[function_count]
-"data.Transformer@1" = 1

@@ -7,8 +7,61 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use serde::Deserialize;
+use serde::Deserializer;
+
 fn default_runtime() -> String {
     "native".to_owned()
+}
+
+fn current_os() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "unknown"
+    }
+}
+
+fn current_arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    }
+}
+
+fn deserialize_file_field<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum FileField {
+        Single(String),
+        PlatformMap(HashMap<String, String>),
+    }
+
+    match FileField::deserialize(deserializer)? {
+        FileField::Single(s) => Ok(s),
+        FileField::PlatformMap(map) => {
+            let key: String = format!("{}.{}", current_os(), current_arch());
+            match map.get(&key) {
+                Some(path) => Ok(path.clone()),
+                None => {
+                    let available: Vec<&String> = map.keys().collect();
+                    Err(serde::de::Error::custom(format!(
+                        "no file entry for platform `{key}`, available: {available:?}"
+                    )))
+                }
+            }
+        }
+    }
 }
 
 /// Raw dependency declaration from a `[[dependency]]` table in `manifest.toml`.
@@ -98,8 +151,9 @@ pub struct ManifestData {
     /// Version string for this bundle
     #[serde(default)]
     pub version: String,
-    /// Path to the shared library file (relative to bundle root)
-    #[serde(default)]
+    /// Path to the plugin file (relative to bundle root).
+    /// For native bundles this is resolved from the platform table at parse time.
+    #[serde(default, deserialize_with = "deserialize_file_field")]
     pub file: String,
     /// List of contract names this bundle provides implementations for
     #[serde(default)]

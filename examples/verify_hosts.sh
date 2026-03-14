@@ -145,36 +145,28 @@ fi
 
 # ── C# host ──────────────────────────────────────────────────────────────────
 CSHARP_DIR="${HOSTS_DIR}/csharp"
-CSHARP_PROJ=""
-# Prefer Host.csproj, fall back to any .csproj
-if [[ -f "${CSHARP_DIR}/Host.csproj" ]]; then
-    CSHARP_PROJ="${CSHARP_DIR}/Host.csproj"
-elif [[ -f "${CSHARP_DIR}/PolyplugHost.csproj" ]]; then
-    CSHARP_PROJ="${CSHARP_DIR}/PolyplugHost.csproj"
-fi
-
-if [[ -n "${CSHARP_PROJ}" ]]; then
+if [[ -f "${CSHARP_DIR}/run.sh" ]]; then
     if command -v dotnet &>/dev/null; then
-        run_host "csharp csharp/Host.csproj" \
-            dotnet run --project "${CSHARP_PROJ}" --configuration Release
+        run_host "csharp csharp" \
+            bash "${CSHARP_DIR}/run.sh"
     else
-        skip_host "csharp csharp/Host.csproj" "dotnet not found"
+        skip_host "csharp csharp" "dotnet not found"
     fi
 else
-    skip_host "csharp csharp/Host.csproj" "no .csproj found in hosts/csharp"
+    skip_host "csharp csharp" "run.sh not found: ${CSHARP_DIR}/run.sh"
 fi
 
 # ── JS host (Deno) ───────────────────────────────────────────────────────────
-JS_HOST="${HOSTS_DIR}/js_deno/host.ts"
-if [[ -f "${JS_HOST}" ]]; then
+JS_HOST_DIR="${HOSTS_DIR}/js_deno"
+if [[ -f "${JS_HOST_DIR}/run.sh" ]]; then
     if command -v deno &>/dev/null; then
-        run_host "js_deno js_deno/host.ts (deno)" \
-            deno run --allow-read --allow-ffi --allow-env "${JS_HOST}"
+        run_host "js_deno js_deno (deno)" \
+            bash "${JS_HOST_DIR}/run.sh"
     else
-        skip_host "js_deno js_deno/host.ts (deno)" "deno not found"
+        skip_host "js_deno js_deno (deno)" "deno not found"
     fi
 else
-    skip_host "js_deno js_deno/host.ts (deno)" "file not found: ${JS_HOST}"
+    skip_host "js_deno js_deno (deno)" "run.sh not found: ${JS_HOST_DIR}/run.sh"
 fi
 
 # ===========================================================================

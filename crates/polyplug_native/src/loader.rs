@@ -1,24 +1,20 @@
-//! Native plugin loader stub — full loading logic to be added in a follow-up task.
-
 use std::path::Path;
 
 use crate::config::NativeConfig;
+use polyplug::abi::HostVTable;
 use polyplug::abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
+use polyplug::registry::Registry;
+use polyplug::runtime::global_registry;
+use std::sync::Arc;
 
-/// Native plugin loader — loads compiled native bundles (.so / .dll / .dylib).
-///
-/// Full dlopen-based loading logic is implemented in a follow-up task.
-/// This stub exists to satisfy the `BundleLoader` trait for registration purposes.
 pub struct NativeLoader {
-    /// Configuration for this loader instance.
     pub config: NativeConfig,
 }
 
 impl NativeLoader {
-    /// Create a new `NativeLoader` with the given configuration.
     pub fn new(config: NativeConfig) -> NativeLoader {
         NativeLoader { config }
     }
@@ -29,10 +25,24 @@ impl BundleLoader for NativeLoader {
         "native"
     }
 
-    fn load(&self, path: &Path, _registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
-        Err(PolyplugError::Loader(LoaderError::InitFailed {
-            bundle: path.to_string_lossy().into_owned(),
-            error: "native loader not yet implemented".to_owned(),
-        }))
+    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+        let registry: Arc<Registry> = global_registry().ok_or_else(|| {
+            PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.to_string_lossy().into_owned(),
+                error: "global registry not initialised".to_owned(),
+            })
+        })?;
+
+        // SAFETY: registrar.host is set by make_registrar_context and points to a
+        // leaked &'static HostVTable that lives for the runtime's lifetime.
+        let host_vtable: &'static HostVTable = unsafe { &*registrar.host };
+
+        let bundle_dir: &Path = path.parent().unwrap_or(path);
+        let mut manifest: polyplug::loader::manifest::ManifestData =
+            polyplug::loader::parse_manifest(bundle_dir).map_err(PolyplugError::Loader)?;
+        manifest.bundle_id = polyplug::abi::bundle_id(&manifest.bundle_name);
+
+        polyplug::loader::load_bundle(path, &manifest, &registry, host_vtable)
+            .map_err(PolyplugError::Loader)
     }
 }
