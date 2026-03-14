@@ -1,41 +1,26 @@
 // THIS FILE IS A HAND-WRITTEN polyplug guest plugin.
-// uppercase_transformer — C++ native plugin implementing pipeline.transformer v1.0
-// Contract: pipeline.transformer@1  (TRANSFORMER_CONTRACT_ID = 0x0E3044133E12EB05)
+// uppercase_transformer — C++ native plugin implementing data.Transformer v1.0
+// Contract: data.Transformer@1  (TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EF)
 
 #include "guest-libs/cpp/polyplug_guest.hpp"
 
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
-// ─── DataRecord — mirrors examples/abi_types.md layout ───────────────────────
-// Layout verified: name@0[16], value@16[16], count@32[4], _pad@36[4]  total=40
-struct DataRecord {
-    StringView name;
-    StringView value;
-    uint32_t   count;
-};
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-static constexpr uint64_t TRANSFORMER_CONTRACT_ID = 0x0E3044133E12EB05ULL;
+static constexpr uint64_t TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL;
 static constexpr uint32_t EXT_TRACE_ID             = 0xC4EB9AEEu;
 
 // ─── Trace support ────────────────────────────────────────────────────────────
-//
-// TraceVTable ABI (Rust, crates/polyplug/src/extensions/trace/mod.rs):
-//   struct TraceVTable { emit: fn(StringView, *const ()), state: *const () }
-// StringView = { ptr: const uint8_t*, len: size_t }
-// So emit args on x86-64: rdi=ptr, rsi=len, rdx=state
 
 struct StringViewC {
     const uint8_t* ptr;
     size_t         len;
 };
 
-// Matches Rust TraceVTable layout exactly.
 struct TraceVTable {
     void (*emit)(StringViewC msg, const void* state);
     const void* state;
@@ -55,30 +40,25 @@ static void emit_trace(const char* msg) noexcept {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Produce an uppercase copy of sv.
-/// Caller is responsible for freeing buf via polyplug_host_free when done.
-/// Returns a StringView pointing to the newly allocated buffer.
-static StringView uppercase_sv(StringView sv) {
+static StringView alloc_sv(const char* literal, size_t len) {
     char* buf = static_cast<char*>(
-        polyplug_host_alloc(sv.len + 1U, alignof(char))
+        polyplug_host_alloc(len + 1U, alignof(char))
     );
-    for (size_t i = 0U; i < sv.len; ++i) {
-        buf[i] = static_cast<char>(
-            std::toupper(static_cast<unsigned char>(sv.ptr[i]))
-        );
-    }
-    buf[sv.len] = '\0';
+    std::memcpy(buf, literal, len);
+    buf[len] = '\0';
 
     StringView result;
     result.ptr = reinterpret_cast<const uint8_t*>(buf);
-    result.len = sv.len;
+    result.len = len;
     return result;
 }
 
 // ─── Transform function ───────────────────────────────────────────────────────
+// Contract: transform(input: StringView) -> StringView
+// Returns: "cpp:transform({input})"
 
 static AbiError transform_fn(const void* args, void* out) noexcept {
-    emit_trace("[uppercase_transformer] transform called");
+    emit_trace("[transformer] transform called");
 
     if (args == nullptr || out == nullptr) {
         AbiError err;
@@ -88,12 +68,28 @@ static AbiError transform_fn(const void* args, void* out) noexcept {
         return err;
     }
 
-    const DataRecord* record = static_cast<const DataRecord*>(args);
-    DataRecord*       result = static_cast<DataRecord*>(out);
+    const StringView* input  = static_cast<const StringView*>(args);
+    StringView*       result = static_cast<StringView*>(out);
 
-    result->name  = uppercase_sv(record->name);
-    result->value = uppercase_sv(record->value);
-    result->count = record->count;
+    // Build "cpp:transform({input})"
+    const char* prefix = "cpp:transform(";
+    const char* suffix = ")";
+    size_t prefix_len = 14U;
+    size_t suffix_len = 1U;
+    size_t total_len  = prefix_len + input->len + suffix_len;
+
+    char* buf = static_cast<char*>(
+        polyplug_host_alloc(total_len + 1U, alignof(char))
+    );
+    std::memcpy(buf, prefix, prefix_len);
+    if (input->len > 0U && input->ptr != nullptr) {
+        std::memcpy(buf + prefix_len, input->ptr, input->len);
+    }
+    std::memcpy(buf + prefix_len + input->len, suffix, suffix_len);
+    buf[total_len] = '\0';
+
+    result->ptr = reinterpret_cast<const uint8_t*>(buf);
+    result->len = total_len;
 
     AbiError ok;
     ok.code        = ABI_OK;
@@ -110,7 +106,7 @@ static FnPtr const TRANSFORMER_FNS[] = { &transform_fn };
 
 static PluginVTable TRANSFORMER_VTABLE = {
     TRANSFORMER_CONTRACT_ID,
-    0u,  // contract_version: v1.0 → (minor << 16 | patch) = 0
+    0u,  // contract_version: v1.0
     1u,  // function_count
     reinterpret_cast<void* const*>(
         static_cast<FnPtr const*>(TRANSFORMER_FNS)
@@ -118,8 +114,8 @@ static PluginVTable TRANSFORMER_VTABLE = {
 };
 
 static const PluginDescriptor TRANSFORMER_DESCRIPTOR = {
-    StringView{ reinterpret_cast<const uint8_t*>("uppercase-transformer-cpp"), 25U },
-    StringView{ reinterpret_cast<const uint8_t*>("pipeline.transformer"),      20U },
+    StringView{ reinterpret_cast<const uint8_t*>("transformer-cpp"), 15U },
+    StringView{ reinterpret_cast<const uint8_t*>("data.Transformer"), 16U },
     1u,  // version_major
     0u,  // version_minor
     0u   // version_patch
@@ -144,14 +140,12 @@ POLYPLUG_GUEST_MAIN {
         return err;
     }
 
-    // Acquire trace extension if available.
-    // TraceVTable layout: { emit: fn(StringViewC, *const ()), state: *const () }
     const void* trace_ext = registrar->host->get_extension(EXT_TRACE_ID);
     if (trace_ext != nullptr) {
         s_trace_vtable = reinterpret_cast<const TraceVTable*>(trace_ext);
     }
 
-    emit_trace("[uppercase_transformer] init");
+    emit_trace("[transformer] init");
 
     return registrar->register_plugin(registrar, &TRANSFORMER_DESCRIPTOR, &TRANSFORMER_VTABLE);
 }

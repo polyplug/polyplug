@@ -353,6 +353,7 @@ paket-files/
 **/__pycache__/
 *.pyc
 .ruff_cache
+.venv
 
 # Cake - Uncomment if you are using it
 #tools/**

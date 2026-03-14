@@ -1,8 +1,8 @@
-bundle_name = "summary_reporter"
+bundle_name = "python_reporter"
 runtime     = "python"
 version     = "1.0"
 file        = "summary_reporter.py"
-provides    = ["pipeline.reporter"]
+provides    = ["data.Reporter"]
 
 [function_count]
-"pipeline.reporter@1" = 1
+"data.Reporter@1" = 1

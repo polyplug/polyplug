@@ -13,6 +13,8 @@ public sealed class Runtime {
         _handle = handle;
     }
 
+    public IntPtr Handle => _handle;
+
     public static RuntimeBuilder Builder() => new RuntimeBuilder();
 
     internal static Runtime Create(IntPtr handle) => new Runtime(handle);

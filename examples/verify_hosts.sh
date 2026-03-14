@@ -161,16 +161,16 @@ else
 fi
 
 # ── JS host (Deno) ───────────────────────────────────────────────────────────
-JS_HOST="${HOSTS_DIR}/js/host.ts"
+JS_HOST="${HOSTS_DIR}/js_deno/host.ts"
 if [[ -f "${JS_HOST}" ]]; then
     if command -v deno &>/dev/null; then
-        run_host "js    js/host.ts (deno)" \
-            deno run --allow-read --allow-ffi "${JS_HOST}"
+        run_host "js_deno js_deno/host.ts (deno)" \
+            deno run --allow-read --allow-ffi --allow-env "${JS_HOST}"
     else
-        skip_host "js    js/host.ts (deno)" "deno not found"
+        skip_host "js_deno js_deno/host.ts (deno)" "deno not found"
     fi
 else
-    skip_host "js    js/host.ts (deno)" "file not found: ${JS_HOST}"
+    skip_host "js_deno js_deno/host.ts (deno)" "file not found: ${JS_HOST}"
 fi
 
 # ===========================================================================

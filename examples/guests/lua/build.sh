@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 GUESTS=(
     transformer
-    validator
+    reporter
 )
 
 echo "--- [lua] Verifying Lua guests ---"

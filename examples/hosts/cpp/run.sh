@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Resolve the directory containing this script (no absolute paths)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-# Set LD_LIBRARY_PATH so libpolyplug.so is found at runtime
-export LD_LIBRARY_PATH="${REPO_ROOT}/target/debug${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+LIB_DIR="${REPO_ROOT}/target/debug"
+POLYPLUG_SO="${LIB_DIR}/libpolyplug.so"
 
-# Export LD_PRELOAD so libpolyplug.so symbols (e.g. polyplug_host_alloc) are
-# globally visible to plugins loaded with RTLD_LOCAL by the runtime
-export LD_PRELOAD="${REPO_ROOT}/target/debug/libpolyplug.so${LD_PRELOAD:+:${LD_PRELOAD}}"
+if [ ! -f "${POLYPLUG_SO}" ]; then
+    echo "ERROR: libpolyplug.so not found at ${POLYPLUG_SO}" >&2
+    echo "  Build: cargo build -p polyplug" >&2
+    exit 1
+fi
 
-# Build the host binary if it doesn't exist yet
+export LD_LIBRARY_PATH="${LIB_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_PRELOAD="${POLYPLUG_SO}${LD_PRELOAD:+:${LD_PRELOAD}}"
+
 if [ ! -f "${SCRIPT_DIR}/polyplug_host_cpp" ]; then
     make -C "${SCRIPT_DIR}" polyplug_host_cpp
 fi
 
-# Run the host, forwarding any arguments passed to this script
 exec "${SCRIPT_DIR}/polyplug_host_cpp" "$@"

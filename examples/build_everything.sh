@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # examples/build_everything.sh — Build all polyplug guest examples with PASS/FAIL reporting
 #
-# Compiles or verifies all 10 guest plugin examples across 6 languages:
-#   Rust     : decoder, encoder           (cargo build --release)
-#   C++      : transformer, validator     (make)
-#   C#       : encoder, reporter          (dotnet build --configuration Release)
-#   Python   : decoder, reporter          (python3 -m py_compile — syntax check)
-#   Lua      : transformer, validator     (luac -p — syntax check)
-#   JS       : reporter, validator        (bundle.js existence check)
+# Compiles or verifies all 14 guest plugin examples across 7 language targets:
+#   Rust       : decoder, reporter          (cargo build --release)
+#   C++        : reporter, transformer      (make)
+#   C#         : encoder, reporter          (dotnet build --configuration Release)
+#   Python     : decoder, reporter          (python3 -m py_compile — syntax check)
+#   Lua        : reporter, transformer      (luac -p — syntax check)
+#   JS/QuickJS : reporter, transformer      (bundle.js existence check)
+#   JS/Deno    : reporter, transformer      (index.ts existence check)
 #
 # Exits 0 if all examples pass, non-zero if any fail.
 #
@@ -158,12 +159,12 @@ run_lua_example() {
 }
 
 # ---------------------------------------------------------------------------
-# Specialised check for JS (verify bundle.js exists)
+# Specialised check for JS/QuickJS (verify bundle.js exists)
 # ---------------------------------------------------------------------------
-run_js_example() {
+run_js_quickjs_example() {
     local guest="$1"
-    local label="js/${guest}"
-    local guest_dir="${GUESTS_DIR}/js/${guest}"
+    local label="js_quickjs/${guest}"
+    local guest_dir="${GUESTS_DIR}/js_quickjs/${guest}"
     local bundle="${guest_dir}/bundle.js"
 
     printf "  %-28s " "${label} ..."
@@ -180,6 +181,34 @@ run_js_example() {
         (( PASS_COUNT += 1 ))
     else
         printf "${RED}FAIL${RESET} (bundle.js missing: %s)\n" "${bundle}"
+        RESULTS+=("FAIL  ${label}")
+        (( FAIL_COUNT += 1 ))
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Specialised check for JS/Deno (verify index.ts exists)
+# ---------------------------------------------------------------------------
+run_js_deno_example() {
+    local guest="$1"
+    local label="js_deno/${guest}"
+    local guest_dir="${GUESTS_DIR}/js_deno/${guest}"
+    local src="${guest_dir}/index.ts"
+
+    printf "  %-28s " "${label} ..."
+
+    if [[ ! -d "${guest_dir}" ]]; then
+        printf "${YELLOW}SKIP${RESET} (directory not found: %s)\n" "${guest_dir}"
+        RESULTS+=("SKIP  ${label}")
+        return
+    fi
+
+    if [[ -f "${src}" ]]; then
+        printf "${GREEN}PASS${RESET} (index.ts present)\n"
+        RESULTS+=("PASS  ${label}")
+        (( PASS_COUNT += 1 ))
+    else
+        printf "${RED}FAIL${RESET} (index.ts missing: %s)\n" "${src}"
         RESULTS+=("FAIL  ${label}")
         (( FAIL_COUNT += 1 ))
     fi
@@ -264,12 +293,12 @@ printf "%-30s\n" "$(printf '%.0s─' {1..50})"
 # ── Rust ────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}[rust]${RESET}  cargo build --release\n"
 run_example rust decoder  cargo build --release
-run_example rust encoder  cargo build --release
+run_example rust reporter  cargo build --release
 
 # ── C++ ─────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}[cpp]${RESET}   make\n"
-run_example cpp transformer  make
-run_example cpp validator    make
+run_example cpp reporter      make
+run_example cpp transformer   make
 
 # ── C# ──────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}[csharp]${RESET}  dotnet build --configuration Release\n"
@@ -283,13 +312,18 @@ run_python_example reporter
 
 # ── Lua ─────────────────────────────────────────────────────────────────────
 printf "\n${BOLD}[lua]${RESET}   luac -p (syntax check)\n"
+run_lua_example reporter
 run_lua_example transformer
-run_lua_example validator
 
-# ── JavaScript ──────────────────────────────────────────────────────────────
-printf "\n${BOLD}[js]${RESET}    bundle.js existence check\n"
-run_js_example reporter
-run_js_example validator
+# ── JavaScript (QuickJS) ────────────────────────────────────────────────────
+printf "\n${BOLD}[js_quickjs]${RESET}    bundle.js existence check\n"
+run_js_quickjs_example reporter
+run_js_quickjs_example transformer
+
+# ── JavaScript (Deno) ──────────────────────────────────────────────────────
+printf "\n${BOLD}[js_deno]${RESET}    index.ts existence check\n"
+run_js_deno_example reporter
+run_js_deno_example transformer
 
 # ===========================================================================
 # SUMMARY

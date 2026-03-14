@@ -1,0 +1,8 @@
+bundle_name = "js_quickjs_reporter"
+runtime     = "js-quickjs"
+version     = "1.0"
+file        = "bundle.js"
+provides    = ["data.Reporter"]
+
+[function_count]
+"data.Reporter@1" = 1

@@ -1,0 +1,8 @@
+bundle_name = "js_deno_transformer"
+runtime     = "js-deno"
+version     = "1.0"
+file        = "index.ts"
+provides    = ["data.Transformer"]
+
+[function_count]
+"data.Transformer@1" = 1

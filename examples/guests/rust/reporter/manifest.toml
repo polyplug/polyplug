@@ -1,0 +1,8 @@
+bundle_name = "rust_reporter"
+runtime     = "native"
+version     = "1.0"
+file        = "libcsv_encoder.so"
+provides    = ["data.Reporter"]
+
+[function_count]
+"data.Reporter@1" = 1

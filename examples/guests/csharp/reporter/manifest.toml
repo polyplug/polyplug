@@ -2,7 +2,7 @@ bundle_name = "csharp_reporter"
 runtime     = "dotnet"
 version     = "1.0"
 file        = "bin/Debug/net10.0/Reporter.dll"
-provides    = ["pipeline.reporter"]
+provides    = ["data.Reporter"]
 
 [function_count]
-"pipeline.reporter@1" = 1
+"data.Reporter@1" = 1

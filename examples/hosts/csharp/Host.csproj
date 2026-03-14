@@ -11,5 +11,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../host-libs/csharp/Polyplug.csproj" />
+    <ProjectReference Include="../../../host-libs/csharp/Loaders/JsDeno/Polyplug.Loaders.JsDeno.csproj" />
   </ItemGroup>
 </Project>

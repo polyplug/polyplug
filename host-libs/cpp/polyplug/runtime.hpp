@@ -162,6 +162,14 @@ public:
         return polyplug_get_extension(handle_, extension_id);
     }
 
+    /// Returns the raw opaque runtime handle.
+    ///
+    /// Needed for loader registration functions that operate on the
+    /// underlying C handle. The handle is valid for the lifetime of this Runtime.
+    RuntimeHandle handle() const noexcept {
+        return handle_;
+    }
+
 private:
     /// Private constructor — use builder().build() to construct.
     explicit Runtime(RuntimeHandle h) noexcept

@@ -1,8 +1,0 @@
-bundle_name = "field_validator"
-runtime     = "js-quickjs"
-version     = "1.0"
-file        = "bundle.js"
-provides    = ["pipeline.validator"]
-
-[function_count]
-"pipeline.validator@1" = 1

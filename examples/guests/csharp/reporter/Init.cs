@@ -8,8 +8,8 @@ namespace Reporter;
 
 public static class Plugin
 {
-    private static readonly byte[] _plugin_name   = "reporter_plugin"u8.ToArray();
-    private static readonly byte[] _contract_name = "pipeline.reporter"u8.ToArray();
+    private static readonly byte[] _plugin_name   = "csharp_reporter"u8.ToArray();
+    private static readonly byte[] _contract_name = "data.Reporter"u8.ToArray();
 
     // Output buffer: keep last report bytes pinned across ABI boundary.
     private static byte[]?  _lastOutput;
@@ -20,12 +20,11 @@ public static class Plugin
     {
         try
         {
-            DataRecord record;
-            unsafe { record = Unsafe.AsRef<DataRecord>((void*)argsPtr); }
+            StringView input;
+            unsafe { input = Unsafe.AsRef<StringView>((void*)argsPtr); }
 
-            string nameStr  = record.Name.ToString();
-            string valueStr = record.Value.ToString();
-            byte[] reportBytes = ReporterImpl.BuildReport(nameStr, valueStr, record.Count);
+            string valueStr = input.ToString();
+            byte[] reportBytes = ReporterImpl.Report(valueStr);
 
             if (_lastOutputHandle.IsAllocated) _lastOutputHandle.Free();
             _lastOutput       = reportBytes;

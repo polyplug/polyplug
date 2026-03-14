@@ -1,50 +1,18 @@
-# showcase/api.toml — defines the showcase's plugin API
-# DataRecord: a simple record flowing through the pipeline
-
-[[types]]
-name = "DataRecord"
-fields = [
-  { name = "name",  type = "StringView" },
-  { name = "value", type = "StringView" },
-  { name = "count", type = "u32" }
-]
+# examples/api.toml — defines the example plugin API
+# Two simple string→string contracts for uniform guest examples
 
 [[contract]]
-name    = "pipeline.decoder"
-version = "1.0.0"
-[[contract.functions]]
-name    = "decode"
-params  = [{ name = "input", type = "Buffer" }]
-return  = "DataRecord"
-
-[[contract]]
-name    = "pipeline.transformer"
+name    = "data.Transformer"
 version = "1.0.0"
 [[contract.functions]]
 name    = "transform"
-params  = [{ name = "record", type = "DataRecord" }]
-return  = "DataRecord"
-
-[[contract]]
-name    = "pipeline.encoder"
-version = "1.0.0"
-[[contract.functions]]
-name    = "encode"
-params  = [{ name = "record", type = "DataRecord" }]
-return  = "Buffer"
-
-[[contract]]
-name    = "pipeline.reporter"
-version = "1.0.0"
-[[contract.functions]]
-name    = "report"
-params  = [{ name = "record", type = "DataRecord" }]
+params  = [{ name = "input", type = "StringView" }]
 return  = "StringView"
 
 [[contract]]
-name    = "pipeline.validator"
+name    = "data.Reporter"
 version = "1.0.0"
 [[contract.functions]]
-name    = "validate"
-params  = [{ name = "record", type = "DataRecord" }]
-return  = "void"
+name    = "report"
+params  = [{ name = "value", type = "StringView" }]
+return  = "StringView"

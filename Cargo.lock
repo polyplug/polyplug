@@ -2139,7 +2139,9 @@ dependencies = [
  "polyplug",
  "polyplug_dotnet",
  "polyplug_js",
+ "polyplug_js_deno",
  "polyplug_lua",
+ "polyplug_native",
  "polyplug_python",
 ]
 

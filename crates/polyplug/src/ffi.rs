@@ -417,10 +417,13 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
         }
         // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_new per ABI contract.
         // loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib compiled
+        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_new per ABI contract.
         // against the same polyplug rlib. The double-box pattern preserves the fat pointer through
         // the c_void erasure. Reconstituting via Box::from_raw as *mut Box<dyn BundleLoader> is valid
         // because both sides agree on the layout via the shared rlib. Ownership is transferred here.
         let runtime: &mut Runtime = unsafe { &mut (*rt).0 };
+        // SAFETY: loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib
+        // compiled against the same polyplug rlib. Reconstituting via Box::from_raw is valid.
         let loader: Box<dyn BundleLoader> =
             unsafe { *Box::from_raw(loader_ptr as *mut Box<dyn BundleLoader>) };
         match runtime.register_loader(loader) {

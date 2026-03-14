@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUESTS_DIR="${SCRIPT_DIR}/guests"
 
-LANGUAGES=(rust cpp csharp python lua js)
+LANGUAGES=(rust cpp csharp python lua js_quickjs js_deno)
 
 usage() {
     cat <<EOF
@@ -23,7 +23,7 @@ OPTIONS:
 
 LANG:
   One or more language names to build. If omitted, all languages are built.
-  Available: rust cpp csharp python lua js
+  Available: rust cpp csharp python lua js_quickjs js_deno
 
 EXAMPLES:
   $(basename "$0")              Build all guest languages

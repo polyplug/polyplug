@@ -1,4 +1,4 @@
-// Init.cs — csv_encoder ABI entry point. Contains isolated unsafe { } block.
+// Init.cs — csharp_transformer ABI entry point. Contains isolated unsafe { } block.
 // AllowUnsafeBlocks is kept in CsvEncoder.csproj for this file.
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -8,58 +8,56 @@ namespace CsvEncoder;
 
 public static class Plugin
 {
-    private static readonly byte[] _plugin_name   = "csv_encoder_plugin"u8.ToArray();
-    private static readonly byte[] _contract_name = "pipeline.encoder"u8.ToArray();
+    private static readonly byte[] _plugin_name   = "csharp_transformer"u8.ToArray();
+    private static readonly byte[] _contract_name = "data.Transformer"u8.ToArray();
 
     // Output buffer: keep last encoded bytes pinned across ABI boundary.
     private static byte[]?  _lastOutput;
     private static GCHandle _lastOutputHandle;
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static AbiError csv_encoder_encode_abi(IntPtr argsPtr, IntPtr outPtr)
+    private static AbiError transformer_transform_abi(IntPtr argsPtr, IntPtr outPtr)
     {
         try
         {
-            DataRecord record;
-            unsafe { record = System.Runtime.CompilerServices.Unsafe.AsRef<DataRecord>((void*)argsPtr); }
+            StringView input;
+            unsafe { input = Unsafe.AsRef<StringView>((void*)argsPtr); }
 
-            string nameStr  = record.Name.ToString();
-            string valueStr = record.Value.ToString();
-            byte[] csvBytes = CsvEncoderImpl.EncodeToCsv(nameStr, valueStr, record.Count);
+            string inputStr = input.ToString();
+            byte[] resultBytes = TransformerImpl.Transform(inputStr);
 
             if (_lastOutputHandle.IsAllocated) _lastOutputHandle.Free();
-            _lastOutput       = csvBytes;
+            _lastOutput       = resultBytes;
             _lastOutputHandle = GCHandle.Alloc(_lastOutput, GCHandleType.Pinned);
 
-            var outBuf = new Polyplug.Guest.Buffer
+            var outView = new StringView
             {
                 Ptr = _lastOutputHandle.AddrOfPinnedObject(),
-                Len = (ulong)csvBytes.Length,
-                Cap = (ulong)csvBytes.Length,
+                Len = (ulong)resultBytes.Length,
             };
-            unsafe { System.Runtime.CompilerServices.Unsafe.WriteUnaligned((void*)outPtr, outBuf); }
+            unsafe { Unsafe.WriteUnaligned((void*)outPtr, outView); }
             return AbiError.Ok;
         }
         catch { return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC }; }
     }
 
-    private static readonly IntPtr[] ENCODER_FNS;
+    private static readonly IntPtr[] TRANSFORMER_FNS;
     private static GCHandle _fnsPinHandle;
-    public static PluginVTable ENCODER_VTABLE;
+    public static PluginVTable TRANSFORMER_VTABLE;
 
     static Plugin()
     {
         unsafe
         {
-            ENCODER_FNS = new IntPtr[]
+            TRANSFORMER_FNS = new IntPtr[]
             {
-                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&csv_encoder_encode_abi,
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&transformer_transform_abi,
             };
         }
-        _fnsPinHandle = GCHandle.Alloc(ENCODER_FNS, GCHandleType.Pinned);
-        ENCODER_VTABLE = new PluginVTable
+        _fnsPinHandle = GCHandle.Alloc(TRANSFORMER_FNS, GCHandleType.Pinned);
+        TRANSFORMER_VTABLE = new PluginVTable
         {
-            ContractId      = CsvEncoderImpl.ENCODER_CONTRACT_ID,
+            ContractId      = TransformerImpl.TRANSFORMER_CONTRACT_ID,
             ContractVersion = 0u << 16 | 0u,
             FunctionCount   = 1u,
             FunctionsPtr    = _fnsPinHandle.AddrOfPinnedObject(),
@@ -82,17 +80,11 @@ public static class Plugin
                 var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)
                     registrar->RegisterPluginPtr;
 
-                // Cross-plugin dependency lookup: demonstrate decoder handle lookup.
-                var findByContractFn = (delegate* unmanaged[Cdecl, SuppressGCTransition]<ulong, uint, PluginHandle>)
-                    ((HostVTable*)registrar->HostPtr)->FindByContractPtr;
-                PluginHandle decoderHandle = findByContractFn(CsvEncoderImpl.DECODER_CONTRACT_ID, 0u);
-                _ = decoderHandle;
-
                 var nameHandle     = GCHandle.Alloc(_plugin_name, GCHandleType.Pinned);
                 var contractHandle = GCHandle.Alloc(_contract_name, GCHandleType.Pinned);
                 try
                 {
-                    fixed (PluginVTable* vtablePtr = &ENCODER_VTABLE)
+                    fixed (PluginVTable* vtablePtr = &TRANSFORMER_VTABLE)
                     {
                         var desc = new PluginDescriptor
                         {

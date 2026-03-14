@@ -1,8 +1,0 @@
-bundle_name = "csv_encoder_rust"
-runtime     = "native"
-version     = "1.0"
-file        = "libcsv_encoder.so"
-provides    = ["pipeline.encoder"]
-
-[function_count]
-"pipeline.encoder@1" = 1

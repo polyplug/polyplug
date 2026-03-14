@@ -1,8 +1,8 @@
-bundle_name = "uppercase_transformer"
+bundle_name = "cpp_transformer"
 runtime     = "native"
 version     = "1.0"
 file        = "libuppercase_transformer.so"
-provides    = ["pipeline.transformer"]
+provides    = ["data.Transformer"]
 
 [function_count]
-"pipeline.transformer@1" = 1
+"data.Transformer@1" = 1
