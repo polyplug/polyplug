@@ -21,7 +21,6 @@ use crate::abi::AbiError as AbiErrorType;
 use crate::abi::HostVTable;
 use crate::abi::POLYPLUG_ABI_VERSION;
 use crate::abi::PluginDescriptor;
-use crate::abi::PluginHandle;
 use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
 use crate::error::LoaderError;
@@ -86,17 +85,15 @@ pub trait BundleLoader: Send + Sync {
 /// The built-in loader for native (Rust/C++/NativeAOT) bundles.
 ///
 /// Uses dlopen (via libloading) to load `.so` / `.dll` / `.dylib` files.
-/// Automatically registered in `RuntimeBuilder::new()` — app developers
-/// do not need to call `.loader()` for native plugins.
+/// Automatically registered during `RuntimeBuilder::build()` unless a user-provided
+/// loader already claims the `"native"` runtime name.
 /// The `Library` handle for each loaded bundle is stored in the injected `Registry`,
 /// not in this struct, to guarantee it outlives all vtable function pointers.
-#[allow(dead_code)]
 pub(crate) struct NativeBundleLoader {
     registry: Arc<Registry>,
     host_vtable: &'static HostVTable,
 }
 
-#[allow(dead_code)]
 impl NativeBundleLoader {
     /// Create a new `NativeBundleLoader` with the given registry and host vtable.
     pub(crate) fn new(
@@ -145,15 +142,6 @@ pub struct LoadedBundle {
     pub path: PathBuf,
     /// libloading handle — intentionally leaked (never dropped).
     pub library: Box<libloading::Library>,
-}
-
-/// Registration state passed as the `PluginRegistrar.register_plugin` callback context.
-#[allow(dead_code)]
-struct RegistrarState<'a> {
-    registry: &'a Registry,
-    bundle_path: &'a str,
-    /// All vtables registered during this init call (for rollback on failure).
-    registered_handles: Vec<PluginHandle>,
 }
 
 /// Read and parse `manifest.toml` from a bundle directory.
@@ -244,6 +232,7 @@ pub fn load_bundle(
     host_vtable: &'static HostVTable,
 ) -> Result<(), LoaderError> {
     let path_str: String = path.to_string_lossy().into_owned();
+    let bundle_dir: &Path = path.parent().unwrap_or_else(|| Path::new("."));
 
     // Step 0: manifest is provided by the caller — no internal parse needed.
 
@@ -307,18 +296,24 @@ pub fn load_bundle(
     // We copy the fn pointer out of the Symbol immediately so the Symbol's borrow
     // on `library` is released before we move `library` into the registry below.
     // SAFETY: polyplug_init is guaranteed by the plugin build process to have the
-    // signature: extern "C" fn(*mut PluginRegistrar) -> AbiError.
+    // signature: extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError.
     // Symbol<F> derefs to F (a fn pointer). Fn pointers are Copy — copying does not
     // extend the lifetime of `library`. The pointer remains valid as long as `library`
     // is alive. `library` is moved into `registry.loaded_libraries` immediately after,
     // so the pointer is always valid while reachable.
-    let init_fn_ptr: unsafe extern "C" fn(*mut PluginRegistrar) -> AbiErrorType = {
+    let init_fn_ptr: unsafe extern "C" fn(
+        *mut PluginRegistrar,
+        *const crate::abi::PluginContext,
+    ) -> AbiErrorType = {
         // SAFETY: polyplug_init is resolved from a successfully loaded library.
         // libloading's get() returns Err if the symbol doesn't exist; we propagate via ?.
         // The returned Symbol borrows `library` and is valid for the duration of this block.
         let sym: libloading::Symbol<
             '_,
-            unsafe extern "C" fn(*mut PluginRegistrar) -> AbiErrorType,
+            unsafe extern "C" fn(
+                *mut PluginRegistrar,
+                *const crate::abi::PluginContext,
+            ) -> AbiErrorType,
         > = unsafe {
             library
                 .get(b"polyplug_init\0")
@@ -356,11 +351,26 @@ pub fn load_bundle(
         host: host_vtable as *const HostVTable,
     };
 
-    // Step 6: Call init
+    // Step 6: Create PluginContext with bundle path and host ABI version
+    let bundle_path_sv: crate::abi::StringView = crate::abi::StringView {
+        ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
+        len: bundle_dir.as_os_str().as_encoded_bytes().len(),
+    };
+    let ctx: crate::abi::PluginContext = crate::abi::PluginContext {
+        bundle_path: bundle_path_sv,
+        host_abi_version: POLYPLUG_ABI_VERSION,
+    };
+
+    // Step 7: Call init with registrar and context
     // SAFETY: init_fn_ptr was resolved from the library (now stored in registry).
-    // The PluginRegistrar is valid for the duration of the call.
+    // The PluginRegistrar and PluginContext are valid for the duration of the call.
     // Thread-locals are set above and will be cleared by _bundle_guard on drop.
-    let init_result: AbiError = unsafe { init_fn_ptr(&mut registrar as *mut PluginRegistrar) };
+    let init_result: AbiError = unsafe {
+        init_fn_ptr(
+            &mut registrar as *mut PluginRegistrar,
+            &ctx as *const crate::abi::PluginContext,
+        )
+    };
 
     if init_result.code != ABI_OK {
         // Step 7: On init failure: the library is already stored in registry.loaded_libraries
@@ -443,9 +453,16 @@ pub(crate) unsafe extern "C" fn registrar_callback(
     // SAFETY: descriptor and vtable are provided by the plugin's polyplug_init function.
     // They point to static data in the plugin binary (which is never unloaded per the invariant).
     let desc: PluginDescriptor = unsafe { *descriptor };
-    // SAFETY: vtable is a valid 'static PluginVTable from the plugin binary — read contract_id.
-    let vtable_contract_id: u64 = unsafe { (*vtable).contract_id };
-    let contract_name: String = format!("contract_{:#x}", vtable_contract_id);
+    // SAFETY: desc.contract_name is a StringView from the plugin binary, valid for the call.
+    // Null/empty contract_name falls back to a hash-based name.
+    let contract_name: String = if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
+        // SAFETY: vtable is a valid 'static PluginVTable — read contract_id for fallback name.
+        let vtable_contract_id: u64 = unsafe { (*vtable).contract_id };
+        format!("contract_{:#x}", vtable_contract_id)
+    } else {
+        // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes. Never unloaded.
+        unsafe { desc.contract_name.to_string_owned() }
+    };
     // SAFETY: vtable is a valid 'static PluginVTable from the plugin binary.
     // Registry::register is marked unsafe because it dereferences vtable_ptr internally.
     match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
@@ -460,23 +477,9 @@ pub(crate) unsafe extern "C" fn registrar_callback(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    // Integration tests for the loader are in tests/integration_load/mod.rs.
-    // Unit tests here cover helper functions only.
-
-    #[test]
-    fn loader_module_compiles() {
-        // Compilation test — the real tests are integration tests with actual .so files.
-        assert!(true);
-    }
-}
-
 // ─── Test-only public surface ───────────────────────────────────────────────
 #[cfg(any(test, feature = "testing"))]
 pub mod testing {
-    //! Thin wrappers that expose crate-private loader items to integration tests.
-    //! Only compiled when `test` or the `testing` feature is active.
 
     use super::BundleInitGuard;
     use crate::abi::HostVTable;

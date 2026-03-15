@@ -5,41 +5,47 @@
 //!
 //! Tests requiring native plugin loading are in tests/integration/ffi_native.rs.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::ffi::{
-    polyplug_error_message_len, polyplug_last_error, polyplug_load_bundle, polyplug_runtime_free,
-    polyplug_runtime_new, OpaqueRuntime,
+    OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
+    polyplug_runtime_error_message_len, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
 };
 
 fn read_last_error() -> String {
-    let len: usize = unsafe { polyplug_error_message_len() };
+    // SAFETY: polyplug_runtime_error_message_len has no pointer preconditions.
+    let len: usize = unsafe { polyplug_runtime_error_message_len() };
     if len == 0 {
         return String::new();
     }
     let mut buf: Vec<u8> = vec![0u8; len];
-    let _written: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), len) };
+    // SAFETY: buf is a valid allocation of `len` bytes.
+    let _written: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), len) };
     String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[test]
 fn test_runtime_new_succeeds() {
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_new() };
-    assert!(!rt.is_null(), "polyplug_runtime_new returned null");
-    unsafe { polyplug_runtime_free(rt) };
+    // SAFETY: polyplug_runtime_create has no preconditions.
+    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+    assert!(!rt.is_null(), "polyplug_runtime_create returned null");
+    // SAFETY: rt is non-null, returned by polyplug_runtime_create.
+    unsafe { polyplug_runtime_destroy(rt) };
 }
 
 #[test]
 fn test_last_error_after_failed_load() {
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_new() };
+    // SAFETY: polyplug_runtime_create has no preconditions.
+    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     let bad_path: &[u8] = b"/does/not/exist";
-    let result: u32 = unsafe { polyplug_load_bundle(rt, bad_path.as_ptr(), bad_path.len()) };
+    // SAFETY: rt is non-null; bad_path ptr/len are valid for the slice.
+    let result: u32 =
+        unsafe { polyplug_runtime_load_bundle(rt, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(result, 0, "Expected failure for non-existent path");
     let err: String = read_last_error();
     assert!(
         !err.is_empty(),
         "Expected non-empty error string after failed load"
     );
-    unsafe { polyplug_runtime_free(rt) };
+    // SAFETY: rt is non-null, returned by polyplug_runtime_create.
+    unsafe { polyplug_runtime_destroy(rt) };
 }

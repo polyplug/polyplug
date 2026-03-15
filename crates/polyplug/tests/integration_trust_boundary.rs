@@ -38,9 +38,10 @@ mod tests {
             _path: &Path,
             _registrar: &mut PluginRegistrar,
         ) -> Result<(), PolyplugError> {
-            // SAFETY: polyplug_find_by_contract takes plain integers only.
-            let handle: PluginHandle =
-                unsafe { polyplug::polyplug_find_by_contract(self.contract_id, 0_u32) };
+            // SAFETY: test_host_find_by_contract takes plain integers only.
+            let handle: PluginHandle = unsafe {
+                polyplug::runtime::testing::test_host_find_by_contract(self.contract_id, 0_u32)
+            };
             if handle.is_null() {
                 return Err(RuntimeError::UndeclaredDependency {
                     bundle_id: self.error_bundle_id,
@@ -66,9 +67,10 @@ mod tests {
             _path: &Path,
             _registrar: &mut PluginRegistrar,
         ) -> Result<(), PolyplugError> {
-            // SAFETY: polyplug_find_by_contract takes plain integers only.
-            let handle: PluginHandle =
-                unsafe { polyplug::polyplug_find_by_contract(self.contract_id, 0_u32) };
+            // SAFETY: test_host_find_by_contract takes plain integers only.
+            let handle: PluginHandle = unsafe {
+                polyplug::runtime::testing::test_host_find_by_contract(self.contract_id, 0_u32)
+            };
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_null.lock()
             {
                 Ok(g) => g,
@@ -133,6 +135,7 @@ mod tests {
             let inner_bundle: PathBuf = state.inner_bundle.clone();
             let already_set: bool = state.tls_after_inner_load.is_some();
             drop(state);
+            // SAFETY: runtime_ptr was set from a valid &Runtime during load_bundle.
             let runtime_ref: &Runtime = unsafe { &*(runtime_ptr as *const Runtime) };
             let inner_result: Result<(), PolyplugError> = runtime_ref.load_bundle_with(
                 inner_bundle.as_path(),
@@ -141,9 +144,7 @@ mod tests {
                     ignore_function_count_mismatch: false,
                 },
             );
-            if let Err(e) = inner_result {
-                return Err(e);
-            }
+            inner_result?;
             // Read INIT_BUNDLE_ID right after the inner load completes.
             // The inner BundleInitGuard has dropped; INIT_BUNDLE_ID should now
             // be 0 (inner guard clears to 0, it does not restore outer value).
@@ -182,9 +183,10 @@ mod tests {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
             };
-            // SAFETY: polyplug_find_by_contract takes plain integers only.
-            let handle: PluginHandle =
-                unsafe { polyplug::polyplug_find_by_contract(state.contract_id, 0_u32) };
+            // SAFETY: test_host_find_by_contract takes plain integers only.
+            let handle: PluginHandle = unsafe {
+                polyplug::runtime::testing::test_host_find_by_contract(state.contract_id, 0_u32)
+            };
             if state.observed_null.is_none() {
                 state.observed_null = Some(handle.is_null());
             }
@@ -346,9 +348,9 @@ mod tests {
         if result.is_ok() {
             panic!("expected panic from PanicLoader");
         }
-        // SAFETY: polyplug_find_by_contract takes plain integers only.
+        // SAFETY: test_host_find_by_contract takes plain integers only.
         let handle_after: PluginHandle =
-            unsafe { polyplug::polyplug_find_by_contract(contract, 0_u32) };
+            unsafe { polyplug::runtime::testing::test_host_find_by_contract(contract, 0_u32) };
         assert!(
             !handle_after.is_null(),
             "BundleInitGuard should clear TLS even when load panics"

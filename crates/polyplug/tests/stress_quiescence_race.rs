@@ -1,10 +1,8 @@
-#![allow(clippy::expect_used)]
-
 use core::hint::spin_loop;
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering;
 use core::time::Duration;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
@@ -19,8 +17,8 @@ use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
-const VERSION_V1: u32 = (1_u32 << 16) | 0_u32;
-const VERSION_V2: u32 = (2_u32 << 16) | 0_u32;
+const VERSION_V1: u32 = 1_u32 << 16;
+const VERSION_V2: u32 = 2_u32 << 16;
 
 const CONTRACT_ID_RACE_1: u64 = 0x5151_0000_0000_0001_u64;
 const CONTRACT_ID_RACE_2: u64 = 0x5151_0000_0000_0002_u64;
@@ -178,6 +176,7 @@ fn stress_quiescence_no_contention() {
     let registry: Registry = Registry::new();
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin", "quie.race.contract1");
 
+    // SAFETY: VTABLE_RACE_1_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(
@@ -220,6 +219,7 @@ fn stress_quiescence_succeeds_after_guard_released() {
     let registry: Arc<Registry> = Arc::new(Registry::new());
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin2", "quie.race.contract2");
 
+    // SAFETY: VTABLE_RACE_2_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(
@@ -280,6 +280,7 @@ fn stress_quiescence_timeout_fires() {
     let registry: Arc<Registry> = Arc::new(Registry::new());
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin3", "quie.race.contract3");
 
+    // SAFETY: VTABLE_TIMEOUT_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(
@@ -336,6 +337,7 @@ fn stress_quiescence_timeout_fires() {
 fn stress_quiescence_multiple_arcs_all_must_quiesce() {
     let registry: Registry = Registry::new();
 
+    // SAFETY: VTABLE_SLOT0_V1 is a static reference valid for the test lifetime.
     let h0: PluginHandle = unsafe {
         registry
             .register(
@@ -346,6 +348,7 @@ fn stress_quiescence_multiple_arcs_all_must_quiesce() {
             )
             .expect("slot0 register must succeed")
     };
+    // SAFETY: VTABLE_SLOT1_V1 is a static reference valid for the test lifetime.
     let h1: PluginHandle = unsafe {
         registry
             .register(
@@ -356,6 +359,7 @@ fn stress_quiescence_multiple_arcs_all_must_quiesce() {
             )
             .expect("slot1 register must succeed")
     };
+    // SAFETY: VTABLE_SLOT2_V1 is a static reference valid for the test lifetime.
     let h2: PluginHandle = unsafe {
         registry
             .register(
@@ -415,6 +419,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
 
     let registry: Arc<Registry> = Arc::new(Registry::new());
 
+    // SAFETY: VTABLE_CONC_A is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(
@@ -480,6 +485,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
 fn stress_quiescence_waits_for_last_clone() {
     let registry: Registry = Registry::new();
 
+    // SAFETY: VTABLE_LAST_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(

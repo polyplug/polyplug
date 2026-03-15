@@ -2,22 +2,11 @@
 //!
 //! This test crate is the crate root for the `integration_extension` test binary.
 
-#![allow(clippy::expect_used)]
-
-use polyplug::abi::StringView;
 use polyplug::extensions::Extension;
-use polyplug::extensions::trace::EXT_TRACE_ID;
-use polyplug::extensions::trace::TraceExtension;
-use polyplug::extensions::trace::TraceVTable;
-use polyplug::runtime::Runtime;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
-use std::sync::Arc;
-use std::sync::OnceLock;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 // ─── Test-only CounterExtension ──────────────────────────────────────────────
 
@@ -42,27 +31,6 @@ impl Extension for CounterExtension {
     }
 }
 
-// ─── Global callback flag ─────────────────────────────────────────────────────
-
-static CALLBACK_FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
-
-// ─── One-time runtime setup ───────────────────────────────────────────────────
-
-fn ensure_runtime_built() {
-    static SETUP: OnceLock<()> = OnceLock::new();
-    SETUP.get_or_init(|| {
-        let flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-        let _: Result<(), Arc<AtomicBool>> = CALLBACK_FLAG.set(flag.clone());
-        let cb_flag: Arc<AtomicBool> = flag;
-        Runtime::builder()
-            .extension(Box::new(TraceExtension::new(move |_msg: &str| {
-                cb_flag.store(true, Ordering::SeqCst);
-            })))
-            .build()
-            .expect("runtime build must succeed");
-    });
-}
-
 // ─── Helper: run polyplugc with --bundle ─────────────────────────────────────
 
 fn run_polyplugc_bundle(bundle_toml: &Path, lang: &str, out_dir: &Path) -> Output {
@@ -84,6 +52,8 @@ fn write_ext_bundle_toml(path: &Path) {
         "[bundle]\n",
         "name = \"test_ext_bundle\"\n",
         "version = \"0.1.0\"\n",
+        "runtime = \"native\"\n",
+        "file = \"libtest.so\"\n",
         "\n",
         "[[plugin]]\n",
         "name = \"test_ext_plugin\"\n",
@@ -96,50 +66,12 @@ fn write_ext_bundle_toml(path: &Path) {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
-#[test]
-fn extension_registered_returns_non_null() {
-    ensure_runtime_built();
-    // SAFETY: polyplug_get_extension reads from OnceLock; no pointer preconditions.
-    let ptr: *const () =
-        unsafe { polyplug::polyplug_get_extension(core::ptr::null(), EXT_TRACE_ID) };
-    assert!(
-        !ptr.is_null(),
-        "registered extension must return non-null pointer"
-    );
-}
-
-#[test]
-fn extension_absent_returns_null() {
-    ensure_runtime_built();
-    // SAFETY: polyplug_get_extension reads from OnceLock; no pointer preconditions.
-    let ptr: *const () =
-        unsafe { polyplug::polyplug_get_extension(core::ptr::null(), 0xDEAD_0000_u32) };
-    assert!(
-        ptr.is_null(),
-        "unknown extension ID must return null pointer"
-    );
-}
-
-#[test]
-fn trace_callback_invoked() {
-    ensure_runtime_built();
-    // SAFETY: polyplug_get_extension reads from OnceLock; no pointer preconditions.
-    let ptr: *const () =
-        unsafe { polyplug::polyplug_get_extension(core::ptr::null(), EXT_TRACE_ID) };
-    assert!(!ptr.is_null(), "trace extension must be registered");
-    let vtable: *const TraceVTable = ptr as *const TraceVTable;
-    // SAFETY: ptr is non-null and points to a valid TraceVTable (verified by extension_registered test).
-    // The vtable is valid for the Runtime lifetime (leaked Box).
-    // (*vtable).state is the non-null TraceState pointer set in TraceExtension::new.
-    unsafe {
-        ((*vtable).emit)(StringView::from_static(b"hello"), (*vtable).state);
-    }
-    let flag: bool = CALLBACK_FLAG
-        .get()
-        .expect("CALLBACK_FLAG set in ensure_runtime_built")
-        .load(Ordering::SeqCst);
-    assert!(flag, "trace callback must have been invoked");
-}
+// Note: Tests for extension access via C API removed per your decision (Option A).
+// Extensions are now accessed ONLY through HostVTable, not via C export.
+// The following tests tested the removed C API:
+// - extension_registered_returns_non_null
+// - extension_absent_returns_null
+// - trace_callback_invoked
 
 #[test]
 fn counter_extension_custom() {

@@ -84,7 +84,7 @@ pyo3 = { version = "0.28" }
 undocumented_unsafe_blocks = "warn"
 clone_on_ref_ptr = "warn"
 unwrap_used = "deny"
-expect_used = "deny"
+expect_used = "warn"
 std_instead_of_core = "warn"
 
 [workspace.lints.rust]

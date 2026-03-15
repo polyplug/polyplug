@@ -4,10 +4,9 @@
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
@@ -73,6 +72,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call (ABI contract).
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // Extract contract name from StringView.
@@ -85,17 +85,10 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     // Register with thread-local Registry.
-    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe {
-            registry.register(
-                *desc,
-                vtable as *const PluginVTable,
-                contract_name.to_owned(),
-                vt.contract_id,
-            )
-        }
+        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
 
     match result {
@@ -111,8 +104,8 @@ unsafe extern "C" fn registry_register_callback(
 }
 
 std::thread_local! {
-    static CPP_DISPATCH_REGISTRY: std::cell::RefCell<Registry> =
-        std::cell::RefCell::new(Registry::new());
+    static CPP_DISPATCH_REGISTRY: core::cell::RefCell<Registry> =
+        core::cell::RefCell::new(Registry::new());
 }
 
 /// `AddArgs` — mirrors the C++ struct in the test plugin (`#[repr(C)]`).
@@ -258,6 +251,7 @@ fn test_cpp_plugin_dispatch() {
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -362,6 +356,7 @@ fn test_cpp_host_loads_rust_plugin() {
     // SAFETY: init_fn is valid; registrar lives for call duration
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -400,6 +395,7 @@ fn test_cpp_host_loads_rust_plugin() {
     // SAFETY: functions[0] is the first ABI wrapper with signature
     //   extern "C" fn(*const (), *mut ()) -> AbiError
     let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
@@ -441,6 +437,7 @@ fn test_exception_isolation_cpp() {
             .expect("failed to load throwing C++ test plugin")
     };
 
+    // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
@@ -462,6 +459,7 @@ fn test_exception_isolation_cpp() {
     // SAFETY: init_fn is valid; registrar lives for call duration
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -492,6 +490,7 @@ fn test_exception_isolation_cpp() {
 
     // SAFETY: functions[0] is the cpp_throw_abi with noexcept wrapper
     let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 

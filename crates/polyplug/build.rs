@@ -3,13 +3,16 @@
 //! Compiles `test_plugin` (a cdylib workspace member) and copies the resulting
 //! shared library to `tests/fixtures/` so integration tests can load it.
 //!
+
+// Build scripts have no caller to propagate errors to — .expect() is the only
+// option because a missing env var or failed compilation must abort the build.
+#![allow(clippy::expect_used)]
 //! The path to the compiled `.so` is emitted as the `TEST_PLUGIN_SO` cargo
 //! environment variable, accessible in tests via `env!('TEST_PLUGIN_SO")`.
 //!
 //! Build scripts are permitted to use `.expect()` and `panic!()` freely —
 //! a build failure is the appropriate response to environment configuration errors.
 
-#![allow(clippy::expect_used)]
 use std::env;
 use std::fs;
 use std::path::PathBuf;

@@ -1,7 +1,7 @@
 //! Version — version struct, compatibility enum, and parse/compare logic.
 
 use crate::error::LoaderError;
-use std::fmt;
+use core::fmt;
 
 /// A two-component semantic version (major.minor).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

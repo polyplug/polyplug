@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 using Polyplug.Guest;
 
 public static class Plugin {
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
     public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {
         if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
         System.Threading.Thread.BeginThreadAffinity();

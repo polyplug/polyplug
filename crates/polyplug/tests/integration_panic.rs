@@ -3,20 +3,19 @@
 //!
 //! This test crate is the crate root for the `integration_panic` test binary.
 
-#![allow(clippy::expect_used)]
-
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
+use polyplug::abi::ABI_ERROR_PANIC;
 use polyplug::abi::AbiError;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_ERROR_PANIC;
 
 // ─── Registrar callback that stores the vtable pointer ───────────────────────
 
@@ -79,6 +78,7 @@ fn test_panic_returns_abi_error_panic() {
          name = \"panic_plugin\"\n\
          version = \"1.0.0\"\n\
          runtime = \"native\"\n\
+         file = \"libpanic.so\"\n\
          api = \"{}\"\n\
          \n\
          [[plugin]]\n\
@@ -253,6 +253,7 @@ fn test_panic_returns_abi_error_panic() {
     // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -301,5 +302,5 @@ fn test_panic_returns_abi_error_panic() {
     // Process continues here — no abort occurred. Test completing IS the proof.
 
     // Leak the library to avoid dlclose issues on some platforms.
-    std::mem::forget(library);
+    core::mem::forget(library);
 }

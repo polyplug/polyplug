@@ -277,16 +277,35 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
     1
 }
 
+/// Mirror of polyplug::abi::PluginContext for the guest side.
+#[repr(C)]
+pub struct PluginContext {
+    pub bundle_path: StringView,
+}
+
 /// # Safety
 /// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
+/// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
+pub unsafe extern "C" fn polyplug_init(
+    registrar: *mut PluginRegistrar,
+    ctx: *const PluginContext,
+) -> AbiError {
     if registrar.is_null() {
         return AbiError {
             code: 1,
             message: StringView::null(),
         };
     }
+    if ctx.is_null() {
+        return AbiError {
+            code: 1,
+            message: StringView::null(),
+        };
+    }
+
+    // SAFETY: ctx is non-null and valid per ABI contract.
+    let _bundle_path: StringView = unsafe { (*ctx).bundle_path };
 
     // SAFETY: registrar is non-null, so host field is valid per ABI contract.
     let host: *const HostVTable = unsafe { (*registrar).host };

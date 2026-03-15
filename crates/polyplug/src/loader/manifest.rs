@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use serde::Deserialize;
 use serde::Deserializer;
 
 fn default_runtime() -> String {
@@ -48,7 +47,7 @@ where
     impl<'de> Visitor<'de> for FileFieldVisitor {
         type Value = String;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
             formatter.write_str("a string or a table with platform keys")
         }
 
@@ -276,12 +275,12 @@ mod tests {
     fn validate_file_err_when_file_is_empty_string() {
         let m: ManifestData = make_manifest("", "myplugin");
         let result: Result<(), crate::error::LoaderError> = m.validate_file();
-        assert!(result.is_err(), "empty file field must fail validation");
-        match result.unwrap_err() {
-            crate::error::LoaderError::ManifestMissingFile { bundle } => {
+        match result {
+            Err(crate::error::LoaderError::ManifestMissingFile { bundle }) => {
                 assert_eq!(bundle, "myplugin");
             }
-            other => panic!("unexpected error variant: {:?}", other),
+            Err(other) => panic!("unexpected error variant: {:?}", other),
+            Ok(()) => panic!("expected ManifestMissingFile error, got Ok"),
         }
     }
 
@@ -289,29 +288,27 @@ mod tests {
     fn validate_file_err_when_file_is_whitespace_only() {
         let m: ManifestData = make_manifest("   \t\n  ", "myplugin");
         let result: Result<(), crate::error::LoaderError> = m.validate_file();
-        assert!(
-            result.is_err(),
-            "whitespace-only file field must fail validation"
-        );
-        match result.unwrap_err() {
-            crate::error::LoaderError::ManifestMissingFile { bundle } => {
+        match result {
+            Err(crate::error::LoaderError::ManifestMissingFile { bundle }) => {
                 assert_eq!(bundle, "myplugin");
             }
-            other => panic!("unexpected error variant: {:?}", other),
+            Err(other) => panic!("unexpected error variant: {:?}", other),
+            Ok(()) => panic!("expected ManifestMissingFile error, got Ok"),
         }
     }
 
     #[test]
     fn validate_file_err_carries_bundle_name() {
         let m: ManifestData = make_manifest("", "special-bundle");
-        match m.validate_file().unwrap_err() {
-            crate::error::LoaderError::ManifestMissingFile { bundle } => {
+        match m.validate_file() {
+            Err(crate::error::LoaderError::ManifestMissingFile { bundle }) => {
                 assert_eq!(
                     bundle, "special-bundle",
                     "error must carry the correct bundle name"
                 );
             }
-            other => panic!("unexpected error variant: {:?}", other),
+            Err(other) => panic!("unexpected error variant: {:?}", other),
+            Ok(()) => panic!("expected ManifestMissingFile error, got Ok"),
         }
     }
 

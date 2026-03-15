@@ -1,4 +1,3 @@
-#![cfg_attr(debug_assertions, allow(clippy::std_instead_of_core))]
 //! Tracking allocator — wraps `polyplug_host_alloc`/`polyplug_host_free` and counts
 //! allocation/deallocation calls for test-time leak detection.
 //!
@@ -62,6 +61,7 @@ unsafe extern "C" fn tracking_free(ptr: *mut u8, size: usize, align: usize) {
                     "TrackingAllocator: double-free detected at address {:#x}",
                     addr
                 );
+                #[allow(clippy::std_instead_of_core)]
                 std::process::abort();
             }
         });

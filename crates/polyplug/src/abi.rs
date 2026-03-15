@@ -1,5 +1,5 @@
 // =============================================================================
-// ABI FROZEN AS OF EPIC 9.7 — EXCEPTION: PluginContext added in PluginContext epic (pre-v1 breaking change)
+// ABI FROZEN — pre-v1.0 (PluginContext was the last breaking addition)
 // =============================================================================
 //
 // The following types and function signatures constitute the frozen polyplug ABI.
@@ -14,6 +14,13 @@
 
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
+
+/// ABI version sentinel exported by both host and plugins.
+/// The loader checks this before calling polyplug_init.
+#[unsafe(no_mangle)]
+pub extern "C" fn polyplug_abi_version() -> u32 {
+    POLYPLUG_ABI_VERSION
+}
 
 // ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined)
 pub const ABI_OK: u32 = 0;
@@ -283,6 +290,10 @@ unsafe impl Sync for PluginDescriptor {}
 pub struct PluginContext {
     /// Absolute canonical path to the directory containing the loaded bundle.
     pub bundle_path: StringView,
+
+    /// Host's supported ABI version for negotiation (Option C).
+    /// Plugin can use this to determine available features.
+    pub host_abi_version: u32,
 }
 
 /// Bridge used during `polyplug_init` only — not stored long-term.
@@ -320,10 +331,10 @@ unsafe impl Send for ExtensionEntry {}
 // Sharing across threads only reads these values — no mutation after construction.
 unsafe impl Sync for ExtensionEntry {}
 
-/// Configuration passed to `polyplug_runtime_init`.
+/// Configuration passed to `polyplug_runtime_create` during runtime initialisation.
 ///
-/// OWNERSHIP: borrowed for the duration of `polyplug_runtime_init` only.
-/// The caller may free all pointed-to memory after `polyplug_runtime_init`
+/// OWNERSHIP: borrowed for the duration of the runtime build only.
+/// The caller may free all pointed-to memory after the build
 /// returns. The runtime copies any data it needs to retain.
 #[repr(C)]
 pub struct RuntimeConfig {
@@ -377,7 +388,7 @@ pub fn bundle_id(name: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::{align_of, offset_of, size_of};
+    use core::mem::{align_of, offset_of, size_of};
 
     #[test]
     fn fnv1a_known_values() {
@@ -564,8 +575,10 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn plugin_context_layout() {
-        assert_eq!(size_of::<PluginContext>(), 16);
+        // PluginContext: StringView(16) + u32(4) + padding(4) = 24 bytes
+        assert_eq!(size_of::<PluginContext>(), 24);
         assert_eq!(align_of::<PluginContext>(), 8);
         assert_eq!(offset_of!(PluginContext, bundle_path), 0);
+        assert_eq!(offset_of!(PluginContext, host_abi_version), 16);
     }
 }

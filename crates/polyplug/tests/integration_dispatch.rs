@@ -2,10 +2,9 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
@@ -38,6 +37,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call (ABI contract).
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // Extract contract name from StringView.
@@ -52,15 +52,9 @@ unsafe extern "C" fn registry_register_callback(
     // Register with thread-local Registry.
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe {
-            registry.register(
-                *desc,
-                vtable as *const PluginVTable,
-                contract_name.to_owned(),
-                vt.contract_id,
-            )
-        }
+        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
 
     match result {
@@ -76,8 +70,8 @@ unsafe extern "C" fn registry_register_callback(
 }
 
 std::thread_local! {
-    static DISPATCH_REGISTRY: std::cell::RefCell<Registry> =
-        std::cell::RefCell::new(Registry::new());
+    static DISPATCH_REGISTRY: core::cell::RefCell<Registry> =
+        core::cell::RefCell::new(Registry::new());
 }
 
 /// AddArgs — mirrors the struct in test_plugin (must be `#[repr(C)]`).
@@ -120,6 +114,7 @@ fn test_dispatch_add_function() {
     // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -174,7 +169,7 @@ fn test_dispatch_add_function() {
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     // Leak the library.
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -207,6 +202,7 @@ fn test_dispatch_add_with_zero() {
     // SAFETY: valid call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -246,7 +242,7 @@ fn test_dispatch_add_with_zero() {
     assert_eq!(result.code, ABI_OK);
     assert_eq!(out, 0_u32, "add(0, 0) must equal 0");
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -278,6 +274,7 @@ fn test_dispatch_add_wrapping_overflow() {
     // SAFETY: valid call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -318,5 +315,5 @@ fn test_dispatch_add_wrapping_overflow() {
     assert_eq!(result.code, ABI_OK);
     assert_eq!(out, 0_u32, "u32::MAX + 1 wraps to 0");
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }

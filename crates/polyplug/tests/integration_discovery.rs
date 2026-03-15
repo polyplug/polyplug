@@ -1,7 +1,5 @@
 //! Integration tests: multi-bundle discovery, graph resolution, load order, error cases.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;

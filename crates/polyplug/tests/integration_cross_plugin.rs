@@ -7,8 +7,6 @@
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
@@ -96,6 +94,7 @@ mod tests {
                 )
                 .expect("register bundle-a")
         };
+        // SAFETY: vtable_b is 'static.
         unsafe {
             registry
                 .register(
@@ -139,6 +138,7 @@ mod tests {
                 )
                 .expect("register bundle-a")
         };
+        // SAFETY: vtable_b is 'static.
         unsafe {
             registry
                 .register(

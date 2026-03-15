@@ -344,11 +344,9 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Guest;\n\n");
 
     out.push_str("public static class Plugin {\n");
-    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
     out.push_str("    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {\n");
-    out.push_str(
-        "        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n",
-    );
+    out.push_str("        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");

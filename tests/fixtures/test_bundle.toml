@@ -2,6 +2,8 @@
 name = "test_bundle"
 version = "1.0.0"
 api = "test_api.toml"
+runtime = "native"
+file = "libtest.so"
 
 [[plugin]]
 name = "test_adder"

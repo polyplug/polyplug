@@ -70,8 +70,8 @@ mod tests {
         assert!(!ptr.is_null());
         // SAFETY: ptr is a valid 64-byte, align-8 allocation just returned by polyplug_host_alloc.
         unsafe {
-            std::ptr::write(ptr, 0xAB_u8);
-            assert_eq!(std::ptr::read(ptr), 0xAB_u8);
+            core::ptr::write(ptr, 0xAB_u8);
+            assert_eq!(core::ptr::read(ptr), 0xAB_u8);
             polyplug_host_free(ptr, 64, 8);
         }
     }

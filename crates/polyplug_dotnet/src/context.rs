@@ -215,9 +215,9 @@ impl DotnetContext {
                 })?;
             return loader
                 .get_function_with_unmanaged_callers_only::<InitFn>(type_name, method_name)
-                .map_err(|_| {
+                .map_err(|e| {
                     PolyplugError::Loader(LoaderError::InitSymbolMissing {
-                        bundle: asm_path.to_string_lossy().into_owned(),
+                        bundle: format!("{}: error={}", asm_path.to_string_lossy().into_owned(), e),
                     })
                 });
         }
@@ -277,9 +277,9 @@ impl DotnetContext {
             })?;
         loader
             .get_function_with_unmanaged_callers_only::<InitFn>(type_name, method_name)
-            .map_err(|_| {
+            .map_err(|e| {
                 PolyplugError::Loader(LoaderError::InitSymbolMissing {
-                    bundle: asm_path.to_string_lossy().into_owned(),
+                    bundle: format!("{}: error={}", asm_path.to_string_lossy().into_owned(), e),
                 })
             })
     }

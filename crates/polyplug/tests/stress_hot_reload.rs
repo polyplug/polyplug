@@ -6,8 +6,6 @@
 //! Run with:
 //!   cargo test --test stress_hot_reload --package polyplug -- --ignored
 
-#![allow(clippy::expect_used)]
-
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use core::time::Duration;

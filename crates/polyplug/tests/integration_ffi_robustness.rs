@@ -1,8 +1,8 @@
-#![allow(clippy::expect_used)]
-
+use core::cell::RefCell;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::Buffer;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
@@ -12,7 +12,6 @@ use polyplug::abi::StringView;
 use polyplug::allocator::polyplug_host_alloc;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::registry::Registry;
-use std::cell::RefCell;
 use std::sync::Arc;
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
@@ -41,6 +40,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call (ABI contract).
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // SAFETY: desc.contract_name originates from a test plugin with static UTF-8.
@@ -51,15 +51,9 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     let result: Result<PluginHandle, _> = FFI_REGISTRY.with(|reg_cell| {
-        let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe {
-            registry.register(
-                *desc,
-                vtable as *const PluginVTable,
-                contract_name.to_owned(),
-                vt.contract_id,
-            )
-        }
+        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
 
     match result {
@@ -100,6 +94,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
 
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
@@ -171,8 +166,9 @@ fn test_misaligned_buffer_fill() {
     assert_ne!(call_result.code, ABI_OK, "misaligned buffer must error");
     assert_eq!(out, 0_u32, "out must remain zero on error");
 
+    // SAFETY: base_ptr was allocated by polyplug_host_alloc with matching size and alignment.
     unsafe { polyplug_host_free(base_ptr, BUFFER_SIZE, 8) };
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -222,7 +218,7 @@ fn test_stringview_cross_thread_echo() {
         });
     });
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -272,6 +268,7 @@ fn test_buffer_cap_less_than_len() {
         "buffer must remain sentinel on error"
     );
 
+    // SAFETY: ptr was allocated by polyplug_host_alloc with matching size and alignment.
     unsafe { polyplug_host_free(ptr, BUFFER_SIZE, 8) };
-    std::mem::forget(library);
+    core::mem::forget(library);
 }

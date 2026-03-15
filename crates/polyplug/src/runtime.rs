@@ -12,6 +12,7 @@
 //!  - find_by_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,25 +20,23 @@ use std::sync::OnceLock;
 
 use crate::abi::HostVTable;
 use crate::abi::PluginHandle;
+use crate::abi::PluginRegistrar;
 use crate::abi::PluginVTable;
 use crate::allocator::polyplug_host_alloc;
 use crate::allocator::polyplug_host_free;
-use crate::error::RegistryError;
-use crate::error::RuntimeError;
-use crate::loader::LoadedBundle;
-use crate::registry::Registry;
-use std::collections::HashMap;
-
-use crate::abi::PluginRegistrar;
 use crate::error::GraphError;
 use crate::error::LoaderError;
 use crate::error::PolyplugError;
+use crate::error::RegistryError;
+use crate::error::RuntimeError;
 use crate::extensions::Extension;
 use crate::extensions::SendPtr;
 use crate::graph::CapabilityGraph;
 use crate::loader::BundleInitGuard;
 use crate::loader::BundleLoader;
+use crate::loader::LoadedBundle;
 use crate::loader::manifest::ManifestData;
+use crate::registry::Registry;
 use crate::version::Compatibility;
 use crate::version::Version;
 
@@ -113,11 +112,10 @@ pub struct Runtime {
     /// ManifestData for all loaded bundles, keyed by bundle_name.
     /// Used by reload_bundle() for cascade detection.
     pub(crate) bundle_manifests:
-        std::sync::Mutex<std::collections::HashMap<String, crate::loader::manifest::ManifestData>>,
+        std::sync::Mutex<HashMap<String, crate::loader::manifest::ManifestData>>,
     /// Library handles for reloaded native bundles — these ARE droppable (unlike loaded_libraries).
     /// Keyed by bundle_id. On each reload the old handle is removed and dropped after quiescence.
-    pub(crate) reload_libraries:
-        std::sync::Mutex<std::collections::HashMap<u64, libloading::Library>>,
+    pub(crate) reload_libraries: std::sync::Mutex<HashMap<u64, libloading::Library>>,
     /// Optional callback fired after vtable swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCb>,
     /// Background watcher thread handle. Feature-gated. Joined on Drop.
@@ -172,8 +170,8 @@ impl RuntimeBuilder {
     /// (same runtime name) are detected in `build()` and cause `build()` to return
     /// `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))`.
     ///
-    /// All loaders — including the native loader for Rust/C/C++ plugins — must be
-    /// registered explicitly. No loader is built into the runtime automatically.
+    /// The native loader (`"native"`) is registered automatically during `build()`
+    /// unless a user-provided loader already claims that name.
     pub fn loader(mut self, loader: impl BundleLoader + 'static) -> RuntimeBuilder {
         self.loaders.push(Box::new(loader));
         self
@@ -276,15 +274,19 @@ impl RuntimeBuilder {
             }
         }
 
+        if !loader_map.contains_key("native") {
+            let native_loader: crate::loader::NativeBundleLoader =
+                crate::loader::NativeBundleLoader::new(Arc::clone(&registry), host_vtable);
+            loader_map.insert("native".to_owned(), Box::new(native_loader));
+        }
+
         // Phase 1: Scan plugin directories for bundles
         let discovered: Vec<(PathBuf, ManifestData)> =
             crate::loader::scanner::scan_dirs(&self.plugin_dirs);
 
         // Snapshot manifests for hot-reload cascade detection.
-        let mut manifests_map: std::collections::HashMap<
-            String,
-            crate::loader::manifest::ManifestData,
-        > = std::collections::HashMap::new();
+        let mut manifests_map: HashMap<String, crate::loader::manifest::ManifestData> =
+            HashMap::new();
         for (path, manifest) in &discovered {
             let mut stored_manifest: ManifestData = manifest.clone();
             stored_manifest.path = path.clone();
@@ -367,7 +369,7 @@ impl RuntimeBuilder {
             loaders: loader_map,
             _extensions: self.extensions,
             bundle_manifests: std::sync::Mutex::new(manifests_map),
-            reload_libraries: std::sync::Mutex::new(std::collections::HashMap::new()),
+            reload_libraries: std::sync::Mutex::new(HashMap::new()),
             on_reload_cb: self.on_reload_cb,
             #[cfg(feature = "hot-reload")]
             watcher_thread: std::sync::Mutex::new(None),
@@ -390,6 +392,7 @@ impl Runtime {
     }
 
     /// Find the first provider of a contract.
+    #[inline(always)]
     pub fn find_by_contract(
         &self,
         contract_id: u64,
@@ -399,6 +402,7 @@ impl Runtime {
     }
 
     /// Find a specific bundle's provider of a contract.
+    #[inline(always)]
     pub fn find_by_bundle(
         &self,
         bundle_id: u64,
@@ -410,6 +414,7 @@ impl Runtime {
     }
 
     /// Find all providers of a contract.
+    #[inline(always)]
     pub fn find_all_by_contract(
         &self,
         contract_id: u64,
@@ -421,6 +426,7 @@ impl Runtime {
     }
 
     /// Resolve a plugin handle to a vtable pointer.
+    #[inline(always)]
     pub fn resolve_plugin(
         &self,
         handle: PluginHandle,
@@ -429,23 +435,19 @@ impl Runtime {
     }
 
     /// Get the HostVTable for use in plugin registrars.
+    #[inline(always)]
     pub fn host_vtable(&self) -> &'static HostVTable {
         self.host_vtable
     }
 
-    pub fn registry(&self) -> &std::sync::Arc<crate::registry::Registry> {
+    #[inline(always)]
+    pub fn registry(&self) -> &std::sync::Arc<Registry> {
         &self.registry
     }
 
-    pub(crate) fn host_vtable_ref(&self) -> &'static crate::abi::HostVTable {
+    #[inline(always)]
+    pub(crate) fn host_vtable_ref(&self) -> &'static HostVTable {
         self.host_vtable
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn loaders(
-        &self,
-    ) -> &std::collections::HashMap<String, Box<dyn crate::loader::BundleLoader>> {
-        &self.loaders
     }
 
     /// Register an additional bundle loader into this runtime after build.
@@ -456,10 +458,7 @@ impl Runtime {
     ///
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
     /// loader for the same runtime name is already registered.
-    pub fn register_loader(
-        &mut self,
-        loader: Box<dyn BundleLoader>,
-    ) -> Result<(), RuntimeError> {
+    pub fn register_loader(&mut self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
         let names: Vec<String> = loader.runtime_names();
         for name in &names {
             if self.loaders.contains_key(name.as_str()) {
@@ -474,14 +473,6 @@ impl Runtime {
         Ok(())
     }
 
-    /// Test-only accessor for reload_libraries count. Used by integration tests.
-    #[cfg(test)]
-    pub fn test_reload_libraries_count(&self) -> usize {
-        self.reload_libraries
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .len()
-    }
     /// Load a single plugin bundle explicitly by path.
     ///
     /// Reads the companion manifest, finds the matching loader, and dispatches.
@@ -517,17 +508,12 @@ impl Runtime {
         manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {
+            let major_str: &str = match manifest.version.split_once('.') {
+                Some((maj, _)) => maj,
+                None => "0",
+            };
             for contract in &manifest.provides {
-                // Parse contract name and major version from provides entry (e.g., "data.Reporter@1.0")
-                let (contract_name, contract_version): (&str, &str) = match contract.split_once('@') {
-                    Some((name, ver)) => (name, ver),
-                    None => (contract, "0.0.0"),
-                };
-                let major_str: &str = match contract_version.split_once('.') {
-                    Some((maj, _)) => maj,
-                    None => "0",
-                };
-                let key: String = format!("{}@{}", contract_name, major_str);
+                let key: String = format!("{}@{}", contract, major_str);
                 if !manifest.function_count.contains_key(&key)
                     && opts.compatibility != Compatibility::Yolo
                 {
@@ -577,10 +563,7 @@ impl Runtime {
         let result: Result<(), PolyplugError> = loader.load(&effective_path, &mut registrar);
         if result.is_ok() {
             let bundle_name: String = manifest.bundle_name.clone();
-            let mut manifests: std::sync::MutexGuard<
-                '_,
-                std::collections::HashMap<String, ManifestData>,
-            > = self
+            let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = self
                 .bundle_manifests
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
@@ -744,8 +727,7 @@ pub(crate) fn validate_bundle_compatibility(
     compatibility: Compatibility,
 ) -> Result<(), RuntimeError> {
     // Build provider_map: contract_name -> &ManifestData
-    let mut provider_map: std::collections::HashMap<String, &ManifestData> =
-        std::collections::HashMap::new();
+    let mut provider_map: HashMap<String, &ManifestData> = HashMap::new();
     for (_path, manifest) in manifests {
         for contract in &manifest.provides {
             provider_map.insert(contract.clone(), manifest);
@@ -1105,10 +1087,8 @@ mod tests {
 
 // ─── Test-only public surface ───────────────────────────────────────────────
 #[cfg(any(test, feature = "testing"))]
+#[doc(hidden)]
 pub mod testing {
-    //! Thin wrappers that expose crate-private items to integration tests.
-    //! Only compiled when `test` or the `testing` feature is active.
-
     /// Read the INIT_BUNDLE_ID thread-local on the calling thread.
     pub fn read_init_bundle_id() -> u64 {
         super::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.get())

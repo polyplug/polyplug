@@ -5,8 +5,6 @@
 //! dlclose() would unmap plugin code pages while vtable fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::HostVTable;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::bundle_id;

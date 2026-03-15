@@ -81,6 +81,7 @@ fn registrar_callback_null_registry_ptr_returns_error() {
     let descriptor: *const PluginDescriptor = ptr::null();
     let vtable: *const PluginVTable = ptr::null();
     let registrar: &mut PluginRegistrar = context.registrar_mut();
+    // SAFETY: register_plugin is a valid fn pointer; registrar is valid for the call.
     let result: AbiError = unsafe {
         (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor, vtable)
     };
@@ -108,6 +109,7 @@ fn registrar_callback_accepts_null_stringviews() {
     let vtable: *const PluginVTable = &VTABLE_MALFORMED as *const PluginVTable;
 
     let registrar: &mut PluginRegistrar = context.registrar_mut();
+    // SAFETY: register_plugin is a valid fn pointer; all args are valid for the call.
     let result: AbiError = unsafe {
         (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
     };
@@ -133,11 +135,13 @@ fn registrar_callback_duplicate_provider_returns_error() {
     let vtable: *const PluginVTable = &VTABLE_DUPLICATE as *const PluginVTable;
 
     let registrar: &mut PluginRegistrar = context.registrar_mut();
+    // SAFETY: register_plugin is a valid fn pointer; all args are valid for the call.
     let first: AbiError = unsafe {
         (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
     };
     assert_eq!(first.code, 0_u32);
 
+    // SAFETY: same as above — testing duplicate registration path.
     let second: AbiError = unsafe {
         (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
     };

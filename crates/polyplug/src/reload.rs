@@ -1,3 +1,8 @@
+//! Reload — hot-reload logic for native plugin bundles.
+//!
+//! Implements vtable hot-swapping via `ArcSwap`, quiescence wait for in-flight calls,
+//! and cascade re-init for bundles that depend on the reloaded bundle.
+
 use core::hint::spin_loop;
 use core::time::Duration;
 use std::collections::HashMap;
@@ -28,6 +33,10 @@ thread_local! {
         const { core::cell::RefCell::new(Vec::new()) };
 }
 
+/// Registrar callback used during reload to capture new vtable pointers.
+///
+/// # Safety
+/// `vtable` must be a valid `PluginVTable` pointer from the reloaded library's init.
 pub(crate) unsafe extern "C" fn reload_registrar_callback(
     _registrar: *mut crate::abi::PluginRegistrar,
     _descriptor: *const crate::abi::PluginDescriptor,
@@ -44,6 +53,7 @@ pub(crate) unsafe extern "C" fn reload_registrar_callback(
     crate::abi::AbiError::ok()
 }
 
+/// Reload a bundle by path, with cascade depth tracking to prevent infinite loops.
 pub(crate) fn reload_bundle_impl(
     runtime: &Runtime,
     path: &Path,
@@ -257,6 +267,7 @@ pub(crate) fn reload_bundle_impl(
     Ok(())
 }
 
+/// Find bundles that depend on `reloaded_bundle_name` and need re-init.
 pub(crate) fn find_cascade_targets(
     manifests: &HashMap<String, ManifestData>,
     reloaded_bundle_name: &str,

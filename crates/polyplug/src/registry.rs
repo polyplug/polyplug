@@ -71,9 +71,9 @@ pub(crate) struct RegistrySlot {
 }
 
 /// Live plugin registration data.
-#[allow(dead_code)]
 pub(crate) struct RegistryEntry {
-    /// Plugin metadata. StringView fields are 'static (Library is never dropped).
+    /// Plugin metadata — used by other crates for introspection.
+    #[allow(dead_code)]
     pub descriptor: PluginDescriptor,
     /// Full contract name string for collision detection.
     pub contract_name: String,
@@ -535,15 +535,14 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::ABI_OK;
-    use crate::abi::PluginVTable;
+    use crate::abi::PluginDescriptor;
     use crate::abi::StringView;
 
     const MOCK_FNS: [*const (); 0] = [];
 
     static MOCK_VTABLE: PluginVTable = PluginVTable {
         contract_id: 0x1234_5678_9ABC_DEF0,
-        contract_version: (1 << 16) | 0, // minor=1, patch=0
+        contract_version: (1 << 16), // minor=1, patch=0
         function_count: 0,
         functions: MOCK_FNS.as_ptr(),
     };
@@ -683,8 +682,6 @@ mod tests {
         // SAFETY: vtable_ptr points to MOCK_VTABLE which is 'static.
         let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
         assert_eq!(contract_id, MOCK_VTABLE.contract_id);
-        // Suppress unused import warning from ABI_OK in scope
-        let _: u32 = ABI_OK;
     }
 
     #[test]
@@ -693,13 +690,13 @@ mod tests {
         // Both should succeed; find_all_by_contract should return both.
         static VTABLE_A: PluginVTable = PluginVTable {
             contract_id: 0xAAAA_BBBB_CCCC_DDDD,
-            contract_version: (1 << 16) | 0,
+            contract_version: (1 << 16),
             function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         };
         static VTABLE_B: PluginVTable = PluginVTable {
             contract_id: 0xAAAA_BBBB_CCCC_DDDD,
-            contract_version: (2 << 16) | 0,
+            contract_version: (2 << 16),
             function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         };
@@ -754,7 +751,7 @@ mod tests {
     fn swap_vtable_returns_old_arc_and_bumps_generation() {
         static NEW_VTABLE: PluginVTable = PluginVTable {
             contract_id: 0x1234_5678_9ABC_DEF0,
-            contract_version: (2 << 16) | 0,
+            contract_version: (2 << 16),
             function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         };
@@ -789,13 +786,13 @@ mod tests {
     fn find_slots_by_bundle_returns_all_slots() {
         static VTABLE_X: PluginVTable = PluginVTable {
             contract_id: 0xDEAD_BEEF_0000_0001,
-            contract_version: (1 << 16) | 0,
+            contract_version: (1 << 16),
             function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         };
         static VTABLE_Y: PluginVTable = PluginVTable {
             contract_id: 0xDEAD_BEEF_0000_0002,
-            contract_version: (1 << 16) | 0,
+            contract_version: (1 << 16),
             function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         };

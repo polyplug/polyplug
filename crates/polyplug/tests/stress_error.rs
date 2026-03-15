@@ -2,8 +2,6 @@
 //!
 //! This test crate is the crate root for the `stress_error` test binary.
 
-#![allow(clippy::expect_used)]
-
 #[cfg(unix)]
 use libloading::os::unix::Library as UnixLibrary;
 #[cfg(unix)]
@@ -14,6 +12,7 @@ use polyplug::abi::ABI_ERROR_PANIC;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
@@ -43,8 +42,8 @@ struct ChainArgs {
 // ─── Thread-local registry ────────────────────────────────────────────────────
 
 std::thread_local! {
-    static ERROR_REGISTRY: std::cell::RefCell<Registry> =
-        std::cell::RefCell::new(Registry::new());
+    static ERROR_REGISTRY: core::cell::RefCell<Registry> =
+        core::cell::RefCell::new(Registry::new());
 }
 
 // ─── HostVTable callbacks (for Test 3 chain dispatch) ───────────────────────
@@ -55,7 +54,7 @@ std::thread_local! {
 /// Must only be called when ERROR_REGISTRY has been populated on this thread.
 unsafe extern "C" fn chain_find_by_contract(contract_id: u64, _min_version: u32) -> PluginHandle {
     ERROR_REGISTRY.with(|cell| {
-        let registry: std::cell::Ref<'_, Registry> = cell.borrow();
+        let registry: core::cell::Ref<'_, Registry> = cell.borrow();
         match registry.find(contract_id, 0) {
             Ok(handle) => handle,
             Err(_) => PluginHandle {
@@ -98,7 +97,7 @@ unsafe extern "C" fn chain_find_all_by_contract(
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
 unsafe extern "C" fn chain_resolve_plugin(handle: PluginHandle) -> *const PluginVTable {
     ERROR_REGISTRY.with(|cell| {
-        let registry: std::cell::Ref<'_, Registry> = cell.borrow();
+        let registry: core::cell::Ref<'_, Registry> = cell.borrow();
         registry.resolve(handle).unwrap_or(core::ptr::null())
     })
 }
@@ -131,6 +130,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call (ABI contract).
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // Extract contract name from StringView.
@@ -144,15 +144,9 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
-        let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe {
-            registry.register(
-                *desc,
-                vtable as *const PluginVTable,
-                contract_name.to_owned(),
-                vt.contract_id,
-            )
-        }
+        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
 
     match result {
@@ -219,6 +213,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginVTable {
     // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -336,9 +331,6 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
         msg_bytes, b"plugin panicked",
         "panic message must be 'plugin panicked'"
     );
-
-    // Process continues — reaching this assertion IS the proof.
-    assert!(true, "process continues after plugin panic");
 
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();

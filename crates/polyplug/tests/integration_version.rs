@@ -1,7 +1,5 @@
 //! Integration tests: version negotiation, compatibility modes, and warning callbacks.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;

@@ -105,6 +105,16 @@ install_plugin() {
         elif [[ -f "${guest_dir}/bin/Release/net10.0/${file_field}" ]]; then
             # C# output location
             cp "${guest_dir}/bin/Release/net10.0/${file_field}" "${dest}/"
+            # Also copy runtimeconfig.json if it exists (required for .NET Core)
+            local runtimeconfig
+            runtimeconfig="${file_field%.dll}.runtimeconfig.json"
+            if [[ -f "${guest_dir}/bin/Release/net10.0/${runtimeconfig}" ]]; then
+                cp "${guest_dir}/bin/Release/net10.0/${runtimeconfig}" "${dest}/"
+            fi
+            # Copy Polyplug.Guest.dll dependency if it exists
+            if [[ -f "${guest_dir}/bin/Release/net10.0/Polyplug.Guest.dll" ]]; then
+                cp "${guest_dir}/bin/Release/net10.0/Polyplug.Guest.dll" "${dest}/"
+            fi
         fi
     fi
 }

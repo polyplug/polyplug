@@ -6,10 +6,9 @@
 //!
 //! This test crate is the crate root for the `integration_context` test binary.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
@@ -81,6 +80,7 @@ fn rust_plugin_receives_bundle_path() {
             ptr: bundle_path_str.as_ptr(),
             len: bundle_path_str.len(),
         },
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
 
     // Call polyplug_init with the crafted context.
@@ -125,5 +125,5 @@ fn rust_plugin_receives_bundle_path() {
     );
 
     // Leak the library — keeping vtable pointers valid until process exit.
-    std::mem::forget(library);
+    core::mem::forget(library);
 }

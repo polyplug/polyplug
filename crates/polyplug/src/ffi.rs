@@ -1,3 +1,9 @@
+#![allow(clippy::std_instead_of_core)]
+//! FFI — public `#[no_mangle]` C ABI entry points for host language bindings.
+//!
+//! All functions use `catch_unwind` to prevent Rust panics from unwinding across
+//! the C ABI boundary. Errors are stored in a thread-local `LAST_ERROR` string.
+
 use core::cell::Ref;
 use core::cell::RefCell;
 
@@ -7,7 +13,7 @@ use crate::registry::PluginVTableGuard;
 use crate::runtime::Runtime;
 
 pub struct OpaqueRuntime(pub Runtime);
-pub struct OpaqueGuard(pub(crate) PluginVTableGuard);
+pub struct OpaquePluginGuard(pub(crate) PluginVTableGuard);
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -40,11 +46,13 @@ fn unpack_handle(packed: u64) -> PluginHandle {
     }
 }
 
+/// Creates a new runtime instance.
+///
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
-#[allow(clippy::std_instead_of_core)]
+/// Returns null on allocation failure or panic.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_new() -> *mut OpaqueRuntime {
+pub unsafe extern "C" fn polyplug_runtime_create() -> *mut OpaqueRuntime {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         match Runtime::builder().build() {
             Ok(rt) => Box::into_raw(Box::new(OpaqueRuntime(rt))),
@@ -55,34 +63,36 @@ pub unsafe extern "C" fn polyplug_runtime_new() -> *mut OpaqueRuntime {
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_new");
+        set_last_error("panic in polyplug_runtime_create");
         core::ptr::null_mut()
     })
 }
 
+/// Destroys a runtime instance.
+///
 /// # Safety
-/// `rt` must be a non-null pointer previously returned by `polyplug_runtime_new`.
+/// `rt` must be a non-null pointer previously returned by `polyplug_runtime_create`.
 /// Must not be called more than once for the same pointer.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_free(rt: *mut OpaqueRuntime) {
+pub unsafe extern "C" fn polyplug_runtime_destroy(rt: *mut OpaqueRuntime) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !rt.is_null() {
-            // SAFETY: rt was allocated by polyplug_runtime_new via Box::new. Caller guarantees single call per pointer.
+            // SAFETY: rt was allocated by polyplug_runtime_create via Box::new. Caller guarantees single call per pointer.
             drop(unsafe { Box::from_raw(rt) });
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_free");
+        set_last_error("panic in polyplug_runtime_destroy");
     });
 }
 
+/// Loads a plugin bundle.
+///
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 /// `path` must point to `path_len` valid UTF-8 bytes for the duration of the call.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_load_bundle(
+pub unsafe extern "C" fn polyplug_runtime_load_bundle(
     rt: *mut OpaqueRuntime,
     path: *const u8,
     path_len: usize,
@@ -95,7 +105,7 @@ pub unsafe extern "C" fn polyplug_load_bundle(
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         if path.is_null() {
-            set_last_error("null path pointer in polyplug_load_bundle");
+            set_last_error("null path pointer in polyplug_runtime_load_bundle");
             return 1u32;
         }
         // SAFETY: path is non-null and points to path_len valid UTF-8 bytes per ABI contract.
@@ -116,17 +126,16 @@ pub unsafe extern "C" fn polyplug_load_bundle(
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_load_bundle");
+        set_last_error("panic in polyplug_runtime_load_bundle");
         1u32
     })
 }
 
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 /// `path` must point to `path_len` valid UTF-8 bytes for the duration of the call.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_reload_bundle(
+pub unsafe extern "C" fn polyplug_runtime_reload_bundle(
     rt: *mut OpaqueRuntime,
     path: *const u8,
     path_len: usize,
@@ -139,7 +148,7 @@ pub unsafe extern "C" fn polyplug_reload_bundle(
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         if path.is_null() {
-            set_last_error("null path pointer in polyplug_reload_bundle");
+            set_last_error("null path pointer in polyplug_runtime_reload_bundle");
             return 1u32;
         }
         // SAFETY: path is non-null and points to path_len valid UTF-8 bytes per ABI contract.
@@ -160,16 +169,15 @@ pub unsafe extern "C" fn polyplug_reload_bundle(
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_reload_bundle");
+        set_last_error("panic in polyplug_runtime_reload_bundle");
         1u32
     })
 }
 
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
-#[allow(clippy::std_instead_of_core)]
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_rt_find_by_contract(
+pub unsafe extern "C" fn polyplug_runtime_find_by_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
     min_version: u32,
@@ -186,16 +194,15 @@ pub unsafe extern "C" fn polyplug_rt_find_by_contract(
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_rt_find_by_contract");
+        set_last_error("panic in polyplug_runtime_find_by_contract");
         u64::MAX
     })
 }
 
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
-#[allow(clippy::std_instead_of_core)]
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_rt_find_by_bundle(
+pub unsafe extern "C" fn polyplug_runtime_find_by_bundle(
     rt: *const OpaqueRuntime,
     bundle_id: u64,
     contract_id: u64,
@@ -216,17 +223,16 @@ pub unsafe extern "C" fn polyplug_rt_find_by_bundle(
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_rt_find_by_bundle");
+        set_last_error("panic in polyplug_runtime_find_by_bundle");
         u64::MAX
     })
 }
 
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 /// `out` must be valid for writes of `out_cap` u64 elements.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
+pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
     min_version: u32,
@@ -239,7 +245,7 @@ pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
         }
         if out.is_null() && out_cap > 0 {
             set_last_error(
-                "null output buffer with non-zero capacity in polyplug_rt_find_all_by_contract",
+                "null output buffer with non-zero capacity in polyplug_runtime_find_all_by_contract",
             );
             return 0usize;
         }
@@ -248,53 +254,40 @@ pub unsafe extern "C" fn polyplug_rt_find_all_by_contract(
         if out_cap == 0usize {
             return 0usize;
         }
-        let mut handle_buf: [PluginHandle; 16] = [PluginHandle {
-            index: 0u32,
-            generation: 0u32,
-        }; 16];
-        let mut total_written: usize = 0usize;
-        loop {
-            let remaining: usize = out_cap - total_written;
-            if remaining == 0usize {
-                break;
-            }
-            let write_cap: usize = if remaining < handle_buf.len() {
-                remaining
-            } else {
-                handle_buf.len()
+        // Allocate a temporary PluginHandle buffer matching the caller's capacity.
+        // Registry::find_all_by_contract fills it in a single pass — no pagination needed.
+        let mut handle_buf: Vec<PluginHandle> = vec![
+            PluginHandle {
+                index: 0u32,
+                generation: 0u32,
             };
-            let count: usize = runtime.0.find_all_by_contract(
-                contract_id,
-                min_version,
-                &mut handle_buf[..write_cap],
-            );
-            for (offset, handle) in handle_buf[..count].iter().enumerate() {
-                // SAFETY: out is valid for out_cap u64 elements per ABI contract.
-                unsafe {
-                    out.add(total_written + offset).write(pack_handle(*handle));
-                }
-            }
-            total_written += count;
-            if count < write_cap {
-                break;
+            out_cap
+        ];
+        let count: usize =
+            runtime
+                .0
+                .find_all_by_contract(contract_id, min_version, &mut handle_buf);
+        for (i, handle) in handle_buf[..count].iter().enumerate() {
+            // SAFETY: out is valid for out_cap u64 elements per ABI contract.
+            unsafe {
+                out.add(i).write(pack_handle(*handle));
             }
         }
-        total_written
+        count
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_rt_find_all_by_contract");
+        set_last_error("panic in polyplug_runtime_find_all_by_contract");
         0usize
     })
 }
 
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_new`.
-#[allow(clippy::std_instead_of_core)]
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
+pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
-) -> *mut OpaqueGuard {
+) -> *mut OpaquePluginGuard {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
             set_last_error("null runtime");
@@ -310,7 +303,7 @@ pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime.0.registry().resolve_guard(handle) {
-            Ok(guard) => Box::into_raw(Box::new(OpaqueGuard(guard))),
+            Ok(guard) => Box::into_raw(Box::new(OpaquePluginGuard(guard))),
             Err(e) => {
                 set_last_error(e.to_string());
                 core::ptr::null_mut()
@@ -318,52 +311,51 @@ pub unsafe extern "C" fn polyplug_rt_resolve_plugin(
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_rt_resolve_plugin");
+        set_last_error("panic in polyplug_runtime_resolve_plugin");
         core::ptr::null_mut()
     })
 }
 
 /// # Safety
-/// `guard` must be a non-null pointer previously returned by `polyplug_rt_resolve_plugin`.
+/// `guard` must be a non-null pointer previously returned by `polyplug_runtime_resolve_plugin`.
 /// Must not be called more than once for the same pointer.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_guard_free(guard: *mut OpaqueGuard) {
+pub unsafe extern "C" fn polyplug_runtime_plugin_release(guard: *mut OpaquePluginGuard) {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if !guard.is_null() {
-            // SAFETY: guard was allocated by polyplug_rt_resolve_plugin via Box::new. Caller guarantees single call per pointer.
+            // SAFETY: guard was allocated by polyplug_runtime_resolve_plugin via Box::new. Caller guarantees single call per pointer.
             drop(unsafe { Box::from_raw(guard) });
         }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_guard_free");
+        set_last_error("panic in polyplug_runtime_plugin_release");
     });
 }
 
 /// # Safety
-/// `guard` must be a valid pointer returned by `polyplug_rt_resolve_plugin`.
-#[allow(clippy::std_instead_of_core)]
+/// `guard` must be a valid pointer returned by `polyplug_runtime_resolve_plugin`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_get_vtable(guard: *const OpaqueGuard) -> *const () {
+pub unsafe extern "C" fn polyplug_runtime_plugin_vtable(
+    guard: *const OpaquePluginGuard,
+) -> *const () {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if guard.is_null() {
             set_last_error("null guard");
             return core::ptr::null();
         }
-        // SAFETY: guard is non-null valid OpaqueGuard per ABI contract.
+        // SAFETY: guard is non-null valid OpaquePluginGuard per ABI contract.
         unsafe { (*guard).0.vtable() as *const () }
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_get_vtable");
+        set_last_error("panic in polyplug_runtime_plugin_vtable");
         core::ptr::null()
     })
 }
 
 /// # Safety
 /// `buf` must be valid for writes of `buf_len` bytes when non-null.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_last_error(buf: *mut u8, buf_len: usize) -> usize {
+pub unsafe extern "C" fn polyplug_runtime_last_error(buf: *mut u8, buf_len: usize) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let len: usize = LAST_ERROR.with(|e| {
             let msg: Ref<'_, String> = e.borrow();
@@ -379,32 +371,30 @@ pub unsafe extern "C" fn polyplug_last_error(buf: *mut u8, buf_len: usize) -> us
         len
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_last_error");
+        set_last_error("panic in polyplug_runtime_last_error");
         0usize
     })
 }
 
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_error_message_len() -> usize {
+pub unsafe extern "C" fn polyplug_runtime_error_message_len() -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         LAST_ERROR.with(|e| e.borrow().len())
     }))
     .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_error_message_len");
+        set_last_error("panic in polyplug_runtime_error_message_len");
         0usize
     })
 }
 
 /// # Safety
-/// `rt` must be a valid non-null pointer returned by `polyplug_runtime_new`.
+/// `rt` must be a valid non-null pointer returned by `polyplug_runtime_create`.
 /// `loader_ptr` must be a non-null `*mut c_void` produced by a loader cdylib's
 /// `polyplug_*_loader_create()` function compiled against the same polyplug rlib.
 /// This call transfers ownership — do not call `polyplug_*_loader_free()` after
 /// a successful registration (return value 0).
-#[allow(clippy::std_instead_of_core)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_register_loader(
     rt: *mut OpaqueRuntime,
@@ -415,9 +405,9 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
             set_last_error("null argument in polyplug_runtime_register_loader");
             return 1u32;
         }
-        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_new per ABI contract.
+        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
         // loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib compiled
-        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_new per ABI contract.
+        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
         // against the same polyplug rlib. The double-box pattern preserves the fat pointer through
         // the c_void erasure. Reconstituting via Box::from_raw as *mut Box<dyn BundleLoader> is valid
         // because both sides agree on the layout via the shared rlib. Ownership is transferred here.
@@ -446,9 +436,11 @@ mod tests {
 
     #[test]
     fn test_runtime_new_and_free() {
-        let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_new() };
+        // SAFETY: polyplug_runtime_create has no pointer preconditions.
+        let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
         assert!(!rt.is_null());
-        unsafe { polyplug_runtime_free(rt) };
+        // SAFETY: rt was returned by polyplug_runtime_create and is non-null.
+        unsafe { polyplug_runtime_destroy(rt) };
     }
 
     #[test]

@@ -2,10 +2,9 @@
 //!
 //! This test crate is the crate root for the `integration_load` test binary.
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
@@ -36,6 +35,7 @@ unsafe extern "C" fn capture_register(
     // SAFETY: vtable is valid for the call duration. We store the contract_id for
     // later verification. The vtable itself lives in the plugin's static memory.
     let contract_id: u64 = unsafe { (*vtable).contract_id };
+    // SAFETY: vtable is valid for this call (ABI contract); reading a plain u32 field.
     let function_count: u32 = unsafe { (*vtable).function_count };
 
     // Store results in thread-local for the test to read back.
@@ -53,10 +53,10 @@ unsafe extern "C" fn capture_register(
 }
 
 std::thread_local! {
-    static CAPTURED_CONTRACT_ID: std::cell::RefCell<Option<u64>> =
-        std::cell::RefCell::new(None);
-    static CAPTURED_FUNCTION_COUNT: std::cell::RefCell<Option<u32>> =
-        std::cell::RefCell::new(None);
+    static CAPTURED_CONTRACT_ID: core::cell::RefCell<Option<u64>> =
+        const { core::cell::RefCell::new(None) };
+    static CAPTURED_FUNCTION_COUNT: core::cell::RefCell<Option<u32>> =
+        const { core::cell::RefCell::new(None) };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ fn test_load_and_abi_version() {
     assert_eq!(version, 1, "polyplug_abi_version() must return 1");
 
     // Leak the library — vtable pointers must remain valid.
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -116,7 +116,9 @@ fn test_init_registers_vtable() {
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
+    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let result: AbiError = unsafe {
         init_fn(
             &mut registrar as *mut PluginRegistrar,
@@ -147,7 +149,7 @@ fn test_init_registers_vtable() {
     );
 
     // Leak the library.
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -158,9 +160,10 @@ fn test_missing_symbol_returns_error() {
     };
 
     // A non-existent symbol should return Err.
+    // SAFETY: library is loaded; querying a symbol name is safe even if it doesn't exist.
     let result: Result<libloading::Symbol<'_, unsafe extern "C" fn()>, _> =
         unsafe { library.get(b"nonexistent_symbol_xyz\0") };
     assert!(result.is_err(), "non-existent symbol must return Err");
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }

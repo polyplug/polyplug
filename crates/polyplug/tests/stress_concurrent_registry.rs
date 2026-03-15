@@ -1,11 +1,9 @@
-#![allow(clippy::expect_used)]
-
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
+use core::time::Duration;
 use std::sync::Arc;
 use std::sync::Barrier;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
 use std::time::Instant;
 
 use polyplug::abi::PluginDescriptor;
@@ -21,8 +19,8 @@ const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;
 const RESOLVE_ROUNDS: usize = 32_usize;
 const SWAP_ROUNDS: usize = 24_usize;
-const VERSION_V1: u32 = (1_u32 << 16) | 0_u32;
-const VERSION_V2: u32 = (2_u32 << 16) | 0_u32;
+const VERSION_V1: u32 = 1_u32 << 16;
+const VERSION_V2: u32 = 2_u32 << 16;
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(2_u64);
 
 const CONTRACT_IDS: [u64; THREADS] = [
@@ -165,11 +163,12 @@ fn stress_concurrent_register_find_resolve() {
                 make_descriptor(PLUGIN_NAMES[idx], CONTRACT_NAMES[idx]);
             let vtable: &'static PluginVTable = &VTABLES_V1[idx];
             barrier_clone.wait();
+            // SAFETY: vtable is a static reference valid for the test lifetime.
             let handle: PluginHandle = unsafe {
                 reg_clone
                     .register(
                         descriptor,
-                        vtable as *const PluginVTable,
+                        vtable,
                         CONTRACT_NAMES[idx].to_owned(),
                         idx as u64,
                     )
@@ -186,6 +185,7 @@ fn stress_concurrent_register_find_resolve() {
                 let vtable_ptr: *const PluginVTable = guard.vtable();
                 // SAFETY: vtable_ptr is from the registry and valid for the guard lifetime.
                 let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
+                // SAFETY: vtable_ptr is from the registry and valid for the guard lifetime.
                 let version: u32 = unsafe { (*vtable_ptr).contract_version };
                 assert_eq!(contract_id, CONTRACT_IDS[idx]);
                 assert_eq!(version, VERSION_V1);
@@ -204,9 +204,9 @@ fn stress_concurrent_register_find_resolve() {
         handle.join().expect("thread must not panic");
     }
 
-    for idx in 0_usize..THREADS {
+    for (idx, &expected_cid) in CONTRACT_IDS.iter().enumerate().take(THREADS) {
         let found: PluginHandle = registry
-            .find_by_contract(CONTRACT_IDS[idx], VERSION_V1)
+            .find_by_contract(expected_cid, VERSION_V1)
             .expect("main-thread find must succeed");
         let guard: PluginVTableGuard = registry
             .resolve_guard(found)
@@ -222,6 +222,7 @@ fn stress_concurrent_register_find_resolve() {
 fn stress_concurrent_swaps_with_resolvers() {
     let registry: Arc<Registry> = Arc::new(Registry::new());
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "stress.swap.contract");
+    // SAFETY: VTABLE_SWAP_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(

@@ -2,12 +2,14 @@
 //!
 //! This test crate is the crate root for the `stress_memory` test binary.
 
-#![allow(clippy::expect_used)]
-
+use core::cell::RefCell;
+use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::Ordering;
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::Buffer;
 use polyplug::abi::HostVTable;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
@@ -18,12 +20,9 @@ use polyplug::allocator::polyplug_host_alloc;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::allocator::tracking::TrackingAllocator;
 use polyplug::registry::Registry;
-use std::cell::RefCell;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 
@@ -146,6 +145,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call (ABI contract).
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // Extract contract name from StringView.
@@ -159,15 +159,9 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
-        let registry: std::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe {
-            registry.register(
-                *desc,
-                vtable as *const PluginVTable,
-                contract_name.to_owned(),
-                vt.contract_id,
-            )
-        }
+        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
 
     match result {
@@ -226,6 +220,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
     // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -319,7 +314,7 @@ fn stress_large_buffer_fill_and_read() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -378,7 +373,7 @@ fn stress_string_view_non_ascii_utf8() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -440,7 +435,7 @@ fn stress_zero_length_buffer_and_string_view() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -542,7 +537,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
     let tracker: TrackingAllocator = TrackingAllocator::new();
     tracker.assert_no_leaks();
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -633,7 +628,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     assert_eq!(tracker.free_count(), 1, "free_count must be 1 after free");
     tracker.assert_no_leaks();
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 #[test]
@@ -709,7 +704,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     // _workspace_root is unused here but workspace_root() is defined per task spec.
     let _workspace_root: PathBuf = workspace_root();
 
-    std::mem::forget(library);
+    core::mem::forget(library);
 }
 
 /// Called when the test binary is re-invoked with the `POLYPLUG_DOUBLE_FREE_SUBPROCESS`

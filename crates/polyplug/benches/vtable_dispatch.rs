@@ -1,7 +1,8 @@
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
 // Run with: cargo bench -p polyplug --bench vtable_dispatch
 
-#![allow(clippy::expect_used)]
+use core::cell::RefCell;
+use core::hint::black_box;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
@@ -19,8 +20,6 @@ use polyplug::abi::StringView;
 use polyplug::allocator::polyplug_host_alloc;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::registry::Registry;
-use std::cell::RefCell;
-use std::hint::black_box;
 
 // ─── Plugin paths from build.rs ──────────────────────────────────────────────
 
@@ -47,8 +46,8 @@ struct FillArgs {
 
 thread_local! {
     static BENCH_REGISTRY: RefCell<Registry> = RefCell::new(Registry::new());
-    static LAST_VTABLE: std::cell::Cell<*const PluginVTable> = const { std::cell::Cell::new(core::ptr::null()) };
-    static LAST_CONTRACT_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static LAST_VTABLE: core::cell::Cell<*const PluginVTable> = const { core::cell::Cell::new(core::ptr::null()) };
+    static LAST_CONTRACT_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
 
 /// Registration callback used by all benchmarks.
@@ -69,6 +68,7 @@ unsafe extern "C" fn bench_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call per ABI contract.
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call per ABI contract.
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // SAFETY: desc.contract_name is set from a &'static str in the benchmark fixture.
@@ -80,12 +80,11 @@ unsafe extern "C" fn bench_register_callback(
     };
 
     let result: Result<PluginHandle, _> = BENCH_REGISTRY.with(|cell| {
-        cell.borrow().register(
-            *desc,
-            vtable as *const PluginVTable,
-            contract_name.to_owned(),
-            vt.contract_id,
-        )
+        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+        unsafe {
+            cell.borrow()
+                .register(*desc, vtable, contract_name.to_owned(), vt.contract_id)
+        }
     });
 
     match result {
@@ -128,7 +127,8 @@ unsafe extern "C" fn bench_find_by_bundle(
     contract_id: u64,
     min_version: u32,
 ) -> PluginHandle {
-    bench_find_by_contract(contract_id, min_version)
+    // SAFETY: bench_find_by_contract is a safe wrapper around BENCH_REGISTRY.
+    unsafe { bench_find_by_contract(contract_id, min_version) }
 }
 
 /// find_all_by_contract stub — returns 0 (not used in benches).
@@ -418,7 +418,9 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
                     message: StringView::null(),
                 }
             } else {
+                // SAFETY: vtable_ptr is non-null (checked above) and 'static.
                 let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+                // SAFETY: vtable.functions is a valid static array; index 2 is within function_count.
                 let fn_ptr: *const () = unsafe { *vtable.functions.add(2) };
                 // SAFETY: fn_ptr is a valid extern C fn for the given function id.
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =

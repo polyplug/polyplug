@@ -1,34 +1,33 @@
-#![allow(clippy::expect_used)]
 //! Integration tests for LAST_ERROR thread-local: isolation, clearing, truncation,
 //! null termination behaviour, and large message handling via the C facade.
 //!
-//! These tests exercise `polyplug_last_error` and `polyplug_error_message_len`
+//! These tests exercise `polyplug_runtime_last_error` and `polyplug_runtime_error_message_len`
 //! as defined in `crates/polyplug/src/ffi.rs:361-380` and `11-17`.
 
 use polyplug::ffi::OpaqueRuntime;
-use polyplug::ffi::polyplug_error_message_len;
-use polyplug::ffi::polyplug_last_error;
-use polyplug::ffi::polyplug_load_bundle;
-use polyplug::ffi::polyplug_runtime_free;
-use polyplug::ffi::polyplug_runtime_new;
+use polyplug::ffi::polyplug_runtime_create;
+use polyplug::ffi::polyplug_runtime_destroy;
+use polyplug::ffi::polyplug_runtime_error_message_len;
+use polyplug::ffi::polyplug_runtime_last_error;
+use polyplug::ffi::polyplug_runtime_load_bundle;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 /// Drains the current thread's LAST_ERROR, returning it as a `Vec<u8>`.
 ///
-/// Calls `polyplug_last_error` with a 4 KiB stack buffer; the function clears
+/// Calls `polyplug_runtime_last_error` with a 4 KiB stack buffer; the function clears
 /// the error after reading it.
 fn drain_last_error() -> Vec<u8> {
     let mut buf: [u8; 4096] = [0_u8; 4096];
     // SAFETY: buf is a valid stack buffer; buf.len() exactly matches the slice length.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
     buf[..n].to_vec()
 }
 
-/// Returns the length reported by `polyplug_error_message_len` without clearing.
+/// Returns the length reported by `polyplug_runtime_error_message_len` without clearing.
 fn peek_error_len() -> usize {
     // SAFETY: no pointer arguments required.
-    unsafe { polyplug_error_message_len() }
+    unsafe { polyplug_runtime_error_message_len() }
 }
 
 /// Clears any pre-existing error on the current thread.
@@ -37,12 +36,13 @@ fn clear_error() {
 }
 
 /// Triggers a `set_last_error` call on the current thread by calling
-/// `polyplug_load_bundle` with a null `rt` pointer, which unconditionally
+/// `polyplug_runtime_load_bundle` with a null `rt` pointer, which unconditionally
 /// records an error and returns non-zero.
 fn trigger_error() {
     let path: &[u8] = b"/dev/null";
     // SAFETY: null rt is the explicit null-safety contract under test; no UB.
-    let rc: u32 = unsafe { polyplug_load_bundle(core::ptr::null_mut(), path.as_ptr(), path.len()) };
+    let rc: u32 =
+        unsafe { polyplug_runtime_load_bundle(core::ptr::null_mut(), path.as_ptr(), path.len()) };
     // We only care that an error was produced; the specific code is irrelevant.
     assert_ne!(
         rc, 0,
@@ -52,7 +52,7 @@ fn trigger_error() {
 
 // ─── tests ────────────────────────────────────────────────────────────────────
 
-/// `polyplug_last_error` returns 0 when no error has been set and the error
+/// `polyplug_runtime_last_error` returns 0 when no error has been set and the error
 /// is already empty (fresh thread state).
 #[test]
 fn last_error_empty_on_fresh_thread() {
@@ -60,11 +60,11 @@ fn last_error_empty_on_fresh_thread() {
 
     let mut buf: [u8; 64] = [0_u8; 64];
     // SAFETY: buf is a valid stack buffer of length 64.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
     assert_eq!(n, 0, "last_error must return 0 when no error is pending");
 }
 
-/// After `polyplug_last_error` is called (which clears the error), a second
+/// After `polyplug_runtime_last_error` is called (which clears the error), a second
 /// call must return 0 — the error is cleared after the first read.
 #[test]
 fn last_error_cleared_after_read() {
@@ -81,15 +81,15 @@ fn last_error_cleared_after_read() {
     // Second read: error was cleared; must return 0.
     let mut buf: [u8; 256] = [0_u8; 256];
     // SAFETY: buf is a valid stack buffer of length 256.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
     assert_eq!(
         n, 0,
         "last_error must return 0 after the error was already read and cleared"
     );
 }
 
-/// `polyplug_error_message_len` does NOT clear the error; a subsequent
-/// `polyplug_last_error` must still return the full message.
+/// `polyplug_runtime_error_message_len` does NOT clear the error; a subsequent
+/// `polyplug_runtime_last_error` must still return the full message.
 #[test]
 fn error_message_len_does_not_clear_error() {
     clear_error();
@@ -117,7 +117,7 @@ fn error_message_len_does_not_clear_error() {
     );
 }
 
-/// `polyplug_last_error` truncates to `buf_len` and returns the number of
+/// `polyplug_runtime_last_error` truncates to `buf_len` and returns the number of
 /// bytes actually written (capped at `buf_len`), not the full message length.
 /// The error is still cleared after the partial read.
 #[test]
@@ -138,7 +138,7 @@ fn last_error_truncates_to_buf_len() {
     let truncated_len: usize = full_len - 1;
     let mut buf: Vec<u8> = vec![0xAA_u8; truncated_len];
     // SAFETY: buf is a valid heap-allocated buffer of exactly `truncated_len` bytes.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
 
     assert_eq!(
         n, truncated_len,
@@ -148,14 +148,14 @@ fn last_error_truncates_to_buf_len() {
     // Error must be cleared even after a partial (truncated) read.
     let mut probe: [u8; 8] = [0_u8; 8];
     // SAFETY: probe is a valid stack buffer of length 8.
-    let n2: usize = unsafe { polyplug_last_error(probe.as_mut_ptr(), probe.len()) };
+    let n2: usize = unsafe { polyplug_runtime_last_error(probe.as_mut_ptr(), probe.len()) };
     assert_eq!(
         n2, 0,
         "last_error must be cleared even after a truncated read"
     );
 }
 
-/// `polyplug_last_error` with `buf_len == 0` returns 0 bytes written but
+/// `polyplug_runtime_last_error` with `buf_len == 0` returns 0 bytes written but
 /// still clears the error (write_n = 0 because min(len, 0) == 0).
 #[test]
 fn last_error_zero_buf_len_clears_error() {
@@ -172,7 +172,7 @@ fn last_error_zero_buf_len_clears_error() {
     // SAFETY: buf_len = 0 means zero bytes are written; the pointer is
     // technically unused but must be non-null for defined behaviour on some
     // platforms. We pass a valid stack pointer for safety.
-    let n: usize = unsafe { polyplug_last_error(&mut byte as *mut u8, 0) };
+    let n: usize = unsafe { polyplug_runtime_last_error(&mut byte as *mut u8, 0) };
     assert_eq!(
         n, 0,
         "last_error with buf_len=0 must return 0 written bytes"
@@ -186,7 +186,7 @@ fn last_error_zero_buf_len_clears_error() {
     );
 }
 
-/// `polyplug_last_error` with a null buffer and len=0 is the canonical
+/// `polyplug_runtime_last_error` with a null buffer and len=0 is the canonical
 /// "just clear the error" call; must return 0 and must not crash.
 #[test]
 fn last_error_null_buf_zero_len_clears_error() {
@@ -199,7 +199,7 @@ fn last_error_null_buf_zero_len_clears_error() {
     );
 
     // SAFETY: buf=null, buf_len=0 — no write occurs; this is the "discard" call pattern.
-    let n: usize = unsafe { polyplug_last_error(core::ptr::null_mut(), 0) };
+    let n: usize = unsafe { polyplug_runtime_last_error(core::ptr::null_mut(), 0) };
     assert_eq!(n, 0, "last_error(null, 0) must return 0");
 
     let n2: usize = peek_error_len();
@@ -289,7 +289,7 @@ fn last_error_concurrent_threads_see_own_messages() {
     );
 }
 
-/// When no error is present, `polyplug_last_error` writes nothing and the
+/// When no error is present, `polyplug_runtime_last_error` writes nothing and the
 /// buffer contents must remain unchanged (no spurious null-termination or
 /// zero-fill by the FFI layer).
 #[test]
@@ -299,7 +299,7 @@ fn last_error_no_write_when_empty() {
     let sentinel: u8 = 0xDE_u8;
     let mut buf: [u8; 16] = [sentinel; 16];
     // SAFETY: buf is a valid stack buffer of length 16.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
     assert_eq!(n, 0, "must return 0 when no error is pending");
 
     // The FFI layer must not modify the buffer when there is nothing to write.
@@ -323,7 +323,7 @@ fn last_error_exact_buf_len_writes_full_message() {
 
     let mut buf: Vec<u8> = vec![0_u8; full_len];
     // SAFETY: buf is a heap-allocated buffer with exactly `full_len` bytes.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
 
     assert_eq!(
         n, full_len,
@@ -346,18 +346,18 @@ fn last_error_large_message_handling() {
 
     // Create a runtime, then attempt to load a bundle with an extremely long
     // (but invalid) path to seed a non-trivial error message.
-    // SAFETY: polyplug_runtime_new returns a heap-allocated runtime or null on OOM.
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_new() };
-    assert!(!rt.is_null(), "polyplug_runtime_new must succeed");
+    // SAFETY: polyplug_runtime_create returns a heap-allocated runtime or null on OOM.
+    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+    assert!(!rt.is_null(), "polyplug_runtime_create must succeed");
 
     // A 512-byte path — long enough to exercise message formatting with the path included.
     let long_path: Vec<u8> = core::iter::repeat_n(b'x', 512).collect();
     // SAFETY: rt is valid; long_path is a valid non-null byte slice.
-    let rc: u32 = unsafe { polyplug_load_bundle(rt, long_path.as_ptr(), long_path.len()) };
+    let rc: u32 = unsafe { polyplug_runtime_load_bundle(rt, long_path.as_ptr(), long_path.len()) };
     assert_ne!(rc, 0, "load_bundle with non-existent path must fail");
 
-    // SAFETY: rt is valid and was allocated by polyplug_runtime_new.
-    unsafe { polyplug_runtime_free(rt) };
+    // SAFETY: rt is valid and was allocated by polyplug_runtime_create.
+    unsafe { polyplug_runtime_destroy(rt) };
 
     let msg_len: usize = peek_error_len();
     if msg_len == 0 {
@@ -368,7 +368,7 @@ fn last_error_large_message_handling() {
     // Read into a heap buffer sized exactly to the reported length.
     let mut buf: Vec<u8> = vec![0_u8; msg_len];
     // SAFETY: buf is a heap-allocated buffer with exactly `msg_len` bytes.
-    let n: usize = unsafe { polyplug_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
 
     assert_eq!(n, msg_len, "large-message read must return msg_len bytes");
     assert!(

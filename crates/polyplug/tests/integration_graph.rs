@@ -7,10 +7,9 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-#![allow(clippy::expect_used)]
-
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
+use polyplug::abi::POLYPLUG_ABI_VERSION;
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginHandle;
@@ -44,6 +43,7 @@ unsafe extern "C" fn graph_register_callback(
 
     // SAFETY: descriptor and vtable are valid for this call.
     let desc: &PluginDescriptor = unsafe { &*descriptor };
+    // SAFETY: vtable is valid for this call.
     let vt: &PluginVTable = unsafe { &*vtable };
 
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
@@ -56,12 +56,8 @@ unsafe extern "C" fn graph_register_callback(
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
-        cell.borrow().register(
-            *desc,
-            vtable as *const PluginVTable,
-            contract_name_str.to_owned(),
-            vt.contract_id,
-        )
+        cell.borrow()
+            .register(*desc, vtable, contract_name_str.to_owned(), vt.contract_id)
     });
 
     match result {
@@ -77,8 +73,8 @@ unsafe extern "C" fn graph_register_callback(
 }
 
 std::thread_local! {
-    static GRAPH_REGISTRY: std::cell::RefCell<Registry> =
-        std::cell::RefCell::new(Registry::new());
+    static GRAPH_REGISTRY: core::cell::RefCell<Registry> =
+        core::cell::RefCell::new(Registry::new());
 }
 
 /// Load the test_plugin and call polyplug_init, storing results in GRAPH_REGISTRY.
@@ -107,6 +103,7 @@ fn load_and_init_plugin() -> libloading::Library {
     // SAFETY: init_fn is valid; registrar is valid for the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -154,7 +151,7 @@ fn test_single_contract_registration_and_lookup() {
     );
     assert_eq!(vtable.function_count, 1, "test.add must have 1 function");
 
-    std::mem::forget(lib);
+    core::mem::forget(lib);
 }
 
 #[test]
@@ -172,7 +169,7 @@ fn test_unknown_contract_returns_not_found() {
         "lookup of unregistered contract must return Err"
     );
 
-    std::mem::forget(lib);
+    core::mem::forget(lib);
 }
 
 #[test]
@@ -215,7 +212,7 @@ fn test_duplicate_registration_is_rejected() {
         "second registration of same contract must return DuplicateProvider error"
     );
 
-    std::mem::forget(lib);
+    core::mem::forget(lib);
 }
 
 #[test]
@@ -242,7 +239,7 @@ fn test_stale_handle_detected_after_explicit_construction() {
 
     assert!(result.is_err(), "stale handle must return Err");
 
-    std::mem::forget(lib);
+    core::mem::forget(lib);
 }
 
 #[test]
@@ -274,5 +271,5 @@ fn test_multi_lookup_consistent() {
         "repeated lookups must return same generation"
     );
 
-    std::mem::forget(lib);
+    core::mem::forget(lib);
 }

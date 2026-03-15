@@ -4,8 +4,6 @@
 //!
 //! This test takes ~5 seconds. Run with: cargo test -- --ignored
 
-#![allow(clippy::expect_used)]
-
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::runtime::Runtime;
@@ -47,7 +45,7 @@ fn test_quiescence_timeout() {
     let generation: u32 = handle.generation;
 
     // Clone registry Arc for the background thread (Arc<Registry> is Send).
-    let registry_arc: std::sync::Arc<Registry> = rt.registry().clone();
+    let registry_arc: std::sync::Arc<Registry> = std::sync::Arc::clone(rt.registry());
 
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         // Reconstruct handle on this thread.
@@ -57,12 +55,12 @@ fn test_quiescence_timeout() {
             .resolve_guard(h)
             .expect("resolve_guard must succeed for loaded plugin");
         // Hold for 7s — longer than the 5s QUIESCENCE_TIMEOUT.
-        std::thread::sleep(std::time::Duration::from_secs(7_u64));
+        std::thread::sleep(core::time::Duration::from_secs(7_u64));
         drop(guard);
     });
 
     // Give the background thread time to acquire the guard before attempting reload.
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(core::time::Duration::from_millis(100));
 
     let v2_dir: &str = env!("RELOAD_PLUGIN_V2_DIR");
     let result: Result<(), PolyplugError> = rt.reload_bundle(std::path::Path::new(v2_dir));
