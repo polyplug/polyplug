@@ -10,6 +10,6 @@
     <RootNamespace>PolyplugHost</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../host-libs/csharp/Polyplug.csproj" />
+    <ProjectReference Include="../../../host-libs/csharp/Polyplug/Polyplug.csproj" />
   </ItemGroup>
 </Project>
