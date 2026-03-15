@@ -144,7 +144,7 @@ fn cs_return_type(func: &ResolvedFunction) -> String {
     }
 }
 
-/// Generate the `Types.cs` file content (shared between host and guest).
+/// Generate the `Types.cs` file content for guest (uses Polyplug.Guest).
 fn generate_cs_types_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
@@ -172,6 +172,40 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
                 out.push('\n');
             }
         }
+    }
+
+    out
+}
+
+/// Generate the `Types.cs` file content for host (uses Polyplug namespace).
+fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(CS_HEADER);
+    out.push_str("using Polyplug;\n");
+    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str("namespace Polyplug.Generated;\n\n");
+    out.push_str("public static class ContractIds {\n");
+
+    // Emit contract ID constants
+    for contract in &ir.contracts {
+        let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "    public const ulong {}_CONTRACT_ID = 0x{:016X};\n",
+            contract_upper, contract.contract_id
+        ));
+    }
+    out.push_str("}\n\n");
+
+    // Emit enums before struct types
+    for e in &ir.enums {
+        out.push_str(&generate_cs_enum(e));
+        out.push('\n');
+    }
+
+    // Emit user-defined types
+    for ty in &ir.types {
+        out.push_str(&generate_cs_user_type(ty));
+        out.push('\n');
     }
 
     out
@@ -428,7 +462,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Guest;\n\n");
+    out.push_str("using Polyplug;\n\n");
+    out.push_str("namespace Polyplug.Generated;\n\n");
 
     for contract in &ir.contracts {
         let class_name: String = contract_name_to_cs_class(&contract.name);
@@ -613,7 +648,7 @@ impl CodeGenerator for CSharpGenerator {
     ) -> Result<(), PolyplugcError> {
         files.files.push(GeneratedFile {
             path: PathBuf::from("host/Types.cs"),
-            content: generate_cs_types_file(ir),
+            content: generate_cs_host_types_file(ir),
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
