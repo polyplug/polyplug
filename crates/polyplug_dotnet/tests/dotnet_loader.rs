@@ -3,9 +3,11 @@
 //! Tests that require the CLR or a real .NET SDK are marked `#[ignore]`.
 //! Run them with: `cargo test --test dotnet_loader -- --include-ignored`
 
-use std::io::Write as _;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+
+use tempfile::NamedTempFile;
 
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
@@ -14,12 +16,11 @@ use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader as _;
+use polyplug::loader::BundleLoader;
+use polyplug_dotnet::version::read_target_framework;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
-use polyplug_dotnet::version::read_target_framework;
-use tempfile::NamedTempFile;
 
 // SAFETY: noop_register is a valid function used only in test PluginRegistrar stubs.
 // It is never actually called — tests fail before load() reaches the register step.
@@ -322,12 +323,6 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
                     || path.contains("libhostfxr")
                     || path.contains("Polyplug"),
                 "Error should mention the bad hostfxr path or assembly, got: {path}"
-            );
-        }
-        Err(PolyplugError::Loader(LoaderError::ClrInitFailed { path, .. })) => {
-            assert!(
-                path.contains("nonexistent") || path.contains("libhostfxr"),
-                "ClrInitFailed path should mention the bad hostfxr path, got: {path}"
             );
         }
         other => panic!("expected ClrInitFailed for bad hostfxr path, got {other:?}"),

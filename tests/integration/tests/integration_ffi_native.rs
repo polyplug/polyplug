@@ -7,13 +7,12 @@
 #![allow(clippy::expect_used)]
 
 use polyplug::ffi::{
-    OpaquePluginGuard, OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
-    polyplug_runtime_error_message_len, polyplug_runtime_find_all_by_contract,
-    polyplug_runtime_find_by_contract, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
-    polyplug_runtime_plugin_release, polyplug_runtime_plugin_vtable,
-    polyplug_runtime_register_loader, polyplug_runtime_resolve_plugin,
+    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
+    polyplug_runtime_find_all_by_contract, polyplug_runtime_find_by_contract,
+    polyplug_runtime_last_error, polyplug_runtime_load_bundle, polyplug_runtime_plugin_release,
+    polyplug_runtime_plugin_vtable, polyplug_runtime_resolve_plugin, OpaquePluginGuard,
+    OpaqueRuntime,
 };
-use polyplug_native::ffi::{PolyplugNativeConfig, polyplug_native_loader_create};
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B;

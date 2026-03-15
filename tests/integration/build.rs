@@ -128,6 +128,41 @@ fn main() {
         fixtures_dir.join("reload_plugin_v2").display()
     );
 
+    // RELOAD_PLUGIN_V1_SO, RELOAD_PLUGIN_V2_SO — reload test plugin shared libraries
+    let reload_so_filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v1.dylib"
+    } else {
+        "libreload_plugin_v1.so"
+    };
+    let reload_v1_so: PathBuf = fixtures_dir
+        .join("reload_plugin_v1")
+        .join(reload_so_filename);
+    if reload_v1_so.exists() {
+        println!(
+            "cargo:rustc-env=RELOAD_PLUGIN_V1_SO={}",
+            reload_v1_so.display()
+        );
+    } else {
+        println!("cargo:rustc-env=RELOAD_PLUGIN_V1_SO=");
+    }
+
+    let reload_v2_so_filename: &str = if cfg!(target_os = "macos") {
+        "libreload_plugin_v2.dylib"
+    } else {
+        "libreload_plugin_v2.so"
+    };
+    let reload_v2_so: PathBuf = fixtures_dir
+        .join("reload_plugin_v2")
+        .join(reload_v2_so_filename);
+    if reload_v2_so.exists() {
+        println!(
+            "cargo:rustc-env=RELOAD_PLUGIN_V2_SO={}",
+            reload_v2_so.display()
+        );
+    } else {
+        println!("cargo:rustc-env=RELOAD_PLUGIN_V2_SO=");
+    }
+
     // DEPENDER_PLUGIN_DIR — depender test plugin directory
     println!(
         "cargo:rustc-env=DEPENDER_PLUGIN_DIR={}",
