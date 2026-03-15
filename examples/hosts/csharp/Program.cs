@@ -21,7 +21,14 @@ class Program {
                 .PluginDir(pluginPath)
                 .Init();
             
-            Console.Error.WriteLine("Runtime created successfully.");
+            // Register all loaders
+            runtime.RegisterNativeLoader();
+            runtime.RegisterDotnetLoader();
+            runtime.RegisterPythonLoader();
+            runtime.RegisterLuaLoader();
+            runtime.RegisterJsLoader();
+            
+            Console.Error.WriteLine("Runtime created with all loaders.");
             
             Console.WriteLine("\n=== polyplug csharp host example ===");
             
