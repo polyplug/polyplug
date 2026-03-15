@@ -23,7 +23,6 @@ notify = { workspace = true, default-features = false, features = [
 [features]
 default = []
 hot-reload = ["dep:notify"]
-testing = []  # exposes internal test helpers to integration tests
 
 [lints]
 workspace = true
@@ -37,13 +36,3 @@ toml = { workspace = true }
 name = "vtable_dispatch"
 harness = false
 
-[[test]]
-name = "integration_trust_boundary"
-required-features = ["testing"]
-
-[[test]]
-name = "integration_registrar_security"
-required-features = ["testing"]
-
-[[test]]
-name = "integration_last_error"

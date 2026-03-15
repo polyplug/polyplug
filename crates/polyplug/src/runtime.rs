@@ -1086,8 +1086,6 @@ mod tests {
 }
 
 // ─── Test-only public surface ───────────────────────────────────────────────
-#[cfg(any(test, feature = "testing"))]
-#[doc(hidden)]
 pub mod testing {
     /// Read the INIT_BUNDLE_ID thread-local on the calling thread.
     pub fn read_init_bundle_id() -> u64 {

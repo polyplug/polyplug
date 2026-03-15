@@ -13,7 +13,7 @@ fn default_runtime() -> String {
     "native".to_owned()
 }
 
-fn current_os() -> &'static str {
+const fn current_os() -> &'static str {
     if cfg!(target_os = "linux") {
         "linux"
     } else if cfg!(target_os = "windows") {
@@ -25,7 +25,7 @@ fn current_os() -> &'static str {
     }
 }
 
-fn current_arch() -> &'static str {
+const fn current_arch() -> &'static str {
     if cfg!(target_arch = "x86_64") {
         "x86_64"
     } else if cfg!(target_arch = "aarch64") {

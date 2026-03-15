@@ -478,9 +478,7 @@ pub(crate) unsafe extern "C" fn registrar_callback(
 }
 
 // ─── Test-only public surface ───────────────────────────────────────────────
-#[cfg(any(test, feature = "testing"))]
 pub mod testing {
-
     use super::BundleInitGuard;
     use crate::abi::HostVTable;
     use crate::abi::PluginRegistrar;
