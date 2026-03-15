@@ -12,13 +12,13 @@ use mlua::Table;
 use mlua::Value;
 
 use crate::config::LuaConfig;
-use polyplug::abi::contract_id;
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginDescriptor;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
+use polyplug::abi::contract_id;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -382,6 +382,7 @@ impl BundleLoader for LuaLoader {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
+            host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
         };
         let ctx_ptr: i64 = &ctx as *const polyplug::abi::PluginContext as i64;
         init_fn

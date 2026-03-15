@@ -16,9 +16,9 @@ use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 
-use crate::context::init_context;
-use crate::context::InitFn;
 use crate::context::CLR_CONTEXT;
+use crate::context::InitFn;
+use crate::context::init_context;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
@@ -51,6 +51,7 @@ pub(crate) fn check_version_compatibility(
             reason: format!("invalid major version: {req_major_str}"),
         })
     })?;
+    // Lenient parsing: non-numeric minor version components are treated as 0.
     let required_minor: u32 = req_parts
         .next()
         .map(|s: &str| s.parse::<u32>().unwrap_or(0))
@@ -69,6 +70,7 @@ pub(crate) fn check_version_compatibility(
             reason: format!("invalid major version: {found_major_str}"),
         })
     })?;
+    // Lenient parsing: non-numeric minor version components are treated as 0.
     let found_minor: u32 = found_parts
         .next()
         .map(|s: &str| s.parse::<u32>().unwrap_or(0))
@@ -144,6 +146,7 @@ impl BundleLoader for DotnetLoader {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
+            host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
         };
         // SAFETY: managed_init is a valid fn ptr from CLR. registrar and ctx are non-null and valid.
         let result: u32 = unsafe {

@@ -3,6 +3,10 @@
 //! Loads JS plugin bundles via the embedded QuickJS VM (rquickjs).
 //! One shared QuickJS Runtime per process. Each bundle gets a fresh Context.
 //! The registerVtable() callback writes back through a thread-local to the load() call.
+//!
+//! # Memory
+//! Vtables, function pointer arrays, and string data are `Box::leak`'d intentionally.
+//! JS plugins live for the process lifetime and are never unloaded.
 
 use core::cell::RefCell;
 use std::path::Path;
@@ -19,6 +23,7 @@ use rquickjs::Runtime;
 use rquickjs::Value;
 
 use crate::config::JsConfig;
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::HostVTable;
 use polyplug::abi::PluginDescriptor;
@@ -26,7 +31,6 @@ use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -706,7 +710,7 @@ impl BundleLoader for JsLoader {
         let static_vtable: *const PluginVTable = Box::into_raw(Box::new(new_vtable));
 
         // 12. Build descriptor.
-        let contract_name_str: String = format!("js_contract_{:#x}", contract_id_val);
+        let contract_name_str: String = format!("contract_{:#x}", contract_id_val);
         let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-quickjs-plugin"),
@@ -746,7 +750,6 @@ impl BundleLoader for JsLoader {
 
 #[cfg(test)]
 mod tests {
-    #[allow(clippy::expect_used)]
     use super::*;
 
     #[test]

@@ -4,6 +4,10 @@
 
 #![allow(clippy::expect_used)]
 
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Command;
+
 use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginContext;
@@ -12,9 +16,6 @@ use polyplug::abi::PluginRegistrar;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
 use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
-use std::path::Path;
-use std::path::PathBuf;
-use std::process::Command;
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -281,6 +282,7 @@ fn test_rust_codegen_compile_and_run() {
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

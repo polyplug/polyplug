@@ -2,6 +2,10 @@
 //!
 //! One JsRuntime (V8 isolate) per bundle, pinned to a dedicated OS thread.
 //! Function calls from the host are dispatched via static trampolines.
+//!
+//! # Memory
+//! Vtables, function pointer arrays, thread handles, and string data are `Box::leak`'d
+//! intentionally. JS plugins live for the process lifetime and are never unloaded.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -51,6 +55,7 @@ thread_local! {
 }
 
 /// A cross-thread call request dispatched from a trampoline to the bundle thread.
+// Fields are constructed by trampolines and consumed on the bundle thread via channel.
 #[allow(dead_code)]
 pub(crate) struct JsCallRequest {
     /// Raw args pointer value (reconstructed on the bundle thread).
@@ -734,7 +739,7 @@ impl BundleLoader for JsDenoLoader {
         let static_vtable: *const PluginVTable = Box::into_raw(Box::new(new_vtable));
 
         // 9. Build descriptor
-        let contract_name_str: String = format!("js_deno_contract_{:#x}", contract_id_val);
+        let contract_name_str: String = format!("contract_{:#x}", contract_id_val);
         let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-deno-plugin"),
@@ -771,7 +776,6 @@ impl BundleLoader for JsDenoLoader {
 
 #[cfg(test)]
 mod tests {
-    #[allow(clippy::expect_used)]
     use super::*;
 
     #[test]

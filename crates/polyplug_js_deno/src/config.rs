@@ -3,11 +3,5 @@
 /// Configuration for the V8/deno_core JavaScript plugin loader.
 ///
 /// No fields required — V8 is embedded in-process via deno_core.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct JsDenoConfig {}
-
-impl Default for JsDenoConfig {
-    fn default() -> Self {
-        Self {}
-    }
-}

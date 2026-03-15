@@ -20,9 +20,9 @@ pub use config::PythonConfig;
 
 use std::path::Path;
 
+use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::Python;
 
 use polyplug::abi::PluginContext;
 use polyplug::abi::PluginRegistrar;
@@ -195,6 +195,7 @@ impl BundleLoader for PythonLoader {
                     ptr: bundle_path_static.as_ptr(),
                     len: bundle_path_static.len(),
                 },
+                host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
             };
             let ctx_addr: usize = &ctx as *const PluginContext as usize;
             init_fn

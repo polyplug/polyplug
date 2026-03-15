@@ -2,19 +2,19 @@
 #![allow(clippy::unwrap_used)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::Mutex;
 #[cfg(feature = "hot-reload")]
 use std::sync::atomic::AtomicBool;
 #[cfg(feature = "hot-reload")]
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::sync::Mutex;
 #[cfg(feature = "hot-reload")]
 use std::time::Duration;
 
+use polyplug::ReloadEvent;
 use polyplug::abi::PluginVTable;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
-use polyplug::ReloadEvent;
 use polyplug_native::NativeLoader;
 
 // Global mutex to serialize tests that share global registry state

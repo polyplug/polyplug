@@ -135,6 +135,7 @@ fn test_jsdeno_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

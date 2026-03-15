@@ -9,9 +9,6 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::PolyplugcError;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -26,6 +23,9 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::resolve_type_ref;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -635,7 +635,7 @@ mod tests {
 
     const SAMPLE_API: &str = "[[contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[contract.functions]]\nname = \"decode\"\n\n[[contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
 
-    const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nversion = \"1.0.0\"\nimplements = [\"image.decode@1.0\"]";
+    const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nversion = \"1.0.0\"\nimplements = [\"image.decode@1.0\"]";
 
     #[test]
     fn parse_minimal_api() {
@@ -799,7 +799,7 @@ mod tests {
 #[test]
 fn parse_bundle_with_dependency() {
     let toml: &str = concat!(
-        "[bundle]\nname = \"audio-engine\"\nversion = \"1.0.0\"\n\n",
+        "[bundle]\nname = \"audio-engine\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n",
         "[[plugin]]\nname = \"decoder\"\nversion = \"1.0.0\"\nimplements = [\"audio.decode@1.0\"]\n\n",
         "[[dependency]]\nkind = \"contract\"\ncontract = \"audio-decoder\"\nmin_version = \"1.0\"\n"
     );

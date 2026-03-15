@@ -16,6 +16,9 @@ pub struct PolyplugJsDenoConfig {
 ///
 /// `config` may be null — V8 is embedded in-process, no config required.
 /// Free with `polyplug_js_deno_loader_free`.
+///
+/// # Safety
+/// `config` may be null. The returned pointer must be freed with `polyplug_js_deno_loader_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_js_deno_loader_create(
     config: *const PolyplugJsDenoConfig,

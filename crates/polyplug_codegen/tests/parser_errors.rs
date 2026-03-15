@@ -668,7 +668,7 @@ fn bundle_version_overflow_rejected() {
 #[test]
 fn bundle_with_no_plugins_accepted() {
     // plugins are optional.
-    let toml: &str = "[bundle]\nname = \"empty-bundle\"\nversion = \"1.0\"";
+    let toml: &str = "[bundle]\nname = \"empty-bundle\"\nversion = \"1.0\"\nfile = \"test.so\"";
     let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
     assert!(
         result.is_ok(),
@@ -703,7 +703,7 @@ fn bundle_plugin_invalid_version_rejected() {
 #[test]
 fn bundle_well_formed_succeeds() {
     let toml: &str = concat!(
-        "[bundle]\nname = \"codec-bundle\"\nversion = \"2.0.1\"\n\n",
+        "[bundle]\nname = \"codec-bundle\"\nversion = \"2.0.1\"\nfile = \"test.so\"\n\n",
         "[[plugin]]\nname = \"jpeg-encoder\"\nversion = \"1.0.0\"\n",
         "implements = [\"image.encode@1.0\"]\n\n",
         "[[dependency]]\nkind = \"contract\"\ncontract = \"image.encode\"\nmin_version = \"1.0\"\n",

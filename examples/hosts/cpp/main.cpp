@@ -30,15 +30,15 @@ static uint64_t fnv1a_64(std::string_view s) {
 }
 
 static std::string read_last_error() {
-    size_t len = polyplug_error_message_len();
+    size_t len = polyplug_runtime_error_message_len();
     if (len == 0U) return std::string();
     std::vector<uint8_t> buf(len);
-    size_t written = polyplug_last_error(buf.data(), buf.size());
+    size_t written = polyplug_runtime_last_error(buf.data(), buf.size());
     return std::string(reinterpret_cast<const char*>(buf.data()), written);
 }
 
 static void load_bundle(OpaqueRuntime* runtime, const std::string& path) {
-    uint32_t result = polyplug_load_bundle(
+    uint32_t result = polyplug_runtime_load_bundle(
         runtime,
         reinterpret_cast<const uint8_t*>(path.data()),
         path.size()
@@ -183,19 +183,19 @@ int main() {
             if (contract_id == 0 || fn_name == nullptr) continue;
 
             uint64_t bid = fnv1a_64(b.bundle_name);
-            uint64_t packed = polyplug_rt_find_by_bundle(rt.handle(), bid, contract_id, 0U);
+            uint64_t packed = polyplug_runtime_find_by_bundle(rt.handle(), bid, contract_id, 0U);
             if (packed == std::numeric_limits<uint64_t>::max()) {
                 throw std::runtime_error(std::string("plugin not found: ") + b.bundle_name);
             }
 
-            OpaqueGuard* guard = polyplug_rt_resolve_plugin(rt.handle(), packed);
+            OpaqueGuard* guard = polyplug_runtime_resolve_plugin(rt.handle(), packed);
             if (guard == nullptr) {
                 throw std::runtime_error(std::string("resolve failed: ") + b.bundle_name);
             }
 
-            const PluginVTable* vtable = static_cast<const PluginVTable*>(polyplug_get_vtable(guard));
+            const PluginVTable* vtable = static_cast<const PluginVTable*>(polyplug_runtime_plugin_vtable(guard));
             if (vtable == nullptr || vtable->functions == nullptr || vtable->function_count == 0U) {
-                polyplug_guard_free(guard);
+                polyplug_runtime_plugin_release(guard);
                 throw std::runtime_error(std::string("null vtable: ") + b.bundle_name);
             }
 
@@ -213,7 +213,7 @@ int main() {
 
             AbiError err = fn_ptr(&input_sv, &output_sv);
             if (err.code != ABI_OK) {
-                polyplug_guard_free(guard);
+                polyplug_runtime_plugin_release(guard);
                 throw std::runtime_error(std::string("call failed for ") + b.bundle_name);
             }
 
@@ -223,7 +223,7 @@ int main() {
                       << fn_name << "(\"hello\") = \"" << result << "\""
                       << std::endl;
 
-            polyplug_guard_free(guard);
+            polyplug_runtime_plugin_release(guard);
         }
 
         return 0;

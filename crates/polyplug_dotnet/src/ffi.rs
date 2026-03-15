@@ -1,3 +1,5 @@
+#![allow(clippy::std_instead_of_core)]
+
 use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;

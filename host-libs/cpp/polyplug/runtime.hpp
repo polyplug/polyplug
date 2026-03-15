@@ -59,10 +59,10 @@ public:
         /// Throws std::runtime_error if the runtime cannot be initialized
         /// (e.g. polyplug_runtime_init returns null).
         Runtime build() {
-            RuntimeHandle h = polyplug_runtime_new();
+            RuntimeHandle h = polyplug_runtime_create();
             if (h == nullptr) {
                 throw std::runtime_error(
-                    "polyplug_runtime_new returned null — "
+                    "polyplug_runtime_create returned null — "
                     "runtime initialisation failed");
             }
             return Runtime(h);
@@ -85,7 +85,7 @@ public:
     /// Destroys the runtime, releasing all loaded plugins and associated memory.
     ~Runtime() noexcept {
         if (handle_ != nullptr) {
-            polyplug_runtime_free(handle_);
+            polyplug_runtime_destroy(handle_);
             handle_ = nullptr;
         }
     }
@@ -101,7 +101,7 @@ public:
     Runtime& operator=(Runtime&& other) noexcept {
         if (this != &other) {
             if (handle_ != nullptr) {
-                polyplug_runtime_free(handle_);
+                polyplug_runtime_destroy(handle_);
             }
             handle_       = other.handle_;
             other.handle_ = nullptr;
@@ -119,7 +119,7 @@ public:
     ///
     /// Returns a packed u64 handle (UINT64_MAX == not found).
     uint64_t find(uint64_t contract_id, uint32_t min_version) const noexcept {
-        return polyplug_rt_find_by_contract(handle_, contract_id, min_version);
+        return polyplug_runtime_find_by_contract(handle_, contract_id, min_version);
     }
 
     /// Returns the raw opaque runtime handle.

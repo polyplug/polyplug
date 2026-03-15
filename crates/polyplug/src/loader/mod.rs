@@ -477,47 +477,180 @@ pub(crate) unsafe extern "C" fn registrar_callback(
     }
 }
 
-// ─── Test-only public surface ───────────────────────────────────────────────
-pub mod testing {
-    use super::BundleInitGuard;
+#[cfg(test)]
+mod tests {
+    use core::ptr;
+
+    use crate::abi::AbiError;
     use crate::abi::HostVTable;
+    use crate::abi::PluginDescriptor;
+    use crate::abi::PluginHandle;
     use crate::abi::PluginRegistrar;
+    use crate::abi::PluginVTable;
+    use crate::abi::StringView;
     use crate::registry::Registry;
 
-    pub struct RegistrarContext {
+    const EMPTY_FNS: [*const (); 0] = [];
+
+    static VTABLE_MALFORMED: PluginVTable = PluginVTable {
+        contract_id: 0xA1B2_C3D4_E5F6_0001_u64,
+        contract_version: 0_u32,
+        function_count: 0_u32,
+        functions: EMPTY_FNS.as_ptr(),
+    };
+
+    static VTABLE_DUPLICATE: PluginVTable = PluginVTable {
+        contract_id: 0xDEAD_BEEF_0000_0001_u64,
+        contract_version: 0_u32,
+        function_count: 0_u32,
+        functions: EMPTY_FNS.as_ptr(),
+    };
+
+    unsafe extern "C" fn stub_alloc(_size: usize, _align: usize) -> *mut u8 {
+        ptr::null_mut()
+    }
+
+    unsafe extern "C" fn stub_free(_ptr: *mut u8, _size: usize, _align: usize) {}
+
+    unsafe extern "C" fn stub_find_by_contract(
+        _contract_id: u64,
+        _min_version: u32,
+    ) -> PluginHandle {
+        PluginHandle::null()
+    }
+
+    unsafe extern "C" fn stub_find_by_bundle(
+        _bundle_id: u64,
+        _contract_id: u64,
+        _min_version: u32,
+    ) -> PluginHandle {
+        PluginHandle::null()
+    }
+
+    unsafe extern "C" fn stub_find_all_by_contract(
+        _contract_id: u64,
+        _min_version: u32,
+        _out: *mut PluginHandle,
+        _out_cap: usize,
+    ) -> usize {
+        0_usize
+    }
+
+    unsafe extern "C" fn stub_resolve_plugin(_handle: PluginHandle) -> *const PluginVTable {
+        ptr::null()
+    }
+
+    unsafe extern "C" fn stub_get_extension(_extension_id: u32) -> *const () {
+        ptr::null()
+    }
+
+    static HOST_VTABLE: HostVTable = HostVTable {
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
+    };
+
+    #[allow(dead_code)] // guard is held for its Drop impl to clear TLS
+    struct RegistrarContext {
         registrar: PluginRegistrar,
-        guard: Option<BundleInitGuard>,
+        guard: super::BundleInitGuard,
     }
 
     impl RegistrarContext {
-        pub fn registrar_mut(&mut self) -> &mut PluginRegistrar {
+        fn registrar_mut(&mut self) -> &mut PluginRegistrar {
             &mut self.registrar
-        }
-
-        pub fn drop_guard(&mut self) {
-            let dropped: Option<BundleInitGuard> = self.guard.take();
-            drop(dropped);
         }
     }
 
-    /// Create a `PluginRegistrar` + `BundleInitGuard` for the given bundle.
-    ///
-    /// Sets INIT_BUNDLE_ID and the REGISTRAR thread-locals.
-    /// The guard clears all three on drop (even on panic).
-    ///
-    /// # Safety
-    /// The caller must ensure `registry` outlives the returned `PluginRegistrar`.
-    /// `host_vtable` must be `'static`.
-    pub fn make_registrar_context(
+    fn make_registrar_context(
         registry: &Registry,
         bundle_id: u64,
         host_vtable: &'static HostVTable,
     ) -> RegistrarContext {
-        let (registrar, guard): (PluginRegistrar, BundleInitGuard) =
-            super::make_registrar_context(registry, bundle_id, host_vtable);
-        RegistrarContext {
-            registrar,
-            guard: Some(guard),
-        }
+        let (registrar, guard) = super::make_registrar_context(registry, bundle_id, host_vtable);
+        RegistrarContext { registrar, guard }
+    }
+
+    #[test]
+    fn registrar_callback_null_registry_ptr_returns_error() {
+        let registry: Registry = Registry::new();
+        let bundle_id: u64 = 0xABCD_u64;
+        let mut context: RegistrarContext =
+            make_registrar_context(&registry, bundle_id, &HOST_VTABLE);
+        super::REGISTRAR_REGISTRY_PTR
+            .with(|c: &core::cell::Cell<*const Registry>| c.set(core::ptr::null()));
+
+        let descriptor: *const PluginDescriptor = ptr::null();
+        let vtable: *const PluginVTable = ptr::null();
+        let registrar: &mut PluginRegistrar = context.registrar_mut();
+        // SAFETY: register_plugin is a valid fn pointer; registrar is valid for the call.
+        let result: AbiError = unsafe {
+            (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor, vtable)
+        };
+
+        assert_eq!(result.code, 1_u32);
+        assert!(result.message.ptr.is_null());
+        assert_eq!(result.message.len, 0_usize);
+    }
+
+    #[test]
+    fn registrar_callback_accepts_null_stringviews() {
+        let registry: Registry = Registry::new();
+        let bundle_id: u64 = 0x1000_u64;
+        let mut context: RegistrarContext =
+            make_registrar_context(&registry, bundle_id, &HOST_VTABLE);
+
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::null(),
+            contract_name: StringView::null(),
+            version_major: 1_u32,
+            version_minor: 0_u32,
+            version_patch: 0_u32,
+        };
+        let descriptor_ptr: *const PluginDescriptor = &descriptor as *const PluginDescriptor;
+        let vtable: *const PluginVTable = &VTABLE_MALFORMED as *const PluginVTable;
+
+        let registrar: &mut PluginRegistrar = context.registrar_mut();
+        // SAFETY: register_plugin is a valid fn pointer; all args are valid for the call.
+        let result: AbiError = unsafe {
+            (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
+        };
+
+        assert_eq!(result.code, 0_u32);
+    }
+
+    #[test]
+    fn registrar_callback_duplicate_provider_returns_error() {
+        let registry: Registry = Registry::new();
+        let bundle_id: u64 = 0xBEEF_u64;
+        let mut context: RegistrarContext =
+            make_registrar_context(&registry, bundle_id, &HOST_VTABLE);
+
+        let descriptor: PluginDescriptor = PluginDescriptor {
+            name: StringView::from_static(b"dup-provider"),
+            contract_name: StringView::from_static(b"dup.contract"),
+            version_major: 1_u32,
+            version_minor: 0_u32,
+            version_patch: 0_u32,
+        };
+        let descriptor_ptr: *const PluginDescriptor = &descriptor as *const PluginDescriptor;
+        let vtable: *const PluginVTable = &VTABLE_DUPLICATE as *const PluginVTable;
+
+        let registrar: &mut PluginRegistrar = context.registrar_mut();
+        // SAFETY: register_plugin is a valid fn pointer; all args are valid for the call.
+        let first: AbiError = unsafe {
+            (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
+        };
+        assert_eq!(first.code, 0_u32);
+
+        // SAFETY: same as above — testing duplicate registration path.
+        let second: AbiError = unsafe {
+            (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
+        };
+        assert_eq!(second.code, 1_u32);
     }
 }

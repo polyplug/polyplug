@@ -1,3 +1,5 @@
+//! Native bundle loader — delegates to `polyplug::loader::load_bundle` via the global registry.
+
 use std::path::Path;
 
 use crate::config::NativeConfig;

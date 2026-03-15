@@ -227,6 +227,7 @@ fn test_rust_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -294,6 +295,7 @@ fn test_cpp_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -361,6 +363,7 @@ fn test_csharp_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -428,6 +431,7 @@ fn test_python_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -495,6 +499,7 @@ fn test_lua_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -562,6 +567,7 @@ fn test_js_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -635,6 +641,7 @@ fn test_rust_host_cpp_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -702,6 +709,7 @@ fn test_cpp_host_cpp_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -769,6 +777,7 @@ fn test_csharp_host_cpp_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -836,6 +845,7 @@ fn test_python_host_cpp_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -903,6 +913,7 @@ fn test_lua_host_cpp_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
@@ -970,6 +981,7 @@ fn test_js_host_cpp_guest() {
     // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

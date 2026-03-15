@@ -10,11 +10,11 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use polyplug::abi::ABI_OK;
 use polyplug::abi::AbiError;
 use polyplug::abi::PluginHandle;
 use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
-use polyplug::abi::ABI_OK;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::scanner;
 use polyplug::registry::PluginVTableGuard;

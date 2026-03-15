@@ -15,10 +15,11 @@ use std::path::PathBuf;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Minimal bundle TOML with a name and version.
-const BUNDLE_TOML: &str = "[bundle]\nname = \"my-plugin\"\nversion = \"1.2.3\"";
+const BUNDLE_TOML: &str = "[bundle]\nname = \"my-plugin\"\nversion = \"1.2.3\"\nfile = \"test.so\"";
 
 /// Bundle TOML whose name contains hyphens (used for C#/Python underscore tests).
-const HYPHEN_BUNDLE_TOML: &str = "[bundle]\nname = \"my-cool-plugin\"\nversion = \"0.1.0\"";
+const HYPHEN_BUNDLE_TOML: &str =
+    "[bundle]\nname = \"my-cool-plugin\"\nversion = \"0.1.0\"\nfile = \"test.so\"";
 
 /// Write a temporary bundle manifest TOML to a temp file and return a
 /// `PackConfig` pointing at it with the given language and output dir.

@@ -1,3 +1,5 @@
+//! FFI exports for polyplug_native — `polyplug_native_loader_create` and `polyplug_native_loader_free`.
+
 use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;
@@ -9,6 +11,8 @@ pub struct PolyplugNativeConfig {
     pub _reserved: u8,
 }
 
+/// # Safety
+/// `config` may be null. The returned pointer must be freed with `polyplug_native_loader_free`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_native_loader_create(
     config: *const PolyplugNativeConfig,
@@ -23,6 +27,8 @@ pub unsafe extern "C" fn polyplug_native_loader_create(
     Box::into_raw(Box::new(trait_obj)) as *mut c_void
 }
 
+/// # Safety
+/// `ptr` must be a non-freed pointer returned by `polyplug_native_loader_create`, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_native_loader_free(ptr: *mut c_void) {
     if ptr.is_null() {

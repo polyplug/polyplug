@@ -290,6 +290,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
+        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

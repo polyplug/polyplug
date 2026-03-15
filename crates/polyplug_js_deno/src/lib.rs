@@ -5,8 +5,8 @@
 //! No subprocess. No IPC.
 
 pub mod config;
-pub(crate) mod loader;
 pub mod ffi;
+pub(crate) mod loader;
 
 pub use config::JsDenoConfig;
 pub use loader::JsDenoLoader;

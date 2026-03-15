@@ -21,7 +21,7 @@ public sealed class Runtime {
 
     ~Runtime() {
         if (_handle != IntPtr.Zero) {
-            polyplug_runtime_free(_handle);
+            polyplug_runtime_destroy(_handle);
             _handle = IntPtr.Zero;
         }
     }
@@ -29,7 +29,7 @@ public sealed class Runtime {
     public void LoadBundle(string path) {
         EnsureHandle();
         InvokeWithUtf8(path, (ptr, len) => {
-            uint result = polyplug_load_bundle(_handle, ptr, len);
+            uint result = polyplug_runtime_load_bundle(_handle, ptr, len);
             if (result != 0u) {
                 ThrowLastError("Failed to load bundle.");
             }
@@ -39,7 +39,7 @@ public sealed class Runtime {
     public void ReloadBundle(string path) {
         EnsureHandle();
         InvokeWithUtf8(path, (ptr, len) => {
-            uint result = polyplug_reload_bundle(_handle, ptr, len);
+            uint result = polyplug_runtime_reload_bundle(_handle, ptr, len);
             if (result != 0u) {
                 ThrowLastError("Failed to reload bundle.");
             }
@@ -48,13 +48,13 @@ public sealed class Runtime {
 
     public ulong FindByContract(ulong contractId, uint minVersion) {
         EnsureHandle();
-        ulong packed = polyplug_rt_find_by_contract(_handle, contractId, minVersion);
+        ulong packed = polyplug_runtime_find_by_contract(_handle, contractId, minVersion);
         return packed;
     }
 
     public ulong FindByBundle(ulong bundleId, ulong contractId, uint minVersion) {
         EnsureHandle();
-        ulong packed = polyplug_rt_find_by_bundle(_handle, bundleId, contractId, minVersion);
+        ulong packed = polyplug_runtime_find_by_bundle(_handle, bundleId, contractId, minVersion);
         return packed;
     }
 
@@ -67,7 +67,7 @@ public sealed class Runtime {
             try {
                 IntPtr outPtr = pinned.AddrOfPinnedObject();
                 UIntPtr outCap = (UIntPtr)handles.Length;
-                UIntPtr written = polyplug_rt_find_all_by_contract(
+                UIntPtr written = polyplug_runtime_find_all_by_contract(
                     _handle,
                     contractId,
                     minVersion,
@@ -95,7 +95,7 @@ public sealed class Runtime {
         if (packedHandle == ulong.MaxValue) {
             return new PluginGuard(IntPtr.Zero);
         }
-        IntPtr guard = polyplug_rt_resolve_plugin(_handle, packedHandle);
+        IntPtr guard = polyplug_runtime_resolve_plugin(_handle, packedHandle);
         if (guard == IntPtr.Zero) {
             ThrowLastError("Failed to resolve plugin.");
         }
@@ -140,7 +140,7 @@ public sealed class Runtime {
     }
 
     private static string GetLastError() {
-        UIntPtr len = polyplug_error_message_len();
+            UIntPtr len = polyplug_runtime_error_message_len();
         ulong length = len.ToUInt64();
         if (length == 0ul) {
             return string.Empty;
@@ -151,7 +151,7 @@ public sealed class Runtime {
         byte[] buffer = new byte[(int)length];
         GCHandle pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
         try {
-            UIntPtr written = polyplug_last_error(pinned.AddrOfPinnedObject(), (UIntPtr)buffer.Length);
+            UIntPtr written = polyplug_runtime_last_error(pinned.AddrOfPinnedObject(), (UIntPtr)buffer.Length);
             int count = (int)written.ToUInt64();
             if (count == 0) {
                 return string.Empty;
@@ -162,34 +162,34 @@ public sealed class Runtime {
         }
     }
 
-    internal static IntPtr GetVTablePtr(IntPtr guard) => polyplug_get_vtable(guard);
+    internal static IntPtr GetVTablePtr(IntPtr guard) => polyplug_runtime_plugin_vtable(guard);
 
     internal static void ReleaseGuard(IntPtr guard) {
         if (guard != IntPtr.Zero) {
-            polyplug_guard_free(guard);
+            polyplug_runtime_plugin_release(guard);
         }
     }
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_new", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr polyplug_runtime_new();
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_runtime_create();
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_free", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void polyplug_runtime_free(IntPtr rt);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_destroy", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void polyplug_runtime_destroy(IntPtr rt);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_load_bundle", CallingConvention = CallingConvention.Cdecl)]
-    private static extern uint polyplug_load_bundle(IntPtr rt, IntPtr path, UIntPtr pathLen);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_load_bundle", CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint polyplug_runtime_load_bundle(IntPtr rt, IntPtr path, UIntPtr pathLen);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_reload_bundle", CallingConvention = CallingConvention.Cdecl)]
-    private static extern uint polyplug_reload_bundle(IntPtr rt, IntPtr path, UIntPtr pathLen);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_reload_bundle", CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint polyplug_runtime_reload_bundle(IntPtr rt, IntPtr path, UIntPtr pathLen);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_rt_find_by_contract", CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong polyplug_rt_find_by_contract(IntPtr rt, ulong contractId, uint minVersion);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_contract", CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong polyplug_runtime_find_by_contract(IntPtr rt, ulong contractId, uint minVersion);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_rt_find_by_bundle", CallingConvention = CallingConvention.Cdecl)]
-    private static extern ulong polyplug_rt_find_by_bundle(IntPtr rt, ulong bundleId, ulong contractId, uint minVersion);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_bundle", CallingConvention = CallingConvention.Cdecl)]
+    private static extern ulong polyplug_runtime_find_by_bundle(IntPtr rt, ulong bundleId, ulong contractId, uint minVersion);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_rt_find_all_by_contract", CallingConvention = CallingConvention.Cdecl)]
-    private static extern UIntPtr polyplug_rt_find_all_by_contract(
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_find_all_by_contract", CallingConvention = CallingConvention.Cdecl)]
+    private static extern UIntPtr polyplug_runtime_find_all_by_contract(
         IntPtr rt,
         ulong contractId,
         uint minVersion,
@@ -197,20 +197,20 @@ public sealed class Runtime {
         UIntPtr outCap
     );
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_rt_resolve_plugin", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr polyplug_rt_resolve_plugin(IntPtr rt, ulong packedHandle);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_resolve_plugin", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_runtime_resolve_plugin(IntPtr rt, ulong packedHandle);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_get_vtable", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr polyplug_get_vtable(IntPtr guard);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_plugin_vtable", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_runtime_plugin_vtable(IntPtr guard);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_guard_free", CallingConvention = CallingConvention.Cdecl)]
-    private static extern void polyplug_guard_free(IntPtr guard);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_plugin_release", CallingConvention = CallingConvention.Cdecl)]
+    private static extern void polyplug_runtime_plugin_release(IntPtr guard);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_last_error", CallingConvention = CallingConvention.Cdecl)]
-    private static extern UIntPtr polyplug_last_error(IntPtr buf, UIntPtr bufLen);
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_last_error", CallingConvention = CallingConvention.Cdecl)]
+    private static extern UIntPtr polyplug_runtime_last_error(IntPtr buf, UIntPtr bufLen);
 
-    [DllImport(NativeLib, EntryPoint = "polyplug_error_message_len", CallingConvention = CallingConvention.Cdecl)]
-    private static extern UIntPtr polyplug_error_message_len();
+    [DllImport(NativeLib, EntryPoint = "polyplug_runtime_error_message_len", CallingConvention = CallingConvention.Cdecl)]
+    private static extern UIntPtr polyplug_runtime_error_message_len();
 
     [DllImport(NativeLib, EntryPoint = "polyplug_runtime_register_loader", CallingConvention = CallingConvention.Cdecl)]
     private static extern uint polyplug_runtime_register_loader(IntPtr rt, IntPtr loaderPtr);
@@ -429,13 +429,13 @@ public sealed class RuntimeBuilder {
     public Runtime Init() {
         _ = _compatibilityMode;
         _ = _pluginDirs;
-        IntPtr handle = polyplug_runtime_new();
+        IntPtr handle = polyplug_runtime_create();
         if (handle == IntPtr.Zero) {
             Runtime.ThrowLastError("Failed to create runtime.");
         }
         return Runtime.Create(handle);
     }
 
-    [DllImport(Runtime.NativeLib, EntryPoint = "polyplug_runtime_new", CallingConvention = CallingConvention.Cdecl)]
-    private static extern IntPtr polyplug_runtime_new();
+    [DllImport(Runtime.NativeLib, EntryPoint = "polyplug_runtime_create", CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr polyplug_runtime_create();
 }

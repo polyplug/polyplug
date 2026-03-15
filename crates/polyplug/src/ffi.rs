@@ -1,8 +1,9 @@
-#![allow(clippy::std_instead_of_core)]
 //! FFI — public `#[no_mangle]` C ABI entry points for host language bindings.
 //!
 //! All functions use `catch_unwind` to prevent Rust panics from unwinding across
 //! the C ABI boundary. Errors are stored in a thread-local `LAST_ERROR` string.
+
+#![allow(clippy::std_instead_of_core)]
 
 use core::cell::Ref;
 use core::cell::RefCell;
