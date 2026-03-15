@@ -44,6 +44,7 @@ use crate::version::Version;
 use core::sync::atomic::Ordering;
 #[cfg(feature = "hot-reload")]
 use notify::Watcher;
+
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
 static GLOBAL_REGISTRY: OnceLock<Arc<Registry>> = OnceLock::new();
