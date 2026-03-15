@@ -1,23 +1,19 @@
 //! examples/hosts/rust/src/main.rs
-//! Rust host example — discovers plugins via scanner, calls their functions.
+//! Rust host example using polyplugc-generated bindings.
 //!
-//! Real-world workflow:
-//!   1. Read POLYPLUG_PLUGIN_PATH env var (or default to examples/plugins/)
-//!   2. Use polyplug scanner to discover all bundles
-//!   3. Load each discovered bundle
-//!   4. Resolve and call plugin functions
+//! This host demonstrates the real-world polyplug pattern:
+//!   1. Generate host bindings: polyplugc --api api.toml --lang rust --out generated/
+//!   2. Import generated callers: use generated::host::host_callers::*;
+//!   3. Use type-safe contract wrappers instead of manual vtable dispatch
+//!
+//! Zero hand-written contract IDs, zero manual unsafe dispatch.
 
 use std::path::Path;
 use std::path::PathBuf;
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginVTable;
 use polyplug::abi::StringView;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::scanner;
-use polyplug::registry::PluginVTableGuard;
 use polyplug::runtime::Runtime;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
@@ -32,27 +28,30 @@ use polyplug_native::NativeLoader;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 
-// ─── Contract IDs ────────────────────────────────────────────────────────────
-// FNV-1a 64-bit of "data.Transformer@1" and "data.Reporter@1"
-const TRANSFORMER_CONTRACT_ID: u64 = 0x3D53C682F3F5A9EF_u64;
-const REPORTER_CONTRACT_ID: u64 = 0x81D41D43E511D297_u64;
+// Import generated host bindings
+mod generated {
+    pub mod host {
+        pub mod host_callers;
+        pub mod types;
+    }
+}
 
-// ─── ABI types ───────────────────────────────────────────────────────────────
-type AbiFn = unsafe extern "C" fn(*const (), *mut ()) -> AbiError;
+use generated::host::host_callers::*;
+use generated::host::types::*;
 
-// ─── Read a StringView as &str ───────────────────────────────────────────────
+/// Convert a StringView to &str safely
 fn string_view_to_str(sv: &StringView) -> &str {
     if sv.ptr.is_null() || sv.len == 0 {
         return "";
     }
-    // SAFETY: sv.ptr is valid UTF-8 for sv.len bytes — guaranteed by guest ABI.
+    // SAFETY: sv.ptr is valid UTF-8 for sv.len bytes — guaranteed by guest ABI contract
     unsafe {
         core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len))
             .unwrap_or("(invalid utf-8)")
     }
 }
 
-// ─── Resolve plugin path from env or default ─────────────────────────────────
+/// Resolve plugin path from env or default
 fn resolve_plugin_path() -> PathBuf {
     if let Ok(path) = std::env::var("POLYPLUG_PLUGIN_PATH") {
         return PathBuf::from(path);
@@ -84,7 +83,7 @@ fn main() {
     match run() {
         Ok(()) => {}
         Err(message) => {
-            eprintln!("error: {message}");
+            eprintln!("error: {}", message);
             std::process::exit(1_i32);
         }
     }
@@ -94,18 +93,21 @@ fn run() -> Result<(), String> {
     let plugin_path: PathBuf = resolve_plugin_path();
     eprintln!("plugin directory: {}", plugin_path.display());
 
-    // ─── Build runtime with all loaders ──────────────────────────────────────
-    let runtime: Runtime = Runtime::builder()
-        .loader(NativeLoader::new(NativeConfig {}))
-        .loader(DotnetLoader::new(DotnetConfig::default()))
-        .loader(PythonLoader::new(PythonConfig::default()))
-        .loader(LuaLoader::new(LuaConfig::default()))
-        .loader(JsLoader::new(JsConfig {}))
-        .loader(JsDenoLoader::new(JsDenoConfig::default()))
-        .build()
-        .map_err(|e| format!("runtime build failed: {e}"))?;
+    // Build runtime with all loaders
+    // Leak to get &'static reference required by generated callers
+    let runtime: &'static Runtime = Box::leak(Box::new(
+        Runtime::builder()
+            .loader(NativeLoader::new(NativeConfig {}))
+            .loader(DotnetLoader::new(DotnetConfig::default()))
+            .loader(PythonLoader::new(PythonConfig::default()))
+            .loader(LuaLoader::new(LuaConfig::default()))
+            .loader(JsLoader::new(JsConfig {}))
+            .loader(JsDenoLoader::new(JsDenoConfig::default()))
+            .build()
+            .map_err(|e| format!("runtime build failed: {}", e))?,
+    ));
 
-    // ─── Scan for plugins ────────────────────────────────────────────────────
+    // Scan for plugins
     let bundles: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(&plugin_path);
 
     if bundles.is_empty() {
@@ -117,111 +119,142 @@ fn run() -> Result<(), String> {
 
     eprintln!("discovered {} bundles", bundles.len());
 
-    // ─── Load all discovered bundles ─────────────────────────────────────────
+    // Load all discovered bundles
     for (bundle_path, manifest) in &bundles {
         runtime
             .load_bundle(Path::new(bundle_path))
-            .map_err(|e| format!("failed to load {}: {e}", manifest.bundle_name))?;
+            .map_err(|e| format!("failed to load {}: {}", manifest.bundle_name, e))?;
         eprintln!("  loaded: {}", manifest.bundle_name);
     }
 
-    // ─── Call each loaded plugin ─────────────────────────────────────────────
+    // Process each bundle using generated contract callers
+    println!("\n=== polyplug rust host example ===");
+
     for (_bundle_path, manifest) in &bundles {
-        let contract_id: u64 = if manifest.provides.iter().any(|c| c == "data.Transformer") {
-            TRANSFORMER_CONTRACT_ID
-        } else if manifest.provides.iter().any(|c| c == "data.Reporter") {
-            REPORTER_CONTRACT_ID
-        } else {
-            continue;
-        };
-
-        let fn_name: &str = if contract_id == TRANSFORMER_CONTRACT_ID {
-            "transform"
-        } else {
-            "report"
-        };
-
         let bid: u64 = polyplug::abi::bundle_id(&manifest.bundle_name);
-        let handle: PluginHandle = runtime
-            .find_by_bundle(bid, contract_id, 0_u32)
-            .map_err(|e| format!("find_by_bundle({}): {e}", manifest.bundle_name))?;
-
-        if handle.is_null() {
-            return Err(format!(
-                "plugin not found for bundle: {}",
-                manifest.bundle_name
-            ));
-        }
-
-        let guard: PluginVTableGuard = runtime
-            .registry()
-            .resolve_guard(handle)
-            .map_err(|e| format!("resolve_guard({}): {e}", manifest.bundle_name))?;
-
-        let vtable: *const PluginVTable = guard.vtable();
-        if vtable.is_null() {
-            return Err(format!("null vtable for bundle: {}", manifest.bundle_name));
-        }
-
-        let input_str: &str = "hello";
-        let input_sv: StringView = StringView {
-            ptr: input_str.as_ptr(),
-            len: input_str.len(),
-        };
-        let mut output_sv: StringView = StringView::null();
-
-        // SAFETY: vtable is non-null and valid for the lifetime of _guard.
-        unsafe {
-            let vt: &PluginVTable = &*vtable;
-            if vt.function_count == 0_u32 || vt.functions.is_null() {
-                return Err(format!(
-                    "no functions in vtable for {}",
-                    manifest.bundle_name
-                ));
-            }
-
-            // SAFETY: functions[0] is valid per vtable contract.
-            let fn_ptr_raw: *const () = *vt.functions.add(0_usize);
-            if fn_ptr_raw.is_null() {
-                return Err(format!(
-                    "null function pointer for {}",
-                    manifest.bundle_name
-                ));
-            }
-
-            // SAFETY: fn_ptr_raw conforms to ABI signature.
-            let func: AbiFn = core::mem::transmute(fn_ptr_raw);
-            // SAFETY: input_sv and output_sv are valid stack-allocated structs.
-            let err: AbiError = func(
-                core::ptr::addr_of!(input_sv).cast::<()>(),
-                core::ptr::addr_of_mut!(output_sv).cast::<()>(),
-            );
-
-            if err.code != ABI_OK {
-                let msg: &str = if err.message.ptr.is_null() || err.message.len == 0 {
-                    "unknown error"
-                } else {
-                    // SAFETY: error message is valid UTF-8 for message.len bytes.
-                    core::str::from_utf8(core::slice::from_raw_parts(
-                        err.message.ptr,
-                        err.message.len,
-                    ))
-                    .unwrap_or("(invalid utf-8)")
-                };
-                return Err(format!(
-                    "{} failed: {} (code {})",
-                    manifest.bundle_name, msg, err.code
-                ));
-            }
-        }
-
-        let result: &str = string_view_to_str(&output_sv);
         let label: String = format!("[{}]", manifest.bundle_name);
-        println!(
-            "{:<30} {}(\"{}\") = \"{}\"",
-            label, fn_name, input_str, result
-        );
+
+        // Determine which contract this bundle implements
+        if manifest
+            .provides
+            .iter()
+            .any(|c| c.starts_with("pipeline.Decoder"))
+        {
+            let handle = runtime
+                .find_by_bundle(bid, PIPELINE_DECODER_CONTRACT_ID, 0_u32)
+                .map_err(|e| format!("find_by_bundle({}): {}", manifest.bundle_name, e))?;
+
+            if !handle.is_null() {
+                let decoder = PipelineDecoderContract::new(handle, runtime);
+                let input: StringView = StringView::from_static(b"name,value,42");
+                match decoder.decode(input) {
+                    Ok(result) => {
+                        let result_str: &str = string_view_to_str(&result);
+                        println!(
+                            "{:<30} decode(\"name,value,42\") = \"{}\"",
+                            label, result_str
+                        );
+                    }
+                    Err(e) => println!("{:<30} decode failed: code={}", label, e.code),
+                }
+            }
+        } else if manifest
+            .provides
+            .iter()
+            .any(|c| c.starts_with("data.Transformer"))
+        {
+            let handle = runtime
+                .find_by_bundle(bid, DATA_TRANSFORMER_CONTRACT_ID, 0_u32)
+                .map_err(|e| format!("find_by_bundle({}): {}", manifest.bundle_name, e))?;
+
+            if !handle.is_null() {
+                let transformer = DataTransformerContract::new(handle, runtime);
+                let input: StringView = StringView::from_static(b"DECODED:name|value|42");
+                match transformer.transform(input) {
+                    Ok(result) => {
+                        let result_str: &str = string_view_to_str(&result);
+                        println!(
+                            "{:<30} transform(\"DECODED:name|value|42\") = \"{}\"",
+                            label, result_str
+                        );
+                    }
+                    Err(e) => println!("{:<30} transform failed: code={}", label, e.code),
+                }
+            }
+        } else if manifest
+            .provides
+            .iter()
+            .any(|c| c.starts_with("pipeline.Encoder"))
+        {
+            let handle = runtime
+                .find_by_bundle(bid, PIPELINE_ENCODER_CONTRACT_ID, 0_u32)
+                .map_err(|e| format!("find_by_bundle({}): {}", manifest.bundle_name, e))?;
+
+            if !handle.is_null() {
+                let encoder = PipelineEncoderContract::new(handle, runtime);
+                let input: StringView =
+                    StringView::from_static(b"TRANSFORMED:NAME|value (transformed)|43");
+                match encoder.encode(input) {
+                    Ok(result) => {
+                        let result_str: &str = string_view_to_str(&result);
+                        println!(
+                            "{:<30} encode(\"TRANSFORMED:NAME|value (transformed)|43\") = \"{}\"",
+                            label, result_str
+                        );
+                    }
+                    Err(e) => println!("{:<30} encode failed: code={}", label, e.code),
+                }
+            }
+        } else if manifest
+            .provides
+            .iter()
+            .any(|c| c.starts_with("data.Reporter"))
+        {
+            let handle = runtime
+                .find_by_bundle(bid, DATA_REPORTER_CONTRACT_ID, 0_u32)
+                .map_err(|e| format!("find_by_bundle({}): {}", manifest.bundle_name, e))?;
+
+            if !handle.is_null() {
+                let reporter = DataReporterContract::new(handle, runtime);
+                let input: StringView =
+                    StringView::from_static(b"TRANSFORMED:NAME|value (transformed)|43");
+                match reporter.report(input) {
+                    Ok(result) => {
+                        let result_str: &str = string_view_to_str(&result);
+                        println!(
+                            "{:<30} report(\"TRANSFORMED:NAME|value (transformed)|43\") = \"{}\"",
+                            label, result_str
+                        );
+                    }
+                    Err(e) => println!("{:<30} report failed: code={}", label, e.code),
+                }
+            }
+        } else if manifest
+            .provides
+            .iter()
+            .any(|c| c.starts_with("pipeline.Validator"))
+        {
+            let handle = runtime
+                .find_by_bundle(bid, PIPELINE_VALIDATOR_CONTRACT_ID, 0_u32)
+                .map_err(|e| format!("find_by_bundle({}): {}", manifest.bundle_name, e))?;
+
+            if !handle.is_null() {
+                let validator = PipelineValidatorContract::new(handle, runtime);
+                let input: StringView = StringView::from_static(b"DECODED:name|value|42");
+                match validator.validate(input) {
+                    Ok(result) => {
+                        let result_str: &str = string_view_to_str(&result);
+                        println!(
+                            "{:<30} validate(\"DECODED:name|value|42\") = \"{}\"",
+                            label, result_str
+                        );
+                    }
+                    Err(e) => println!("{:<30} validate failed: code={}", label, e.code),
+                }
+            }
+        }
     }
 
+    println!("\nrust pipeline complete");
     Ok(())
 }

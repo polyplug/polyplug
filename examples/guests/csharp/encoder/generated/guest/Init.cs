@@ -12,6 +12,29 @@ public static class Plugin {
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
+            // Register pipeline.Decoder
+            var plugin_name_pipeline_Decoder = System.Text.Encoding.UTF8.GetBytes("pipeline_Decoder_plugin");
+            var contract_name_pipeline_Decoder = System.Text.Encoding.UTF8.GetBytes("pipeline.Decoder");
+            var nameHandle_pipeline_Decoder = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_pipeline_Decoder, System.Runtime.InteropServices.GCHandleType.Pinned);
+            var contractHandle_pipeline_Decoder = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_pipeline_Decoder, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+            fixed (PluginVTable* vtablePtr_pipeline_Decoder = &PipelineDecoderContractVtables.PIPELINE_DECODER_VTABLE) {
+                var desc_pipeline_Decoder = new PluginDescriptor {
+                    Name = new StringView { Ptr = nameHandle_pipeline_Decoder.AddrOfPinnedObject(), Len = (ulong)plugin_name_pipeline_Decoder.Length },
+                    ContractName = new StringView { Ptr = contractHandle_pipeline_Decoder.AddrOfPinnedObject(), Len = (ulong)contract_name_pipeline_Decoder.Length },
+                    VersionMajor = 1u,
+                    VersionMinor = 0u,
+                    VersionPatch = 0u,
+                };
+                var registrar = (PluginRegistrar*)registrarPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;
+                var err_pipeline_Decoder = registerFn(registrar, &desc_pipeline_Decoder, vtablePtr_pipeline_Decoder);
+                if (err_pipeline_Decoder.Code != AbiConstants.ABI_OK) return err_pipeline_Decoder.Code;
+            }
+            } finally {
+                nameHandle_pipeline_Decoder.Free();
+                contractHandle_pipeline_Decoder.Free();
+            }
             // Register data.Transformer
             var plugin_name_data_Transformer = System.Text.Encoding.UTF8.GetBytes("data_Transformer_plugin");
             var contract_name_data_Transformer = System.Text.Encoding.UTF8.GetBytes("data.Transformer");
@@ -35,6 +58,29 @@ public static class Plugin {
                 nameHandle_data_Transformer.Free();
                 contractHandle_data_Transformer.Free();
             }
+            // Register pipeline.Encoder
+            var plugin_name_pipeline_Encoder = System.Text.Encoding.UTF8.GetBytes("pipeline_Encoder_plugin");
+            var contract_name_pipeline_Encoder = System.Text.Encoding.UTF8.GetBytes("pipeline.Encoder");
+            var nameHandle_pipeline_Encoder = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_pipeline_Encoder, System.Runtime.InteropServices.GCHandleType.Pinned);
+            var contractHandle_pipeline_Encoder = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_pipeline_Encoder, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+            fixed (PluginVTable* vtablePtr_pipeline_Encoder = &PipelineEncoderContractVtables.PIPELINE_ENCODER_VTABLE) {
+                var desc_pipeline_Encoder = new PluginDescriptor {
+                    Name = new StringView { Ptr = nameHandle_pipeline_Encoder.AddrOfPinnedObject(), Len = (ulong)plugin_name_pipeline_Encoder.Length },
+                    ContractName = new StringView { Ptr = contractHandle_pipeline_Encoder.AddrOfPinnedObject(), Len = (ulong)contract_name_pipeline_Encoder.Length },
+                    VersionMajor = 1u,
+                    VersionMinor = 0u,
+                    VersionPatch = 0u,
+                };
+                var registrar = (PluginRegistrar*)registrarPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;
+                var err_pipeline_Encoder = registerFn(registrar, &desc_pipeline_Encoder, vtablePtr_pipeline_Encoder);
+                if (err_pipeline_Encoder.Code != AbiConstants.ABI_OK) return err_pipeline_Encoder.Code;
+            }
+            } finally {
+                nameHandle_pipeline_Encoder.Free();
+                contractHandle_pipeline_Encoder.Free();
+            }
             // Register data.Reporter
             var plugin_name_data_Reporter = System.Text.Encoding.UTF8.GetBytes("data_Reporter_plugin");
             var contract_name_data_Reporter = System.Text.Encoding.UTF8.GetBytes("data.Reporter");
@@ -57,6 +103,29 @@ public static class Plugin {
             } finally {
                 nameHandle_data_Reporter.Free();
                 contractHandle_data_Reporter.Free();
+            }
+            // Register pipeline.Validator
+            var plugin_name_pipeline_Validator = System.Text.Encoding.UTF8.GetBytes("pipeline_Validator_plugin");
+            var contract_name_pipeline_Validator = System.Text.Encoding.UTF8.GetBytes("pipeline.Validator");
+            var nameHandle_pipeline_Validator = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_pipeline_Validator, System.Runtime.InteropServices.GCHandleType.Pinned);
+            var contractHandle_pipeline_Validator = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_pipeline_Validator, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+            fixed (PluginVTable* vtablePtr_pipeline_Validator = &PipelineValidatorContractVtables.PIPELINE_VALIDATOR_VTABLE) {
+                var desc_pipeline_Validator = new PluginDescriptor {
+                    Name = new StringView { Ptr = nameHandle_pipeline_Validator.AddrOfPinnedObject(), Len = (ulong)plugin_name_pipeline_Validator.Length },
+                    ContractName = new StringView { Ptr = contractHandle_pipeline_Validator.AddrOfPinnedObject(), Len = (ulong)contract_name_pipeline_Validator.Length },
+                    VersionMajor = 1u,
+                    VersionMinor = 0u,
+                    VersionPatch = 0u,
+                };
+                var registrar = (PluginRegistrar*)registrarPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;
+                var err_pipeline_Validator = registerFn(registrar, &desc_pipeline_Validator, vtablePtr_pipeline_Validator);
+                if (err_pipeline_Validator.Code != AbiConstants.ABI_OK) return err_pipeline_Validator.Code;
+            }
+            } finally {
+                nameHandle_pipeline_Validator.Free();
+                contractHandle_pipeline_Validator.Free();
             }
             return AbiConstants.ABI_OK;
         } // unsafe

@@ -10,8 +10,11 @@ use polyplug_guest::StringView;
 #[allow(unused_imports)]
 use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};
 use super::types::*;
+use super::contracts::PipelineDecoderPlugin;
 use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineEncoderPlugin;
 use super::contracts::DataReporterPlugin;
+use super::contracts::PipelineValidatorPlugin;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -21,6 +24,46 @@ unsafe impl Send for FnPtr {}
 // SAFETY: Function pointers are inherently Sync — multiple threads may call the
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
+
+/// Contract ID constant -- pre-computed FNV-1a of "pipeline.Decoder@1".
+pub(crate) const PIPELINE_DECODER_CONTRACT_ID: u64 = 0x12F3C106B0C3DC1E;
+
+pub(crate) static PIPELINE_DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderPlugin>> = OnceLock::new();
+
+/// ABI wrapper for decode (function_id = 0).
+// SAFETY: args and out pointers are validated by the host runtime ABI contract.
+extern "C" fn pipeline_Decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ref: &Box<dyn PipelineDecoderPlugin> = match PIPELINE_DECODER_IMPL.get() {
+            Some(i) => i,
+            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
+        };
+        // SAFETY: args is a valid *const StringView per ABI contract.
+        let result = impl_ref.decode(unsafe { *(args as *const StringView) });
+        match result {
+            Ok(val) => {
+                // SAFETY: out is a valid *mut StringView per ABI contract.
+                unsafe { std::ptr::write(out as *mut StringView, val); }
+                AbiError::ok()
+            }
+            Err(e) => AbiError { code: e.code, message: StringView::null() },
+        }
+    })) {
+        Ok(err) => err,
+        Err(_) => AbiError::panic_caught(),
+    }
+}
+
+static PIPELINE_DECODER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(pipeline_Decoder_decode_abi as *const ()),
+];
+
+pub(crate) static PIPELINE_DECODER_VTABLE: PluginVTable = PluginVTable {
+    contract_id: PIPELINE_DECODER_CONTRACT_ID,
+    contract_version: 0_u32 << 16 | 0_u32,
+    function_count: 1_u32,
+    functions: PIPELINE_DECODER_FNS.as_ptr() as *const *const (),
+};
 
 /// Contract ID constant -- pre-computed FNV-1a of "data.Transformer@1".
 pub(crate) const DATA_TRANSFORMER_CONTRACT_ID: u64 = 0x3D53C682F3F5A9EF;
@@ -62,6 +105,46 @@ pub(crate) static DATA_TRANSFORMER_VTABLE: PluginVTable = PluginVTable {
     functions: DATA_TRANSFORMER_FNS.as_ptr() as *const *const (),
 };
 
+/// Contract ID constant -- pre-computed FNV-1a of "pipeline.Encoder@1".
+pub(crate) const PIPELINE_ENCODER_CONTRACT_ID: u64 = 0x127D1703C6EFB432;
+
+pub(crate) static PIPELINE_ENCODER_IMPL: OnceLock<Box<dyn PipelineEncoderPlugin>> = OnceLock::new();
+
+/// ABI wrapper for encode (function_id = 0).
+// SAFETY: args and out pointers are validated by the host runtime ABI contract.
+extern "C" fn pipeline_Encoder_encode_abi(args: *const (), out: *mut ()) -> AbiError {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ref: &Box<dyn PipelineEncoderPlugin> = match PIPELINE_ENCODER_IMPL.get() {
+            Some(i) => i,
+            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
+        };
+        // SAFETY: args is a valid *const StringView per ABI contract.
+        let result = impl_ref.encode(unsafe { *(args as *const StringView) });
+        match result {
+            Ok(val) => {
+                // SAFETY: out is a valid *mut StringView per ABI contract.
+                unsafe { std::ptr::write(out as *mut StringView, val); }
+                AbiError::ok()
+            }
+            Err(e) => AbiError { code: e.code, message: StringView::null() },
+        }
+    })) {
+        Ok(err) => err,
+        Err(_) => AbiError::panic_caught(),
+    }
+}
+
+static PIPELINE_ENCODER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(pipeline_Encoder_encode_abi as *const ()),
+];
+
+pub(crate) static PIPELINE_ENCODER_VTABLE: PluginVTable = PluginVTable {
+    contract_id: PIPELINE_ENCODER_CONTRACT_ID,
+    contract_version: 0_u32 << 16 | 0_u32,
+    function_count: 1_u32,
+    functions: PIPELINE_ENCODER_FNS.as_ptr() as *const *const (),
+};
+
 /// Contract ID constant -- pre-computed FNV-1a of "data.Reporter@1".
 pub(crate) const DATA_REPORTER_CONTRACT_ID: u64 = 0x81D41D43E511D297;
 
@@ -100,5 +183,45 @@ pub(crate) static DATA_REPORTER_VTABLE: PluginVTable = PluginVTable {
     contract_version: 0_u32 << 16 | 0_u32,
     function_count: 1_u32,
     functions: DATA_REPORTER_FNS.as_ptr() as *const *const (),
+};
+
+/// Contract ID constant -- pre-computed FNV-1a of "pipeline.Validator@1".
+pub(crate) const PIPELINE_VALIDATOR_CONTRACT_ID: u64 = 0xA553FAB5D11C7AF0;
+
+pub(crate) static PIPELINE_VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorPlugin>> = OnceLock::new();
+
+/// ABI wrapper for validate (function_id = 0).
+// SAFETY: args and out pointers are validated by the host runtime ABI contract.
+extern "C" fn pipeline_Validator_validate_abi(args: *const (), out: *mut ()) -> AbiError {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let impl_ref: &Box<dyn PipelineValidatorPlugin> = match PIPELINE_VALIDATOR_IMPL.get() {
+            Some(i) => i,
+            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
+        };
+        // SAFETY: args is a valid *const StringView per ABI contract.
+        let result = impl_ref.validate(unsafe { *(args as *const StringView) });
+        match result {
+            Ok(val) => {
+                // SAFETY: out is a valid *mut StringView per ABI contract.
+                unsafe { std::ptr::write(out as *mut StringView, val); }
+                AbiError::ok()
+            }
+            Err(e) => AbiError { code: e.code, message: StringView::null() },
+        }
+    })) {
+        Ok(err) => err,
+        Err(_) => AbiError::panic_caught(),
+    }
+}
+
+static PIPELINE_VALIDATOR_FNS: [FnPtr; 1_usize] = [
+    FnPtr(pipeline_Validator_validate_abi as *const ()),
+];
+
+pub(crate) static PIPELINE_VALIDATOR_VTABLE: PluginVTable = PluginVTable {
+    contract_id: PIPELINE_VALIDATOR_CONTRACT_ID,
+    contract_version: 0_u32 << 16 | 0_u32,
+    function_count: 1_u32,
+    functions: PIPELINE_VALIDATOR_FNS.as_ptr() as *const *const (),
 };
 

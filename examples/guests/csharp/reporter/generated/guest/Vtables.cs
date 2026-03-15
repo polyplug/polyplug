@@ -5,6 +5,44 @@ using System.Runtime.CompilerServices;
 using Polyplug.Guest;
 using System.Runtime.InteropServices;
 
+public static class PipelineDecoderContractVtables {
+    public const ulong PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EUL;
+    private static IPipelineDecoderPlugin? _impl_pipeline_Decoder;
+    public static void SetPipelineDecoderContractImpl(IPipelineDecoderPlugin impl) { _impl_pipeline_Decoder = impl; }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static AbiError pipeline_Decoder_decode_abi(IntPtr argsPtr, IntPtr outPtr) {
+        try {
+            var impl = _impl_pipeline_Decoder ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, "not initialized");
+            // call impl
+            return AbiError.Ok;
+        } catch (Polyplug.Guest.PluginException ex) {
+            return new AbiError { Code = ex.Code };
+        } catch {
+            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };
+        }
+    }
+
+    private static readonly IntPtr[] PIPELINE_DECODER_FNS;
+    private static System.Runtime.InteropServices.GCHandle _PIPELINE_DECODER_pin_handle;
+    public static PluginVTable PIPELINE_DECODER_VTABLE;
+
+    static PipelineDecoderContractVtables() {
+        unsafe {
+            PIPELINE_DECODER_FNS = new IntPtr[] {
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&pipeline_Decoder_decode_abi,
+            };
+        }
+        _PIPELINE_DECODER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(PIPELINE_DECODER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+        PIPELINE_DECODER_VTABLE = new PluginVTable {
+            ContractId = PIPELINE_DECODER_CONTRACT_ID,
+            ContractVersion = 0u << 16 | 0u,
+            FunctionCount = 1u,
+            FunctionsPtr = _PIPELINE_DECODER_pin_handle.AddrOfPinnedObject(),
+        };
+    }
+}
+
 public static class DataTransformerContractVtables {
     public const ulong DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFUL;
     private static IDataTransformerPlugin? _impl_data_Transformer;
@@ -43,6 +81,44 @@ public static class DataTransformerContractVtables {
     }
 }
 
+public static class PipelineEncoderContractVtables {
+    public const ulong PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432UL;
+    private static IPipelineEncoderPlugin? _impl_pipeline_Encoder;
+    public static void SetPipelineEncoderContractImpl(IPipelineEncoderPlugin impl) { _impl_pipeline_Encoder = impl; }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static AbiError pipeline_Encoder_encode_abi(IntPtr argsPtr, IntPtr outPtr) {
+        try {
+            var impl = _impl_pipeline_Encoder ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, "not initialized");
+            // call impl
+            return AbiError.Ok;
+        } catch (Polyplug.Guest.PluginException ex) {
+            return new AbiError { Code = ex.Code };
+        } catch {
+            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };
+        }
+    }
+
+    private static readonly IntPtr[] PIPELINE_ENCODER_FNS;
+    private static System.Runtime.InteropServices.GCHandle _PIPELINE_ENCODER_pin_handle;
+    public static PluginVTable PIPELINE_ENCODER_VTABLE;
+
+    static PipelineEncoderContractVtables() {
+        unsafe {
+            PIPELINE_ENCODER_FNS = new IntPtr[] {
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&pipeline_Encoder_encode_abi,
+            };
+        }
+        _PIPELINE_ENCODER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(PIPELINE_ENCODER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+        PIPELINE_ENCODER_VTABLE = new PluginVTable {
+            ContractId = PIPELINE_ENCODER_CONTRACT_ID,
+            ContractVersion = 0u << 16 | 0u,
+            FunctionCount = 1u,
+            FunctionsPtr = _PIPELINE_ENCODER_pin_handle.AddrOfPinnedObject(),
+        };
+    }
+}
+
 public static class DataReporterContractVtables {
     public const ulong DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297UL;
     private static IDataReporterPlugin? _impl_data_Reporter;
@@ -77,6 +153,44 @@ public static class DataReporterContractVtables {
             ContractVersion = 0u << 16 | 0u,
             FunctionCount = 1u,
             FunctionsPtr = _DATA_REPORTER_pin_handle.AddrOfPinnedObject(),
+        };
+    }
+}
+
+public static class PipelineValidatorContractVtables {
+    public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0UL;
+    private static IPipelineValidatorPlugin? _impl_pipeline_Validator;
+    public static void SetPipelineValidatorContractImpl(IPipelineValidatorPlugin impl) { _impl_pipeline_Validator = impl; }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static AbiError pipeline_Validator_validate_abi(IntPtr argsPtr, IntPtr outPtr) {
+        try {
+            var impl = _impl_pipeline_Validator ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, "not initialized");
+            // call impl
+            return AbiError.Ok;
+        } catch (Polyplug.Guest.PluginException ex) {
+            return new AbiError { Code = ex.Code };
+        } catch {
+            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };
+        }
+    }
+
+    private static readonly IntPtr[] PIPELINE_VALIDATOR_FNS;
+    private static System.Runtime.InteropServices.GCHandle _PIPELINE_VALIDATOR_pin_handle;
+    public static PluginVTable PIPELINE_VALIDATOR_VTABLE;
+
+    static PipelineValidatorContractVtables() {
+        unsafe {
+            PIPELINE_VALIDATOR_FNS = new IntPtr[] {
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&pipeline_Validator_validate_abi,
+            };
+        }
+        _PIPELINE_VALIDATOR_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(PIPELINE_VALIDATOR_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+        PIPELINE_VALIDATOR_VTABLE = new PluginVTable {
+            ContractId = PIPELINE_VALIDATOR_CONTRACT_ID,
+            ContractVersion = 0u << 16 | 0u,
+            FunctionCount = 1u,
+            FunctionsPtr = _PIPELINE_VALIDATOR_pin_handle.AddrOfPinnedObject(),
         };
     }
 }

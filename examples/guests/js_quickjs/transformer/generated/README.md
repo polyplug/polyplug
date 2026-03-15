@@ -1,4 +1,4 @@
-# js-quickjs Plugin Bundle: data.Transformer
+# js-quickjs Plugin Bundle: pipeline.Decoder
 
 ## Requirements
 - rolldown: `npm i -g rolldown`

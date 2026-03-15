@@ -11,10 +11,16 @@ use polyplug_guest::PluginRegistrar;
 use polyplug_guest::PluginVTable;
 use polyplug_guest::StringView;
 use polyplug_guest::PluginContext;
+use super::vtables::PIPELINE_DECODER_CONTRACT_ID;
+use super::vtables::PIPELINE_DECODER_VTABLE;
 use super::vtables::DATA_TRANSFORMER_CONTRACT_ID;
 use super::vtables::DATA_TRANSFORMER_VTABLE;
+use super::vtables::PIPELINE_ENCODER_CONTRACT_ID;
+use super::vtables::PIPELINE_ENCODER_VTABLE;
 use super::vtables::DATA_REPORTER_CONTRACT_ID;
 use super::vtables::DATA_REPORTER_VTABLE;
+use super::vtables::PIPELINE_VALIDATOR_CONTRACT_ID;
+use super::vtables::PIPELINE_VALIDATOR_VTABLE;
 
 #[no_mangle]
 pub extern "C" fn polyplug_abi_version() -> u32 { 1 }
@@ -40,6 +46,21 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: registrar is non-null and valid per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
 
+    let desc_PIPELINE_DECODER: PluginDescriptor = PluginDescriptor {
+        name: StringView { ptr: b"pipeline_Decoder_plugin".as_ptr(), len: 23_usize },
+        contract_name: StringView { ptr: b"pipeline.Decoder".as_ptr(), len: 16_usize },
+        version_major: 1_u32,
+        version_minor: 0_u32,
+        version_patch: 0_u32,
+    };
+    // SAFETY: desc and vtable are 'static.
+    let err_PIPELINE_DECODER: AbiError = unsafe {
+        (reg.register_plugin)(registrar, &desc_PIPELINE_DECODER as *const PluginDescriptor, &PIPELINE_DECODER_VTABLE as *const PluginVTable)
+    };
+    if err_PIPELINE_DECODER.code != ABI_OK {
+        return err_PIPELINE_DECODER;
+    }
+
     let desc_DATA_TRANSFORMER: PluginDescriptor = PluginDescriptor {
         name: StringView { ptr: b"data_Transformer_plugin".as_ptr(), len: 23_usize },
         contract_name: StringView { ptr: b"data.Transformer".as_ptr(), len: 16_usize },
@@ -55,6 +76,21 @@ pub unsafe extern "C" fn polyplug_init(
         return err_DATA_TRANSFORMER;
     }
 
+    let desc_PIPELINE_ENCODER: PluginDescriptor = PluginDescriptor {
+        name: StringView { ptr: b"pipeline_Encoder_plugin".as_ptr(), len: 23_usize },
+        contract_name: StringView { ptr: b"pipeline.Encoder".as_ptr(), len: 16_usize },
+        version_major: 1_u32,
+        version_minor: 0_u32,
+        version_patch: 0_u32,
+    };
+    // SAFETY: desc and vtable are 'static.
+    let err_PIPELINE_ENCODER: AbiError = unsafe {
+        (reg.register_plugin)(registrar, &desc_PIPELINE_ENCODER as *const PluginDescriptor, &PIPELINE_ENCODER_VTABLE as *const PluginVTable)
+    };
+    if err_PIPELINE_ENCODER.code != ABI_OK {
+        return err_PIPELINE_ENCODER;
+    }
+
     let desc_DATA_REPORTER: PluginDescriptor = PluginDescriptor {
         name: StringView { ptr: b"data_Reporter_plugin".as_ptr(), len: 20_usize },
         contract_name: StringView { ptr: b"data.Reporter".as_ptr(), len: 13_usize },
@@ -68,6 +104,21 @@ pub unsafe extern "C" fn polyplug_init(
     };
     if err_DATA_REPORTER.code != ABI_OK {
         return err_DATA_REPORTER;
+    }
+
+    let desc_PIPELINE_VALIDATOR: PluginDescriptor = PluginDescriptor {
+        name: StringView { ptr: b"pipeline_Validator_plugin".as_ptr(), len: 25_usize },
+        contract_name: StringView { ptr: b"pipeline.Validator".as_ptr(), len: 18_usize },
+        version_major: 1_u32,
+        version_minor: 0_u32,
+        version_patch: 0_u32,
+    };
+    // SAFETY: desc and vtable are 'static.
+    let err_PIPELINE_VALIDATOR: AbiError = unsafe {
+        (reg.register_plugin)(registrar, &desc_PIPELINE_VALIDATOR as *const PluginDescriptor, &PIPELINE_VALIDATOR_VTABLE as *const PluginVTable)
+    };
+    if err_PIPELINE_VALIDATOR.code != ABI_OK {
+        return err_PIPELINE_VALIDATOR;
     }
 
     AbiError::ok()

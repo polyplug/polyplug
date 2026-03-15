@@ -89,6 +89,10 @@ impl CodeGenerator for RustGenerator {
         for contract in &ir.contracts {
             let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
             types_out.push_str(&format!(
+                "pub const {contract_upper}_CONTRACT_ID: u64 = {:#018x};\n",
+                contract.contract_id
+            ));
+            types_out.push_str(&format!(
                 "pub const {contract_upper}_REQUIRED_VERSION: polyplug::version::Version = \
                  polyplug::version::Version {{ major: {major}, minor: {minor} }};\n",
                 major = contract.version.major,
@@ -111,10 +115,10 @@ impl CodeGenerator for RustGenerator {
         let mut callers_out: String = String::new();
         callers_out.push_str(header);
 
-        callers_out.push_str("use polyplug_guest::PluginError;\n");
         callers_out.push_str("use polyplug::abi::ABI_OK;\n");
         callers_out.push_str("use polyplug::abi::AbiError;\n");
         callers_out.push_str("use polyplug::abi::PluginVTable;\n");
+        callers_out.push_str("use polyplug::abi::StringView;\n");
         callers_out.push_str("use polyplug::abi::ABI_ERROR_GENERIC;\n");
         callers_out.push_str("use polyplug::abi::ABI_ERROR_NOT_FOUND;\n");
         callers_out.push_str("use polyplug::abi::ABI_ERROR_STALE_HANDLE;\n");
@@ -122,6 +126,20 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug::abi::PluginHandle;\n");
         callers_out.push_str("use polyplug::runtime::Runtime;\n");
         callers_out.push_str("use super::types::*;\n\n");
+        callers_out.push_str("/// Host-side error type for contract calls.\n");
+        callers_out.push_str("#[derive(Debug)]\n");
+        callers_out.push_str("pub struct ContractError {\n");
+        callers_out.push_str("    /// ABI error code (non-zero).\n");
+        callers_out.push_str("    pub code: u32,\n");
+        callers_out.push_str("    /// Human-readable error message (may be empty).\n");
+        callers_out.push_str("    pub message: String,\n");
+        callers_out.push_str("}\n\n");
+        callers_out.push_str("impl ContractError {\n");
+        callers_out.push_str("    /// Create a new error with the given code.\n");
+        callers_out.push_str("    pub fn new(code: u32) -> Self {\n");
+        callers_out.push_str("        Self { code, message: String::new() }\n");
+        callers_out.push_str("    }\n");
+        callers_out.push_str("}\n\n");
 
         for contract in &ir.contracts {
             generate_host_contract_caller(&mut callers_out, contract)?;
@@ -900,7 +918,7 @@ fn generate_host_fn_caller(
         func.name, fn_id
     ));
     out.push_str(&format!(
-        "    pub fn {}(&self{}) -> Result<{ret_type}, PluginError> {{\n",
+        "    pub fn {}(&self{}) -> Result<{ret_type}, ContractError> {{\n",
         func.name, sig_params
     ));
 
@@ -938,11 +956,11 @@ fn generate_host_fn_caller(
     out.push_str("                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,\n");
     out.push_str("                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,\n");
     out.push_str("                };\n");
-    out.push_str("                return Err(PluginError { code, message: String::new() });\n");
+    out.push_str("                return Err(ContractError { code, message: String::new() });\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
     out.push_str("        if vtable_ptr.is_null() {\n");
-    out.push_str("            return Err(PluginError { code: ABI_ERROR_NOT_FOUND, message: String::new() });\n");
+    out.push_str("            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });\n");
     out.push_str("        }\n");
     out.push_str("        // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.\n");
     out.push_str("        let err: AbiError = unsafe {\n");
@@ -961,7 +979,7 @@ fn generate_host_fn_caller(
     out.push_str("        };\n");
     out.push_str("        if err.code != ABI_OK {\n");
     out.push_str(
-        "            return Err(PluginError { code: err.code, message: String::new() });\n",
+        "            return Err(ContractError { code: err.code, message: String::new() });\n",
     );
     out.push_str("        }\n");
 

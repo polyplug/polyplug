@@ -514,7 +514,12 @@ impl Runtime {
                 None => "0",
             };
             for contract in &manifest.provides {
-                let key: String = format!("{}@{}", contract, major_str);
+                // Extract contract name without version (e.g., "data.Reporter" from "data.Reporter@1.0")
+                let contract_name: &str = match contract.split_once('@') {
+                    Some((name, _)) => name,
+                    None => contract,
+                };
+                let key: String = format!("{}@{}", contract_name, major_str);
                 if !manifest.function_count.contains_key(&key)
                     && opts.compatibility != Compatibility::Yolo
                 {

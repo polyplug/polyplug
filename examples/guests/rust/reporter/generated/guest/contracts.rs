@@ -7,13 +7,28 @@ use polyplug_guest::PluginError;
 use polyplug_guest::StringView;
 use super::types::*;
 
+/// Guest trait for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
+pub trait PipelineDecoderPlugin: Send + Sync {
+    fn decode(&self, input: StringView) -> Result<StringView, PluginError>;
+}
+
 /// Guest trait for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
 pub trait DataTransformerPlugin: Send + Sync {
-    fn transform(&self, input: StringView) -> Result<StringView, PluginError>;
+    fn transform(&self, data: StringView) -> Result<StringView, PluginError>;
+}
+
+/// Guest trait for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
+pub trait PipelineEncoderPlugin: Send + Sync {
+    fn encode(&self, data: StringView) -> Result<StringView, PluginError>;
 }
 
 /// Guest trait for contract `data.Reporter` (id=0x81D41D43E511D297)
 pub trait DataReporterPlugin: Send + Sync {
-    fn report(&self, value: StringView) -> Result<StringView, PluginError>;
+    fn report(&self, data: StringView) -> Result<StringView, PluginError>;
+}
+
+/// Guest trait for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
+pub trait PipelineValidatorPlugin: Send + Sync {
+    fn validate(&self, data: StringView) -> Result<StringView, PluginError>;
 }
 

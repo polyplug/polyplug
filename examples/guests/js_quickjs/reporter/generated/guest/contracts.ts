@@ -4,11 +4,23 @@
 
 import type { } from './types';
 
+export abstract class PipelineDecoder {
+    abstract decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
+}
+
 export abstract class DataTransformer {
-    abstract transform(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
+    abstract transform(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
+}
+
+export abstract class PipelineEncoder {
+    abstract encode(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
 }
 
 export abstract class DataReporter {
-    abstract report(value: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
+    abstract report(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
+}
+
+export abstract class PipelineValidator {
+    abstract validate(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
 }
 

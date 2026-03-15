@@ -6,22 +6,41 @@
 
 namespace polyplug_plugin {
 
+PipelineDecoderPlugin* g_pipeline_Decoder_impl = nullptr;
+// Developer must define: PipelineDecoderPlugin* create_pipeline_Decoder_impl();
 DataTransformerPlugin* g_data_Transformer_impl = nullptr;
 // Developer must define: DataTransformerPlugin* create_data_Transformer_impl();
+PipelineEncoderPlugin* g_pipeline_Encoder_impl = nullptr;
+// Developer must define: PipelineEncoderPlugin* create_pipeline_Encoder_impl();
 DataReporterPlugin* g_data_Reporter_impl = nullptr;
 // Developer must define: DataReporterPlugin* create_data_Reporter_impl();
+PipelineValidatorPlugin* g_pipeline_Validator_impl = nullptr;
+// Developer must define: PipelineValidatorPlugin* create_pipeline_Validator_impl();
 
 }  // namespace polyplug_plugin
 
 namespace polyplug_plugin {
+PipelineDecoderPlugin* create_pipeline_Decoder_impl();
 DataTransformerPlugin* create_data_Transformer_impl();
+PipelineEncoderPlugin* create_pipeline_Encoder_impl();
 DataReporterPlugin* create_data_Reporter_impl();
+PipelineValidatorPlugin* create_pipeline_Validator_impl();
 }  // namespace polyplug_plugin (forward decls)
 
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
 extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {
     if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};
+
+    // Register contract: pipeline.Decoder
+    polyplug_plugin::g_pipeline_Decoder_impl = polyplug_plugin::create_pipeline_Decoder_impl();
+    PluginDescriptor desc_PIPELINE_DECODER = {
+        { (const uint8_t*)"pipeline.Decoder", 16U },  // name
+        { (const uint8_t*)"pipeline.Decoder", 16U },  // contract_name
+        1U, 0U, 0U
+    };
+    AbiError err_PIPELINE_DECODER = registrar->register_plugin(registrar, &desc_PIPELINE_DECODER, &polyplug_plugin::PIPELINE_DECODER_VTABLE);
+    if (err_PIPELINE_DECODER.code != 0U) return err_PIPELINE_DECODER;
 
     // Register contract: data.Transformer
     polyplug_plugin::g_data_Transformer_impl = polyplug_plugin::create_data_Transformer_impl();
@@ -33,6 +52,16 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContex
     AbiError err_DATA_TRANSFORMER = registrar->register_plugin(registrar, &desc_DATA_TRANSFORMER, &polyplug_plugin::DATA_TRANSFORMER_VTABLE);
     if (err_DATA_TRANSFORMER.code != 0U) return err_DATA_TRANSFORMER;
 
+    // Register contract: pipeline.Encoder
+    polyplug_plugin::g_pipeline_Encoder_impl = polyplug_plugin::create_pipeline_Encoder_impl();
+    PluginDescriptor desc_PIPELINE_ENCODER = {
+        { (const uint8_t*)"pipeline.Encoder", 16U },  // name
+        { (const uint8_t*)"pipeline.Encoder", 16U },  // contract_name
+        1U, 0U, 0U
+    };
+    AbiError err_PIPELINE_ENCODER = registrar->register_plugin(registrar, &desc_PIPELINE_ENCODER, &polyplug_plugin::PIPELINE_ENCODER_VTABLE);
+    if (err_PIPELINE_ENCODER.code != 0U) return err_PIPELINE_ENCODER;
+
     // Register contract: data.Reporter
     polyplug_plugin::g_data_Reporter_impl = polyplug_plugin::create_data_Reporter_impl();
     PluginDescriptor desc_DATA_REPORTER = {
@@ -42,6 +71,16 @@ extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContex
     };
     AbiError err_DATA_REPORTER = registrar->register_plugin(registrar, &desc_DATA_REPORTER, &polyplug_plugin::DATA_REPORTER_VTABLE);
     if (err_DATA_REPORTER.code != 0U) return err_DATA_REPORTER;
+
+    // Register contract: pipeline.Validator
+    polyplug_plugin::g_pipeline_Validator_impl = polyplug_plugin::create_pipeline_Validator_impl();
+    PluginDescriptor desc_PIPELINE_VALIDATOR = {
+        { (const uint8_t*)"pipeline.Validator", 18U },  // name
+        { (const uint8_t*)"pipeline.Validator", 18U },  // contract_name
+        1U, 0U, 0U
+    };
+    AbiError err_PIPELINE_VALIDATOR = registrar->register_plugin(registrar, &desc_PIPELINE_VALIDATOR, &polyplug_plugin::PIPELINE_VALIDATOR_VTABLE);
+    if (err_PIPELINE_VALIDATOR.code != 0U) return err_PIPELINE_VALIDATOR;
 
     return AbiError{0U, StringView{nullptr, 0}};
 }

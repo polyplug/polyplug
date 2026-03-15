@@ -122,6 +122,17 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
     out.push_str("#pragma once\n");
     out.push_str("#include <cstdint>\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n\n");
+    out.push_str("namespace polyplug_generated {\n\n");
+
+    // Emit contract ID constants
+    for contract in &ir.contracts {
+        let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "constexpr uint64_t {}_CONTRACT_ID = 0x{:016X};\n",
+            contract_upper, contract.contract_id
+        ));
+    }
+    out.push_str("\n");
 
     // Emit enums before struct types
     for e in &ir.enums {
@@ -132,6 +143,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
         generate_cpp_type(&mut out, ty);
     }
 
+    out.push_str("}  // namespace polyplug_generated\n");
     out
 }
 
@@ -810,8 +822,10 @@ fn generate_cpp_host_function(
         out.push_str(&format!("        {} out{{}};\n", return_type));
         out.push_str("        void* out_ptr = &out;\n");
         out.push_str("        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n");
-        out.push_str("        if (!vtable_ || {}U >= vtable_->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
-        );
+        out.push_str(&format!(
+            "        if (!vtable_ || {}_u32 >= vtable_->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
+            fn_id
+        ));
         out.push_str(&format!(
             "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->functions[{}U]);\n",
             fn_id
@@ -988,12 +1002,10 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(files.files.len() >= 1);
         // At least one file contains the AUTO-GENERATED header
-        assert!(
-            files
-                .files
-                .iter()
-                .any(|f| f.content.contains("AUTO-GENERATED"))
-        );
+        assert!(files
+            .files
+            .iter()
+            .any(|f| f.content.contains("AUTO-GENERATED")));
     }
 
     #[test]

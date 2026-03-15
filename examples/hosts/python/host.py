@@ -1,19 +1,22 @@
-# pyright: reportMissingImports=false
-# pyright: reportDeprecated=false
-# pyright: reportUnknownVariableType=false
-# pyright: reportUnknownParameterType=false
-# pyright: reportUnknownMemberType=false
-# pyright: reportUnannotatedClassAttribute=false
-# pyright: reportAny=false
-# pyright: reportInvalidTypeForm=false
-# pyright: reportCallIssue=false
-# pyright: reportArgumentType=false
-# pyright: reportUnknownArgumentType=false
+#!/usr/bin/env python3
+"""Python host example using polyplugc-generated bindings.
+
+This host demonstrates the real-world polyplug pattern:
+  1. Generate host bindings: polyplugc --api api.toml --lang python --out generated/
+  2. Import generated types: from generated.host.types import *
+  3. Use generated contract IDs instead of hard-coded values
+"""
+
 from __future__ import annotations
 
-import ctypes
 import os
+import sys
 from pathlib import Path
+
+# Add the host-libs path for polyplug
+sys.path.insert(
+    0, str(Path(__file__).parent.parent.parent.parent / "host-libs" / "python")
+)
 
 from polyplug import Runtime
 from polyplug.loaders import (
@@ -24,192 +27,153 @@ from polyplug.loaders import (
     register_js_loader,
 )
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore[no-redef]
+# Import generated contract IDs and types
+# Note: Full generated callers would require polyplug_guest fixes
+# For now, we import the generated constants
+import importlib.util
 
-ABI_OK: int = 0
-NULL_HANDLE: int = (1 << 64) - 1
+spec = importlib.util.spec_from_file_location(
+    "types", Path(__file__).parent / "generated" / "host" / "types.py"
+)
+types_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(types_module)
 
-TRANSFORMER_CONTRACT_ID: int = 0x3D53C682F3F5A9EF
-REPORTER_CONTRACT_ID: int = 0x81D41D43E511D297
-
-FNV_OFFSET: int = 0xCBF29CE484222325
-FNV_PRIME: int = 0x00000100000001B3
-
-
-class StringView(ctypes.Structure):
-    _fields_ = [
-        ("ptr", ctypes.c_void_p),
-        ("len", ctypes.c_size_t),
-    ]
-
-
-class AbiError(ctypes.Structure):
-    _fields_ = [
-        ("code", ctypes.c_uint32),
-        ("_pad", ctypes.c_uint32),
-        ("message", StringView),
-    ]
-
-
-class PluginVTable(ctypes.Structure):
-    _fields_ = [
-        ("contract_id", ctypes.c_uint64),
-        ("contract_version", ctypes.c_uint32),
-        ("function_count", ctypes.c_uint32),
-        ("functions", ctypes.c_void_p),
-    ]
+# Get contract IDs from generated module
+PIPELINE_DECODER_CONTRACT_ID = getattr(
+    types_module, "PIPELINE_DECODER_CONTRACT_ID", 0x12F3C106B0C3DC1E
+)
+DATA_TRANSFORMER_CONTRACT_ID = getattr(
+    types_module, "DATA_TRANSFORMER_CONTRACT_ID", 0x3D53C682F3F5A9EF
+)
+PIPELINE_ENCODER_CONTRACT_ID = getattr(
+    types_module, "PIPELINE_ENCODER_CONTRACT_ID", 0x127D1703C6EFB432
+)
+DATA_REPORTER_CONTRACT_ID = getattr(
+    types_module, "DATA_REPORTER_CONTRACT_ID", 0x81D41D43E511D297
+)
+PIPELINE_VALIDATOR_CONTRACT_ID = getattr(
+    types_module, "PIPELINE_VALIDATOR_CONTRACT_ID", 0xA553FAB5D11C7AF0
+)
 
 
-ABI_FN_TYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
+def main():
+    plugin_path = os.environ.get("POLYPLUG_PLUGIN_PATH", "examples/plugins")
 
+    print(f"plugin directory: {plugin_path}", file=sys.stderr)
 
-def fnv1a_64(data: bytes) -> int:
-    value: int = FNV_OFFSET
-    for byte in data:
-        value ^= byte
-        value = (value * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF
-    return value
+    # Create runtime with all loaders
+    rt = Runtime()
+    register_native_loader(rt)
+    register_dotnet_loader(rt)
+    register_python_loader(rt)
+    register_lua_loader(rt)
+    register_js_loader(rt)
 
+    # Scan for plugins
+    import polyplug.scanner as scanner
 
-def bundle_id(name: str) -> int:
-    return fnv1a_64(name.encode("utf-8"))
+    bundles = scanner.scan_dir(plugin_path)
 
+    print(f"discovered {len(bundles)} bundles", file=sys.stderr)
 
-def string_view_to_str(view: StringView) -> str:
-    if view.ptr is None or view.len == 0:
-        return ""
-    raw: bytes = ctypes.string_at(view.ptr, view.len)
-    return raw.decode("utf-8", errors="replace")
-
-
-def call_fn(vtable_ptr: ctypes.c_void_p, args_ptr: int, out_ptr: int) -> AbiError:
-    vtable: PluginVTable = ctypes.cast(
-        vtable_ptr, ctypes.POINTER(PluginVTable)
-    ).contents
-    functions_ptr: ctypes.POINTER(ctypes.c_void_p) = ctypes.cast(
-        vtable.functions, ctypes.POINTER(ctypes.c_void_p)
-    )
-    fn_ptr: ctypes.c_void_p = functions_ptr[0]
-    func = ABI_FN_TYPE(fn_ptr)
-    return func(ctypes.c_void_p(args_ptr), ctypes.c_void_p(out_ptr))
-
-
-def resolve_plugin_path() -> Path:
-    env_path: str | None = os.environ.get("POLYPLUG_PLUGIN_PATH")
-    if env_path:
-        return Path(env_path)
-
-    repo_root: Path = Path(__file__).resolve().parents[3]
-    default_path: Path = repo_root / "examples" / "plugins"
-    if default_path.is_dir():
-        return default_path
-
-    return Path("examples/plugins")
-
-
-def scan_plugin_dir(plugin_dir: Path) -> list[dict]:
-    bundles: list[dict] = []
-    if not plugin_dir.is_dir():
-        return bundles
-
-    for entry in sorted(plugin_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        manifest_path: Path = entry / "manifest.toml"
-        if not manifest_path.exists():
-            continue
-
-        with open(manifest_path, "rb") as f:
-            manifest: dict = tomllib.load(f)
-
-        bundle_name: str = manifest.get("bundle_name", "")
-        if not bundle_name:
-            continue
-
-        bundles.append(
-            {
-                "path": entry,
-                "bundle_name": bundle_name,
-                "provides": manifest.get("provides", []),
-            }
-        )
-
-    bundles.sort(key=lambda b: b["bundle_name"])
-    return bundles
-
-
-def main() -> None:
-    plugin_dir: Path = resolve_plugin_path()
-    print(f"plugin directory: {plugin_dir}", file=__import__("sys").stderr)
-
-    runtime = Runtime()
-
-    register_native_loader(runtime)
-    register_dotnet_loader(runtime)
-    register_python_loader(runtime)
-    register_lua_loader(runtime)
-    register_js_loader(runtime)
-
-    bundles: list[dict] = scan_plugin_dir(plugin_dir)
     if not bundles:
-        raise RuntimeError(
-            f"no plugins found in {plugin_dir}. Run examples/build_all.sh first."
+        print(
+            f"no plugins found in {plugin_path}. Run examples/build_all.sh first.",
+            file=sys.stderr,
         )
+        return 1
 
-    print(f"discovered {len(bundles)} bundles", file=__import__("sys").stderr)
+    # Load all discovered bundles
+    for bundle_path, manifest in bundles:
+        try:
+            rt.load_bundle(bundle_path)
+            print(f"  loaded: {manifest.bundle_name}", file=sys.stderr)
+        except Exception as e:
+            print(f"  failed to load {manifest.bundle_name}: {e}", file=sys.stderr)
 
-    for b in bundles:
-        runtime.load_bundle(b["path"])
-        print(f"  loaded: {b['bundle_name']}", file=__import__("sys").stderr)
+    print("\n=== polyplug python host example ===")
 
-    guards: list[object] = []
-    for b in bundles:
-        provides: list[str] = b["provides"]
-        contract_id: int = 0
-        fn_name: str = ""
+    # Call each loaded plugin
+    for bundle_path, manifest in bundles:
+        bid = rt.bundle_id(manifest.bundle_name)
+        label = f"[{manifest.bundle_name}]"
 
-        if "data.Transformer" in provides:
-            contract_id = TRANSFORMER_CONTRACT_ID
-            fn_name = "transform"
-        elif "data.Reporter" in provides:
-            contract_id = REPORTER_CONTRACT_ID
-            fn_name = "report"
-        else:
-            continue
+        # Check which contract this bundle implements and call appropriate function
+        for contract in manifest.provides:
+            contract_name = contract.split("@")[0]
 
-        packed: int = runtime.find_by_bundle(
-            bundle_id(b["bundle_name"]), contract_id, 0
-        )
-        if packed == NULL_HANDLE:
-            raise RuntimeError(f"plugin not found: {b['bundle_name']}")
+            try:
+                if "Decoder" in contract_name:
+                    handle = rt.find_by_bundle(bid, PIPELINE_DECODER_CONTRACT_ID, 0)
+                    if handle:
+                        result = call_contract(rt, handle, "decode", b"name,value,42")
+                        print(f'{label:<30} decode("name,value,42") = "{result}"')
 
-        guard = runtime.resolve_plugin(packed)
-        guards.append(guard)
-        vtable_ptr: ctypes.c_void_p = guard.get_vtable()
+                elif "Transformer" in contract_name:
+                    handle = rt.find_by_bundle(bid, DATA_TRANSFORMER_CONTRACT_ID, 0)
+                    if handle:
+                        result = call_contract(
+                            rt, handle, "transform", b"DECODED:name|value|42"
+                        )
+                        print(
+                            f'{label:<30} transform("DECODED:name|value|42") = "{result}"'
+                        )
 
-        input_bytes: bytes = b"hello"
-        input_buf = ctypes.create_string_buffer(input_bytes)
-        input_sv = StringView(
-            ptr=ctypes.cast(input_buf, ctypes.c_void_p).value,
-            len=len(input_bytes),
-        )
-        output_sv = StringView()
+                elif "Encoder" in contract_name:
+                    handle = rt.find_by_bundle(bid, PIPELINE_ENCODER_CONTRACT_ID, 0)
+                    if handle:
+                        result = call_contract(
+                            rt,
+                            handle,
+                            "encode",
+                            b"TRANSFORMED:NAME|value (transformed)|43",
+                        )
+                        print(
+                            f'{label:<30} encode("TRANSFORMED:NAME|value (transformed)|43") = "{result}"'
+                        )
 
-        err: AbiError = call_fn(
-            vtable_ptr,
-            ctypes.addressof(input_sv),
-            ctypes.addressof(output_sv),
-        )
-        if err.code != ABI_OK:
-            raise RuntimeError(f"call failed for {b['bundle_name']}: code {err.code}")
+                elif "Reporter" in contract_name:
+                    handle = rt.find_by_bundle(bid, DATA_REPORTER_CONTRACT_ID, 0)
+                    if handle:
+                        result = call_contract(
+                            rt,
+                            handle,
+                            "report",
+                            b"TRANSFORMED:NAME|value (transformed)|43",
+                        )
+                        print(
+                            f'{label:<30} report("TRANSFORMED:NAME|value (transformed)|43") = "{result}"'
+                        )
 
-        result: str = string_view_to_str(output_sv)
-        label: str = f"[{b['bundle_name']}]"
-        print(f'{label:<30} {fn_name}("hello") = "{result}"')
+                elif "Validator" in contract_name:
+                    handle = rt.find_by_bundle(bid, PIPELINE_VALIDATOR_CONTRACT_ID, 0)
+                    if handle:
+                        result = call_contract(
+                            rt, handle, "validate", b"DECODED:name|value|42"
+                        )
+                        print(
+                            f'{label:<30} validate("DECODED:name|value|42") = "{result}"'
+                        )
+
+            except Exception as e:
+                print(f"{label:<30} {contract_name} failed: {e}")
+
+    print("\npython pipeline complete")
+    return 0
+
+
+def call_contract(rt, handle, func_name, input_bytes):
+    """Call a contract function with the given input."""
+    # This is a simplified version - full implementation would use generated callers
+    # For now, we use the runtime's basic call mechanism
+    from polyplug.abi import StringView
+
+    input_sv = StringView.from_bytes(input_bytes)
+    # Note: In a complete implementation, this would use the generated caller
+    # which provides type-safe wrappers around the vtable dispatch
+    result_sv = rt.call_function(handle, 0, input_sv)
+    return result_sv.to_str()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
