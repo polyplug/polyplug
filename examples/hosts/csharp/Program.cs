@@ -3,9 +3,9 @@ using System.IO;
 using System.Linq;
 using Polyplug;
 
-class Program
+private class Program
 {
-    static int Main(string[] args)
+    private static int Main(string[] args)
     {
         try
         {
@@ -19,7 +19,7 @@ class Program
         }
     }
 
-    static void Run()
+    private static void Run()
     {
         var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH");
         
@@ -32,7 +32,6 @@ class Program
                 Path.Combine(dir, "examples", "plugins"),
                 Path.Combine(dir, "..", "..", "..", "examples", "plugins"),
                 Path.Combine(dir, "..", "..", "plugins"),
-                "/mnt/data/Projects/Utils/polyplug/examples/plugins"
             };
             
             foreach (var candidate in candidates)
