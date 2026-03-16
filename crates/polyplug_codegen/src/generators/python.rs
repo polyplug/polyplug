@@ -189,6 +189,7 @@ fn generate_host_types_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n\n");
+    out.push_str("from polyplug.abi import StringView\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
@@ -221,6 +222,7 @@ fn generate_host_types_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n\n");
+    out.push_str("from polyplug.abi import StringView\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
@@ -253,33 +255,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, TypeAlias\n\n");
-
-    // Host-side ABI constants
-    out.push_str("# Host-side ABI constants\n");
-    out.push_str("ABI_OK: int = 0\n");
-    out.push_str("ABI_ERROR_GENERIC: int = 1\n\n");
-
-    // Host-side StringView struct (mirrors guest but for host use)
-    out.push_str("# Host-side StringView struct\n");
-    out.push_str("class StringView(ctypes.Structure):\n");
-    out.push_str("    _fields_: list[tuple[str, type]] = [\n");
-    out.push_str("        (\"ptr\", ctypes.c_void_p),\n");
-    out.push_str("        (\"len\", ctypes.c_size_t),\n");
-    out.push_str("    ]\n\n");
-    out.push_str("    @classmethod\n");
-    out.push_str("    def from_bytes(cls, data: bytes) -> \"StringView\":\n");
-    out.push_str("        sv = cls()\n");
-    out.push_str(
-        "        sv.ptr = ctypes.cast(ctypes.create_string_buffer(data), ctypes.c_void_p)\n",
-    );
-    out.push_str("        sv.len = len(data)\n");
-    out.push_str("        return sv\n\n");
-    out.push_str("    def to_bytes(self) -> bytes:\n");
-    out.push_str("        if self.ptr is None or self.len == 0:\n");
-    out.push_str("            return b\"\"\n");
-    out.push_str("        return ctypes.string_at(self.ptr, self.len)\n\n");
-    out.push_str("    def to_str(self) -> str:\n");
-    out.push_str("        return self.to_bytes().decode(\"utf-8\", errors=\"replace\")\n\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -332,10 +308,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable\n\n");
-
-    out.push_str("ABI_OK: int\n");
-    out.push_str("ABI_ERROR_GENERIC: int\n");
-    out.push_str("class StringView(ctypes.Structure): ...\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
