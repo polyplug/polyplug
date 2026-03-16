@@ -3,21 +3,21 @@
  * Pipeline Host — Deno host demonstrating polyplug usage.
  */
 
-import { openPolyplug, runtimeNew, toStr } from "../../../host-libs/js/polyplug.ts";
+import { openPolyplug, runtimeNew } from "../../../host-libs/js/polyplug.ts";
 import { scanDir } from "../../../host-libs/js/scanner.ts";
+import { registerNativeLoader } from "../../../host-libs/js/loaders/native.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH") ?? "examples/plugins";
-const libPath = Deno.env.get("POLYPLUG_LIB_PATH");
-
-if (!libPath) {
-  console.error("POLYPLUG_LIB_PATH not set");
-  Deno.exit(1);
-}
+const libPath = Deno.env.get("POLYPLUG_LIB_PATH") ?? "/mnt/data/Projects/Utils/polyplug/target/release/deps/libpolyplug.so";
+const nativeLibPath = Deno.env.get("POLYPLUG_NATIVE_LIB_PATH") ?? "/mnt/data/Projects/Utils/polyplug/target/release/deps/libpolyplug_native.so";
 
 console.error(`loading plugins from: ${pluginPath}\n`);
 
 const lib = openPolyplug(libPath);
 const rt = runtimeNew(lib);
+
+// Register native loader
+registerNativeLoader(lib, rt.ptr());
 
 const bundles = scanDir(pluginPath);
 if (bundles.length === 0) {

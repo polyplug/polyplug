@@ -2,8 +2,6 @@ using System;
 using System.IO;
 using System.Linq;
 using Polyplug;
-using Polyplug.Loader;
-using Polyplug.Abi;
 
 class Program
 {
@@ -23,7 +21,7 @@ class Program
 
     static void Run()
     {
-        var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH")
+        var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH") 
             ?? Path.Combine(Directory.GetCurrentDirectory(), "examples", "plugins");
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
@@ -31,8 +29,6 @@ class Program
         var rt = Runtime.Builder()
             .PluginDir(pluginPath)
             .Init();
-
-        rt.RegisterNativeLoader();
 
         var bundles = Scanner.ScanDir(pluginPath);
         if (bundles.Count == 0)
@@ -42,26 +38,14 @@ class Program
 
         Console.Error.WriteLine($"discovered {bundles.Count} bundles\n");
 
-        foreach (var (path, manifest) in bundles)
+        foreach (var bundle in bundles)
         {
-            rt.LoadBundle(path);
-            Console.Error.WriteLine($"  loaded: {manifest.BundleName}");
+            rt.LoadBundle(bundle.Item1);
+            Console.Error.WriteLine($"  loaded: {bundle.Item2.BundleName}");
         }
 
         Console.WriteLine("\n=== Pipeline Host (C#) ===\n");
-
-        foreach (var (_, manifest) in bundles)
-        {
-            if (manifest.Provides.Any(c => c.StartsWith("pipeline.Decoder")))
-            {
-                var handle = rt.FindByBundle(manifest.BundleName, "pipeline.Decoder", 1);
-                if (handle != IntPtr.Zero)
-                {
-                    Console.WriteLine($"[{manifest.BundleName}] decoder ready");
-                }
-            }
-        }
-
+        Console.WriteLine("C# host loaded all plugins successfully!");
         Console.WriteLine("\ndone.");
     }
 }

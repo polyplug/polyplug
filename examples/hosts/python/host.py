@@ -8,6 +8,7 @@ from pathlib import Path
 from polyplug import Runtime
 from polyplug.loaders import register_native_loader
 from polyplug import scanner
+from polyplug.abi import contract_id
 
 def main():
     plugin_path = os.environ.get(
@@ -17,7 +18,12 @@ def main():
     print(f"loading plugins from: {plugin_path}\n")
 
     rt = Runtime()
-    register_native_loader(rt)
+    try:
+        register_native_loader(rt)
+    except RuntimeError as e:
+        # Error code 2 = DuplicateLoader (already registered, that's OK)
+        if "register failed: 2" not in str(e):
+            raise
 
     bundles = scanner.scan_dir(plugin_path)
     if not bundles:
@@ -37,40 +43,46 @@ def main():
 
     for _, manifest in bundles:
         provides = manifest.get('provides', [])
+        bundle_name = manifest['bundle_name']
 
         if any(c.startswith('pipeline.Decoder@1') for c in provides):
-            handle = rt.find_by_bundle(manifest['bundle_name'], 'pipeline.Decoder', 1)
+            cid = contract_id('pipeline.Decoder', 1)
+            handle = rt.find_by_bundle(bundle_name, cid, 1)
             if handle:
                 result = rt.call(handle, 'decode', input_str)
-                print(f"[{manifest['bundle_name']}] decode(\"{input_str}\") = \"{result}\"")
+                print(f"[{bundle_name}] decode(\"{input_str}\") = \"{result}\"")
 
         if any(c.startswith('data.Transformer@1') for c in provides):
-            handle = rt.find_by_bundle(manifest['bundle_name'], 'data.Transformer', 1)
+            cid = contract_id('data.Transformer', 1)
+            handle = rt.find_by_bundle(bundle_name, cid, 1)
             if handle:
                 decoded = f"DECODED:{input_str.replace(',', '|')}"
                 result = rt.call(handle, 'transform', decoded)
-                print(f"[{manifest['bundle_name']}] transform(\"{decoded}\") = \"{result}\"")
+                print(f"[{bundle_name}] transform(\"{decoded}\") = \"{result}\"")
 
         if any(c.startswith('pipeline.Encoder@1') for c in provides):
-            handle = rt.find_by_bundle(manifest['bundle_name'], 'pipeline.Encoder', 1)
+            cid = contract_id('pipeline.Encoder', 1)
+            handle = rt.find_by_bundle(bundle_name, cid, 1)
             if handle:
                 transformed = "TRANSFORMED:NAME|value (transformed)|43"
                 result = rt.call(handle, 'encode', transformed)
-                print(f"[{manifest['bundle_name']}] encode(\"{transformed}\") = \"{result}\"")
+                print(f"[{bundle_name}] encode(\"{transformed}\") = \"{result}\"")
 
         if any(c.startswith('data.Reporter@1') for c in provides):
-            handle = rt.find_by_bundle(manifest['bundle_name'], 'data.Reporter', 1)
+            cid = contract_id('data.Reporter', 1)
+            handle = rt.find_by_bundle(bundle_name, cid, 1)
             if handle:
                 transformed = "TRANSFORMED:NAME|value (transformed)|43"
                 result = rt.call(handle, 'report', transformed)
-                print(f"[{manifest['bundle_name']}] report(\"{transformed}\") = \"{result}\"")
+                print(f"[{bundle_name}] report(\"{transformed}\") = \"{result}\"")
 
         if any(c.startswith('pipeline.Validator@1') for c in provides):
-            handle = rt.find_by_bundle(manifest['bundle_name'], 'pipeline.Validator', 1)
+            cid = contract_id('pipeline.Validator', 1)
+            handle = rt.find_by_bundle(bundle_name, cid, 1)
             if handle:
                 decoded = f"DECODED:{input_str.replace(',', '|')}"
                 result = rt.call(handle, 'validate', decoded)
-                print(f"[{manifest['bundle_name']}] validate(\"{decoded}\") = \"{result}\"")
+                print(f"[{bundle_name}] validate(\"{decoded}\") = \"{result}\"")
 
     print("\ndone.")
 
