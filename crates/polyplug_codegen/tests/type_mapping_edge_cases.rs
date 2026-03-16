@@ -136,7 +136,6 @@ fn deno_u64_param_maps_to_bigint() {
 }
 
 /// `i64` function return values must map to `bigint` in Deno contract output.
-#[ignore]
 #[test]
 #[ignore] // TODO: Update for host-side generation
 fn deno_i64_return_maps_to_bigint() {

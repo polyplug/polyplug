@@ -2251,6 +2251,7 @@ dependencies = [
  "clap",
  "libloading 0.9.0",
  "polyplug",
+ "polyplug_abi",
  "polyplug_codegen",
  "polyplug_guest",
  "tempfile",

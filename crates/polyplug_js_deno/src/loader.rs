@@ -7,11 +7,13 @@
 //! Vtables, function pointer arrays, thread handles, and string data are `Box::leak`'d
 //! intentionally. JS plugins live for the process lifetime and are never unloaded.
 
+use core::time::Duration;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::sync::OnceLock;
+use std::sync::mpsc;
 
 use deno_core::FastString;
 use deno_core::ModuleLoadOptions;
@@ -23,6 +25,9 @@ use deno_core::ModuleType;
 use deno_core::ResolutionKind;
 use deno_core::op2;
 use deno_error::JsErrorBox;
+use polyplug::error::LoaderError;
+use polyplug::error::PolyplugError;
+use polyplug::loader::BundleLoader;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
@@ -31,9 +36,6 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 
 use crate::config::JsDenoConfig;
 
@@ -48,7 +50,7 @@ thread_local! {
 // VtableSenderInner uses a type alias so the thread_local! macro can parse the angle brackets
 // without hitting the type_complexity lint.
 // Sends: (vtable_ptr, contract_id, fn_count, contract_name)
-type VtableSenderInner = std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>;
+type VtableSenderInner = mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>;
 
 thread_local! {
     static VTABLE_SENDER: core::cell::RefCell<Option<VtableSenderInner>> =
@@ -63,7 +65,7 @@ pub(crate) struct JsCallRequest {
     pub(crate) args_ptr: usize,
     /// Raw out pointer value (reconstructed on the bundle thread).
     pub(crate) out_ptr: usize,
-    pub(crate) result_tx: std::sync::mpsc::SyncSender<AbiError>,
+    pub(crate) result_tx: mpsc::SyncSender<AbiError>,
 }
 
 // SAFETY: JsCallRequest contains raw pointer values stored as usize (non-dereferenced here)
@@ -80,7 +82,7 @@ struct SendPluginVTable(*const PluginVTable);
 unsafe impl Send for SendPluginVTable {}
 
 struct DenoFunctionSlot {
-    call_tx: std::sync::mpsc::SyncSender<JsCallRequest>,
+    call_tx: mpsc::SyncSender<JsCallRequest>,
 }
 
 static DENO_FUNCTION_REGISTRY: OnceLock<Mutex<Vec<Option<DenoFunctionSlot>>>> = OnceLock::new();
@@ -106,10 +108,8 @@ fn dispatch_deno_call(slot: usize, args_ptr: *const (), out_ptr: *mut ()) -> Abi
             };
         }
     };
-    let (result_tx, result_rx): (
-        std::sync::mpsc::SyncSender<AbiError>,
-        std::sync::mpsc::Receiver<AbiError>,
-    ) = std::sync::mpsc::sync_channel::<AbiError>(0);
+    let (result_tx, result_rx): (mpsc::SyncSender<AbiError>, mpsc::Receiver<AbiError>) =
+        mpsc::sync_channel::<AbiError>(0);
     let req: JsCallRequest = JsCallRequest {
         args_ptr: args_ptr as usize,
         out_ptr: out_ptr as usize,
@@ -476,12 +476,6 @@ impl ModuleLoader for InMemoryModuleLoader {
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
-// Type alias for the vtable channel pair to avoid the type_complexity lint.
-type VtableChannelPair = (
-    std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize)>,
-    std::sync::mpsc::Receiver<(SendPluginVTable, u64, usize)>,
-);
-
 /// Loader for V8 in-process JS plugin bundles using deno_core.
 pub struct JsDenoLoader {
     _config: JsDenoConfig,
@@ -508,21 +502,21 @@ impl BundleLoader for JsDenoLoader {
 
         // 2. Create channel for vtable registration (bounded 1 = oneshot)
         let (vtable_tx, vtable_rx): (
-            std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>,
-            std::sync::mpsc::Receiver<(SendPluginVTable, u64, usize, String)>,
-        ) = std::sync::mpsc::sync_channel(1);
+            mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>,
+            mpsc::Receiver<(SendPluginVTable, u64, usize, String)>,
+        ) = mpsc::sync_channel(1);
 
         // 2b. Create channel for propagating init errors from the bundle thread.
         let (err_tx, err_rx): (
-            std::sync::mpsc::SyncSender<PolyplugError>,
-            std::sync::mpsc::Receiver<PolyplugError>,
-        ) = std::sync::mpsc::sync_channel::<PolyplugError>(1);
+            mpsc::SyncSender<PolyplugError>,
+            mpsc::Receiver<PolyplugError>,
+        ) = mpsc::sync_channel::<PolyplugError>(1);
 
         // 3. Create channel for vtable call dispatch
         let (call_tx, call_rx): (
-            std::sync::mpsc::SyncSender<JsCallRequest>,
-            std::sync::mpsc::Receiver<JsCallRequest>,
-        ) = std::sync::mpsc::sync_channel::<JsCallRequest>(16);
+            mpsc::SyncSender<JsCallRequest>,
+            mpsc::Receiver<JsCallRequest>,
+        ) = mpsc::sync_channel::<JsCallRequest>(16);
 
         // 4. Clone path for thread (path is &Path, must be owned to move into thread)
         let bundle_path: PathBuf = path.to_owned();
@@ -672,20 +666,22 @@ impl BundleLoader for JsDenoLoader {
         let _leaked: &'static std::thread::JoinHandle<()> = Box::leak(Box::new(thread_handle));
 
         // 6. Receive the registered vtable ptr from the bundle thread (30s timeout)
-        let (raw_vtable_wrapped, contract_id_val, fn_count, contract_name_str): (SendPluginVTable, u64, usize, String) =
-            vtable_rx
-                .recv_timeout(core::time::Duration::from_secs(30))
-                .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
-                    // Check if the bundle thread reported a specific error.
-                    err_rx
-                        .try_recv()
-                        .unwrap_or_else(|_: std::sync::mpsc::TryRecvError| {
-                            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                                runtime: "js-deno".to_owned(),
-                                message: "vtable registration timed out after 30s".to_owned(),
-                            })
-                        })
-                })?;
+        let (raw_vtable_wrapped, contract_id_val, fn_count, contract_name_str): (
+            SendPluginVTable,
+            u64,
+            usize,
+            String,
+        ) = vtable_rx.recv_timeout(Duration::from_secs(30)).map_err(
+            |_: mpsc::RecvTimeoutError| {
+                // Check if the bundle thread reported a specific error.
+                err_rx.try_recv().unwrap_or_else(|_: mpsc::TryRecvError| {
+                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                        runtime: "js-deno".to_owned(),
+                        message: "vtable registration timed out after 30s".to_owned(),
+                    })
+                })
+            },
+        )?;
         let raw_vtable: *const PluginVTable = raw_vtable_wrapped.0;
 
         if raw_vtable.is_null() {

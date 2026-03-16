@@ -116,8 +116,8 @@ use polyplug_guest::PluginRegistrar;
 use polyplug_guest::StringView;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
-use guest::vtables::TEST_ADD_IMPL;
-use guest::vtables::TEST_ADD_VTABLE;
+use guest::vtables::TEST_ADDER_IMPL;
+use guest::vtables::TEST_ADDER_VTABLE;
 
 struct MyPlugin;
 
@@ -145,7 +145,7 @@ impl TestAddPlugin for MyPlugin {
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     // Set the OnceLock impl before any vtable function can be called.
-    TEST_ADD_IMPL.get_or_init(|| Box::new(MyPlugin));
+    TEST_ADDER_IMPL.get_or_init(|| Box::new(MyPlugin));
 
     if registrar.is_null() {
         return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
@@ -162,12 +162,12 @@ pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiEr
         version_patch: 0_u32,
     };
 
-    // SAFETY: desc and TEST_ADD_VTABLE are 'static; registrar is valid.
+    // SAFETY: desc and TEST_ADDER_VTABLE are 'static; registrar is valid.
     unsafe {
         (reg.register_plugin)(
             registrar,
             &desc as *const PluginDescriptor,
-            &TEST_ADD_VTABLE as *const _,
+            &TEST_ADDER_VTABLE as *const _,
         )
     }
 }

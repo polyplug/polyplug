@@ -156,7 +156,7 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
     out.push_str("#pragma once\n");
     out.push_str("#include \"types.hpp\"\n");
     out.push_str("#include <cstdint>\n\n");
-    out.push_str("namespace polyplug_plugin {\n\n");
+    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
     out.push_str("struct PolyplugError { uint32_t code; };\n\n");
 
     for contract in &ir.contracts {
@@ -222,7 +222,7 @@ fn generate_vtables_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <cstdint>\n");
     out.push_str("#include <exception>\n\n");
-    out.push_str("namespace polyplug_plugin {\n\n");
+    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -492,7 +492,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include \"vtables.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n\n");
 
-    out.push_str("namespace polyplug_plugin {\n\n");
+    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
