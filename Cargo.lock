@@ -2189,6 +2189,7 @@ name = "polyplug_host"
 version = "0.1.0"
 dependencies = [
  "polyplug",
+ "polyplug_abi",
 ]
 
 [[package]]

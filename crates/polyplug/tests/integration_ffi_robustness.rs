@@ -9,8 +9,8 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug::allocator::polyplug_host_alloc;
-use polyplug::allocator::polyplug_host_free;
+use polyplug_abi::polyplug_host_alloc;
+use polyplug_abi::polyplug_host_free;
 use polyplug::registry::Registry;
 use std::sync::Arc;
 
