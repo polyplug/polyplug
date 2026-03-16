@@ -82,7 +82,7 @@ def _check_error_code(lib: ctypes.CDLL, code: int, context: str) -> None:
 
 class Runtime:
     def __init__(self) -> None:
-        lib_path: str = _resolve_lib_path()
+        lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
         self._lib: ctypes.CDLL = ctypes.CDLL(lib_path)
         self._bind_functions(self._lib)
         rt_ptr: ctypes.c_void_p = ctypes.c_void_p(self._lib.polyplug_runtime_create())

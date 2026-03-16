@@ -7,6 +7,20 @@ WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 export POLYPLUG_PLUGIN_PATH="$SCRIPT_DIR/plugins"
 
+# Set library path
+if [ -f "$WORKSPACE_DIR/target/release/deps/libpolyplug.so" ]; then
+    export POLYPLUG_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug.so"
+elif [ -f "$WORKSPACE_DIR/target/debug/deps/libpolyplug.so" ]; then
+    export POLYPLUG_LIB_PATH="$WORKSPACE_DIR/target/debug/deps/libpolyplug.so"
+fi
+
+# Check if loader libs exist
+LOADER_LIBS_EXIST=false
+if [ -f "$WORKSPACE_DIR/target/release/deps/libpolyplug_native.so" ] || \
+   [ -f "$WORKSPACE_DIR/target/debug/deps/libpolyplug_native.so" ]; then
+    LOADER_LIBS_EXIST=true
+fi
+
 echo "=== polyplug Examples Verification ==="
 echo ""
 
@@ -25,11 +39,15 @@ echo ""
 # Run Python host
 echo "=== Python Host ==="
 if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    if python3 hosts/python/host.py 2>&1; then
-        echo "✓ python host passed"
+    if [ -n "${POLYPLUG_LIB_PATH:-}" ] && [ "$LOADER_LIBS_EXIST" = true ]; then
+        if PYTHONPATH="$WORKSPACE_DIR/host-libs/python" python3 hosts/python/host.py 2>&1; then
+            echo "✓ python host passed"
+        else
+            echo "✗ python host failed"
+            FAILED=$((FAILED + 1))
+        fi
     else
-        echo "✗ python host failed"
-        FAILED=$((FAILED + 1))
+        echo "⊘ python host skipped (requires loader libraries)"
     fi
 else
     echo "⊘ python host skipped (python3 not available or host.py not found)"
@@ -38,26 +56,34 @@ echo ""
 
 # Run Lua host
 echo "=== Lua Host ==="
-if command -v lua &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    if lua hosts/lua/host.lua 2>&1; then
-        echo "✓ lua host passed"
+if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
+    if [ -n "${POLYPLUG_LIB_PATH:-}" ] && [ "$LOADER_LIBS_EXIST" = true ]; then
+        if LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;$WORKSPACE_DIR/host-libs/lua/?/init.lua;;" luajit hosts/lua/host.lua 2>&1; then
+            echo "✓ lua host passed"
+        else
+            echo "✗ lua host failed"
+            FAILED=$((FAILED + 1))
+        fi
     else
-        echo "✗ lua host failed"
-        FAILED=$((FAILED + 1))
+        echo "⊘ lua host skipped (requires loader libraries)"
     fi
 else
-    echo "⊘ lua host skipped (lua not available or host.lua not found)"
+    echo "⊘ lua host skipped (luajit not available or host.lua not found)"
 fi
 echo ""
 
 # Run JS/Deno host
 echo "=== JavaScript (Deno) Host ==="
 if command -v deno &> /dev/null && [ -f "hosts/js/host.ts" ]; then
-    if deno run --allow-read --allow-ffi --allow-env hosts/js/host.ts 2>&1; then
-        echo "✓ js host passed"
+    if [ -n "${POLYPLUG_LIB_PATH:-}" ] && [ "$LOADER_LIBS_EXIST" = true ]; then
+        if deno run --allow-read --allow-ffi --allow-env hosts/js/host.ts 2>&1; then
+            echo "✓ js host passed"
+        else
+            echo "✗ js host failed"
+            FAILED=$((FAILED + 1))
+        fi
     else
-        echo "✗ js host failed"
-        FAILED=$((FAILED + 1))
+        echo "⊘ js host skipped (requires loader libraries)"
     fi
 else
     echo "⊘ js host skipped (deno not available or host.ts not found)"

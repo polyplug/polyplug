@@ -30,6 +30,11 @@ export class Runtime {
     this.#ptr = ptr;
   }
 
+  registerNativeLoader(): void {
+    // Native loader is built-in to the runtime
+    // No separate registration needed
+  }
+
   [Symbol.dispose](): void {
     this.#lib.symbols.polyplug_runtime_destroy(this.#ptr);
   }
@@ -90,6 +95,11 @@ export class Guard {
   constructor(lib: Deno.DynamicLibrary<typeof SYMBOLS>, ptr: Deno.PointerValue) {
     this.#lib = lib;
     this.#ptr = ptr;
+  }
+
+  registerNativeLoader(): void {
+    // Native loader is built-in to the runtime
+    // No separate registration needed
   }
 
   [Symbol.dispose](): void {

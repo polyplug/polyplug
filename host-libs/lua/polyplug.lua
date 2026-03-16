@@ -26,12 +26,12 @@ ffi.cdef([[
 
 -- NULL_HANDLE sentinel: u64::MAX = 0xFFFFFFFFFFFFFFFF
 -- Use ULL suffix (LuaJIT cdata literal syntax)
-M.NULL_HANDLE = ffi.cast("uint64_t", 0xFFFFFFFFFFFFFFFFULL)
+M.NULL_HANDLE = ffi.cast("uint64_t", "0xFFFFFFFFFFFFFFFF")
 
 -- Load the shared library. Caller must pass the full path to libpolyplug.so.
 -- Returns the loaded ffi library object (stored on M for re-use).
 function M.load_lib(so_path)
-    M._lib = ffi.load(so_path)
+    M._lib = ffi.load(os.getenv('POLYPLUG_LIB_PATH') or so_path)
     return M._lib
 end
 
@@ -241,7 +241,6 @@ function M.register_native_loader(rt)
     if err ~= 0 then error("polyplug: native loader register failed: " .. err) end
 end
 
-return M
 
 --- Convert StringView to Lua string.
 -- @param sv StringView cdata
@@ -264,3 +263,5 @@ end
 M.to_str = to_str
 M.to_string = to_str
 M.str_as_view = str_as_view
+
+return M
