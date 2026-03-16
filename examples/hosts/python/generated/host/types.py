@@ -5,5 +5,4 @@
 from __future__ import annotations
 import ctypes
 from typing import ClassVar
-from polyplug_guest.abi import StringView
 

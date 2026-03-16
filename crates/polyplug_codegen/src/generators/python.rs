@@ -35,8 +35,8 @@ impl CodeGenerator for PythonGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError> {
-        let types_py: String = generate_python_types_file(ir);
-        let types_pyi: String = generate_python_types_stub(ir);
+        let types_py: String = generate_host_types_file(ir);
+        let types_pyi: String = generate_host_types_stub(ir);
         let callers_py: String = generate_host_callers_file(ir);
         let callers_pyi: String = generate_host_callers_stub(ir);
 
@@ -157,6 +157,70 @@ fn generate_python_types_stub(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import ClassVar\n");
     out.push_str("from polyplug_guest.abi import Buffer, StringView\n\n");
+    if !ir.enums.is_empty() {
+        out.push_str("import enum\n\n");
+    }
+    for e in &ir.enums {
+        generate_python_enum(&mut out, e);
+        out.push('\n');
+    }
+
+    for ty in &ir.types {
+        generate_python_user_type_stub(&mut out, ty);
+        out.push('\n');
+    }
+
+    for contract in &ir.contracts {
+        let struct_name: String = contract_name_to_struct(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                emit_python_arg_pack_stub(&mut out, &struct_name, func);
+                out.push('\n');
+            }
+        }
+    }
+
+    out
+}
+
+fn generate_host_types_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("import ctypes\n");
+    out.push_str("from typing import ClassVar\n\n");
+    if !ir.enums.is_empty() {
+        out.push_str("import enum\n\n");
+    }
+    for e in &ir.enums {
+        generate_python_enum(&mut out, e);
+        out.push('\n');
+    }
+
+    for ty in &ir.types {
+        generate_python_user_type(&mut out, ty);
+        out.push('\n');
+    }
+
+    for contract in &ir.contracts {
+        let struct_name: String = contract_name_to_struct(&contract.name);
+        for func in &contract.functions {
+            if needs_arg_pack(&func.params) {
+                emit_python_arg_pack_struct(&mut out, &struct_name, func);
+                out.push('\n');
+            }
+        }
+    }
+
+    out
+}
+
+fn generate_host_types_stub(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("import ctypes\n");
+    out.push_str("from typing import ClassVar\n\n");
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
