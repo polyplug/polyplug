@@ -10,21 +10,21 @@ public interface IPipelineDecoderPlugin {
 
 /// Guest interface for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
 public interface IDataTransformerPlugin {
-    Polyplug.Guest.StringView Transform(Polyplug.Guest.StringView data);
+    Polyplug.Guest.StringView Transform(Polyplug.Guest.StringView input);
 }
 
 /// Guest interface for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
 public interface IPipelineEncoderPlugin {
-    Polyplug.Guest.StringView Encode(Polyplug.Guest.StringView data);
+    Polyplug.Guest.StringView Encode(Polyplug.Guest.StringView input);
 }
 
 /// Guest interface for contract `data.Reporter` (id=0x81D41D43E511D297)
 public interface IDataReporterPlugin {
-    Polyplug.Guest.StringView Report(Polyplug.Guest.StringView data);
+    Polyplug.Guest.StringView Report(Polyplug.Guest.StringView input);
 }
 
 /// Guest interface for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
 public interface IPipelineValidatorPlugin {
-    Polyplug.Guest.StringView Validate(Polyplug.Guest.StringView data);
+    Polyplug.Guest.StringView Validate(Polyplug.Guest.StringView input);
 }
 

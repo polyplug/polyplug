@@ -1,16 +1,13 @@
 [bundle]
-name    = "cpp_encoder"
+name = "cpp_encoder"
 version = "1.0.0"
+api = "../../../api.toml"
 runtime = "native"
-api     = "../../../api.toml"
 
 [bundle.file]
-linux.x86_64   = "libencoder.so"
-linux.aarch64  = "libencoder.so"
-macos.aarch64  = "libencoder.dylib"
-windows.x86_64 = "encoder.dll"
+linux.x86_64 = "libencoder.so"
 
 [[plugin]]
-name       = "cpp_encoder"
-version    = "1.0.0"
-implements = ["pipeline.Encoder@1.0"]
+name = "encoder"
+version = "1.0.0"
+contracts = ["pipeline.Encoder@1.0"]

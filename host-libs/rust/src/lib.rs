@@ -68,3 +68,35 @@ pub unsafe fn resolve_plugin(vtable: &HostVTable, handle: PluginHandle) -> *cons
     // SAFETY: caller guarantees vtable is valid and runtime is alive.
     unsafe { (vtable.resolve_plugin)(handle) }
 }
+
+// ─── String Helpers ───────────────────────────────────────────────────────────
+
+/// Convert a `StringView` to a `&str`.
+///
+/// # Safety
+/// The `StringView` must point to valid UTF-8 data that remains valid for the
+/// duration of the returned reference's use.
+pub fn to_str(sv: &polyplug_abi::StringView) -> &str {
+    if sv.ptr.is_null() || sv.len == 0 {
+        return "";
+    }
+    unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)).unwrap_or("") }
+}
+
+/// Convert a `&str` to a `StringView` (borrowed, for passing to guest).
+///
+/// The returned `StringView` borrows from the input string. The caller must
+/// ensure the string outlives the `StringView`.
+pub fn str_as_view(s: &str) -> polyplug_abi::StringView {
+    polyplug_abi::StringView {
+        ptr: s.as_ptr(),
+        len: s.len(),
+    }
+}
+
+/// Create an owned `String` from a `StringView`.
+///
+/// This copies the data, so the `StringView` can be freed after this call.
+pub fn to_string(sv: &polyplug_abi::StringView) -> String {
+    to_str(sv).to_string()
+}

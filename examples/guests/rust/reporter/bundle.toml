@@ -1,19 +1,13 @@
-# bundle.toml — Rust reporter guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang rust --out generated/
-
 [bundle]
-name    = "rust_reporter"
+name = "rust_reporter"
 version = "1.0.0"
+api = "../../../api.toml"
 runtime = "native"
-api     = "../../../api.toml"
 
 [bundle.file]
-linux.x86_64   = "libcsv_encoder.so"
-linux.aarch64  = "libcsv_encoder.so"
-macos.aarch64  = "libcsv_encoder.dylib"
-windows.x86_64 = "csv_encoder.dll"
+linux.x86_64 = "libreporter.so"
 
 [[plugin]]
-name       = "rust_reporter"
-version    = "1.0.0"
-implements = ["data.Reporter@1.0"]
+name = "reporter"
+version = "1.0.0"
+contracts = ["data.Reporter@1.0"]

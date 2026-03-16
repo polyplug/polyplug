@@ -3,7 +3,7 @@ name = "lua_reporter"
 bundle_id = 11993127314940549623
 version = "1.0.0"
 runtime = "lua"
-provides = ["data.Reporter@1"]
-function_count = { "data.Reporter@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 file = "reporter.lua"

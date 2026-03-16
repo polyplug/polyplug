@@ -1,54 +1,31 @@
-// cpp_validator — C++ native plugin implementing pipeline.Validator v1.
-// Contract: validate(data: StringView) -> StringView
-// Input:  "name,value,42"
-// Output: "VALID:name,value,42" or error
+#include <polyplug/abi.hpp>
+#include <polyplug/helpers.hpp>
+#include <string>
+#include <sstream>
 
-#include "generated/guest/contracts.hpp"
-#include "generated/guest/vtables.hpp"
-#include "polyplug/abi.hpp"
+using namespace polyplug;
 
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
+extern "C" {
 
-namespace polyplug_plugin {
-
-static constexpr uint32_t EXT_TRACE_ID = 0xC4EB9AEEu;
-
-struct TraceVTable {
-    void (*emit)(StringView msg, const void* state);
-    const void* state;
-};
-
-static const TraceVTable* g_trace_vtable = nullptr;
-
-static void emit_trace(const char* msg) noexcept {
-    if (g_trace_vtable == nullptr || g_trace_vtable->emit == nullptr) return;
-    StringView sv{reinterpret_cast<const uint8_t*>(msg), std::strlen(msg)};
-    g_trace_vtable->emit(sv, g_trace_vtable->state);
+POLYPLUG_EXPORT uint32_t polyplug_abi_version() {
+    return POLYPLUG_ABI_VERSION;
 }
 
-class Validator : public PipelineValidatorPlugin {
-public:
-    StringView validate(StringView data) override {
-        emit_trace("[cpp_validator] validate called");
-        // Simple validation - real impl would check format
-        return data;
+POLYPLUG_EXPORT AbiError pipeline_validator_validate(StringView input, StringView* out) {
+    if (!out) return {ABI_ERROR_GENERIC, {}};
+    std::string s = guest::to_string(input);
+    if (s.find("DECODED:") == 0) s = s.substr(8);
+    std::istringstream iss(s);
+    std::string name, value, count_str;
+    if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|') && !name.empty() && !value.empty()) {
+        try {
+            std::stoi(count_str);
+            *out = guest::alloc_string("VALID:" + s);
+            return ABI_OK;
+        } catch (...) {}
     }
-};
-
-PipelineValidatorPlugin* create_pipeline_Validator_impl() {
-    return new Validator();
+    *out = guest::alloc_string("INVALID:expected name|value|count");
+    return ABI_OK;
 }
 
-extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {
-    if (!registrar || !ctx) return AbiError{ABI_ERROR_GENERIC, StringView{nullptr, 0}};
-    
-    const void* trace_ext = registrar->host->get_extension(EXT_TRACE_ID);
-    if (trace_ext) g_trace_vtable = reinterpret_cast<const TraceVTable*>(trace_ext);
-    
-    emit_trace("[cpp_validator] init");
-    return ::polyplug_init(registrar, ctx);
 }
-
-}  // namespace polyplug_plugin

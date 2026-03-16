@@ -1,10 +1,10 @@
 [package]
-name    = "rust_decoder"
+name = "decoder"
 version = "1.0.0"
-edition.workspace = true
+edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-polyplug_guest = { workspace = true }
+polyplug_guest = { path = "../../../../guest-libs/rust" }

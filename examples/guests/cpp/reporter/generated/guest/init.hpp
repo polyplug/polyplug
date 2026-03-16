@@ -6,7 +6,9 @@
 
 namespace polyplug_plugin {
 
-DataReporterPlugin* g_cpp_reporter_impl = nullptr;
+using namespace polyplug_generated;
+
+IPlugin* g_reporter_impl = nullptr;
 
 }  // namespace polyplug_plugin
 
@@ -15,15 +17,15 @@ extern "C" uint32_t polyplug_abi_version() { return 1U; }
 extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {
     if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};
 
-    // Register plugin: cpp_reporter
-    polyplug_plugin::set_cpp_reporter_impl(polyplug_plugin::create_cpp_reporter_impl());
-    PluginDescriptor desc_CPP_REPORTER = {
-        { (const uint8_t*)"cpp_reporter", 12U },
-        { (const uint8_t*)"data.Reporter@1", 15U },
+    // Register plugin: reporter
+    polyplug_plugin::set_reporter_impl(polyplug_plugin::create_reporter_impl());
+    PluginDescriptor desc_REPORTER = {
+        { (const uint8_t*)"reporter", 8U },
+        { (const uint8_t*)"@1", 2U },
         1U, 0U, 0U
     };
-    AbiError err_CPP_REPORTER = registrar->register_plugin(registrar, &desc_CPP_REPORTER, &polyplug_plugin::CPP_REPORTER_VTABLE);
-    if (err_CPP_REPORTER.code != 0U) return err_CPP_REPORTER;
+    AbiError err_REPORTER = registrar->register_plugin(registrar, &desc_REPORTER, &polyplug_plugin::REPORTER_VTABLE);
+    if (err_REPORTER.code != 0U) return err_REPORTER;
 
     return AbiError{0U, StringView{nullptr, 0}};
 }

@@ -3,11 +3,8 @@ name = "cpp_transformer"
 bundle_id = 9589753868596421602
 version = "1.0.0"
 runtime = "native"
-provides = ["data.Transformer@1"]
-function_count = { "data.Transformer@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 [file]
-linux.aarch64 = "libuppercase_transformer.so"
-linux.x86_64 = "libuppercase_transformer.so"
-macos.aarch64 = "libuppercase_transformer.dylib"
-windows.x86_64 = "uppercase_transformer.dll"
+linux.x86_64 = "libtransformer.so"

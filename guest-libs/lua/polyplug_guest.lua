@@ -93,3 +93,27 @@ function M.cast_context(ptr)
 end
 
 return M
+
+--- Convert a StringView to a Lua string.
+-- @param sv StringView cdata
+-- @return Lua string
+local function to_str(sv)
+    if not sv.ptr or sv.len == 0 then
+        return ""
+    end
+    return ffi.string(sv.ptr, sv.len)
+end
+
+--- Allocate a StringView from a Lua string using host allocator.
+-- @param s Lua string
+-- @return StringView cdata pointing to host-allocated memory
+local function alloc_string(s)
+    local ptr = M.host_alloc(#s, 1)
+    ffi.copy(ptr, s, #s)
+    return ffi.new('StringView', ptr, #s)
+end
+
+M.to_str = to_str
+M.alloc_string = alloc_string
+
+return M

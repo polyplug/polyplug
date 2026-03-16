@@ -1,20 +1,18 @@
-# Python validator plugin — implements pipeline.Validator@1
-# Input:  "name,value,42"
-# Output: "VALID:name,value,42" or error
+from polyplug_guest import StringView, to_str, alloc_string
 
-from generated.guest.contracts import (
-    PYTHON_VALIDATORPipelineValidatorPlugin,
-    set_python_validator_impl,
-)
-from polyplug_guest.abi import StringView, ABI_ERROR_GENERIC
+def validate(input: StringView) -> StringView:
+    s = to_str(input)
+    if s.startswith("DECODED:"):
+        s = s[8:]
+    parts = s.split('|')
+    if len(parts) >= 3 and parts[0] and parts[1]:
+        try:
+            int(parts[2])
+            return alloc_string(f"VALID:{s}")
+        except ValueError:
+            pass
+    return alloc_string("INVALID:expected format is name|value|count")
 
-class ValidatorPlugin(PYTHON_VALIDATORPipelineValidatorPlugin):
-    def validate(self, data: StringView) -> StringView:
-        data_str = data.to_str()
-        parts = data_str.split(',')
-        if len(parts) != 3:
-            raise ValueError("invalid format: expected 3 fields")
-        result = f"VALID:{data_str}"
-        return StringView.from_string(result)
-
-set_python_validator_impl(ValidatorPlugin())
+POLYPLUG_FUNCTIONS = {
+    'pipeline.Validator': {'validate': validate},
+}

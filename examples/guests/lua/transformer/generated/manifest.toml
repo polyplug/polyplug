@@ -3,7 +3,7 @@ name = "lua_transformer"
 bundle_id = 17498045201333065941
 version = "1.0.0"
 runtime = "lua"
-provides = ["data.Transformer@1"]
-function_count = { "data.Transformer@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
-file = "reverse_transformer.lua"
+file = "transformer.lua"

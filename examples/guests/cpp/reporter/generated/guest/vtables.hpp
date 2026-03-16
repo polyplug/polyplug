@@ -8,35 +8,6 @@
 
 namespace polyplug_plugin {
 
-// Plugin: cpp_reporter
-extern DataReporterPlugin* g_cpp_reporter_impl;
-
-constexpr uint64_t CPP_REPORTER_CONTRACT_ID = 0x81D41D43E511D297ULL;
-
-inline void set_cpp_reporter_impl(DataReporterPlugin* impl) { g_cpp_reporter_impl = impl; }
-
-// ABI wrapper for report (function_id = 0)
-inline AbiError cpp_reporter_report_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_cpp_reporter_impl->report(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const CPP_REPORTER_FNS[] = {
-    reinterpret_cast<void*>(cpp_reporter_report_abi),
-};
-
-static PluginVTable CPP_REPORTER_VTABLE = {
-    CPP_REPORTER_CONTRACT_ID,
-    0U,
-    1U,
-    CPP_REPORTER_FNS
-};
+using namespace polyplug_generated;
 
 }  // namespace polyplug_plugin

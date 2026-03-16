@@ -15,50 +15,6 @@ POLYPLUG_ABI_VERSION: int = 1
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
 
-class PYTHON_REPORTERDataReporterPlugin:
-    def report(self, data: StringView) -> StringView:
-        raise NotImplementedError
-
-_python_reporter_IMPL: PYTHON_REPORTERDataReporterPlugin | None = None
-def set_python_reporter_impl(impl: PYTHON_REPORTERDataReporterPlugin) -> None:
-    global _python_reporter_IMPL
-    _python_reporter_IMPL = impl
-
-PYTHON_REPORTER_PLUGIN_NAME_BYTES: bytes = b"python_reporter"
-PYTHON_REPORTER_CONTRACT_NAME_BYTES: bytes = b"data.Reporter@1"
-PYTHON_REPORTER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PYTHON_REPORTER_PLUGIN_NAME_BYTES)
-PYTHON_REPORTER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PYTHON_REPORTER_CONTRACT_NAME_BYTES)
-PYTHON_REPORTER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=PYTHON_REPORTER_PLUGIN_NAME_C, len=len(PYTHON_REPORTER_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=PYTHON_REPORTER_CONTRACT_NAME_C, len=len(PYTHON_REPORTER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
-)
-
-def python_reporter_report_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: PYTHON_REPORTERDataReporterPlugin | None = _python_reporter_IMPL
-    if impl is None:
-        return ABI_ERROR_GENERIC
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    data: StringView = args_ptr_t.contents
-    result = impl.report(data)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return ABI_OK
-
-PYTHON_REPORTER_python_reporter_report_abi_CFUNC = _DISPATCH_FN_CTYPE(python_reporter_report_abi)
-
-PYTHON_REPORTER_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(PYTHON_REPORTER_python_reporter_report_abi_CFUNC, ctypes.c_void_p),
-)
-PYTHON_REPORTER_VTABLE: PluginVTable = PluginVTable(
-    contract_id=0x81D41D43E511D297,
-    contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(PYTHON_REPORTER_FNS, ctypes.c_void_p),
-)
-
 def polyplug_abi_version() -> int:
     return 1
 
@@ -69,9 +25,9 @@ def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
         return
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))
-    err_PYTHON_REPORTER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(PYTHON_REPORTER_DESCRIPTOR), ctypes.byref(PYTHON_REPORTER_VTABLE)
+    err_REPORTER: AbiError = registrar_ptr.contents.register_plugin(
+        registrar_ptr, ctypes.byref(REPORTER_DESCRIPTOR), ctypes.byref(REPORTER_VTABLE)
     )
-    if err_PYTHON_REPORTER.code != ABI_OK:
+    if err_REPORTER.code != ABI_OK:
         raise RuntimeError("plugin registration failed")
 

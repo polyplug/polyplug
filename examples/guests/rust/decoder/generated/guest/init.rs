@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use polyplug_guest::AbiError;
 use polyplug_guest::ABI_OK;
@@ -11,8 +14,8 @@ use polyplug_guest::PluginRegistrar;
 use polyplug_guest::PluginVTable;
 use polyplug_guest::StringView;
 use polyplug_guest::PluginContext;
-use super::vtables::RUST_DECODER_CONTRACT_ID;
-use super::vtables::RUST_DECODER_VTABLE;
+use super::vtables::DECODER_CONTRACT_ID;
+use super::vtables::DECODER_VTABLE;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -40,19 +43,26 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: registrar is non-null and valid per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
 
-    let desc_RUST_DECODER: PluginDescriptor = PluginDescriptor {
-        name: StringView { ptr: b"rust_decoder".as_ptr(), len: 12_usize },
+    // Call user initialization to register plugin implementations
+    unsafe extern "C" {
+        fn polyplug_user_init();
+    }
+    // SAFETY: polyplug_user_init is a safe initialization function provided by user
+    unsafe { polyplug_user_init(); }
+
+    let desc_DECODER: PluginDescriptor = PluginDescriptor {
+        name: StringView { ptr: b"decoder".as_ptr(), len: 7_usize },
         contract_name: StringView { ptr: b"pipeline.Decoder@1".as_ptr(), len: 18_usize },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
-    let err_RUST_DECODER: AbiError = unsafe {
-        (reg.register_plugin)(registrar, &desc_RUST_DECODER as *const PluginDescriptor, &RUST_DECODER_VTABLE as *const PluginVTable)
+    let err_DECODER: AbiError = unsafe {
+        (reg.register_plugin)(registrar, &desc_DECODER as *const PluginDescriptor, &DECODER_VTABLE as *const PluginVTable)
     };
-    if err_RUST_DECODER.code != ABI_OK {
-        return err_RUST_DECODER;
+    if err_DECODER.code != ABI_OK {
+        return err_DECODER;
     }
 
     AbiError::ok()

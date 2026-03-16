@@ -1,0 +1,11 @@
+[bundle]
+name = "js_reporter"
+version = "1.0.0"
+api = "../../../api.toml"
+runtime = "js"
+file = "reporter.js"
+
+[[plugin]]
+name = "reporter"
+version = "1.0.0"
+contracts = ["data.Reporter@1.0"]

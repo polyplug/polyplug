@@ -3,7 +3,7 @@ name = "lua_decoder"
 bundle_id = 7360878406272697018
 version = "1.0.0"
 runtime = "lua"
-provides = ["pipeline.Decoder@1"]
-function_count = { "pipeline.Decoder@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 file = "decoder.lua"

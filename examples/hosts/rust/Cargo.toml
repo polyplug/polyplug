@@ -1,24 +1,13 @@
 [package]
-name = "polyplug-rust-host"
-version = "0.1.0"
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-description = "Rust host example for the polyplug plugin runtime"
+name = "pipeline_host"
+version = "1.0.0"
+edition = "2024"
 
 [[bin]]
-name = "rust"
+name = "pipeline_host"
 path = "src/main.rs"
 
 [dependencies]
-polyplug = { workspace = true }
-polyplug_abi = { workspace = true }
-polyplug_native = { workspace = true }
-polyplug_dotnet = { workspace = true }
-polyplug_js = { workspace = true }
-polyplug_js_deno = { workspace = true }
-polyplug_lua = { workspace = true }
-polyplug_python = { workspace = true }
-
-[lints]
-workspace = true
+polyplug = { path = "../../../crates/polyplug" }
+polyplug_abi = { path = "../../../crates/polyplug_abi" }
+polyplug_native = { path = "../../../crates/polyplug_native" }

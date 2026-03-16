@@ -1,9 +1,8 @@
-# examples/api.toml — defines the example plugin API for a real-world data pipeline
-# This API demonstrates polyplug capabilities for multi-step contract chains
-# All contracts use StringView for simplicity and maximum language compatibility
+# examples/api.toml — Pipeline Data Processing API
+# All contracts use StringView for maximum language compatibility
 
-# pipeline.Decoder: Parses input strings into structured data
-# Input: "name,value,42" 
+# pipeline.Decoder: Parses CSV input into pipe-delimited format
+# Input: "name,value,42"
 # Output: "DECODED:name|value|42"
 [[contract]]
 name = "pipeline.Decoder"
@@ -14,7 +13,7 @@ name = "decode"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
 
-# data.Transformer: Transforms decoded data from one state to another
+# data.Transformer: Transforms decoded data
 # Input: "DECODED:name|value|42"
 # Output: "TRANSFORMED:NAME|value (transformed)|43"
 [[contract]]
@@ -23,10 +22,10 @@ version = "1.0.0"
 
 [[contract.functions]]
 name = "transform"
-params = [{ name = "data", type = "StringView" }]
+params = [{ name = "input", type = "StringView" }]
 return = "StringView"
 
-# pipeline.Encoder: Serializes transformed data back to original format
+# pipeline.Encoder: Encodes transformed data back to CSV
 # Input: "TRANSFORMED:NAME|value (transformed)|43"
 # Output: "NAME,value (transformed),43"
 [[contract]]
@@ -35,10 +34,10 @@ version = "1.0.0"
 
 [[contract.functions]]
 name = "encode"
-params = [{ name = "data", type = "StringView" }]
+params = [{ name = "input", type = "StringView" }]
 return = "StringView"
 
-# data.Reporter: Generates human-readable reports from processed data
+# data.Reporter: Generates human-readable report
 # Input: "TRANSFORMED:NAME|value (transformed)|43"
 # Output: "Report: NAME has value 'value (transformed)' with count 43"
 [[contract]]
@@ -47,10 +46,10 @@ version = "1.0.0"
 
 [[contract.functions]]
 name = "report"
-params = [{ name = "data", type = "StringView" }]
+params = [{ name = "input", type = "StringView" }]
 return = "StringView"
 
-# pipeline.Validator: Validates data format and returns validation result
+# pipeline.Validator: Validates data format
 # Input: "DECODED:name|value|42"
 # Output: "VALID:name|value|42" or "INVALID:reason"
 [[contract]]
@@ -59,5 +58,5 @@ version = "1.0.0"
 
 [[contract.functions]]
 name = "validate"
-params = [{ name = "data", type = "StringView" }]
+params = [{ name = "input", type = "StringView" }]
 return = "StringView"

@@ -1,19 +1,13 @@
-# bundle.toml — C++ transformer guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang cpp --out generated/
-
 [bundle]
-name    = "cpp_transformer"
+name = "cpp_transformer"
 version = "1.0.0"
+api = "../../../api.toml"
 runtime = "native"
-api     = "../../../api.toml"
 
 [bundle.file]
-linux.x86_64   = "libuppercase_transformer.so"
-linux.aarch64  = "libuppercase_transformer.so"
-macos.aarch64  = "libuppercase_transformer.dylib"
-windows.x86_64 = "uppercase_transformer.dll"
+linux.x86_64 = "libtransformer.so"
 
 [[plugin]]
-name       = "cpp_transformer"
-version    = "1.0.0"
-implements = ["data.Transformer@1.0"]
+name = "transformer"
+version = "1.0.0"
+contracts = ["data.Transformer@1.0"]

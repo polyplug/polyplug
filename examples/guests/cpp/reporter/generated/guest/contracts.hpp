@@ -6,6 +6,8 @@
 
 namespace polyplug_plugin {
 
+using namespace polyplug_generated;
+
 struct PolyplugError { uint32_t code; };
 
 /// Abstract plugin base for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
@@ -19,28 +21,28 @@ public:
 class DataTransformerPlugin {
 public:
     virtual ~DataTransformerPlugin() = default;
-    virtual StringView transform(StringView data) = 0;
+    virtual StringView transform(StringView input) = 0;
 };
 
 /// Abstract plugin base for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
 class PipelineEncoderPlugin {
 public:
     virtual ~PipelineEncoderPlugin() = default;
-    virtual StringView encode(StringView data) = 0;
+    virtual StringView encode(StringView input) = 0;
 };
 
 /// Abstract plugin base for contract `data.Reporter` (id=0x81D41D43E511D297)
 class DataReporterPlugin {
 public:
     virtual ~DataReporterPlugin() = default;
-    virtual StringView report(StringView data) = 0;
+    virtual StringView report(StringView input) = 0;
 };
 
 /// Abstract plugin base for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
 class PipelineValidatorPlugin {
 public:
     virtual ~PipelineValidatorPlugin() = default;
-    virtual StringView validate(StringView data) = 0;
+    virtual StringView validate(StringView input) = 0;
 };
 
 }  // namespace polyplug_plugin

@@ -886,6 +886,15 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     );
     out.push_str("    // SAFETY: registrar is non-null and valid per ABI contract.\n");
     out.push_str("    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };\n\n");
+    // Call user initialization hook if it exists
+    out.push_str("    // Call user initialization to register plugin implementations\n");
+    out.push_str("    unsafe extern \"C\" {\n");
+    out.push_str("        fn polyplug_user_init();\n");
+    out.push_str("    }\n");
+    out.push_str(
+        "    // SAFETY: polyplug_user_init is a safe initialization function provided by user\n",
+    );
+    out.push_str("    unsafe { polyplug_user_init(); }\n\n");
     if has_trace {
         out.push_str("    // Optional: trace extension\n");
         out.push_str("    const EXT_TRACE_ID: u32 = 0xC4EB9AEE_u32;\n");

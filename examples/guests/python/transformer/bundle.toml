@@ -1,0 +1,11 @@
+[bundle]
+name = "python_transformer"
+version = "1.0.0"
+api = "../../../api.toml"
+runtime = "python"
+file = "transformer.py"
+
+[[plugin]]
+name = "transformer"
+version = "1.0.0"
+contracts = ["data.Transformer@1.0"]

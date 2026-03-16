@@ -3,7 +3,7 @@ name = "python_decoder"
 bundle_id = 15249206534592156088
 version = "1.0.0"
 runtime = "python"
-provides = ["pipeline.Decoder@1"]
-function_count = { "pipeline.Decoder@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 file = "decoder.py"

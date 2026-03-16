@@ -1,51 +1,19 @@
-// Validator.cs — Validator plugin. ZERO unsafe. Pure business logic.
-using System.Text;
-using Polyplug.Guest;
+using System;
+using PolyplugGuest;
 
 namespace Validator;
 
-// Business logic — pure safe C#.
-public static class ValidatorImpl
+public static class Plugin
 {
-    // pipeline.Validator@1 contract ID
-    public const ulong VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0UL;
-
-    public static byte[] Validate(string value)
+    public static StringView Validate(StringView input)
     {
-        // Expected format: "DECODED:name|value|42"
-        if (!value.StartsWith("DECODED:"))
+        var s = StringHelpers.ToString(input);
+        if (s.StartsWith("DECODED:")) s = s[8..];
+        var parts = s.Split('|');
+        if (parts.Length == 3 && !string.IsNullOrEmpty(parts[0]) && !string.IsNullOrEmpty(parts[1]) && int.TryParse(parts[2], out _))
         {
-            byte[] errBytes = Encoding.UTF8.GetBytes("INVALID:missing DECODED prefix");
-            return errBytes;
+            return StringHelpers.AllocString($"VALID:{s}");
         }
-
-        string payload = value.Substring(8); // skip "DECODED:"
-        string[] parts = payload.Split('|');
-
-        if (parts.Length != 3)
-        {
-            byte[] errBytes = Encoding.UTF8.GetBytes("INVALID:expected 3 pipe-separated fields");
-            return errBytes;
-        }
-
-        string name = parts[0];
-        string val = parts[1];
-        string numStr = parts[2];
-
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(val))
-        {
-            byte[] errBytes = Encoding.UTF8.GetBytes("INVALID:empty name or value field");
-            return errBytes;
-        }
-
-        bool isNumeric = int.TryParse(numStr, out _);
-        if (!isNumeric)
-        {
-            byte[] errBytes = Encoding.UTF8.GetBytes($"INVALID:third field is not a number: {numStr}");
-            return errBytes;
-        }
-
-        byte[] okBytes = Encoding.UTF8.GetBytes("VALID:ok");
-        return okBytes;
+        return StringHelpers.AllocString("INVALID:expected name|value|count");
     }
 }

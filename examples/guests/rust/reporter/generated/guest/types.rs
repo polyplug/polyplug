@@ -2,4 +2,7 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 

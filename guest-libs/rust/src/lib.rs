@@ -211,3 +211,58 @@ impl core::fmt::Display for PluginError {
 }
 
 impl core::error::Error for PluginError {}
+
+// ─── String Helpers ───────────────────────────────────────────────────────────
+
+/// Convert a `StringView` to a `&str`.
+///
+/// # Safety
+/// The `StringView` must point to valid UTF-8 data.
+/// The returned slice is valid only as long as the `StringView` data remains valid.
+///
+/// # Example
+/// ```rust
+/// use polyplug_guest::{StringView, to_str};
+///
+/// let sv = StringView { ptr: b"hello".as_ptr(), len: 5 };
+/// let s: &str = to_str(sv);
+/// assert_eq!(s, "hello");
+/// ```
+pub fn to_str(sv: StringView) -> &'static str {
+    if sv.ptr.is_null() || sv.len == 0 {
+        return "";
+    }
+    unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)).unwrap_or("") }
+}
+
+/// Allocate a `StringView` from a `&str` using the host allocator.
+///
+/// The returned `StringView` points to memory allocated via `polyplug_host_alloc`.
+/// The caller (host) is responsible for freeing the memory via `polyplug_host_free`.
+///
+/// # Errors
+/// Returns `Err(PluginError)` if allocation fails.
+///
+/// # Example
+/// ```rust
+/// use polyplug_guest::{alloc_string, StringView};
+///
+/// let sv: StringView = alloc_string("hello").unwrap();
+/// // sv.ptr points to host-allocated memory
+/// // Host must call polyplug_host_free(sv.ptr, sv.len, 1) when done
+/// ```
+pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
+    let bytes = s.as_bytes();
+    let ptr = unsafe { polyplug_host_alloc(bytes.len(), 1) };
+    if ptr.is_null() {
+        return Err(PluginError {
+            code: ABI_ERROR_GENERIC,
+            message: "allocation failed".to_string(),
+        });
+    }
+    unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
+    Ok(StringView {
+        ptr,
+        len: bytes.len(),
+    })
+}

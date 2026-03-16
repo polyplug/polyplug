@@ -1,14 +1,11 @@
-# bundle.toml — Lua reporter guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang lua --out generated/
-
 [bundle]
-name    = "lua_reporter"
+name = "lua_reporter"
 version = "1.0.0"
+api = "../../../api.toml"
 runtime = "lua"
-file    = "reporter.lua"
-api     = "../../../api.toml"
+file = "reporter.lua"
 
 [[plugin]]
-name       = "lua_reporter"
-version    = "1.0.0"
-implements = ["data.Reporter@1.0"]
+name = "reporter"
+version = "1.0.0"
+contracts = ["data.Reporter@1.0"]

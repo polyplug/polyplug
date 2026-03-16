@@ -8,35 +8,6 @@
 
 namespace polyplug_plugin {
 
-// Plugin: cpp_validator
-extern PipelineValidatorPlugin* g_cpp_validator_impl;
-
-constexpr uint64_t CPP_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0ULL;
-
-inline void set_cpp_validator_impl(PipelineValidatorPlugin* impl) { g_cpp_validator_impl = impl; }
-
-// ABI wrapper for validate (function_id = 0)
-inline AbiError cpp_validator_validate_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_cpp_validator_impl->validate(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const CPP_VALIDATOR_FNS[] = {
-    reinterpret_cast<void*>(cpp_validator_validate_abi),
-};
-
-static PluginVTable CPP_VALIDATOR_VTABLE = {
-    CPP_VALIDATOR_CONTRACT_ID,
-    0U,
-    1U,
-    CPP_VALIDATOR_FNS
-};
+using namespace polyplug_generated;
 
 }  // namespace polyplug_plugin

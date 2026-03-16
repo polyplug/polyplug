@@ -1,13 +1,12 @@
--- Lua encoder plugin — implements pipeline.Encoder@1
--- Input:  "name|value|42"
--- Output: "ENCODED:name,value,42"
+local ffi = require('ffi')
+local polyplug = require('polyplug_guest')
 
-local contracts = require("generated.guest.contracts")
-
-local function encode(data_sv)
-    local data_str = data_sv.str
-    local result = "ENCODED:" .. data_str:gsub("|", ",")
-    return result
+local function encode(input)
+    local s = polyplug.to_str(input)
+    if s:sub(1, 12) == 'TRANSFORMED:' then s = s:sub(13) end
+    return polyplug.alloc_string(s:gsub('|', ','))
 end
 
-contracts.set_lua_encoder_impl(encode)
+return {
+    ['pipeline.Encoder'] = { encode = encode },
+}

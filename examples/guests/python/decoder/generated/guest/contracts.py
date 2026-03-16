@@ -15,50 +15,6 @@ POLYPLUG_ABI_VERSION: int = 1
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
 
-class PYTHON_DECODERPipelineDecoderPlugin:
-    def decode(self, input: StringView) -> StringView:
-        raise NotImplementedError
-
-_python_decoder_IMPL: PYTHON_DECODERPipelineDecoderPlugin | None = None
-def set_python_decoder_impl(impl: PYTHON_DECODERPipelineDecoderPlugin) -> None:
-    global _python_decoder_IMPL
-    _python_decoder_IMPL = impl
-
-PYTHON_DECODER_PLUGIN_NAME_BYTES: bytes = b"python_decoder"
-PYTHON_DECODER_CONTRACT_NAME_BYTES: bytes = b"pipeline.Decoder@1"
-PYTHON_DECODER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PYTHON_DECODER_PLUGIN_NAME_BYTES)
-PYTHON_DECODER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PYTHON_DECODER_CONTRACT_NAME_BYTES)
-PYTHON_DECODER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=PYTHON_DECODER_PLUGIN_NAME_C, len=len(PYTHON_DECODER_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=PYTHON_DECODER_CONTRACT_NAME_C, len=len(PYTHON_DECODER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
-)
-
-def python_decoder_decode_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: PYTHON_DECODERPipelineDecoderPlugin | None = _python_decoder_IMPL
-    if impl is None:
-        return ABI_ERROR_GENERIC
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    input: StringView = args_ptr_t.contents
-    result = impl.decode(input)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return ABI_OK
-
-PYTHON_DECODER_python_decoder_decode_abi_CFUNC = _DISPATCH_FN_CTYPE(python_decoder_decode_abi)
-
-PYTHON_DECODER_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(PYTHON_DECODER_python_decoder_decode_abi_CFUNC, ctypes.c_void_p),
-)
-PYTHON_DECODER_VTABLE: PluginVTable = PluginVTable(
-    contract_id=0x12F3C106B0C3DC1E,
-    contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(PYTHON_DECODER_FNS, ctypes.c_void_p),
-)
-
 def polyplug_abi_version() -> int:
     return 1
 
@@ -69,9 +25,9 @@ def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
         return
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))
-    err_PYTHON_DECODER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(PYTHON_DECODER_DESCRIPTOR), ctypes.byref(PYTHON_DECODER_VTABLE)
+    err_DECODER: AbiError = registrar_ptr.contents.register_plugin(
+        registrar_ptr, ctypes.byref(DECODER_DESCRIPTOR), ctypes.byref(DECODER_VTABLE)
     )
-    if err_PYTHON_DECODER.code != ABI_OK:
+    if err_DECODER.code != ABI_OK:
         raise RuntimeError("plugin registration failed")
 

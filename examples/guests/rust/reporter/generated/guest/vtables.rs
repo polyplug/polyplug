@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use std::sync::OnceLock;
 use polyplug_guest::AbiError;
@@ -25,21 +28,21 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-/// Plugin: rust_reporter
+/// Plugin: reporter
 /// Contract ID constant -- pre-computed FNV-1a of "data.Reporter@1".
-pub const RUST_REPORTER_CONTRACT_ID: u64 = 0x81D41D43E511D297;
+pub const REPORTER_CONTRACT_ID: u64 = 0x81D41D43E511D297;
 
-pub static RUST_REPORTER_IMPL: OnceLock<Box<dyn DataReporterPlugin>> = OnceLock::new();
+pub static REPORTER_IMPL: OnceLock<Box<dyn DataReporterPlugin>> = OnceLock::new();
 
-pub fn set_rust_reporter_impl(impl_: Box<dyn DataReporterPlugin>) -> Result<(), &'static str> {
-    RUST_REPORTER_IMPL.set(impl_).map_err(|_| "rust_reporter already registered")
+pub fn set_reporter_impl(impl_: Box<dyn DataReporterPlugin>) -> Result<(), &'static str> {
+    REPORTER_IMPL.set(impl_).map_err(|_| "reporter already registered")
 }
 
 /// ABI wrapper for report (function_id = 0).
 // SAFETY: args and out pointers are validated by the host runtime ABI contract.
-extern "C" fn rust_reporter_report_abi(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn reporter_report_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &Box<dyn DataReporterPlugin> = match RUST_REPORTER_IMPL.get() {
+        let impl_ref: &Box<dyn DataReporterPlugin> = match REPORTER_IMPL.get() {
             Some(i) => i,
             None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
@@ -59,14 +62,14 @@ extern "C" fn rust_reporter_report_abi(args: *const (), out: *mut ()) -> AbiErro
     }
 }
 
-static RUST_REPORTER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(rust_reporter_report_abi as *const ()),
+static REPORTER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(reporter_report_abi as *const ()),
 ];
 
-pub static RUST_REPORTER_VTABLE: PluginVTable = PluginVTable {
-    contract_id: RUST_REPORTER_CONTRACT_ID,
+pub static REPORTER_VTABLE: PluginVTable = PluginVTable {
+    contract_id: REPORTER_CONTRACT_ID,
     contract_version: 0_u32 << 16 | 0_u32,
     function_count: 1_u32,
-    functions: RUST_REPORTER_FNS.as_ptr() as *const *const (),
+    functions: REPORTER_FNS.as_ptr() as *const *const (),
 };
 

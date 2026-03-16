@@ -1,18 +1,14 @@
-# Python reporter plugin — implements data.Reporter@1
-# Input:  "name,value,42"
-# Output: "REPORTED:name|value|42"
+from polyplug_guest import StringView, to_str, alloc_string
 
-from generated.guest.contracts import (
-    PYTHON_REPORTERDataReporterPlugin,
-    set_python_reporter_impl,
-)
-from polyplug_guest.abi import StringView
+def report(input: StringView) -> StringView:
+    s = to_str(input)
+    if s.startswith("TRANSFORMED:"):
+        s = s[12:]
+    parts = s.split('|')
+    if len(parts) >= 3:
+        return alloc_string(f"Report: {parts[0]} has value '{parts[1]}' with count {parts[2]}")
+    return alloc_string("INVALID:format")
 
-class ReporterPlugin(PYTHON_REPORTERDataReporterPlugin):
-    def report(self, data: StringView) -> StringView:
-        data_str = data.to_str()
-        pipe_sep = data_str.replace(',', '|')
-        result = f"REPORTED:{pipe_sep}"
-        return StringView.from_string(result)
-
-set_python_reporter_impl(ReporterPlugin())
+POLYPLUG_FUNCTIONS = {
+    'data.Reporter': {'report': report},
+}

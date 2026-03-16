@@ -1,0 +1,11 @@
+[bundle]
+name = "js_validator"
+version = "1.0.0"
+api = "../../../api.toml"
+runtime = "js"
+file = "validator.js"
+
+[[plugin]]
+name = "validator"
+version = "1.0.0"
+contracts = ["pipeline.Validator@1.0"]

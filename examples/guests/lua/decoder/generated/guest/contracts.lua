@@ -7,27 +7,4 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for lua_decoder (pipeline.Decoder@1)
---   decode(input: StringView) -> StringView
-local LUA_DECODER_VTABLE = ffi.new("PluginVTable")
-LUA_DECODER_VTABLE.contract_id = 0x12F3C106B0C3DC1E
-LUA_DECODER_VTABLE.contract_version = 0
-LUA_DECODER_VTABLE.function_count = 1
-LUA_DECODER_VTABLE.functions = nil
-
-function M.set_lua_decoder_impl(decode_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", decode_fn)
-    LUA_DECODER_VTABLE.functions = functions
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("lua_decoder")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Decoder@1")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local err = polyplug_guest.register_plugin(descriptor, LUA_DECODER_VTABLE)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
 return M

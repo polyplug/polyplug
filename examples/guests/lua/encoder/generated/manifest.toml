@@ -3,7 +3,7 @@ name = "lua_encoder"
 bundle_id = 1266534721828040038
 version = "1.0.0"
 runtime = "lua"
-provides = ["pipeline.Encoder@1"]
-function_count = { "pipeline.Encoder@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 file = "encoder.lua"

@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use std::sync::OnceLock;
 use polyplug_guest::AbiError;
@@ -25,21 +28,21 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-/// Plugin: rust_encoder
+/// Plugin: encoder
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Encoder@1".
-pub const RUST_ENCODER_CONTRACT_ID: u64 = 0x127D1703C6EFB432;
+pub const ENCODER_CONTRACT_ID: u64 = 0x127D1703C6EFB432;
 
-pub static RUST_ENCODER_IMPL: OnceLock<Box<dyn PipelineEncoderPlugin>> = OnceLock::new();
+pub static ENCODER_IMPL: OnceLock<Box<dyn PipelineEncoderPlugin>> = OnceLock::new();
 
-pub fn set_rust_encoder_impl(impl_: Box<dyn PipelineEncoderPlugin>) -> Result<(), &'static str> {
-    RUST_ENCODER_IMPL.set(impl_).map_err(|_| "rust_encoder already registered")
+pub fn set_encoder_impl(impl_: Box<dyn PipelineEncoderPlugin>) -> Result<(), &'static str> {
+    ENCODER_IMPL.set(impl_).map_err(|_| "encoder already registered")
 }
 
 /// ABI wrapper for encode (function_id = 0).
 // SAFETY: args and out pointers are validated by the host runtime ABI contract.
-extern "C" fn rust_encoder_encode_abi(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn encoder_encode_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &Box<dyn PipelineEncoderPlugin> = match RUST_ENCODER_IMPL.get() {
+        let impl_ref: &Box<dyn PipelineEncoderPlugin> = match ENCODER_IMPL.get() {
             Some(i) => i,
             None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
@@ -59,14 +62,14 @@ extern "C" fn rust_encoder_encode_abi(args: *const (), out: *mut ()) -> AbiError
     }
 }
 
-static RUST_ENCODER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(rust_encoder_encode_abi as *const ()),
+static ENCODER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(encoder_encode_abi as *const ()),
 ];
 
-pub static RUST_ENCODER_VTABLE: PluginVTable = PluginVTable {
-    contract_id: RUST_ENCODER_CONTRACT_ID,
+pub static ENCODER_VTABLE: PluginVTable = PluginVTable {
+    contract_id: ENCODER_CONTRACT_ID,
     contract_version: 0_u32 << 16 | 0_u32,
     function_count: 1_u32,
-    functions: RUST_ENCODER_FNS.as_ptr() as *const *const (),
+    functions: ENCODER_FNS.as_ptr() as *const *const (),
 };
 

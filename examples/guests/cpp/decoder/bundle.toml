@@ -1,0 +1,13 @@
+[bundle]
+name = "cpp_decoder"
+version = "1.0.0"
+api = "../../../api.toml"
+runtime = "native"
+
+[bundle.file]
+linux.x86_64 = "libdecoder.so"
+
+[[plugin]]
+name = "decoder"
+version = "1.0.0"
+contracts = ["pipeline.Decoder@1.0"]

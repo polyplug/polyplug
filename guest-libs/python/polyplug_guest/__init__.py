@@ -22,6 +22,7 @@ from polyplug_guest.abi import (
     PluginVTable,
     REGISTER_FN_TYPE,
     StringView,
+    host_alloc,
 )
 
 __all__ = [
@@ -40,4 +41,42 @@ __all__ = [
     "PluginVTable",
     "REGISTER_FN_TYPE",
     "StringView",
+    "host_alloc",
+    "to_str",
+    "alloc_string",
 ]
+
+
+def to_str(sv: StringView) -> str:
+    """Convert a StringView to a Python str.
+
+    Args:
+        sv: StringView from polyplug ABI
+
+    Returns:
+        Python string (UTF-8 decoded)
+    """
+    if not sv.ptr or sv.len == 0:
+        return ""
+    import ctypes
+
+    data = ctypes.cast(sv.ptr, ctypes.POINTER(ctypes.c_char * sv.len)).contents
+    return bytes(data).decode("utf-8")
+
+
+def alloc_string(s: str) -> StringView:
+    """Allocate a StringView from a Python str using host allocator.
+
+    Args:
+        s: Python string to convert
+
+    Returns:
+        StringView pointing to host-allocated memory
+        Caller (host) must free via polyplug_host_free
+    """
+    data = s.encode("utf-8")
+    ptr = host_alloc(len(data), 1)
+    import ctypes
+
+    ctypes.memmove(ptr, data, len(data))
+    return StringView(ptr, len(data))

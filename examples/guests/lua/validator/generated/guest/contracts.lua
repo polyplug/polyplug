@@ -7,27 +7,4 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for lua_validator (pipeline.Validator@1)
---   validate(data: StringView) -> StringView
-local LUA_VALIDATOR_VTABLE = ffi.new("PluginVTable")
-LUA_VALIDATOR_VTABLE.contract_id = 0xA553FAB5D11C7AF0
-LUA_VALIDATOR_VTABLE.contract_version = 0
-LUA_VALIDATOR_VTABLE.function_count = 1
-LUA_VALIDATOR_VTABLE.functions = nil
-
-function M.set_lua_validator_impl(validate_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", validate_fn)
-    LUA_VALIDATOR_VTABLE.functions = functions
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("lua_validator")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Validator@1")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local err = polyplug_guest.register_plugin(descriptor, LUA_VALIDATOR_VTABLE)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
 return M

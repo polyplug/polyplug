@@ -15,6 +15,7 @@ members = [
     "examples/hosts/rust",
     "examples/guests/rust/decoder",
     "examples/guests/rust/encoder",
+    "examples/guests/rust/transformer",
     "examples/guests/rust/reporter",
     "examples/guests/rust/validator",
 ]

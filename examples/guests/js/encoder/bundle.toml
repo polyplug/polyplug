@@ -1,0 +1,11 @@
+[bundle]
+name = "js_encoder"
+version = "1.0.0"
+api = "../../../api.toml"
+runtime = "js"
+file = "encoder.js"
+
+[[plugin]]
+name = "encoder"
+version = "1.0.0"
+contracts = ["pipeline.Encoder@1.0"]

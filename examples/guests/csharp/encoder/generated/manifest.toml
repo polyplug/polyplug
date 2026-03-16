@@ -2,8 +2,8 @@
 name = "csharp_encoder"
 bundle_id = 7990354863392597613
 version = "1.0.0"
-runtime = "dotnet"
-provides = ["pipeline.Encoder@1"]
-function_count = { "pipeline.Encoder@1" = 1 }
+runtime = "csharp"
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
-file = "CsvEncoder.dll"
+file = "encoder.cs"

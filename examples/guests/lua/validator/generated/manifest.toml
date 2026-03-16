@@ -3,7 +3,7 @@ name = "lua_validator"
 bundle_id = 15960560424979047568
 version = "1.0.0"
 runtime = "lua"
-provides = ["pipeline.Validator@1"]
-function_count = { "pipeline.Validator@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 file = "validator.lua"

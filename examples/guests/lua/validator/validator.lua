@@ -1,19 +1,17 @@
--- Lua validator plugin — implements pipeline.Validator@1
--- Input:  "name,value,42"
--- Output: "VALID:name,value,42" or error
+local ffi = require('ffi')
+local polyplug = require('polyplug_guest')
 
-local contracts = require("generated.guest.contracts")
-
-local function validate(data_sv)
-    local data_str = data_sv.str
-    local count = 0
-    for _ in data_str:gmatch("[^,]+") do
-        count = count + 1
+local function validate(input)
+    local s = polyplug.to_str(input)
+    if s:sub(1, 8) == 'DECODED:' then s = s:sub(9) end
+    local parts = {}
+    for part in s:gmatch('[^|]+') do table.insert(parts, part) end
+    if #parts == 3 and parts[1] ~= '' and parts[2] ~= '' and tonumber(parts[3]) then
+        return polyplug.alloc_string('VALID:' .. s)
     end
-    if count ~= 3 then
-        error("invalid format: expected 3 fields")
-    end
-    return "VALID:" .. data_str
+    return polyplug.alloc_string('INVALID:expected name|value|count')
 end
 
-contracts.set_lua_validator_impl(validate)
+return {
+    ['pipeline.Validator'] = { validate = validate },
+}

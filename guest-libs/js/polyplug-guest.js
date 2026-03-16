@@ -199,3 +199,59 @@ export default {
     StringViewHelper,
     getExtension
 };
+
+/**
+ * Convert a StringView to a JavaScript string.
+ * 
+ * @param {StringView} sv - StringView from polyplug ABI
+ * @returns {string} JavaScript string (UTF-8 decoded)
+ * 
+ * @example
+ * const s = toStr(stringView);
+ */
+export function toStr(sv) {
+    if (!sv || !sv.ptr || sv.len === 0) {
+        return '';
+    }
+    // QuickJS: ptr is split into ptr_lo/ptr_hi
+    // Deno: ptr is a bigint
+    if (typeof sv.ptr === 'bigint') {
+        // Deno FFI
+        const ptr = Number(sv.ptr);
+        return new Deno.UnsafePointerView(ptr).getUtf8String(sv.len);
+    } else {
+        // QuickJS
+        const ptr = (sv.ptr_hi << 16) + sv.ptr_lo;
+        // Host runtime provides memory view
+        return globalThis.__polyplug_read_string(ptr, sv.len) || '';
+    }
+}
+
+/**
+ * Allocate a StringView from a JavaScript string using host allocator.
+ * 
+ * @param {string} s - JavaScript string to convert
+ * @returns {StringView} StringView pointing to host-allocated memory
+ * 
+ * @example
+ * const sv = allocString("hello");
+ * // Host must free sv via polyplug_host_free when done
+ */
+export function allocString(s) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(s);
+    const ptr = host_alloc(data.length, 1);
+    
+    if (typeof ptr === 'bigint') {
+        // Deno FFI
+        const view = new Deno.UnsafePointerView(ptr);
+        view.copyFrom(data);
+        return { ptr, len: data.length };
+    } else {
+        // QuickJS
+        const ptr_lo = ptr & 0xFFFF;
+        const ptr_hi = (ptr >> 16) & 0xFFFF;
+        globalThis.__polyplug_write_memory(ptr, data);
+        return { ptr_lo, ptr_hi, len: data.length };
+    }
+}

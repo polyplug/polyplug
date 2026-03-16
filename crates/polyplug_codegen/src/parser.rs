@@ -9,6 +9,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::PolyplugcError;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -23,9 +26,6 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::resolve_type_ref;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -138,7 +138,8 @@ impl Default for RawBundleFile {
 pub(crate) struct RawPlugin {
     pub name: String,
     pub version: String,
-    #[serde(default)]
+    /// Legacy field name — maps to `contracts` for backward compatibility
+    #[serde(default, alias = "contracts")]
     pub implements: Vec<String>,
     #[serde(default)]
     pub optional: Vec<String>,
@@ -589,12 +590,12 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
         };
         resolved_deps.push(resolved);
     }
-    // Parse file field — either flat string or platform table
+    // Parse file field — native runtimes require [bundle.file] table, others use flat string
+    let runtime = raw.bundle.runtime.to_lowercase();
+    let is_native = runtime == "rust" || runtime == "cpp" || runtime == "native";
     let resolved_file: crate::generators::ResolvedBundleFile = match &raw.bundle.file {
-        RawBundleFile::Single(path) if !path.is_empty() => {
-            crate::generators::ResolvedBundleFile::Single(path.clone())
-        }
-        RawBundleFile::PlatformMap(os_map) => {
+        RawBundleFile::PlatformMap(os_map) if is_native => {
+            // Native runtimes MUST use [bundle.file] table
             let mut map: std::collections::HashMap<crate::generators::PlatformKey, String> =
                 std::collections::HashMap::new();
             for (os, arch_map) in os_map {
@@ -610,7 +611,31 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
             }
             crate::generators::ResolvedBundleFile::PlatformMap(map)
         }
-        _ => crate::generators::ResolvedBundleFile::Single(format!("lib{}.so", raw.bundle.name)),
+        RawBundleFile::Single(path) if !path.is_empty() && !is_native => {
+            // Non-native runtimes MUST use flat string
+            crate::generators::ResolvedBundleFile::Single(path.clone())
+        }
+        RawBundleFile::PlatformMap(_) if !is_native => {
+            return Err(PolyplugcError::ValidationFailed {
+                message: format!(
+                    "runtime '{}' requires a flat file field (file = \"path\"), not [bundle.file] table",
+                    runtime
+                ),
+            });
+        }
+        RawBundleFile::Single(_) if is_native => {
+            return Err(PolyplugcError::ValidationFailed {
+                message: format!(
+                    "runtime '{}' requires [bundle.file] table with platform entries, not a flat file field",
+                    runtime
+                ),
+            });
+        }
+        _ => {
+            return Err(PolyplugcError::ValidationFailed {
+                message: "bundle.file field is required".to_string(),
+            });
+        }
     };
     Ok(ValidatedIr {
         types: Vec::new(),

@@ -1,19 +1,11 @@
--- Lua decoder plugin — implements pipeline.Decoder@1
--- Input:  "name,value,42"
--- Output: "DECODED:name|value|42"
+local ffi = require('ffi')
+local polyplug = require('polyplug_guest')
 
-local contracts = require("generated.guest.contracts")
-
-local function decode(input_sv)
-    local input_str = input_sv.str
-    local parts = {}
-    for part in input_str:gmatch("[^,]+") do
-        table.insert(parts, part)
-    end
-    local joined = table.concat(parts, "|")
-    local result = "DECODED:" .. joined
-    return result
+local function decode(input)
+    local s = polyplug.to_str(input):gsub(',', '|')
+    return polyplug.alloc_string('DECODED:' .. s)
 end
 
--- Register implementation
-contracts.set_lua_decoder_impl(decode)
+return {
+    ['pipeline.Decoder'] = { decode = decode },
+}

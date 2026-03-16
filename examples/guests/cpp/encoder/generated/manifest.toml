@@ -3,11 +3,8 @@ name = "cpp_encoder"
 bundle_id = 13988810111245972125
 version = "1.0.0"
 runtime = "native"
-provides = ["pipeline.Encoder@1"]
-function_count = { "pipeline.Encoder@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 [file]
-linux.aarch64 = "libencoder.so"
 linux.x86_64 = "libencoder.so"
-macos.aarch64 = "libencoder.dylib"
-windows.x86_64 = "encoder.dll"

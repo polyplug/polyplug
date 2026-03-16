@@ -3,11 +3,8 @@ name = "cpp_validator"
 bundle_id = 1662902491770280651
 version = "1.0.0"
 runtime = "native"
-provides = ["pipeline.Validator@1"]
-function_count = { "pipeline.Validator@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 [file]
-linux.aarch64 = "libvalidator.so"
 linux.x86_64 = "libvalidator.so"
-macos.aarch64 = "libvalidator.dylib"
-windows.x86_64 = "validator.dll"

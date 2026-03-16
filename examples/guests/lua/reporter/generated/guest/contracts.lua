@@ -7,27 +7,4 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
--- Function pointer type for lua_reporter (data.Reporter@1)
---   report(data: StringView) -> StringView
-local LUA_REPORTER_VTABLE = ffi.new("PluginVTable")
-LUA_REPORTER_VTABLE.contract_id = 0x81D41D43E511D297
-LUA_REPORTER_VTABLE.contract_version = 0
-LUA_REPORTER_VTABLE.function_count = 1
-LUA_REPORTER_VTABLE.functions = nil
-
-function M.set_lua_reporter_impl(report_fn)
-    local functions = ffi.new("PluginFunction[1]")
-    functions[0] = ffi.cast("uintptr_t", report_fn)
-    LUA_REPORTER_VTABLE.functions = functions
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("lua_reporter")
-    descriptor.contract_name = polyplug_guest.string_view("data.Reporter@1")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local err = polyplug_guest.register_plugin(descriptor, LUA_REPORTER_VTABLE)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
 return M

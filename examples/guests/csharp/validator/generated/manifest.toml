@@ -2,8 +2,8 @@
 name = "csharp_validator"
 bundle_id = 15578748212566519579
 version = "1.0.0"
-runtime = "dotnet"
-provides = ["pipeline.Validator@1"]
-function_count = { "pipeline.Validator@1" = 1 }
+runtime = "csharp"
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
-file = "Validator.dll"
+file = "validator.cs"

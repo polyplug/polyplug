@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use std::sync::OnceLock;
 use polyplug_guest::AbiError;
@@ -25,21 +28,21 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-/// Plugin: rust_validator
+/// Plugin: validator
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Validator@1".
-pub const RUST_VALIDATOR_CONTRACT_ID: u64 = 0xA553FAB5D11C7AF0;
+pub const VALIDATOR_CONTRACT_ID: u64 = 0xA553FAB5D11C7AF0;
 
-pub static RUST_VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorPlugin>> = OnceLock::new();
+pub static VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorPlugin>> = OnceLock::new();
 
-pub fn set_rust_validator_impl(impl_: Box<dyn PipelineValidatorPlugin>) -> Result<(), &'static str> {
-    RUST_VALIDATOR_IMPL.set(impl_).map_err(|_| "rust_validator already registered")
+pub fn set_validator_impl(impl_: Box<dyn PipelineValidatorPlugin>) -> Result<(), &'static str> {
+    VALIDATOR_IMPL.set(impl_).map_err(|_| "validator already registered")
 }
 
 /// ABI wrapper for validate (function_id = 0).
 // SAFETY: args and out pointers are validated by the host runtime ABI contract.
-extern "C" fn rust_validator_validate_abi(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn validator_validate_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &Box<dyn PipelineValidatorPlugin> = match RUST_VALIDATOR_IMPL.get() {
+        let impl_ref: &Box<dyn PipelineValidatorPlugin> = match VALIDATOR_IMPL.get() {
             Some(i) => i,
             None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
@@ -59,14 +62,14 @@ extern "C" fn rust_validator_validate_abi(args: *const (), out: *mut ()) -> AbiE
     }
 }
 
-static RUST_VALIDATOR_FNS: [FnPtr; 1_usize] = [
-    FnPtr(rust_validator_validate_abi as *const ()),
+static VALIDATOR_FNS: [FnPtr; 1_usize] = [
+    FnPtr(validator_validate_abi as *const ()),
 ];
 
-pub static RUST_VALIDATOR_VTABLE: PluginVTable = PluginVTable {
-    contract_id: RUST_VALIDATOR_CONTRACT_ID,
+pub static VALIDATOR_VTABLE: PluginVTable = PluginVTable {
+    contract_id: VALIDATOR_CONTRACT_ID,
     contract_version: 0_u32 << 16 | 0_u32,
     function_count: 1_u32,
-    functions: RUST_VALIDATOR_FNS.as_ptr() as *const *const (),
+    functions: VALIDATOR_FNS.as_ptr() as *const *const (),
 };
 

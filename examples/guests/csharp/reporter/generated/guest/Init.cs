@@ -12,29 +12,6 @@ public static class Plugin {
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
-            // Register csharp_reporter (data.Reporter@1)
-            var plugin_name_csharp_reporter = System.Text.Encoding.UTF8.GetBytes("csharp_reporter");
-            var contract_name_csharp_reporter = System.Text.Encoding.UTF8.GetBytes("data.Reporter@1");
-            var nameHandle_csharp_reporter = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_csharp_reporter, System.Runtime.InteropServices.GCHandleType.Pinned);
-            var contractHandle_csharp_reporter = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_csharp_reporter, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try {
-            fixed (PluginVTable* vtablePtr_csharp_reporter = &CsharpReporterVtables.CSHARP_REPORTER_VTABLE) {
-                var desc_csharp_reporter = new PluginDescriptor {
-                    Name = new StringView { Ptr = nameHandle_csharp_reporter.AddrOfPinnedObject(), Len = (ulong)plugin_name_csharp_reporter.Length },
-                    ContractName = new StringView { Ptr = contractHandle_csharp_reporter.AddrOfPinnedObject(), Len = (ulong)contract_name_csharp_reporter.Length },
-                    VersionMajor = 1u,
-                    VersionMinor = 0u,
-                    VersionPatch = 0u,
-                };
-                var registrar = (PluginRegistrar*)registrarPtr;
-                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;
-                var err_csharp_reporter = registerFn(registrar, &desc_csharp_reporter, vtablePtr_csharp_reporter);
-                if (err_csharp_reporter.Code != AbiConstants.ABI_OK) return err_csharp_reporter.Code;
-            }
-            } finally {
-                nameHandle_csharp_reporter.Free();
-                contractHandle_csharp_reporter.Free();
-            }
             return AbiConstants.ABI_OK;
         } // unsafe
         } catch {

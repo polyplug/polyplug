@@ -1,13 +1,11 @@
-# bundle.toml — C# validator guest plugin
-
 [bundle]
-name    = "csharp_validator"
+name = "csharp_validator"
 version = "1.0.0"
-runtime = "dotnet"
-file    = "Validator.dll"
-api     = "../../../api.toml"
+api = "../../../api.toml"
+runtime = "csharp"
+file = "validator.cs"
 
 [[plugin]]
-name       = "csharp_validator"
-version    = "1.0.0"
-implements = ["pipeline.Validator@1.0"]
+name = "validator"
+version = "1.0.0"
+contracts = ["pipeline.Validator@1.0"]

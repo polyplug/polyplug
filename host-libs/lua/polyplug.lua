@@ -242,3 +242,25 @@ function M.register_native_loader(rt)
 end
 
 return M
+
+--- Convert StringView to Lua string.
+-- @param sv StringView cdata
+-- @return Lua string
+local function to_str(sv)
+    if not sv.ptr or sv.len == 0 then
+        return ""
+    end
+    return ffi.string(sv.ptr, sv.len)
+end
+
+--- Create StringView from Lua string (borrowed).
+-- Warning: StringView only valid while Lua string exists.
+-- @param s Lua string
+-- @return StringView cdata
+local function str_as_view(s)
+    return M.string_view(s)
+end
+
+M.to_str = to_str
+M.to_string = to_str
+M.str_as_view = str_as_view

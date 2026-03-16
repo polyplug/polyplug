@@ -1,14 +1,11 @@
-# bundle.toml — C# decoder guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang csharp --out generated/
-
 [bundle]
-name    = "csharp_decoder"
+name = "csharp_decoder"
 version = "1.0.0"
-runtime = "dotnet"
-file    = "CsvDecoder.dll"
-api     = "../../../api.toml"
+api = "../../../api.toml"
+runtime = "csharp"
+file = "decoder.cs"
 
 [[plugin]]
-name       = "csharp_decoder"
-version    = "1.0.0"
-implements = ["pipeline.Decoder@1.0"]
+name = "decoder"
+version = "1.0.0"
+contracts = ["pipeline.Decoder@1.0"]

@@ -2,8 +2,8 @@
 name = "csharp_decoder"
 bundle_id = 13722946622342065977
 version = "1.0.0"
-runtime = "dotnet"
-provides = ["pipeline.Decoder@1"]
-function_count = { "pipeline.Decoder@1" = 1 }
+runtime = "csharp"
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
-file = "CsvDecoder.dll"
+file = "decoder.cs"

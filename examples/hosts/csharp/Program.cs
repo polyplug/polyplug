@@ -1,69 +1,67 @@
-// examples/hosts/csharp/Program.cs
-// C# host example using polyplugc-generated bindings.
-//
-// This host demonstrates the real-world polyplug pattern:
-//   1. Generate host bindings: polyplugc --api api.toml --lang csharp --out generated/
-//   2. Use generated contract IDs from Polyplug.Generated.ContractIds
-//
-// Zero hand-written contract IDs.
-
 using System;
+using System.IO;
+using System.Linq;
 using Polyplug;
-using Polyplug.Generated;
+using Polyplug.Loader;
+using Polyplug.Abi;
 
-class Program {
-    static int Main(string[] args) {
-        string pluginPath = args.Length > 0 ? args[0] : "examples/plugins";
-        Console.Error.WriteLine($"plugin directory: {pluginPath}");
-        
-        try {
-            var runtime = Runtime.Builder()
-                .PluginDir(pluginPath)
-                .Init();
-            
-            // Register all loaders
-            runtime.RegisterNativeLoader();
-            runtime.RegisterDotnetLoader();
-            runtime.RegisterPythonLoader();
-            runtime.RegisterLuaLoader();
-            runtime.RegisterJsLoader();
-            
-            Console.Error.WriteLine("Runtime created with all loaders.");
-            
-            Console.WriteLine("\n=== polyplug csharp host example ===");
-            
-            // Try to find plugins by generated contract IDs
-            ulong decoderHandle = runtime.FindByContract(ContractIds.PIPELINE_DECODER_CONTRACT_ID, 0);
-            if (decoderHandle != ulong.MaxValue) {
-                Console.WriteLine("[csharp_decoder]               found decoder plugin");
-            }
-            
-            ulong transformerHandle = runtime.FindByContract(ContractIds.DATA_TRANSFORMER_CONTRACT_ID, 0);
-            if (transformerHandle != ulong.MaxValue) {
-                Console.WriteLine("[csharp_transformer]           found transformer plugin");
-            }
-            
-            ulong encoderHandle = runtime.FindByContract(ContractIds.PIPELINE_ENCODER_CONTRACT_ID, 0);
-            if (encoderHandle != ulong.MaxValue) {
-                Console.WriteLine("[csharp_encoder]               found encoder plugin");
-            }
-            
-            ulong reporterHandle = runtime.FindByContract(ContractIds.DATA_REPORTER_CONTRACT_ID, 0);
-            if (reporterHandle != ulong.MaxValue) {
-                Console.WriteLine("[csharp_reporter]              found reporter plugin");
-            }
-            
-            ulong validatorHandle = runtime.FindByContract(ContractIds.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
-            if (validatorHandle != ulong.MaxValue) {
-                Console.WriteLine("[csharp_validator]             found validator plugin");
-            }
-            
-            Console.WriteLine("\ncsharp pipeline complete");
+class Program
+{
+    static int Main(string[] args)
+    {
+        try
+        {
+            Run();
             return 0;
-            
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"error: {ex.Message}");
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"error: {e.Message}");
             return 1;
         }
+    }
+
+    static void Run()
+    {
+        var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH")
+            ?? Path.Combine(Directory.GetCurrentDirectory(), "examples", "plugins");
+
+        Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
+
+        var rt = Runtime.Builder()
+            .PluginDir(pluginPath)
+            .Init();
+
+        rt.RegisterNativeLoader();
+
+        var bundles = Scanner.ScanDir(pluginPath);
+        if (bundles.Count == 0)
+        {
+            throw new Exception($"no plugins found in {pluginPath}");
+        }
+
+        Console.Error.WriteLine($"discovered {bundles.Count} bundles\n");
+
+        foreach (var (path, manifest) in bundles)
+        {
+            rt.LoadBundle(path);
+            Console.Error.WriteLine($"  loaded: {manifest.BundleName}");
+        }
+
+        Console.WriteLine("\n=== Pipeline Host (C#) ===\n");
+
+        foreach (var (_, manifest) in bundles)
+        {
+            if (manifest.Provides.Any(c => c.StartsWith("pipeline.Decoder")))
+            {
+                var handle = rt.FindByBundle(manifest.BundleName, "pipeline.Decoder", 1);
+                if (handle != IntPtr.Zero)
+                {
+                    Console.WriteLine($"[{manifest.BundleName}] decoder ready");
+                }
+            }
+        }
+
+        Console.WriteLine("\ndone.");
     }
 }

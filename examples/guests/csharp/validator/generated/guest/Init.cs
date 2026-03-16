@@ -12,29 +12,6 @@ public static class Plugin {
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
-            // Register csharp_validator (pipeline.Validator@1)
-            var plugin_name_csharp_validator = System.Text.Encoding.UTF8.GetBytes("csharp_validator");
-            var contract_name_csharp_validator = System.Text.Encoding.UTF8.GetBytes("pipeline.Validator@1");
-            var nameHandle_csharp_validator = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_csharp_validator, System.Runtime.InteropServices.GCHandleType.Pinned);
-            var contractHandle_csharp_validator = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_csharp_validator, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try {
-            fixed (PluginVTable* vtablePtr_csharp_validator = &CsharpValidatorVtables.CSHARP_VALIDATOR_VTABLE) {
-                var desc_csharp_validator = new PluginDescriptor {
-                    Name = new StringView { Ptr = nameHandle_csharp_validator.AddrOfPinnedObject(), Len = (ulong)plugin_name_csharp_validator.Length },
-                    ContractName = new StringView { Ptr = contractHandle_csharp_validator.AddrOfPinnedObject(), Len = (ulong)contract_name_csharp_validator.Length },
-                    VersionMajor = 1u,
-                    VersionMinor = 0u,
-                    VersionPatch = 0u,
-                };
-                var registrar = (PluginRegistrar*)registrarPtr;
-                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;
-                var err_csharp_validator = registerFn(registrar, &desc_csharp_validator, vtablePtr_csharp_validator);
-                if (err_csharp_validator.Code != AbiConstants.ABI_OK) return err_csharp_validator.Code;
-            }
-            } finally {
-                nameHandle_csharp_validator.Free();
-                contractHandle_csharp_validator.Free();
-            }
             return AbiConstants.ABI_OK;
         } // unsafe
         } catch {

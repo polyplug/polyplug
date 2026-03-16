@@ -6,7 +6,9 @@
 
 namespace polyplug_plugin {
 
-PipelineValidatorPlugin* g_cpp_validator_impl = nullptr;
+using namespace polyplug_generated;
+
+IPlugin* g_validator_impl = nullptr;
 
 }  // namespace polyplug_plugin
 
@@ -15,15 +17,15 @@ extern "C" uint32_t polyplug_abi_version() { return 1U; }
 extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {
     if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};
 
-    // Register plugin: cpp_validator
-    polyplug_plugin::set_cpp_validator_impl(polyplug_plugin::create_cpp_validator_impl());
-    PluginDescriptor desc_CPP_VALIDATOR = {
-        { (const uint8_t*)"cpp_validator", 13U },
-        { (const uint8_t*)"pipeline.Validator@1", 20U },
+    // Register plugin: validator
+    polyplug_plugin::set_validator_impl(polyplug_plugin::create_validator_impl());
+    PluginDescriptor desc_VALIDATOR = {
+        { (const uint8_t*)"validator", 9U },
+        { (const uint8_t*)"@1", 2U },
         1U, 0U, 0U
     };
-    AbiError err_CPP_VALIDATOR = registrar->register_plugin(registrar, &desc_CPP_VALIDATOR, &polyplug_plugin::CPP_VALIDATOR_VTABLE);
-    if (err_CPP_VALIDATOR.code != 0U) return err_CPP_VALIDATOR;
+    AbiError err_VALIDATOR = registrar->register_plugin(registrar, &desc_VALIDATOR, &polyplug_plugin::VALIDATOR_VTABLE);
+    if (err_VALIDATOR.code != 0U) return err_VALIDATOR;
 
     return AbiError{0U, StringView{nullptr, 0}};
 }

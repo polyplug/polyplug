@@ -1,13 +1,11 @@
-# bundle.toml — Python encoder guest plugin
-
 [bundle]
-name    = "python_encoder"
+name = "python_encoder"
 version = "1.0.0"
+api = "../../../api.toml"
 runtime = "python"
-file    = "encoder.py"
-api     = "../../../api.toml"
+file = "encoder.py"
 
 [[plugin]]
-name       = "python_encoder"
-version    = "1.0.0"
-implements = ["pipeline.Encoder@1.0"]
+name = "encoder"
+version = "1.0.0"
+contracts = ["pipeline.Encoder@1.0"]

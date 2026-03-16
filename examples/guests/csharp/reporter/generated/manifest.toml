@@ -2,8 +2,8 @@
 name = "csharp_reporter"
 bundle_id = 11015698994484062306
 version = "1.0.0"
-runtime = "dotnet"
-provides = ["data.Reporter@1"]
-function_count = { "data.Reporter@1" = 1 }
+runtime = "csharp"
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
-file = "Reporter.dll"
+file = "reporter.cs"

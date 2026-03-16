@@ -3,7 +3,7 @@ name = "python_encoder"
 bundle_id = 7023565710763889440
 version = "1.0.0"
 runtime = "python"
-provides = ["pipeline.Encoder@1"]
-function_count = { "pipeline.Encoder@1" = 1 }
+provides = []
+function_count = {  }
 needs_reinit_on_dep_reload = false
 file = "encoder.py"

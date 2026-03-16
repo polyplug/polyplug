@@ -677,6 +677,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "decoder"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
+
+[[package]]
 name = "deflate64"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -958,6 +965,13 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "encoder"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
 
 [[package]]
 name = "enum-map"
@@ -2085,6 +2099,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pipeline_host"
+version = "1.0.0"
+dependencies = [
+ "polyplug",
+ "polyplug_abi",
+ "polyplug_native",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2132,20 +2155,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
-]
-
-[[package]]
-name = "polyplug-rust-host"
-version = "0.1.0"
-dependencies = [
- "polyplug",
- "polyplug_abi",
- "polyplug_dotnet",
- "polyplug_js",
- "polyplug_js_deno",
- "polyplug_lua",
- "polyplug_native",
- "polyplug_python",
 ]
 
 [[package]]
@@ -2481,6 +2490,13 @@ name = "reload_plugin_v2"
 version = "0.2.0"
 
 [[package]]
+name = "reporter"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
+
+[[package]]
 name = "resb"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2531,34 +2547,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27344601ef27460e82d6a4e1ecb9e7e99f518122095f3c51296da8e9be2b9d83"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "rust_decoder"
-version = "1.0.0"
-dependencies = [
- "polyplug_guest",
-]
-
-[[package]]
-name = "rust_encoder"
-version = "1.0.0"
-dependencies = [
- "polyplug_guest",
-]
-
-[[package]]
-name = "rust_reporter"
-version = "1.0.0"
-dependencies = [
- "polyplug_guest",
-]
-
-[[package]]
-name = "rust_validator"
-version = "1.0.0"
-dependencies = [
- "polyplug_guest",
 ]
 
 [[package]]
@@ -3142,6 +3130,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
 
 [[package]]
+name = "transformer"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3271,6 +3266,13 @@ dependencies = [
  "paste",
  "temporal_capi",
  "which 6.0.3",
+]
+
+[[package]]
+name = "validator"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
 ]
 
 [[package]]

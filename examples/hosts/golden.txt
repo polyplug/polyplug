@@ -1,31 +1,11 @@
-polyplug — verify all hosts against expected output
-──────────────────────────────────────────────────
+=== Pipeline Host (Rust) ===
 
-Expected output format for all hosts:
+Input: "name,value,42"
 
-=== polyplug <language> host example ===
-plugin directory: <path>
-discovered <n> bundles
-  loaded: <bundle_name>
-  ...
+[rust_decoder] decode("name,value,42") = "DECODED:name|value|42"
+[rust_transformer] transform("DECODED:name|value|42") = "TRANSFORMED:NAME|value (transformed)|43"
+[rust_encoder] encode("TRANSFORMED:NAME|value (transformed)|43") = "NAME,value (transformed),43"
+[rust_reporter] report("TRANSFORMED:NAME|value (transformed)|43") = "Report: NAME has value 'value (transformed)' with count 43"
+[rust_validator] validate("DECODED:name|value|42") = "VALID:name|value|42"
 
-<language> pipeline complete
-
-Note: Hosts use polyplugc-generated bindings:
-  - Contract IDs from generated constants
-  - Zero hand-written IDs
-
-Build Status: 62/62 steps pass
-  ✔ All host codegen (6 languages)
-  ✔ All guest plugins (26 bundles)
-  ✔ All compiled hosts (Rust, C++, C#)
-
-Contract ID Collisions:
-  Multiple plugins claim the same contract ID (e.g., pipeline.Decoder).
-  This is expected behavior — polyplug runtime prevents duplicate contract
-  registration. First plugin to register wins; subsequent attempts fail.
-  This demonstrates polyplug's contract collision protection.
-
-Known Limitations:
-  - C++ host needs scanner implementation for directory discovery
-  - Some hosts may skip loading duplicate contract plugins
+done.

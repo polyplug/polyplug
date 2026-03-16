@@ -7,7 +7,4 @@ provides = ["pipeline.Decoder@1"]
 function_count = { "pipeline.Decoder@1" = 1 }
 needs_reinit_on_dep_reload = false
 [file]
-linux.aarch64 = "libcsv_decoder.so"
-linux.x86_64 = "libcsv_decoder.so"
-macos.aarch64 = "libcsv_decoder.dylib"
-windows.x86_64 = "csv_decoder.dll"
+linux.x86_64 = "libdecoder.so"

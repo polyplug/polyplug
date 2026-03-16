@@ -1,0 +1,13 @@
+[bundle]
+name = "rust_transformer"
+version = "1.0.0"
+api = "../../../api.toml"
+runtime = "native"
+
+[bundle.file]
+linux.x86_64 = "libtransformer.so"
+
+[[plugin]]
+name = "transformer"
+version = "1.0.0"
+contracts = ["data.Transformer@1.0"]

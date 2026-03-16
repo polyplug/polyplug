@@ -6,7 +6,9 @@
 
 namespace polyplug_plugin {
 
-PipelineEncoderPlugin* g_cpp_encoder_impl = nullptr;
+using namespace polyplug_generated;
+
+IPlugin* g_encoder_impl = nullptr;
 
 }  // namespace polyplug_plugin
 
@@ -15,15 +17,15 @@ extern "C" uint32_t polyplug_abi_version() { return 1U; }
 extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {
     if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};
 
-    // Register plugin: cpp_encoder
-    polyplug_plugin::set_cpp_encoder_impl(polyplug_plugin::create_cpp_encoder_impl());
-    PluginDescriptor desc_CPP_ENCODER = {
-        { (const uint8_t*)"cpp_encoder", 11U },
-        { (const uint8_t*)"pipeline.Encoder@1", 18U },
+    // Register plugin: encoder
+    polyplug_plugin::set_encoder_impl(polyplug_plugin::create_encoder_impl());
+    PluginDescriptor desc_ENCODER = {
+        { (const uint8_t*)"encoder", 7U },
+        { (const uint8_t*)"@1", 2U },
         1U, 0U, 0U
     };
-    AbiError err_CPP_ENCODER = registrar->register_plugin(registrar, &desc_CPP_ENCODER, &polyplug_plugin::CPP_ENCODER_VTABLE);
-    if (err_CPP_ENCODER.code != 0U) return err_CPP_ENCODER;
+    AbiError err_ENCODER = registrar->register_plugin(registrar, &desc_ENCODER, &polyplug_plugin::ENCODER_VTABLE);
+    if (err_ENCODER.code != 0U) return err_ENCODER;
 
     return AbiError{0U, StringView{nullptr, 0}};
 }

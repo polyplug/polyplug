@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use polyplug_guest::AbiError;
 use polyplug_guest::ABI_OK;
@@ -11,8 +14,8 @@ use polyplug_guest::PluginRegistrar;
 use polyplug_guest::PluginVTable;
 use polyplug_guest::StringView;
 use polyplug_guest::PluginContext;
-use super::vtables::RUST_VALIDATOR_CONTRACT_ID;
-use super::vtables::RUST_VALIDATOR_VTABLE;
+use super::vtables::VALIDATOR_CONTRACT_ID;
+use super::vtables::VALIDATOR_VTABLE;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -40,19 +43,26 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: registrar is non-null and valid per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
 
-    let desc_RUST_VALIDATOR: PluginDescriptor = PluginDescriptor {
-        name: StringView { ptr: b"rust_validator".as_ptr(), len: 14_usize },
+    // Call user initialization to register plugin implementations
+    unsafe extern "C" {
+        fn polyplug_user_init();
+    }
+    // SAFETY: polyplug_user_init is a safe initialization function provided by user
+    unsafe { polyplug_user_init(); }
+
+    let desc_VALIDATOR: PluginDescriptor = PluginDescriptor {
+        name: StringView { ptr: b"validator".as_ptr(), len: 9_usize },
         contract_name: StringView { ptr: b"pipeline.Validator@1".as_ptr(), len: 20_usize },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
-    let err_RUST_VALIDATOR: AbiError = unsafe {
-        (reg.register_plugin)(registrar, &desc_RUST_VALIDATOR as *const PluginDescriptor, &RUST_VALIDATOR_VTABLE as *const PluginVTable)
+    let err_VALIDATOR: AbiError = unsafe {
+        (reg.register_plugin)(registrar, &desc_VALIDATOR as *const PluginDescriptor, &VALIDATOR_VTABLE as *const PluginVTable)
     };
-    if err_RUST_VALIDATOR.code != ABI_OK {
-        return err_RUST_VALIDATOR;
+    if err_VALIDATOR.code != ABI_OK {
+        return err_VALIDATOR;
     }
 
     AbiError::ok()

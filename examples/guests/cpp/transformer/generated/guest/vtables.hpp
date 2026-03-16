@@ -8,35 +8,6 @@
 
 namespace polyplug_plugin {
 
-// Plugin: cpp_transformer
-extern DataTransformerPlugin* g_cpp_transformer_impl;
-
-constexpr uint64_t CPP_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL;
-
-inline void set_cpp_transformer_impl(DataTransformerPlugin* impl) { g_cpp_transformer_impl = impl; }
-
-// ABI wrapper for transform (function_id = 0)
-inline AbiError cpp_transformer_transform_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_cpp_transformer_impl->transform(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const CPP_TRANSFORMER_FNS[] = {
-    reinterpret_cast<void*>(cpp_transformer_transform_abi),
-};
-
-static PluginVTable CPP_TRANSFORMER_VTABLE = {
-    CPP_TRANSFORMER_CONTRACT_ID,
-    0U,
-    1U,
-    CPP_TRANSFORMER_FNS
-};
+using namespace polyplug_generated;
 
 }  // namespace polyplug_plugin

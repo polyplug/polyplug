@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use polyplug_guest::PluginError;
 use polyplug_guest::StringView;
@@ -14,21 +17,21 @@ pub trait PipelineDecoderPlugin: Send + Sync {
 
 /// Guest trait for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
 pub trait DataTransformerPlugin: Send + Sync {
-    fn transform(&self, data: StringView) -> Result<StringView, PluginError>;
+    fn transform(&self, input: StringView) -> Result<StringView, PluginError>;
 }
 
 /// Guest trait for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
 pub trait PipelineEncoderPlugin: Send + Sync {
-    fn encode(&self, data: StringView) -> Result<StringView, PluginError>;
+    fn encode(&self, input: StringView) -> Result<StringView, PluginError>;
 }
 
 /// Guest trait for contract `data.Reporter` (id=0x81D41D43E511D297)
 pub trait DataReporterPlugin: Send + Sync {
-    fn report(&self, data: StringView) -> Result<StringView, PluginError>;
+    fn report(&self, input: StringView) -> Result<StringView, PluginError>;
 }
 
 /// Guest trait for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
 pub trait PipelineValidatorPlugin: Send + Sync {
-    fn validate(&self, data: StringView) -> Result<StringView, PluginError>;
+    fn validate(&self, input: StringView) -> Result<StringView, PluginError>;
 }
 

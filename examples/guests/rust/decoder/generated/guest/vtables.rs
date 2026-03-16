@@ -2,6 +2,9 @@
 // Re-generate with: polyplugc generate --api api.toml --lang rust --out <dir>
 #![allow(unused_imports)]
 #![allow(dead_code)]
+#![allow(non_snake_case)]
+#![allow(clippy::eq_op)]
+#![allow(clippy::identity_op)]
 
 use std::sync::OnceLock;
 use polyplug_guest::AbiError;
@@ -25,21 +28,21 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-/// Plugin: rust_decoder
+/// Plugin: decoder
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Decoder@1".
-pub const RUST_DECODER_CONTRACT_ID: u64 = 0x12F3C106B0C3DC1E;
+pub const DECODER_CONTRACT_ID: u64 = 0x12F3C106B0C3DC1E;
 
-pub static RUST_DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderPlugin>> = OnceLock::new();
+pub static DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderPlugin>> = OnceLock::new();
 
-pub fn set_rust_decoder_impl(impl_: Box<dyn PipelineDecoderPlugin>) -> Result<(), &'static str> {
-    RUST_DECODER_IMPL.set(impl_).map_err(|_| "rust_decoder already registered")
+pub fn set_decoder_impl(impl_: Box<dyn PipelineDecoderPlugin>) -> Result<(), &'static str> {
+    DECODER_IMPL.set(impl_).map_err(|_| "decoder already registered")
 }
 
 /// ABI wrapper for decode (function_id = 0).
 // SAFETY: args and out pointers are validated by the host runtime ABI contract.
-extern "C" fn rust_decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
+extern "C" fn decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &Box<dyn PipelineDecoderPlugin> = match RUST_DECODER_IMPL.get() {
+        let impl_ref: &Box<dyn PipelineDecoderPlugin> = match DECODER_IMPL.get() {
             Some(i) => i,
             None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
@@ -59,14 +62,14 @@ extern "C" fn rust_decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError
     }
 }
 
-static RUST_DECODER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(rust_decoder_decode_abi as *const ()),
+static DECODER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(decoder_decode_abi as *const ()),
 ];
 
-pub static RUST_DECODER_VTABLE: PluginVTable = PluginVTable {
-    contract_id: RUST_DECODER_CONTRACT_ID,
+pub static DECODER_VTABLE: PluginVTable = PluginVTable {
+    contract_id: DECODER_CONTRACT_ID,
     contract_version: 0_u32 << 16 | 0_u32,
     function_count: 1_u32,
-    functions: RUST_DECODER_FNS.as_ptr() as *const *const (),
+    functions: DECODER_FNS.as_ptr() as *const *const (),
 };
 

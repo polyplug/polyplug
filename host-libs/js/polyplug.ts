@@ -121,3 +121,30 @@ export function runtimeNew(lib: Deno.DynamicLibrary<typeof SYMBOLS>): Runtime {
   }
   return new Runtime(lib, ptr);
 }
+
+/**
+ * Convert StringView to JavaScript string.
+ * @param sv StringView from polyplug ABI
+ * @returns JavaScript string
+ */
+export function toStr(sv: { ptr: bigint; len: number }): string {
+    if (!sv || sv.ptr === 0n || sv.len === 0) return '';
+    return new Deno.UnsafePointerView(sv.ptr).getUtf8String(sv.len);
+}
+
+/**
+ * Alias for toStr().
+ */
+export const toString = toStr;
+
+/**
+ * Create StringView from JavaScript string (owned copy).
+ * @param s JavaScript string
+ * @returns StringView with allocated memory
+ */
+export function strAsView(s: string): { ptr: bigint; len: number } {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(s);
+    const ptr = Deno.UnsafePointer.of(new Uint8Array(data));
+    return { ptr, len: data.length };
+}

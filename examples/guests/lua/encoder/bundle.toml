@@ -1,14 +1,11 @@
-# bundle.toml — Lua encoder guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang lua --out generated/
-
 [bundle]
-name    = "lua_encoder"
+name = "lua_encoder"
 version = "1.0.0"
+api = "../../../api.toml"
 runtime = "lua"
-file    = "encoder.lua"
-api     = "../../../api.toml"
+file = "encoder.lua"
 
 [[plugin]]
-name       = "lua_encoder"
-version    = "1.0.0"
-implements = ["pipeline.Encoder@1.0"]
+name = "encoder"
+version = "1.0.0"
+contracts = ["pipeline.Encoder@1.0"]
