@@ -2,17 +2,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-POLYPLUGC="../../target/release/polyplugc"
+POLYPLUGC="$WORKSPACE_DIR/target/release/polyplugc"
 PLUGINS_DIR="$SCRIPT_DIR/plugins"
+TARGET_DIR="$WORKSPACE_DIR/target/release"
 
 echo "=== Building polyplug examples ==="
 echo ""
 
 # Ensure polyplugc is built
 echo "[1/3] Building polyplugc..."
-cargo build --release -p polyplugc 2>/dev/null
+cargo build --release -p polyplugc
 
 # Clean and create plugins directory
 rm -rf "$PLUGINS_DIR"
@@ -26,13 +28,32 @@ for plugin in decoder encoder transformer reporter validator; do
     echo "  building: $plugin"
     
     # Generate code with polyplugc
-    "$POLYPLUGC" generate --bundle "$dir/bundle.toml" --lang rust --out "$dir/generated" 2>/dev/null
+    "$POLYPLUGC" generate --bundle "$dir/bundle.toml" --lang rust --out "$dir/generated"
     
     # Build the plugin
-    cargo build --release --manifest-path "$dir/Cargo.toml" 2>/dev/null
+    cargo build --release --manifest-path "$dir/Cargo.toml"
     
-    # Pack the plugin with polyplugc (generates manifest.toml automatically)
-    "$POLYPLUGC" pack --bundle "$dir/bundle.toml" --lang rust --out "$PLUGINS_DIR" 2>/dev/null
+    # Install plugin to plugins directory
+    bundle_name="rust_$plugin"
+    plugin_dir="$PLUGINS_DIR/$bundle_name"
+    mkdir -p "$plugin_dir"
+    
+    # Copy the built .so file from workspace target
+    cp "$TARGET_DIR/lib${plugin}.so" "$plugin_dir/"
+    
+    # Generate manifest.toml
+    contract=$(grep 'contracts' "$dir/bundle.toml" | sed 's/.*\["//' | sed 's/"].*//')
+    contract_short=$(echo "$contract" | sed 's/@1\.0$/@1/')
+    cat > "$plugin_dir/manifest.toml" <<MANIFEST
+bundle_name = "$bundle_name"
+runtime = "native"
+version = "1.0.0"
+file = "lib${plugin}.so"
+provides = ["$contract"]
+
+[function_count]
+"$contract_short" = 1
+MANIFEST
 done
 
 echo "  installed $(ls -d $PLUGINS_DIR/*/ 2>/dev/null | wc -l) plugins"
@@ -40,7 +61,7 @@ echo "  installed $(ls -d $PLUGINS_DIR/*/ 2>/dev/null | wc -l) plugins"
 echo "[3/3] Building host applications..."
 
 # Build Rust host
-cargo build --release --manifest-path hosts/rust/Cargo.toml 2>/dev/null && echo "  ✓ rust host" || echo "  ✗ rust host"
+cargo build --release --manifest-path hosts/rust/Cargo.toml && echo "  ✓ rust host" || echo "  ✗ rust host"
 
 # Build C++ host (if sources exist)
 if [ -f "hosts/cpp/main.cpp" ]; then
