@@ -13,6 +13,10 @@ members = [
     "guest-libs/rust",
     "tests/integration",
     "examples/hosts/rust",
+    "examples/guests/rust/decoder",
+    "examples/guests/rust/encoder",
+    "examples/guests/rust/reporter",
+    "examples/guests/rust/validator",
 ]
 
 [workspace.package]
@@ -22,6 +26,7 @@ license = "MIT"
 
 [workspace.dependencies]
 # Internal crates
+polyplug_abi = { path = "crates/polyplug_abi" }
 polyplug = { path = "crates/polyplug" }
 polyplugc = { path = "crates/polyplugc" }
 polyplug_codegen = { path = "crates/polyplug_codegen" }

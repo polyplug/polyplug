@@ -132,7 +132,7 @@ fn generate_types_hpp(ir: &ValidatedIr) -> String {
             contract_upper, contract.contract_id
         ));
     }
-    out.push_str("\n");
+    out.push('\n');
 
     // Emit enums before struct types
     for e in &ir.enums {
@@ -224,12 +224,79 @@ fn generate_vtables_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include <exception>\n\n");
     out.push_str("namespace polyplug_plugin {\n\n");
 
-    for contract in &ir.contracts {
-        generate_cpp_guest_contract_vtable(&mut out, contract)?;
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for contract_impl in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|c| {
+                    let contract_full =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    &contract_full == contract_impl
+                }) {
+                    generate_cpp_guest_plugin_vtable(&mut out, &plugin.name, contract)?;
+                }
+            }
+        }
+    } else {
+        for contract in &ir.contracts {
+            generate_cpp_guest_contract_vtable(&mut out, contract)?;
+        }
     }
 
     out.push_str("}  // namespace polyplug_plugin\n");
     Ok(out)
+}
+
+fn generate_cpp_guest_plugin_vtable(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+) -> Result<(), PolyplugcError> {
+    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
+    let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    let class_name: String = contract_name_to_plugin_class(&contract.name);
+    let fn_count: usize = contract.functions.len();
+    let contract_version: u32 = (contract.version.minor << 16) | contract.version.patch;
+
+    out.push_str(&format!("// Plugin: {}\n", plugin_name));
+    out.push_str(&format!(
+        "extern {}* g_{}_impl;\n\n",
+        class_name, plugin_lower
+    ));
+
+    out.push_str(&format!(
+        "constexpr uint64_t {}_CONTRACT_ID = 0x{:016X}ULL;\n\n",
+        plugin_upper, contract.contract_id
+    ));
+
+    out.push_str(&format!(
+        "inline void set_{}_impl({}* impl) {{ g_{}_impl = impl; }}\n\n",
+        plugin_lower, class_name, plugin_lower
+    ));
+
+    for func in &contract.functions {
+        generate_cpp_guest_abi_wrapper(out, &plugin_lower, func)?;
+    }
+
+    out.push_str(&format!("static void* const {}_FNS[] = {{\n", plugin_upper));
+    for func in &contract.functions {
+        out.push_str(&format!(
+            "    reinterpret_cast<void*>({0}_{1}_abi),\n",
+            plugin_lower, func.name
+        ));
+    }
+    out.push_str("};\n\n");
+
+    out.push_str(&format!(
+        "static PluginVTable {}_VTABLE = {{\n",
+        plugin_upper
+    ));
+    out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
+    out.push_str(&format!("    {}U,\n", contract_version));
+    out.push_str(&format!("    {}U,\n", fn_count));
+    out.push_str(&format!("    {}_FNS\n", plugin_upper));
+    out.push_str("};\n\n");
+
+    Ok(())
 }
 
 fn generate_cpp_guest_contract_vtable(
@@ -425,27 +492,36 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include \"vtables.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n\n");
 
-    // Definition of impl pointer globals
     out.push_str("namespace polyplug_plugin {\n\n");
-    for contract in &ir.contracts {
-        let lower: String = contract_name_to_lower_snake(&contract.name);
-        let class_name: String = contract_name_to_plugin_class(&contract.name);
-        out.push_str(&format!("{}* g_{}_impl = nullptr;\n", class_name, lower));
-        out.push_str(&format!(
-            "// Developer must define: {}* create_{}_impl();\n",
-            class_name, lower
-        ));
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
+            let class_name = if let Some(contract_impl) = plugin.implements.first() {
+                if let Some(contract) = ir.contracts.iter().find(|c| {
+                    let contract_full =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    &contract_full == contract_impl
+                }) {
+                    contract_name_to_plugin_class(&contract.name)
+                } else {
+                    "IPlugin".to_string()
+                }
+            } else {
+                "IPlugin".to_string()
+            };
+            out.push_str(&format!(
+                "{}* g_{}_impl = nullptr;\n",
+                class_name, plugin_lower
+            ));
+        }
+    } else {
+        for contract in &ir.contracts {
+            let lower: String = contract_name_to_lower_snake(&contract.name);
+            let class_name: String = contract_name_to_plugin_class(&contract.name);
+            out.push_str(&format!("{}* g_{}_impl = nullptr;\n", class_name, lower));
+        }
     }
     out.push_str("\n}  // namespace polyplug_plugin\n\n");
-
-    // Factory forward declarations
-    out.push_str("namespace polyplug_plugin {\n");
-    for contract in &ir.contracts {
-        let lower: String = contract_name_to_lower_snake(&contract.name);
-        let class_name: String = contract_name_to_plugin_class(&contract.name);
-        out.push_str(&format!("{}* create_{}_impl();\n", class_name, lower));
-    }
-    out.push_str("}  // namespace polyplug_plugin (forward decls)\n\n");
 
     // polyplug_abi_version
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
@@ -467,8 +543,58 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         );
     }
 
-    for contract in &ir.contracts {
-        generate_init_hpp_register_contract(&mut out, contract)?;
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
+            let plugin_lower: String = plugin.name.to_lowercase().replace('.', "_");
+            let contract_impl = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
+            let (contract_name, version_str) = contract_impl
+                .split_once('@')
+                .unwrap_or((contract_impl, "1.0.0"));
+            let (version_major, version_minor_patch) =
+                version_str.split_once('.').unwrap_or((version_str, "0"));
+            let version_minor = version_minor_patch.split('.').next().unwrap_or("0");
+            let contract_name_full = format!("{}@{}", contract_name, version_major);
+
+            out.push_str(&format!("    // Register plugin: {}\n", plugin.name));
+            out.push_str(&format!(
+                "    polyplug_plugin::set_{}_impl(polyplug_plugin::create_{}_impl());\n",
+                plugin_lower, plugin_lower
+            ));
+
+            out.push_str(&format!(
+                "    PluginDescriptor desc_{} = {{\n",
+                plugin_upper
+            ));
+            out.push_str(&format!(
+                "        {{ (const uint8_t*)\"{name}\", {len}U }},\n",
+                name = plugin.name,
+                len = plugin.name.len()
+            ));
+            out.push_str(&format!(
+                "        {{ (const uint8_t*)\"{name}\", {len}U }},\n",
+                name = contract_name_full,
+                len = contract_name_full.len()
+            ));
+            out.push_str(&format!(
+                "        {}U, {}U, 0U\n",
+                version_major, version_minor
+            ));
+            out.push_str("    };\n");
+
+            out.push_str(&format!(
+                "    AbiError err_{upper} = registrar->register_plugin(registrar, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+                upper = plugin_upper
+            ));
+            out.push_str(&format!(
+                "    if (err_{}.code != 0U) return err_{};\n\n",
+                plugin_upper, plugin_upper
+            ));
+        }
+    } else {
+        for contract in &ir.contracts {
+            generate_init_hpp_register_contract(&mut out, contract)?;
+        }
     }
 
     out.push_str("    return AbiError{0U, StringView{nullptr, 0}};\n");
@@ -494,6 +620,11 @@ fn generate_init_hpp_register_contract(
     out.push_str("    PluginDescriptor desc_");
     out.push_str(&upper);
     out.push_str(" = {\n");
+    let contract_name_full: String = format!(
+        "{}@{}.{}",
+        contract.name, contract.version.major, contract.version.minor
+    );
+    let name_bytes_full: usize = contract_name_full.len();
     out.push_str(&format!(
         "        {{ (const uint8_t*)\"{name}\", {len}U }},  // name\n",
         name = contract.name,
@@ -501,8 +632,8 @@ fn generate_init_hpp_register_contract(
     ));
     out.push_str(&format!(
         "        {{ (const uint8_t*)\"{name}\", {len}U }},  // contract_name\n",
-        name = contract.name,
-        len = name_bytes
+        name = contract_name_full,
+        len = name_bytes_full
     ));
     out.push_str(&format!(
         "        {}U, {}U, {}U\n",
@@ -581,6 +712,20 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
         .plugins
         .iter()
         .flat_map(|p: &ResolvedPlugin| p.implements.iter().cloned())
+        .map(|impl_str: String| {
+            if let Some(at_pos) = impl_str.find('@') {
+                let contract_name: &str = &impl_str[..at_pos];
+                let version_part: &str = &impl_str[at_pos + 1..];
+                if let Some(dot_pos) = version_part.find('.') {
+                    let major: &str = &version_part[..dot_pos];
+                    format!("{}@{}", contract_name, major)
+                } else {
+                    impl_str
+                }
+            } else {
+                impl_str
+            }
+        })
         .collect();
     provides.sort();
     provides.dedup();
@@ -605,10 +750,7 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
         .contracts
         .iter()
         .filter(|c: &&ResolvedContract| {
-            provides_set.contains(&format!(
-                "{}@{}.{}",
-                c.name, c.version.major, c.version.minor
-            ))
+            provides_set.contains(&format!("{}@{}", c.name, c.version.major))
         })
         .map(|c: &ResolvedContract| {
             let fn_count: u32 = c.functions.len() as u32;
@@ -652,14 +794,15 @@ fn generate_bundle_manifest_cpp(ir: &ValidatedIr) -> String {
     format!(
         "# THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n\
 name = \"{name}\"\n\
-bundle_name = \"{name}\"\n\
+bundle_id = {bundle_id}\n\
 version = \"{version}\"\n\
 runtime = \"{runtime}\"\n\
-{file_field}\n\
 provides = {provides_toml}\n\
 function_count = {function_count_toml}\n\
 needs_reinit_on_dep_reload = {reinit}\n\
-{dep_tables}"
+{file_field}\n\
+{dep_tables}",
+        bundle_id = bundle.bundle_id
     )
 }
 

@@ -4,15 +4,15 @@
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::POLYPLUG_ABI_VERSION;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::registry::Registry;
 use std::path::Path;
 use std::path::PathBuf;

@@ -1,14 +1,13 @@
-# bundle.toml — C# transformer guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang csharp --out generated/
+# bundle.toml — C# encoder guest plugin
 
 [bundle]
-name    = "csharp_transformer"
+name    = "csharp_encoder"
 version = "1.0.0"
 runtime = "dotnet"
 file    = "CsvEncoder.dll"
 api     = "../../../api.toml"
 
 [[plugin]]
-name       = "csharp_transformer"
+name       = "csharp_encoder"
 version    = "1.0.0"
-implements = ["data.Transformer@1.0"]
+implements = ["pipeline.Encoder@1.0"]

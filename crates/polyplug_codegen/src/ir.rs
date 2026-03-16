@@ -3,9 +3,9 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
-use polyplug::abi::bundle_id as runtime_bundle_id;
-use polyplug::abi::contract_id as runtime_contract_id;
-use polyplug::abi::extension_id as runtime_extension_id;
+use polyplug_abi::bundle_id as runtime_bundle_id;
+use polyplug_abi::contract_id as runtime_contract_id;
+use polyplug_abi::extension_id as runtime_extension_id;
 
 use crate::error::PolyplugcError;
 
@@ -367,9 +367,9 @@ pub(crate) fn resolve_type_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use polyplug::abi::bundle_id as runtime_bundle_id;
-    use polyplug::abi::contract_id as runtime_contract_id;
-    use polyplug::abi::extension_id as runtime_extension_id;
+    use polyplug_abi::bundle_id as runtime_bundle_id;
+    use polyplug_abi::contract_id as runtime_contract_id;
+    use polyplug_abi::extension_id as runtime_extension_id;
 
     #[test]
     fn version_parse() {
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn codegen_contract_id_matches_runtime() {
         // codegen compute_contract_id must produce identical results to the
-        // runtime polyplug::abi::contract_id — both delegate to the same fn.
+        // runtime polyplug_abi::contract_id — both delegate to the same fn.
         let codegen_id: u64 = compute_contract_id("image.decode", 1);
         let runtime_id: u64 = runtime_contract_id("image.decode", 1);
         assert_eq!(codegen_id, runtime_id);
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn codegen_bundle_id_matches_runtime() {
         // codegen compute_bundle_id must produce identical results to the
-        // runtime polyplug::abi::bundle_id — both delegate to the same fn.
+        // runtime polyplug_abi::bundle_id — both delegate to the same fn.
         let codegen_id: u64 = compute_bundle_id("my-bundle");
         let runtime_id: u64 = runtime_bundle_id("my-bundle");
         assert_eq!(codegen_id, runtime_id);
@@ -494,7 +494,7 @@ mod tests {
     #[test]
     fn codegen_extension_id_matches_runtime() {
         // codegen compute_extension_id must produce identical results to the
-        // runtime polyplug::abi::extension_id — both delegate to the same fn.
+        // runtime polyplug_abi::extension_id — both delegate to the same fn.
         let codegen_id: u32 = compute_extension_id("trace");
         let runtime_id: u32 = runtime_extension_id("trace");
         assert_eq!(codegen_id, runtime_id);

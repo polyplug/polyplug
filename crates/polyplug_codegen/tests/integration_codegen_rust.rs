@@ -8,13 +8,13 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
@@ -93,7 +93,7 @@ polyplug_guest = {{ path = "{}" }}
 /// Write a `src/lib.rs` that:
 ///   - Declares generated modules (types, contracts, vtables) but NOT init.
 ///   - Defines `MyPlugin` and implements `TestAddPlugin`.
-///   - Exports a custom `polyplug_init` that sets `TEST_ADD_IMPL` then registers the vtable.
+///   - Exports a custom `polyplug_init` that sets `TEST_ADDER_IMPL` then registers the vtable.
 fn write_plugin_lib_rs(src_dir: &Path) {
     let content: &str = r#"// THIS FILE IS WRITTEN BY integration_codegen_rust TEST — DO NOT EDIT BY HAND
 
@@ -112,8 +112,8 @@ use polyplug_guest::PluginRegistrar;
 use polyplug_guest::StringView;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
-use guest::vtables::TEST_ADD_IMPL;
-use guest::vtables::TEST_ADD_VTABLE;
+use guest::vtables::TEST_ADDER_IMPL;
+use guest::vtables::TEST_ADDER_VTABLE;
 
 struct MyPlugin;
 
@@ -141,7 +141,7 @@ impl TestAddPlugin for MyPlugin {
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     // Set the OnceLock impl before any vtable function can be called.
-    TEST_ADD_IMPL.get_or_init(|| Box::new(MyPlugin));
+    TEST_ADDER_IMPL.get_or_init(|| Box::new(MyPlugin));
 
     if registrar.is_null() {
         return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
@@ -158,12 +158,12 @@ pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiEr
         version_patch: 0_u32,
     };
 
-    // SAFETY: desc and TEST_ADD_VTABLE are 'static; registrar is valid.
+    // SAFETY: desc and TEST_ADDER_VTABLE are 'static; registrar is valid.
     unsafe {
         (reg.register_plugin)(
             registrar,
             &desc as *const PluginDescriptor,
-            &TEST_ADD_VTABLE as *const _,
+            &TEST_ADDER_VTABLE as *const _,
         )
     }
 }
@@ -282,7 +282,7 @@ fn test_rust_codegen_compile_and_run() {
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
+        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

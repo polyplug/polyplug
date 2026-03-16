@@ -1,5 +1,4 @@
 # bundle.toml — Python validator guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang python --out generated/
 
 [bundle]
 name    = "python_validator"

@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use polyplug::abi::StringView;
+use polyplug_abi::StringView;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
@@ -131,7 +131,7 @@ fn run() -> Result<(), String> {
     println!("\n=== polyplug rust host example ===");
 
     for (_bundle_path, manifest) in &bundles {
-        let bid: u64 = polyplug::abi::bundle_id(&manifest.bundle_name);
+        let bid: u64 = polyplug_abi::bundle_id(&manifest.bundle_name);
         let label: String = format!("[{}]", manifest.bundle_name);
 
         // Determine which contract this bundle implements

@@ -1,18 +1,21 @@
-// Plugin.cs — Transformer plugin. ZERO unsafe. Pure business logic.
+// Encoder plugin — implements pipeline.Encoder@1
+// Input:  "name|value|42"
+// Output: "ENCODED:name,value,42"
+
 using System.Text;
 using Polyplug.Guest;
+using static Polyplug.Guest.StringViewHelper;
 
 namespace CsvEncoder;
 
-// Business logic — pure safe C#.
-public static class TransformerImpl
+public class EncoderPlugin : IPipelineEncoderPlugin
 {
-    // data.Transformer@1 contract ID
-    public const ulong TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFUL;
-
-    public static byte[] Transform(string input)
+    public StringView Encode(StringView data)
     {
-        string result = $"csharp:transform({input})";
-        return Encoding.UTF8.GetBytes(result);
+        string dataStr = data.ToString();
+        string commaSeparated = dataStr.Replace('|', ',');
+        string result = $"ENCODED:{commaSeparated}";
+        var (sv, _) = FromStringPinned(result);
+        return sv;
     }
 }

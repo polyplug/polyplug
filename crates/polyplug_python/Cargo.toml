@@ -12,10 +12,12 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
 pyo3 = { workspace = true }
 
 [dev-dependencies]
 polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
 tempfile = { workspace = true }
 
 [[test]]

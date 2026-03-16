@@ -43,8 +43,8 @@ fn chain_loads_in_dependency_order() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
     // Compute contract IDs to embed in manifests
-    let cid_x: u64 = polyplug::abi::contract_id("contract.X", 1);
-    let cid_y: u64 = polyplug::abi::contract_id("contract.Y", 1);
+    let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
+    let cid_y: u64 = polyplug_abi::contract_id("contract.Y", 1);
 
     write_bundle_dir(
         tmp.path(),
@@ -121,7 +121,7 @@ min_version = "1.0"
 fn missing_dep_fails_before_load() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_x: u64 = polyplug::abi::contract_id("contract.X", 1);
+    let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
 
     // Bundle B requires contract.X, but nothing provides it
     write_bundle_dir(
@@ -155,8 +155,8 @@ min_version = "1.0"
 fn cycle_detected_with_clear_error() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_a: u64 = polyplug::abi::contract_id("contract.A", 1);
-    let cid_b: u64 = polyplug::abi::contract_id("contract.B", 1);
+    let cid_a: u64 = polyplug_abi::contract_id("contract.A", 1);
+    let cid_b: u64 = polyplug_abi::contract_id("contract.B", 1);
 
     write_bundle_dir(
         tmp.path(),

@@ -8,17 +8,17 @@ use libloading::os::unix::Library as UnixLibrary;
 use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
-use polyplug::abi::ABI_ERROR_PANIC;
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::HostVTable;
-use polyplug::abi::POLYPLUG_ABI_VERSION;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::allocator::tracking::TrackingAllocator;
 use polyplug::registry::Registry;
@@ -224,7 +224,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginVTable {
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
 
-    let contract_id: u64 = polyplug::abi::contract_id("error.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("error.test", 1);
     let handle: PluginHandle = ERROR_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -364,7 +364,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     };
 
     // error.test contract_id is FNV-1a("error.test@1").
-    let error_contract_id: u64 = polyplug::abi::contract_id("error.test", 1);
+    let error_contract_id: u64 = polyplug_abi::contract_id("error.test", 1);
 
     // ChainArgs pointing to fn 1 (error_panic).
     // fn 1 returns ABI_ERROR_PANIC via its return value (not via *out),

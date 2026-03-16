@@ -8,6 +8,6 @@ file = "libtest.so"
 [[plugin]]
 name = "test_adder"
 version = "1.0.0"
-implements = ["test.add@1"]
+implements = ["test.add@1.0"]
 requires = []
 optional = []

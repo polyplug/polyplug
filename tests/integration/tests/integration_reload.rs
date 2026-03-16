@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use polyplug::abi::PluginVTable;
+use polyplug_abi::PluginVTable;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
 use polyplug::ReloadEvent;
@@ -25,7 +25,7 @@ fn create_runtime_with_native() -> Runtime {
 }
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let handle: polyplug::abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
+    let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
     let vtable: *const PluginVTable = rt.resolve_plugin(handle).ok()?;
     // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
@@ -45,7 +45,7 @@ fn test_a_basic_reload() {
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(v1_path))
         .expect("load v1");
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
     let version_fn: extern "C" fn() -> u32 = get_version_fn(&rt, contract_id).expect("resolve v1");
     assert_eq!(version_fn(), 100_u32, "v1 should return 100");
     rt.reload_bundle(v2_path.as_path()).expect("reload v2");
@@ -60,11 +60,11 @@ fn test_b_in_flight_safety() {
     let rt: Arc<Runtime> = Arc::new(create_runtime_with_native());
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
     let rt_clone: Arc<Runtime> = Arc::clone(&rt);
     let caller: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         for _ in 0..1000_u32 {
-            let handle_result: Result<polyplug::abi::PluginHandle, polyplug::error::RegistryError> =
+            let handle_result: Result<polyplug_abi::PluginHandle, polyplug::error::RegistryError> =
                 rt_clone.find_by_contract(contract_id, 0);
             if let Ok(handle) = handle_result {
                 let vt_result: Result<*const PluginVTable, polyplug::error::RegistryError> =
@@ -99,7 +99,7 @@ fn test_c_quiescence_arc_count() {
         .expect("load v1");
     rt.reload_bundle(&PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"))
         .expect("reload completes: quiescence succeeded");
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
     let version_fn: extern "C" fn() -> u32 =
         get_version_fn(&rt, contract_id).expect("resolve v2 after reload");
     assert_eq!(version_fn(), 200_u32, "v2 should remain active");
@@ -132,9 +132,9 @@ fn test_e_cascade_reload() {
         .expect("load depender");
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
-    let dep_contract_id: u64 = polyplug::abi::contract_id("depender.test", 1);
+    let dep_contract_id: u64 = polyplug_abi::contract_id("depender.test", 1);
     let init_count_before: u32 = {
-        let handle: polyplug::abi::PluginHandle = rt
+        let handle: polyplug_abi::PluginHandle = rt
             .find_by_contract(dep_contract_id, 0)
             .expect("find depender");
         let vt: *const PluginVTable = rt.resolve_plugin(handle).expect("resolve depender");
@@ -147,7 +147,7 @@ fn test_e_cascade_reload() {
     rt.reload_bundle(&PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("libreload_plugin_v1.so"))
         .expect("reload v1");
     let init_count_after: u32 = {
-        let handle: polyplug::abi::PluginHandle = rt
+        let handle: polyplug_abi::PluginHandle = rt
             .find_by_contract(dep_contract_id, 0)
             .expect("find depender after reload");
         let vt: *const PluginVTable = rt
@@ -188,7 +188,7 @@ fn test_f_callback_fires() {
         .expect("on_reload callback must have fired");
     assert!(
         ev.affected_contract_ids
-            .contains(&polyplug::abi::contract_id("reload.test", 1)),
+            .contains(&polyplug_abi::contract_id("reload.test", 1)),
         "affected_contract_ids must contain reload.test@1"
     );
 }
@@ -258,7 +258,7 @@ fn test_h_multiple_reloads() {
         rt.reload_bundle(so_path.as_path())
             .expect("reload should succeed");
     }
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
     let version_fn: extern "C" fn() -> u32 =
         get_version_fn(&rt, contract_id).expect("resolve after reloads");
     assert_eq!(version_fn(), 100_u32, "last reload should be v1");

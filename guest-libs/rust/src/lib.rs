@@ -61,22 +61,22 @@
 
 /// ABI version sentinel — all plugins must export `polyplug_abi_version() -> u32`
 /// returning this value. The loader rejects plugins with a different version.
-pub use polyplug::abi::POLYPLUG_ABI_VERSION;
+pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 /// Output buffer too small — caller must reallocate and retry.
-pub use polyplug::abi::ABI_BUFFER_TOO_SMALL;
+pub use polyplug_abi::ABI_BUFFER_TOO_SMALL;
 /// Generic error code — use for unclassified plugin errors.
-pub use polyplug::abi::ABI_ERROR_GENERIC;
+pub use polyplug_abi::ABI_ERROR_GENERIC;
 /// Requested plugin or contract not found.
-pub use polyplug::abi::ABI_ERROR_NOT_FOUND;
+pub use polyplug_abi::ABI_ERROR_NOT_FOUND;
 /// Plugin panicked — returned by the host runtime when `catch_unwind` fires.
-pub use polyplug::abi::ABI_ERROR_PANIC;
+pub use polyplug_abi::ABI_ERROR_PANIC;
 /// Plugin handle is stale (plugin was unloaded and reloaded).
-pub use polyplug::abi::ABI_ERROR_STALE_HANDLE;
+pub use polyplug_abi::ABI_ERROR_STALE_HANDLE;
 /// Function ID is out of range for this vtable.
-pub use polyplug::abi::ABI_FUNCTION_NOT_AVAIL;
+pub use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
 /// Success code — no error.
-pub use polyplug::abi::ABI_OK;
+pub use polyplug_abi::ABI_OK;
 
 // ─── ABI Types ────────────────────────────────────────────────────────────────
 
@@ -84,52 +84,52 @@ pub use polyplug::abi::ABI_OK;
 ///
 /// OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
 /// of the call. Never freed by the receiver.
-pub use polyplug::abi::StringView;
+pub use polyplug_abi::StringView;
 
 /// Owning byte buffer allocated via the host allocator.
 ///
 /// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
 /// Owner calls `polyplug_host_free(ptr, cap, align)` when done.
-pub use polyplug::abi::Buffer;
+pub use polyplug_abi::Buffer;
 
 /// ABI error returned by value from all ABI calls.
 ///
 /// OWNERSHIP: `code` is a value type. `message.ptr` (if non-null) is
 /// allocated by the callee via `host_alloc`. Caller frees with
 /// `polyplug_host_free(message.ptr, message.len, 1)` after reading.
-pub use polyplug::abi::AbiError;
+pub use polyplug_abi::AbiError;
 
 /// Opaque handle to a loaded plugin — validated on every use.
-pub use polyplug::abi::PluginHandle;
+pub use polyplug_abi::PluginHandle;
 
 /// Plugin VTable — one per contract implemented by a plugin.
 ///
 /// OWNERSHIP: Must be `'static` or intentionally leaked.
-pub use polyplug::abi::PluginVTable;
+pub use polyplug_abi::PluginVTable;
 
 /// Host capabilities passed to every plugin at init time.
 ///
 /// Accessed via `PluginRegistrar::host`. Provides allocation, plugin lookup,
 /// and extension vtable retrieval.
-pub use polyplug::abi::HostVTable;
+pub use polyplug_abi::HostVTable;
 
 /// Metadata about a plugin within a bundle.
 ///
 /// OWNERSHIP: value type passed by pointer during init. The `name` and
 /// `contract_name` StringViews are borrowed from the plugin's static memory.
-pub use polyplug::abi::PluginDescriptor;
+pub use polyplug_abi::PluginDescriptor;
 
 /// Context passed to every guest `polyplug_init()` function.
 ///
 /// Contains `bundle_path` — the absolute path to the bundle directory.
 /// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
-pub use polyplug::abi::PluginContext;
+pub use polyplug_abi::PluginContext;
 
 /// Bridge used during `polyplug_init` only — not stored long-term.
 ///
 /// OWNERSHIP: stack-allocated by the host, passed by pointer to the plugin.
 /// Never stored by the plugin.
-pub use polyplug::abi::PluginRegistrar;
+pub use polyplug_abi::PluginRegistrar;
 
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 
@@ -143,13 +143,13 @@ pub use polyplug::abi::PluginRegistrar;
 /// use polyplug_guest::contract_id;
 /// assert_eq!(contract_id("test.add", 1), 0xCC4232FAB0410D2B);
 /// ```
-pub use polyplug::abi::contract_id;
+pub use polyplug_abi::contract_id;
 
 /// Compute the FNV-1a 64-bit bundle ID for a bundle name.
-pub use polyplug::abi::bundle_id;
+pub use polyplug_abi::bundle_id;
 
 /// Compute the FNV-1a 32-bit extension ID for an extension name.
-pub use polyplug::abi::extension_id;
+pub use polyplug_abi::extension_id;
 
 // ─── Allocator ────────────────────────────────────────────────────────────────
 
@@ -157,12 +157,12 @@ pub use polyplug::abi::extension_id;
 ///
 /// All memory that crosses the plugin/host boundary must use this allocator.
 /// Returns null for size=0 or invalid alignment.
-pub use polyplug::allocator::polyplug_host_alloc;
+pub use polyplug_abi::polyplug_host_alloc;
 
 /// Free memory previously allocated by `polyplug_host_alloc`.
 ///
 /// Passing null or size=0 is a safe no-op.
-pub use polyplug::allocator::polyplug_host_free;
+pub use polyplug_abi::polyplug_host_free;
 
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 

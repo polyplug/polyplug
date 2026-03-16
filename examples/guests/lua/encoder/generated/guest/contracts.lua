@@ -7,129 +7,27 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
-function M.register_pipeline_Decoder(registrar_ptr)
-    if registrar_ptr == nil then
-        return
-    end
-    local registrar = polyplug_guest.cast_registrar(registrar_ptr)
-    if registrar == nil then
-        return
-    end
+-- Function pointer type for lua_encoder (pipeline.Encoder@1)
+--   encode(data: StringView) -> StringView
+local LUA_ENCODER_VTABLE = ffi.new("PluginVTable")
+LUA_ENCODER_VTABLE.contract_id = 0x127D1703C6EFB432
+LUA_ENCODER_VTABLE.contract_version = 0
+LUA_ENCODER_VTABLE.function_count = 1
+LUA_ENCODER_VTABLE.functions = nil
+
+function M.set_lua_encoder_impl(encode_fn)
+    local functions = ffi.new("PluginFunction[1]")
+    functions[0] = ffi.cast("uintptr_t", encode_fn)
+    LUA_ENCODER_VTABLE.functions = functions
     local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("pipeline_Decoder_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Decoder")
+    descriptor.name = polyplug_guest.string_view("lua_encoder")
+    descriptor.contract_name = polyplug_guest.string_view("pipeline.Encoder@1")
     descriptor.version_major = 1
     descriptor.version_minor = 0
     descriptor.version_patch = 0
-    local vtable = ffi.new("PluginVTable")
-    vtable.contract_id = 0x12F3C106B0C3DC1E
-    vtable.contract_version = 0
-    vtable.function_count = 1
-    vtable.functions = nil
-    local err = registrar.register_plugin(registrar, descriptor, vtable)
+    local err = polyplug_guest.register_plugin(descriptor, LUA_ENCODER_VTABLE)
     if err.code ~= 0 then
         error("plugin registration failed", 2)
     end
 end
-
-function M.register_data_Transformer(registrar_ptr)
-    if registrar_ptr == nil then
-        return
-    end
-    local registrar = polyplug_guest.cast_registrar(registrar_ptr)
-    if registrar == nil then
-        return
-    end
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("data_Transformer_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("data.Transformer")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local vtable = ffi.new("PluginVTable")
-    vtable.contract_id = 0x3D53C682F3F5A9EF
-    vtable.contract_version = 0
-    vtable.function_count = 1
-    vtable.functions = nil
-    local err = registrar.register_plugin(registrar, descriptor, vtable)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
-
-function M.register_pipeline_Encoder(registrar_ptr)
-    if registrar_ptr == nil then
-        return
-    end
-    local registrar = polyplug_guest.cast_registrar(registrar_ptr)
-    if registrar == nil then
-        return
-    end
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("pipeline_Encoder_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Encoder")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local vtable = ffi.new("PluginVTable")
-    vtable.contract_id = 0x127D1703C6EFB432
-    vtable.contract_version = 0
-    vtable.function_count = 1
-    vtable.functions = nil
-    local err = registrar.register_plugin(registrar, descriptor, vtable)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
-
-function M.register_data_Reporter(registrar_ptr)
-    if registrar_ptr == nil then
-        return
-    end
-    local registrar = polyplug_guest.cast_registrar(registrar_ptr)
-    if registrar == nil then
-        return
-    end
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("data_Reporter_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("data.Reporter")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local vtable = ffi.new("PluginVTable")
-    vtable.contract_id = 0x81D41D43E511D297
-    vtable.contract_version = 0
-    vtable.function_count = 1
-    vtable.functions = nil
-    local err = registrar.register_plugin(registrar, descriptor, vtable)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
-
-function M.register_pipeline_Validator(registrar_ptr)
-    if registrar_ptr == nil then
-        return
-    end
-    local registrar = polyplug_guest.cast_registrar(registrar_ptr)
-    if registrar == nil then
-        return
-    end
-    local descriptor = ffi.new("PluginDescriptor")
-    descriptor.name = polyplug_guest.string_view("pipeline_Validator_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Validator")
-    descriptor.version_major = 1
-    descriptor.version_minor = 0
-    descriptor.version_patch = 0
-    local vtable = ffi.new("PluginVTable")
-    vtable.contract_id = 0xA553FAB5D11C7AF0
-    vtable.contract_version = 0
-    vtable.function_count = 1
-    vtable.functions = nil
-    local err = registrar.register_plugin(registrar, descriptor, vtable)
-    if err.code ~= 0 then
-        error("plugin registration failed", 2)
-    end
-end
-
 return M

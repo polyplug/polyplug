@@ -2127,6 +2127,7 @@ dependencies = [
  "libloading 0.9.0",
  "notify",
  "petgraph",
+ "polyplug_abi",
  "serde",
  "tempfile",
  "thiserror",
@@ -2138,6 +2139,7 @@ name = "polyplug-rust-host"
 version = "0.1.0"
 dependencies = [
  "polyplug",
+ "polyplug_abi",
  "polyplug_dotnet",
  "polyplug_js",
  "polyplug_js_deno",
@@ -2147,11 +2149,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "polyplug_abi"
+version = "0.1.0"
+
+[[package]]
 name = "polyplug_codegen"
 version = "0.1.0"
 dependencies = [
  "libloading 0.9.0",
  "polyplug",
+ "polyplug_abi",
  "serde",
  "tempfile",
  "thiserror",
@@ -2166,6 +2173,7 @@ dependencies = [
  "once_cell",
  "pelite",
  "polyplug",
+ "polyplug_abi",
  "tempfile",
 ]
 
@@ -2173,7 +2181,7 @@ dependencies = [
 name = "polyplug_guest"
 version = "0.1.0"
 dependencies = [
- "polyplug",
+ "polyplug_abi",
 ]
 
 [[package]]
@@ -2188,6 +2196,7 @@ name = "polyplug_js"
 version = "0.1.0"
 dependencies = [
  "polyplug",
+ "polyplug_abi",
  "rquickjs",
  "tempfile",
  "thiserror",
@@ -2200,6 +2209,7 @@ dependencies = [
  "deno_core",
  "deno_error",
  "polyplug",
+ "polyplug_abi",
  "tempfile",
  "thiserror",
  "tokio",
@@ -2211,6 +2221,7 @@ version = "0.1.0"
 dependencies = [
  "mlua",
  "polyplug",
+ "polyplug_abi",
  "tempfile",
 ]
 
@@ -2219,6 +2230,7 @@ name = "polyplug_native"
 version = "0.1.0"
 dependencies = [
  "polyplug",
+ "polyplug_abi",
 ]
 
 [[package]]
@@ -2226,6 +2238,7 @@ name = "polyplug_python"
 version = "0.1.0"
 dependencies = [
  "polyplug",
+ "polyplug_abi",
  "pyo3",
  "tempfile",
 ]
@@ -2516,6 +2529,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27344601ef27460e82d6a4e1ecb9e7e99f518122095f3c51296da8e9be2b9d83"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "rust_decoder"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
+
+[[package]]
+name = "rust_encoder"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
+
+[[package]]
+name = "rust_reporter"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
+]
+
+[[package]]
+name = "rust_validator"
+version = "1.0.0"
+dependencies = [
+ "polyplug_guest",
 ]
 
 [[package]]

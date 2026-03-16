@@ -1,3 +1,12 @@
+// JS Deno host example using polyplugc-generated bindings.
+//
+// This host demonstrates the real-world polyplug pattern:
+//   1. Generate host bindings: polyplugc --api api.toml --lang js-deno --out generated/
+//   2. Import generated contract IDs from generated/host/callers.ts
+//   3. Use generated constants instead of hard-coded values
+//
+// Zero hand-written contract IDs.
+
 import {
   openPolyplug,
   runtimeNew,
@@ -12,30 +21,16 @@ import { registerPythonLoader } from "../../../host-libs/js/loaders/python.ts";
 import { registerLuaLoader } from "../../../host-libs/js/loaders/lua.ts";
 import { registerJsLoader } from "../../../host-libs/js/loaders/js.ts";
 
-const TRANSFORMER_CONTRACT_ID: bigint = 0x3D53C682F3F5A9EFn;
-const REPORTER_CONTRACT_ID: bigint = 0x81D41D43E511D297n;
-
-const FNV_OFFSET: bigint = 0xCBF29CE484222325n;
-const FNV_PRIME: bigint = 0x00000100000001B3n;
+// Import generated contract IDs
+import { ContractIds } from "./generated/host/callers.ts";
 
 const SZ_STRING_VIEW: number = 16;
-
 const ABI_FN_RESULT_STRUCT = { struct: ["u32", "u32", "pointer", "usize"] } as const;
 
 interface DiscoveredBundle {
   path: string;
   bundleName: string;
   provides: string[];
-}
-
-function bundleId(name: string): bigint {
-  const data: Uint8Array = new TextEncoder().encode(name);
-  let hash: bigint = FNV_OFFSET;
-  for (const byte of data) {
-    hash ^= BigInt(byte);
-    hash = BigInt.asUintN(64, hash * FNV_PRIME);
-  }
-  return hash;
 }
 
 function readStringViewAt(view: DataView, offset: number): string {
@@ -68,7 +63,6 @@ function callVtableFn(
     parameters: ["pointer", "pointer"],
     result: ABI_FN_RESULT_STRUCT,
   } as const;
-  // deno-lint-ignore no-explicit-any
   const fnCall = new Deno.UnsafeFnPointer(fnPtr as any, fnDef);
   const result = fnCall.call(argsPtr, outPtr) as unknown as [number, number, Deno.PointerValue, number | bigint];
   return result[0];
@@ -79,157 +73,54 @@ function resolvePluginPath(): string {
   if (envPath && envPath.length > 0) {
     return envPath;
   }
-  const repoRoot: string = new URL("../../..", import.meta.url).pathname;
-  return `${repoRoot}examples/plugins`;
+  const scriptDir: string = new URL(".", import.meta.url).pathname;
+  return scriptDir + "../../../plugins";
 }
 
-function scanPluginDir(dir: string): DiscoveredBundle[] {
-  const bundles: DiscoveredBundle[] = [];
+async function main(): Promise<void> {
+  const pluginPath: string = resolvePluginPath();
+  console.error(`plugin directory: ${pluginPath}`);
 
-  try {
-    for (const entry of Deno.readDirSync(dir)) {
-      if (!entry.isDirectory) continue;
+  const libPath: string = "../../../target/debug/libpolyplug.so";
+  const lib = openPolyplug(libPath);
+  const rt: Runtime = runtimeNew(lib);
 
-      const manifestPath: string = `${dir}/${entry.name}/manifest.toml`;
-      let content: string;
-      try {
-        content = Deno.readTextFileSync(manifestPath);
-      } catch {
-        continue;
-      }
+  // Register all loaders
+  registerNativeLoader(lib, rt);
+  registerDotnetLoader(lib, rt, "10.0");
+  registerPythonLoader(lib, rt, "3.11");
+  registerLuaLoader(lib, rt);
+  registerJsLoader(lib, rt);
 
-      const bnMatch: RegExpMatchArray | null = content.match(/bundle_name\s*=\s*"([^"]+)"/);
-      if (!bnMatch) continue;
+  console.log("\n=== polyplug js-deno host example ===");
 
-      const provides: string[] = [];
-      const provMatch: RegExpMatchArray | null = content.match(/provides\s*=\s*\[([^\]]+)\]/);
-      if (provMatch) {
-        const items: RegExpMatchArray | null = provMatch[1].match(/"([^"]+)"/g);
-        if (items) {
-          for (const item of items) {
-            provides.push(item.replace(/"/g, ""));
-          }
-        }
-      }
-
-      bundles.push({
-        path: `${dir}/${entry.name}`,
-        bundleName: bnMatch[1],
-        provides,
-      });
-    }
-  } catch {
-    return [];
+  // Find plugins using generated contract IDs
+  const decoderHandle = rt.findByContract(ContractIds.PIPELINE_DECODER_CONTRACT_ID, 0);
+  if (decoderHandle !== NULL_HANDLE) {
+    console.log("[js_deno_decoder] found decoder plugin");
   }
 
-  bundles.sort((a, b) => a.bundleName.localeCompare(b.bundleName));
-  return bundles;
-}
-
-const REGISTER_SYMBOLS = {
-  polyplug_runtime_register_loader: {
-    parameters: ["pointer", "pointer"] as const,
-    result: "u32" as const,
-  },
-} as const satisfies Deno.ForeignLibraryInterface;
-
-function main(): void {
-  const pluginDir: string = resolvePluginPath();
-  const soPath: string = Deno.env.get("POLYPLUG_SO") ??
-    `${new URL("../../..", import.meta.url).pathname}target/debug/libpolyplug.so`;
-
-  console.error(`plugin directory: ${pluginDir}`);
-
-  const lib = openPolyplug(soPath);
-  const registerLib = Deno.dlopen(soPath, REGISTER_SYMBOLS);
-
-  try {
-    const rt: Runtime = runtimeNew(lib);
-    try {
-      const rtPtr: Deno.PointerValue = rt.ptr();
-      const registerFn = (rtP: Deno.PointerValue, loaderP: Deno.PointerValue): number => {
-        return registerLib.symbols.polyplug_runtime_register_loader(rtP, loaderP);
-      };
-
-      registerNativeLoader(rtPtr, registerFn);
-      registerDotnetLoader(rtPtr, registerFn);
-      registerPythonLoader(rtPtr, registerFn);
-      registerLuaLoader(rtPtr, registerFn);
-      registerJsLoader(rtPtr, registerFn);
-
-      const bundles: DiscoveredBundle[] = scanPluginDir(pluginDir);
-      if (bundles.length === 0) {
-        throw new Error(`no plugins found in ${pluginDir}. Run examples/build_all.sh first.`);
-      }
-
-      console.error(`discovered ${bundles.length} bundles`);
-
-      for (const b of bundles) {
-        rt.loadBundle(b.path);
-        console.error(`  loaded: ${b.bundleName}`);
-      }
-
-      for (const b of bundles) {
-        let contractId: bigint = 0n;
-        let fnName: string = "";
-
-        if (b.provides.includes("data.Transformer")) {
-          contractId = TRANSFORMER_CONTRACT_ID;
-          fnName = "transform";
-        } else if (b.provides.includes("data.Reporter")) {
-          contractId = REPORTER_CONTRACT_ID;
-          fnName = "report";
-        } else {
-          continue;
-        }
-
-        const bid: bigint = bundleId(b.bundleName);
-        const handle: bigint = rt.findByBundle(bid, contractId);
-        if (handle === NULL_HANDLE) {
-          throw new Error(`plugin not found: ${b.bundleName}`);
-        }
-
-        const guard: Guard = rt.resolvePlugin(handle);
-        try {
-          const vtable: Deno.PointerValue = guard.vtable();
-          if (vtable === null) {
-            throw new Error(`null vtable: ${b.bundleName}`);
-          }
-
-          const inputStr: string = "hello";
-          const inputBytes: Uint8Array<ArrayBuffer> = new TextEncoder().encode(inputStr);
-          const inputSvBuf: Uint8Array<ArrayBuffer> = new Uint8Array(new ArrayBuffer(SZ_STRING_VIEW));
-          const inputSvView: DataView = new DataView(inputSvBuf.buffer);
-          const inputDataPtr: Deno.PointerValue = Deno.UnsafePointer.of(inputBytes);
-          inputSvView.setBigUint64(0, BigInt(Deno.UnsafePointer.value(inputDataPtr)), true);
-          inputSvView.setBigUint64(8, BigInt(inputBytes.length), true);
-
-          const outputSvBuf: Uint8Array<ArrayBuffer> = new Uint8Array(new ArrayBuffer(SZ_STRING_VIEW));
-          const outputSvView: DataView = new DataView(outputSvBuf.buffer);
-
-          const errCode: number = callVtableFn(
-            vtable,
-            Deno.UnsafePointer.of(inputSvBuf),
-            Deno.UnsafePointer.of(outputSvBuf),
-          );
-          if (errCode !== 0) {
-            throw new Error(`call failed for ${b.bundleName}: code ${errCode}`);
-          }
-
-          const result: string = readStringViewAt(outputSvView, 0);
-          const label: string = `[${b.bundleName}]`;
-          console.log(`${label.padEnd(30)} ${fnName}("hello") = "${result}"`);
-        } finally {
-          guard[Symbol.dispose]();
-        }
-      }
-    } finally {
-      rt[Symbol.dispose]();
-    }
-  } finally {
-    registerLib.close();
-    lib.close();
+  const transformerHandle = rt.findByContract(ContractIds.DATA_TRANSFORMER_CONTRACT_ID, 0);
+  if (transformerHandle !== NULL_HANDLE) {
+    console.log("[js_deno_transformer] found transformer plugin");
   }
+
+  const encoderHandle = rt.findByContract(ContractIds.PIPELINE_ENCODER_CONTRACT_ID, 0);
+  if (encoderHandle !== NULL_HANDLE) {
+    console.log("[js_deno_encoder] found encoder plugin");
+  }
+
+  const reporterHandle = rt.findByContract(ContractIds.DATA_REPORTER_CONTRACT_ID, 0);
+  if (reporterHandle !== NULL_HANDLE) {
+    console.log("[js_deno_reporter] found reporter plugin");
+  }
+
+  const validatorHandle = rt.findByContract(ContractIds.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
+  if (validatorHandle !== NULL_HANDLE) {
+    console.log("[js_deno_validator] found validator plugin");
+  }
+
+  console.log("\n=== done ===");
 }
 
-main();
+await main();

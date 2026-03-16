@@ -11,7 +11,7 @@ use std::path::Path;
 
 use netcorehost::pdcstring::PdCString;
 
-use polyplug::abi::PluginRegistrar;
+use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -141,18 +141,18 @@ impl BundleLoader for DotnetLoader {
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
-        let ctx: polyplug::abi::PluginContext = polyplug::abi::PluginContext {
-            bundle_path: polyplug::abi::StringView {
+        let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+            bundle_path: polyplug_abi::StringView {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
-            host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         // SAFETY: managed_init is a valid fn ptr from CLR. registrar and ctx are non-null and valid.
         let result: u32 = unsafe {
             (*managed_init)(
                 registrar as *mut PluginRegistrar,
-                &ctx as *const polyplug::abi::PluginContext,
+                &ctx as *const polyplug_abi::PluginContext,
             )
         };
         if result != 0 {

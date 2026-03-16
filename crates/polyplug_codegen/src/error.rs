@@ -100,6 +100,9 @@ pub enum PolyplugcError {
         "name `{name}` is used by both a [[type]] and an [[enum]]: names must be unique across both"
     )]
     EnumNameCollision { name: String },
+
+    #[error("guest generation not supported for `{language}`: {reason}")]
+    GuestGenerationNotSupported { language: String, reason: String },
 }
 
 #[cfg(test)]

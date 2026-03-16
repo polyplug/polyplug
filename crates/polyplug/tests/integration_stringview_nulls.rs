@@ -2,7 +2,7 @@
 //! polyplug never treats StringView as null-terminated — embedded \x00 bytes must
 //! be preserved through any polyplug-internal API that processes StringViews.
 
-use polyplug::abi::StringView;
+use polyplug_abi::StringView;
 
 unsafe extern "C" {
     fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8;

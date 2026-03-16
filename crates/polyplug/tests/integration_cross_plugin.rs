@@ -7,9 +7,9 @@
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
 
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -43,11 +43,11 @@ fn make_desc(plugin_name: &'static str, contract_name: &'static str) -> PluginDe
 mod tests {
     use super::make_desc;
     use super::make_static_vtable;
-    use polyplug::abi::PluginDescriptor;
-    use polyplug::abi::PluginHandle;
-    use polyplug::abi::PluginVTable;
-    use polyplug::abi::bundle_id;
-    use polyplug::abi::contract_id;
+    use polyplug_abi::PluginDescriptor;
+    use polyplug_abi::PluginHandle;
+    use polyplug_abi::PluginVTable;
+    use polyplug_abi::bundle_id;
+    use polyplug_abi::contract_id;
     use polyplug::error::RegistryError;
     use polyplug::registry::Registry;
 

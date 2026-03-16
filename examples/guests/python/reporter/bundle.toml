@@ -1,11 +1,10 @@
 # bundle.toml — Python reporter guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang python --out generated/
 
 [bundle]
 name    = "python_reporter"
 version = "1.0.0"
 runtime = "python"
-file    = "summary_reporter.py"
+file    = "reporter.py"
 api     = "../../../api.toml"
 
 [[plugin]]

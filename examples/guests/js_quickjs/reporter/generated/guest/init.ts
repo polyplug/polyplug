@@ -2,10 +2,13 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
-function init(bundlePath: string): void {
-    // Dependency resolution and vtable registration would go here.
-    // Replace with generated values from bundle.toml.
-}
+import {
+    setJsQuickjsReporterImpl
+} from './contracts';
 
-// bundlePath injected as global by polyplug host loader
-init(globalThis.bundlePath);
+// Plugin implementation registration
+// Call each set*Impl function with your plugin's function implementations
+// Example:
+//   setJsQuickjsReporterImpl(/* your function implementations */);
+
+// Implement your plugin functions and call set*Impl above to register them

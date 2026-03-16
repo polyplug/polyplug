@@ -17,9 +17,9 @@ use std::sync::RwLock;
 
 use arc_swap::ArcSwap;
 
-use crate::abi::PluginDescriptor;
-use crate::abi::PluginHandle;
-use crate::abi::PluginVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
 use crate::error::RegistryError;
 
 /// A `Send + Sync` wrapper around a raw vtable pointer.
@@ -351,7 +351,6 @@ impl Registry {
     }
 
     /// Find all plugins satisfying the given contract_id and minimum version.
-    ///
     pub fn find_all_by_contract(
         &self,
         contract_id: u64,
@@ -535,8 +534,8 @@ impl Default for Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::PluginDescriptor;
-    use crate::abi::StringView;
+    use polyplug_abi::PluginDescriptor;
+    use polyplug_abi::StringView;
 
     const MOCK_FNS: [*const (); 0] = [];
 

@@ -12,13 +12,13 @@ use mlua::Table;
 use mlua::Value;
 
 use crate::config::LuaConfig;
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
-use polyplug::abi::contract_id;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
+use polyplug_abi::contract_id;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -377,14 +377,14 @@ impl BundleLoader for LuaLoader {
         // Pass registrar pointer as first arg and PluginContext pointer as second arg.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
-        let ctx: polyplug::abi::PluginContext = polyplug::abi::PluginContext {
-            bundle_path: polyplug::abi::StringView {
+        let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+            bundle_path: polyplug_abi::StringView {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
-            host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
-        let ctx_ptr: i64 = &ctx as *const polyplug::abi::PluginContext as i64;
+        let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
             .call::<()>((registrar_ptr, ctx_ptr))
             .map_err(|e: mlua::Error| {

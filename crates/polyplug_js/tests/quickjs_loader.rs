@@ -10,14 +10,14 @@ use core::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::loader::BundleLoader;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
@@ -187,7 +187,7 @@ fn runtime_name_is_js_quickjs() {
 
 #[test]
 fn load_valid_bundle_registers_vtable() {
-    let contract_id: u64 = polyplug::abi::contract_id("test.noop", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.noop", 1);
 
     // Build a static vtable pointer to pass through JS (non-null, non-zero).
     // We leak a Box so the pointer is 'static and the JS side gets a stable address.
@@ -230,7 +230,7 @@ fn load_valid_bundle_registers_vtable() {
 
 #[test]
 fn load_bundle_with_functions_registers_correct_count() {
-    let contract_id: u64 = polyplug::abi::contract_id("test.math", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.math", 1);
     let fn_count: u32 = 3;
 
     let dummy_fn_array: Box<[*const ()]> = vec![core::ptr::null(); fn_count as usize].into();
@@ -263,7 +263,7 @@ fn load_bundle_with_functions_registers_correct_count() {
 
 #[test]
 fn load_accepts_directory_path() {
-    let contract_id: u64 = polyplug::abi::contract_id("test.dir", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.dir", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -371,7 +371,7 @@ fn load_bundle_without_register_vtable_returns_error() {
 
 #[test]
 fn load_bundle_null_vtable_pointer_returns_error() {
-    let contract_id: u64 = polyplug::abi::contract_id("test.null_vtable", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.null_vtable", 1);
     let contract_lo: u32 = contract_id as u32;
     let contract_hi: u32 = (contract_id >> 32) as u32;
 
@@ -415,7 +415,7 @@ fn bundle_path_global_is_injected() {
     // The loader injects `globalThis.bundlePath` before evaluating the bundle.
     // This test verifies the injection does not cause an error and that the
     // bundle can read the value.
-    let contract_id: u64 = polyplug::abi::contract_id("test.bundlepath", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.bundlepath", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -456,7 +456,7 @@ polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 
 #[test]
 fn polyplug_object_has_expected_methods() {
     // Verify all expected host methods are present on the polyplug global.
-    let contract_id: u64 = polyplug::abi::contract_id("test.methods", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.methods", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -500,7 +500,7 @@ polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 
 #[test]
 fn vtable_contract_id_roundtrip() {
     // Use a well-known FNV-1a contract — contract_id("image.decode", 1).
-    let contract_id: u64 = polyplug::abi::contract_id("image.decode", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("image.decode", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -563,7 +563,7 @@ unsafe extern "C" fn trampoline_capture_register(
 
 #[test]
 fn trampoline_fn_pointers_are_non_null_and_callable() {
-    let contract_id: u64 = polyplug::abi::contract_id("test.trampoline", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.trampoline", 1);
     let fn_count: u32 = 2;
 
     let dummy_fn_array: Box<[*const ()]> = vec![core::ptr::null(); fn_count as usize].into();
@@ -679,7 +679,7 @@ fn js_alloc_and_free_calls_host_vtable() {
         guard.free_calls = 0;
     }
 
-    let contract_id: u64 = polyplug::abi::contract_id("test.memory", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.memory", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -740,7 +740,7 @@ fn concurrent_loads_do_not_panic() {
             let errors_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&errors);
             std::thread::spawn(move || {
                 let contract_id: u64 =
-                    polyplug::abi::contract_id(&format!("test.concurrent.{i}"), 1);
+                    polyplug_abi::contract_id(&format!("test.concurrent.{i}"), 1);
 
                 let dummy_fn_array: Box<[*const ()]> = Box::new([]);
                 let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -787,7 +787,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     for i in 0..4_u32 {
-        let contract_id: u64 = polyplug::abi::contract_id(&format!("test.sequential.{i}"), 1);
+        let contract_id: u64 = polyplug_abi::contract_id(&format!("test.sequential.{i}"), 1);
 
         let dummy_fn_array: Box<[*const ()]> = Box::new([]);
         let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {

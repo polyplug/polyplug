@@ -2,5 +2,5 @@
 // Re-generate with: polyplugc generate --bundle bundle.toml --lang csharp --out <dir>
 
 public static class BundleConstants {
-    public static readonly ulong MyBundleId = 7440798660444139762UL;
+    public static readonly ulong MyBundleId = 7990354863392597613UL;
 }

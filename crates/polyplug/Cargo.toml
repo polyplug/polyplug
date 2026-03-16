@@ -10,6 +10,7 @@ name = "polyplug"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+polyplug_abi = { workspace = true }
 arc-swap = { workspace = true }
 thiserror = { workspace = true }
 libloading = { workspace = true }

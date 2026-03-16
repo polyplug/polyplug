@@ -11,7 +11,7 @@ use core::sync::atomic::Ordering;
 // We cannot depend on polyplug here (cdylib circular dependency).
 // Mirror the ABI types inline. These are frozen per §7 ABI Stability.
 
-/// Non-owning UTF-8 string view — mirrors polyplug::abi::StringView.
+/// Non-owning UTF-8 string view — mirrors polyplug_abi::StringView.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct StringView {
@@ -35,7 +35,7 @@ unsafe impl Send for StringView {}
 // SAFETY: Same reasoning as Send.
 unsafe impl Sync for StringView {}
 
-/// ABI error — mirrors polyplug::abi::AbiError.
+/// ABI error — mirrors polyplug_abi::AbiError.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AbiError {
@@ -58,14 +58,14 @@ unsafe impl Send for AbiError {}
 // SAFETY: AbiError is a plain-old-data struct with no interior mutability.
 unsafe impl Sync for AbiError {}
 
-/// Plugin context passed by the loader — mirrors polyplug::abi::PluginContext.
+/// Plugin context passed by the loader — mirrors polyplug_abi::PluginContext.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct PluginContext {
     pub bundle_path: StringView,
 }
 
-/// Plugin VTable — mirrors polyplug::abi::PluginVTable.
+/// Plugin VTable — mirrors polyplug_abi::PluginVTable.
 #[repr(C)]
 pub struct PluginVTable {
     pub contract_id: u64,
@@ -79,7 +79,7 @@ unsafe impl Send for PluginVTable {}
 // SAFETY: PluginVTable points to 'static function arrays. All fields are static pointers.
 unsafe impl Sync for PluginVTable {}
 
-/// Plugin descriptor — mirrors polyplug::abi::PluginDescriptor.
+/// Plugin descriptor — mirrors polyplug_abi::PluginDescriptor.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct PluginDescriptor {
@@ -95,7 +95,7 @@ unsafe impl Send for PluginDescriptor {}
 // SAFETY: PluginDescriptor contains only StringViews and u32 values.
 unsafe impl Sync for PluginDescriptor {}
 
-/// Opaque handle to a loaded plugin — mirrors polyplug::abi::PluginHandle.
+/// Opaque handle to a loaded plugin — mirrors polyplug_abi::PluginHandle.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginHandle {
@@ -103,7 +103,7 @@ pub struct PluginHandle {
     pub generation: u32,
 }
 
-/// Host VTable — mirrors polyplug::abi::HostVTable.
+/// Host VTable — mirrors polyplug_abi::HostVTable.
 #[repr(C)]
 pub struct HostVTable {
     pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
@@ -121,7 +121,7 @@ pub struct HostVTable {
     pub get_extension: unsafe extern "C" fn(extension_id: u32) -> *const (),
 }
 
-/// Plugin registrar — mirrors polyplug::abi::PluginRegistrar.
+/// Plugin registrar — mirrors polyplug_abi::PluginRegistrar.
 #[repr(C)]
 pub struct PluginRegistrar {
     pub register_plugin: unsafe extern "C" fn(

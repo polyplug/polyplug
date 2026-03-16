@@ -7,16 +7,16 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::POLYPLUG_ABI_VERSION;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
-use polyplug::abi::contract_id;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
+use polyplug_abi::contract_id;
 use polyplug::registry::Registry;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.

@@ -8,73 +8,17 @@
 
 namespace polyplug_plugin {
 
-// Forward declaration -- set by polyplug_init
-extern PipelineDecoderPlugin* g_pipeline_Decoder_impl;
+// Plugin: cpp_encoder
+extern PipelineEncoderPlugin* g_cpp_encoder_impl;
 
-constexpr uint64_t PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EULL;
+constexpr uint64_t CPP_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432ULL;
 
-// ABI wrapper for decode (function_id = 0)
-inline AbiError pipeline_Decoder_decode_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_pipeline_Decoder_impl->decode(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const PIPELINE_DECODER_FNS[] = {
-    reinterpret_cast<void*>(pipeline_Decoder_decode_abi),
-};
-
-static PluginVTable PIPELINE_DECODER_VTABLE = {
-    PIPELINE_DECODER_CONTRACT_ID,
-    0U,  // contract_version: (minor << 16) | patch
-    1U,  // function_count
-    PIPELINE_DECODER_FNS
-};
-
-// Forward declaration -- set by polyplug_init
-extern DataTransformerPlugin* g_data_Transformer_impl;
-
-constexpr uint64_t DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL;
-
-// ABI wrapper for transform (function_id = 0)
-inline AbiError data_Transformer_transform_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_data_Transformer_impl->transform(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const DATA_TRANSFORMER_FNS[] = {
-    reinterpret_cast<void*>(data_Transformer_transform_abi),
-};
-
-static PluginVTable DATA_TRANSFORMER_VTABLE = {
-    DATA_TRANSFORMER_CONTRACT_ID,
-    0U,  // contract_version: (minor << 16) | patch
-    1U,  // function_count
-    DATA_TRANSFORMER_FNS
-};
-
-// Forward declaration -- set by polyplug_init
-extern PipelineEncoderPlugin* g_pipeline_Encoder_impl;
-
-constexpr uint64_t PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432ULL;
+inline void set_cpp_encoder_impl(PipelineEncoderPlugin* impl) { g_cpp_encoder_impl = impl; }
 
 // ABI wrapper for encode (function_id = 0)
-inline AbiError pipeline_Encoder_encode_abi(const void* args, void* out) noexcept {
+inline AbiError cpp_encoder_encode_abi(const void* args, void* out) noexcept {
     try {
-        auto result = g_pipeline_Encoder_impl->encode(*static_cast<const StringView*>(args));
+        auto result = g_cpp_encoder_impl->encode(*static_cast<const StringView*>(args));
         *static_cast<StringView*>(out) = result;
         return AbiError{ABI_OK, StringView{nullptr, 0}};
     } catch (const std::exception&) {
@@ -84,73 +28,15 @@ inline AbiError pipeline_Encoder_encode_abi(const void* args, void* out) noexcep
     }
 }
 
-static void* const PIPELINE_ENCODER_FNS[] = {
-    reinterpret_cast<void*>(pipeline_Encoder_encode_abi),
+static void* const CPP_ENCODER_FNS[] = {
+    reinterpret_cast<void*>(cpp_encoder_encode_abi),
 };
 
-static PluginVTable PIPELINE_ENCODER_VTABLE = {
-    PIPELINE_ENCODER_CONTRACT_ID,
-    0U,  // contract_version: (minor << 16) | patch
-    1U,  // function_count
-    PIPELINE_ENCODER_FNS
-};
-
-// Forward declaration -- set by polyplug_init
-extern DataReporterPlugin* g_data_Reporter_impl;
-
-constexpr uint64_t DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297ULL;
-
-// ABI wrapper for report (function_id = 0)
-inline AbiError data_Reporter_report_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_data_Reporter_impl->report(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const DATA_REPORTER_FNS[] = {
-    reinterpret_cast<void*>(data_Reporter_report_abi),
-};
-
-static PluginVTable DATA_REPORTER_VTABLE = {
-    DATA_REPORTER_CONTRACT_ID,
-    0U,  // contract_version: (minor << 16) | patch
-    1U,  // function_count
-    DATA_REPORTER_FNS
-};
-
-// Forward declaration -- set by polyplug_init
-extern PipelineValidatorPlugin* g_pipeline_Validator_impl;
-
-constexpr uint64_t PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0ULL;
-
-// ABI wrapper for validate (function_id = 0)
-inline AbiError pipeline_Validator_validate_abi(const void* args, void* out) noexcept {
-    try {
-        auto result = g_pipeline_Validator_impl->validate(*static_cast<const StringView*>(args));
-        *static_cast<StringView*>(out) = result;
-        return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
-    } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
-    }
-}
-
-static void* const PIPELINE_VALIDATOR_FNS[] = {
-    reinterpret_cast<void*>(pipeline_Validator_validate_abi),
-};
-
-static PluginVTable PIPELINE_VALIDATOR_VTABLE = {
-    PIPELINE_VALIDATOR_CONTRACT_ID,
-    0U,  // contract_version: (minor << 16) | patch
-    1U,  // function_count
-    PIPELINE_VALIDATOR_FNS
+static PluginVTable CPP_ENCODER_VTABLE = {
+    CPP_ENCODER_CONTRACT_ID,
+    0U,
+    1U,
+    CPP_ENCODER_FNS
 };
 
 }  // namespace polyplug_plugin

@@ -11,7 +11,7 @@ name = "polyplug_guest"
 path = "src/lib.rs"
 
 [dependencies]
-polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
 
 [lints]
 workspace = true

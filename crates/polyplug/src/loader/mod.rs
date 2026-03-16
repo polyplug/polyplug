@@ -15,14 +15,14 @@ pub mod scanner;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::abi::ABI_OK;
-use crate::abi::AbiError;
-use crate::abi::AbiError as AbiErrorType;
-use crate::abi::HostVTable;
-use crate::abi::POLYPLUG_ABI_VERSION;
-use crate::abi::PluginDescriptor;
-use crate::abi::PluginRegistrar;
-use crate::abi::PluginVTable;
+use polyplug_abi::AbiError;
+use polyplug_abi::AbiError as AbiErrorType;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use crate::error::LoaderError;
 use crate::registry::Registry;
 use std::sync::Arc;
@@ -128,7 +128,7 @@ impl BundleLoader for NativeBundleLoader {
         let bundle_dir: &Path = path.parent().unwrap_or(path);
         let mut manifest: ManifestData =
             parse_manifest(bundle_dir).map_err(|e: LoaderError| PolyplugError::Loader(e))?;
-        manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+        manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
         load_bundle(path, &manifest, &self.registry, self.host_vtable)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))
     }
@@ -244,7 +244,7 @@ pub fn load_bundle(
             if dep.contract_id != 0 {
                 dep.contract_id
             } else {
-                crate::abi::contract_id(&dep.contract, 0)
+                polyplug_abi::contract_id(&dep.contract, 0)
             }
         })
         .collect::<Vec<u64>>();
@@ -303,7 +303,7 @@ pub fn load_bundle(
     // so the pointer is always valid while reachable.
     let init_fn_ptr: unsafe extern "C" fn(
         *mut PluginRegistrar,
-        *const crate::abi::PluginContext,
+        *const polyplug_abi::PluginContext,
     ) -> AbiErrorType = {
         // SAFETY: polyplug_init is resolved from a successfully loaded library.
         // libloading's get() returns Err if the symbol doesn't exist; we propagate via ?.
@@ -312,7 +312,7 @@ pub fn load_bundle(
             '_,
             unsafe extern "C" fn(
                 *mut PluginRegistrar,
-                *const crate::abi::PluginContext,
+                *const polyplug_abi::PluginContext,
             ) -> AbiErrorType,
         > = unsafe {
             library
@@ -352,11 +352,11 @@ pub fn load_bundle(
     };
 
     // Step 6: Create PluginContext with bundle path and host ABI version
-    let bundle_path_sv: crate::abi::StringView = crate::abi::StringView {
+    let bundle_path_sv: polyplug_abi::StringView = polyplug_abi::StringView {
         ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
         len: bundle_dir.as_os_str().as_encoded_bytes().len(),
     };
-    let ctx: crate::abi::PluginContext = crate::abi::PluginContext {
+    let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
         bundle_path: bundle_path_sv,
         host_abi_version: POLYPLUG_ABI_VERSION,
     };
@@ -368,7 +368,7 @@ pub fn load_bundle(
     let init_result: AbiError = unsafe {
         init_fn_ptr(
             &mut registrar as *mut PluginRegistrar,
-            &ctx as *const crate::abi::PluginContext,
+            &ctx as *const polyplug_abi::PluginContext,
         )
     };
 
@@ -444,7 +444,7 @@ pub(crate) unsafe extern "C" fn registrar_callback(
     if registry_ptr.is_null() {
         return AbiError {
             code: 1,
-            message: crate::abi::StringView::null(),
+            message: polyplug_abi::StringView::null(),
         };
     }
     // SAFETY: registry_ptr was set by load_bundle() immediately before calling polyplug_init
@@ -454,15 +454,17 @@ pub(crate) unsafe extern "C" fn registrar_callback(
     // They point to static data in the plugin binary (which is never unloaded per the invariant).
     let desc: PluginDescriptor = unsafe { *descriptor };
     // SAFETY: desc.contract_name is a StringView from the plugin binary, valid for the call.
-    // Null/empty contract_name falls back to a hash-based name.
-    let contract_name: String = if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
-        // SAFETY: vtable is a valid 'static PluginVTable — read contract_id for fallback name.
-        let vtable_contract_id: u64 = unsafe { (*vtable).contract_id };
-        format!("contract_{:#x}", vtable_contract_id)
-    } else {
-        // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes. Never unloaded.
-        unsafe { desc.contract_name.to_string_owned() }
-    };
+    // Contract name must be provided by the plugin - no fallback.
+    if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
+        return AbiError {
+            code: 1,
+            message: polyplug_abi::StringView::from_static(
+                b"PluginDescriptor.contract_name is null or empty",
+            ),
+        };
+    }
+    // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes. Never unloaded.
+    let contract_name: String = unsafe { desc.contract_name.to_string_owned() };
     // SAFETY: vtable is a valid 'static PluginVTable from the plugin binary.
     // Registry::register is marked unsafe because it dereferences vtable_ptr internally.
     match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
@@ -471,7 +473,7 @@ pub(crate) unsafe extern "C" fn registrar_callback(
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
             AbiError {
                 code: 1,
-                message: crate::abi::StringView::null(),
+                message: polyplug_abi::StringView::null(),
             }
         }
     }
@@ -479,15 +481,16 @@ pub(crate) unsafe extern "C" fn registrar_callback(
 
 #[cfg(test)]
 mod tests {
+    use polyplug_abi::ABI_ERROR_GENERIC;
     use core::ptr;
 
-    use crate::abi::AbiError;
-    use crate::abi::HostVTable;
-    use crate::abi::PluginDescriptor;
-    use crate::abi::PluginHandle;
-    use crate::abi::PluginRegistrar;
-    use crate::abi::PluginVTable;
-    use crate::abi::StringView;
+    use polyplug_abi::AbiError;
+    use polyplug_abi::HostVTable;
+    use polyplug_abi::PluginDescriptor;
+    use polyplug_abi::PluginHandle;
+    use polyplug_abi::PluginRegistrar;
+    use polyplug_abi::PluginVTable;
+    use polyplug_abi::StringView;
     use crate::registry::Registry;
 
     const EMPTY_FNS: [*const (); 0] = [];
@@ -620,7 +623,7 @@ mod tests {
             (registrar.register_plugin)(registrar as *mut PluginRegistrar, descriptor_ptr, vtable)
         };
 
-        assert_eq!(result.code, 0_u32);
+        assert_eq!(result.code, ABI_ERROR_GENERIC);
     }
 
     #[test]

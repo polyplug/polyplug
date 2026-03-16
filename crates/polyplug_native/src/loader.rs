@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use crate::config::NativeConfig;
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginRegistrar;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -42,7 +42,7 @@ impl BundleLoader for NativeLoader {
         let bundle_dir: &Path = path.parent().unwrap_or(path);
         let mut manifest: polyplug::loader::manifest::ManifestData =
             polyplug::loader::parse_manifest(bundle_dir).map_err(PolyplugError::Loader)?;
-        manifest.bundle_id = polyplug::abi::bundle_id(&manifest.bundle_name);
+        manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
 
         polyplug::loader::load_bundle(path, &manifest, &registry, host_vtable)
             .map_err(PolyplugError::Loader)

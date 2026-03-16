@@ -18,12 +18,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::abi::HostVTable;
-use crate::abi::PluginHandle;
-use crate::abi::PluginRegistrar;
-use crate::abi::PluginVTable;
-use crate::allocator::polyplug_host_alloc;
-use crate::allocator::polyplug_host_free;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::polyplug_host_alloc;
+use polyplug_abi::polyplug_host_free;
 use crate::error::GraphError;
 use crate::error::LoaderError;
 use crate::error::PolyplugError;
@@ -506,7 +506,7 @@ impl Runtime {
         // Parse manifest and compute bundle_id
         let mut manifest: ManifestData = crate::loader::parse_manifest(path)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
-        manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+        manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {
             let major_str: &str = match manifest.version.split_once('.') {
@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn abi_ok_constant() {
-        assert_eq!(crate::abi::ABI_OK, 0_u32);
+        assert_eq!(polyplug_abi::ABI_OK, 0_u32);
     }
 
     #[test]
@@ -1011,16 +1011,16 @@ mod tests {
     fn ensure_test_plugin_registered() {
         static SETUP: OnceLock<()> = OnceLock::new();
         SETUP.get_or_init(|| {
-            let vtable: &'static crate::abi::PluginVTable =
-                Box::leak(Box::new(crate::abi::PluginVTable {
+            let vtable: &'static polyplug_abi::PluginVTable =
+                Box::leak(Box::new(polyplug_abi::PluginVTable {
                     contract_id: 0xF00D_CAFE_0000_0001_u64,
                     contract_version: 0,
                     function_count: 0,
                     functions: core::ptr::null(),
                 }));
-            let desc: crate::abi::PluginDescriptor = crate::abi::PluginDescriptor {
-                name: crate::abi::StringView::from_static(b"test-dep-plugin"),
-                contract_name: crate::abi::StringView::from_static(b"test.dep.Contract"),
+            let desc: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+                name: polyplug_abi::StringView::from_static(b"test-dep-plugin"),
+                contract_name: polyplug_abi::StringView::from_static(b"test.dep.Contract"),
                 version_major: 1,
                 version_minor: 0,
                 version_patch: 0,
@@ -1049,7 +1049,7 @@ mod tests {
     #[test]
     fn declared_dep_passes_enforcement() {
         ensure_test_plugin_registered();
-        let caller_bid: u64 = crate::abi::bundle_id("caller-bundle-f");
+        let caller_bid: u64 = polyplug_abi::bundle_id("caller-bundle-f");
         let dep_cid: u64 = 0xF00D_CAFE_0000_0001_u64;
         // Declare the dependency so enforcement allows lookup.
         if let Some(reg) = global_registry() {
@@ -1071,7 +1071,7 @@ mod tests {
     #[test]
     fn find_all_skips_dep_enforcement() {
         ensure_test_plugin_registered();
-        let caller_bid: u64 = crate::abi::bundle_id("caller-bundle-g-no-deps");
+        let caller_bid: u64 = polyplug_abi::bundle_id("caller-bundle-g-no-deps");
         let dep_cid: u64 = 0xF00D_CAFE_0000_0001_u64;
         // Do NOT declare any deps for this bundle — enforcement would block find_by_contract.
         INIT_BUNDLE_ID.with(|c| c.set(caller_bid));
@@ -1123,9 +1123,9 @@ mod tests {
             function_count: 0_u32,
             functions: core::ptr::null(),
         }));
-        let descriptor: crate::abi::PluginDescriptor = crate::abi::PluginDescriptor {
-            name: crate::abi::StringView::from_static(b"stub"),
-            contract_name: crate::abi::StringView::from_static(b"stub.contract"),
+        let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+            name: polyplug_abi::StringView::from_static(b"stub"),
+            contract_name: polyplug_abi::StringView::from_static(b"stub.contract"),
             version_major: 1_u32,
             version_minor: 0_u32,
             version_patch: 0_u32,
@@ -1152,7 +1152,7 @@ mod tests {
         fn load(
             &self,
             _path: &Path,
-            _registrar: &mut crate::abi::PluginRegistrar,
+            _registrar: &mut polyplug_abi::PluginRegistrar,
         ) -> Result<(), crate::error::PolyplugError> {
             // SAFETY: host_find_by_contract takes plain integers only.
             let handle: PluginHandle = unsafe { host_find_by_contract(self.contract_id, 0_u32) };
@@ -1179,7 +1179,7 @@ mod tests {
         fn load(
             &self,
             _path: &Path,
-            _registrar: &mut crate::abi::PluginRegistrar,
+            _registrar: &mut polyplug_abi::PluginRegistrar,
         ) -> Result<(), crate::error::PolyplugError> {
             // SAFETY: host_find_by_contract takes plain integers only.
             let handle: PluginHandle = unsafe { host_find_by_contract(self.contract_id, 0_u32) };
@@ -1203,7 +1203,7 @@ mod tests {
         fn load(
             &self,
             _path: &Path,
-            _registrar: &mut crate::abi::PluginRegistrar,
+            _registrar: &mut polyplug_abi::PluginRegistrar,
         ) -> Result<(), crate::error::PolyplugError> {
             panic!("intentional panic in PanicLoader");
         }
@@ -1227,7 +1227,7 @@ mod tests {
         fn load(
             &self,
             _path: &Path,
-            _registrar: &mut crate::abi::PluginRegistrar,
+            _registrar: &mut polyplug_abi::PluginRegistrar,
         ) -> Result<(), crate::error::PolyplugError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
@@ -1285,7 +1285,7 @@ mod tests {
         fn load(
             &self,
             _path: &Path,
-            _registrar: &mut crate::abi::PluginRegistrar,
+            _registrar: &mut polyplug_abi::PluginRegistrar,
         ) -> Result<(), crate::error::PolyplugError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {
                 Ok(g) => g,
@@ -1306,7 +1306,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = crate::abi::contract_id("trust.test", 1_u32);
+        let contract: u64 = polyplug_abi::contract_id("trust.test", 1_u32);
         let bundle_name: &str = "enforce_bundle";
         let bundle_path: PathBuf = create_bundle_dir(&temp, bundle_name, "enforce");
         let runtime: Runtime = match Runtime::builder()
@@ -1342,7 +1342,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = crate::abi::contract_id("trust.tls", 1_u32);
+        let contract: u64 = polyplug_abi::contract_id("trust.tls", 1_u32);
         let observed: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
         let bundle_path: PathBuf = create_bundle_dir(&temp, "probe_bundle", "probe");
         let runtime: Runtime = match Runtime::builder()
@@ -1384,7 +1384,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = crate::abi::contract_id("trust.panic", 1_u32);
+        let contract: u64 = polyplug_abi::contract_id("trust.panic", 1_u32);
         // Use existing global registry if set, otherwise create and set a new one.
         // This handles test isolation when multiple tests share the same binary.
         let registry: Arc<Registry> = match global_registry() {
@@ -1422,7 +1422,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = crate::abi::contract_id("trust.reentrant", 1_u32);
+        let contract: u64 = polyplug_abi::contract_id("trust.reentrant", 1_u32);
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "outer_bundle", "reentrant");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "inner_bundle", "probe");
         let state: Arc<std::sync::Mutex<ReentrantState>> =
@@ -1481,7 +1481,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = crate::abi::contract_id("trust.lazy", 1_u32);
+        let contract: u64 = polyplug_abi::contract_id("trust.lazy", 1_u32);
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "lazy_outer", "lazy");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "lazy_inner", "probe");
         let state: Arc<std::sync::Mutex<LazyState>> = Arc::new(std::sync::Mutex::new(LazyState {

@@ -1,6 +1,6 @@
 //! Integration tests: version negotiation, compatibility modes, and warning callbacks.
 
-use polyplug::abi::PluginRegistrar;
+use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
@@ -132,7 +132,7 @@ fn write_bundle_manifest(
 #[test]
 fn compatible_exact_version_strict_loads_ok() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider
     write_bundle_manifest(
         &tmp,
@@ -162,7 +162,7 @@ fn compatible_exact_version_strict_loads_ok() {
 #[test]
 fn compatible_superset_version_strict_loads_ok() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider: version 1.2 satisfies min_version 1.0 (same major, higher minor)
     write_bundle_manifest(
         &tmp,
@@ -191,7 +191,7 @@ fn compatible_superset_version_strict_loads_ok() {
 #[test]
 fn compatible_superset_version_relaxed_loads_ok() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     write_bundle_manifest(
         &tmp,
         "provider",
@@ -219,7 +219,7 @@ fn compatible_superset_version_relaxed_loads_ok() {
 #[test]
 fn compatible_superset_version_yolo_loads_ok() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     write_bundle_manifest(
         &tmp,
         "provider",
@@ -251,7 +251,7 @@ fn compatible_superset_version_yolo_loads_ok() {
 #[test]
 fn too_old_strict_returns_version_mismatch() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 1.2
     write_bundle_manifest(
         &tmp,
@@ -287,7 +287,7 @@ fn too_old_strict_returns_version_mismatch() {
 fn too_old_relaxed_warns_and_loads() {
     ensure_warning_registered();
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 1.2
     write_bundle_manifest(
         &tmp,
@@ -324,7 +324,7 @@ fn too_old_relaxed_warns_and_loads() {
 #[test]
 fn too_old_yolo_loads_silently() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     write_bundle_manifest(
         &tmp,
         "provider",
@@ -356,7 +356,7 @@ fn too_old_yolo_loads_silently() {
 #[test]
 fn major_mismatch_strict_returns_version_mismatch() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 2.0
     write_bundle_manifest(
         &tmp,
@@ -392,7 +392,7 @@ fn major_mismatch_strict_returns_version_mismatch() {
 fn major_mismatch_relaxed_warns_and_loads() {
     ensure_warning_registered();
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 2.0
     write_bundle_manifest(
         &tmp,
@@ -429,7 +429,7 @@ fn major_mismatch_relaxed_warns_and_loads() {
 #[test]
 fn major_mismatch_yolo_loads_silently() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     write_bundle_manifest(
         &tmp,
         "provider",
@@ -462,7 +462,7 @@ fn major_mismatch_yolo_loads_silently() {
 #[test]
 fn function_count_mismatch_strict_returns_error() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider: NO function_count entry (empty {}) — will trigger FunctionCountMismatch
     write_bundle_manifest(
         &tmp,
@@ -500,7 +500,7 @@ fn function_count_mismatch_strict_returns_error() {
 fn function_count_mismatch_relaxed_warns_and_loads() {
     ensure_warning_registered();
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider: NO function_count entry (empty {})
     write_bundle_manifest(
         &tmp,
@@ -533,7 +533,7 @@ fn function_count_mismatch_relaxed_warns_and_loads() {
 #[test]
 fn function_count_mismatch_yolo_ignored() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider: NO function_count entry (empty {})
     write_bundle_manifest(
         &tmp,
@@ -566,7 +566,7 @@ fn function_count_mismatch_yolo_ignored() {
 #[test]
 fn malformed_version_returns_manifest_parse_error() {
     let tmp: TempDir = TempDir::new().expect("tmp");
-    let cid: u64 = polyplug::abi::contract_id("test.contract", 1);
+    let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider: version = "not_a_version"
     // split_once('.') on "not_a_version" returns None → major_str = "0" → key = "test.contract@0"
     // Include function_count with key "test.contract@0" so function_count check passes,

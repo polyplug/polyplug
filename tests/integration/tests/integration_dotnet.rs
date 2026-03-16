@@ -2,13 +2,13 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -126,7 +126,7 @@ fn load_fixture() -> Result<(), PolyplugError> {
 }
 
 fn get_vtable() -> *const PluginVTable {
-    let contract_id: u64 = polyplug::abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = DOTNET_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)

@@ -26,11 +26,26 @@ class StringView(ctypes.Structure):
         ("ptr", ctypes.c_char_p),  # *const u8
         ("len", ctypes.c_size_t),  # usize
     ]
+    
+    # Keep reference to encoded bytes to prevent GC
+    _refs: ClassVar = {}
 
     def to_str(self) -> str:
         """Decode this StringView as a UTF-8 Python string (copies the bytes)."""
         raw: bytes = ctypes.string_at(self.ptr, self.len)
         return raw.decode("utf-8")
+
+    @staticmethod
+    def from_string(s: str) -> StringView:
+        """Create a StringView from a Python string.
+        The encoded bytes are kept alive internally."""
+        encoded = s.encode('utf-8')
+        # Create ctypes c_char_p from bytes
+        c_str = ctypes.c_char_p(encoded)
+        sv = StringView(ptr=c_str, len=len(encoded))
+        # Keep reference to prevent GC
+        StringView._refs[id(sv)] = (c_str, encoded)
+        return sv
 
 
 class Buffer(ctypes.Structure):
@@ -100,25 +115,23 @@ class PluginDescriptor(ctypes.Structure):
         ("version_major", ctypes.c_uint32),
         ("version_minor", ctypes.c_uint32),
         ("version_patch", ctypes.c_uint32),
-        ("_tail_pad", ctypes.c_uint32),  # tail padding — DO NOT REMOVE
+        ("_tail_pad", ctypes.c_uint32),  # alignment padding — DO NOT REMOVE
     ]
 
 
 class PluginRegistrar(ctypes.Structure):
-    """register_plugin fn ptr(8) + host ptr(8) = 16 bytes."""
+    """register_plugin fnptr(8) + host/HostVTable*(8) = 16 bytes."""
 
-    pass  # _fields_ set after REGISTER_FN_TYPE is defined below
+    _fields_: ClassVar = [
+        ("register_plugin", ctypes.c_void_p),  # fnptr
+        ("host", ctypes.c_void_p),  # *const HostVTable
+    ]
 
 
-# Function type for PluginRegistrar.register_plugin
+# Type alias for the dispatch function signature
 REGISTER_FN_TYPE = ctypes.CFUNCTYPE(
-    AbiError,
-    ctypes.POINTER(PluginRegistrar),
-    ctypes.POINTER(PluginDescriptor),
-    ctypes.POINTER(PluginVTable),
+    ctypes.c_uint32,  # return: AbiError.code
+    ctypes.POINTER(PluginRegistrar),  # registrar
+    ctypes.POINTER(PluginDescriptor),  # descriptor
+    ctypes.POINTER(PluginVTable),  # vtable
 )
-
-PluginRegistrar._fields_ = [
-    ("register_plugin", REGISTER_FN_TYPE),
-    ("host", ctypes.c_void_p),
-]

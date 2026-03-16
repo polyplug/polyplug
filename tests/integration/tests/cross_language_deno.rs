@@ -7,14 +7,14 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
 use polyplug_js_deno::JsDenoConfig;
@@ -90,7 +90,7 @@ fn reset_registry() {
 }
 
 fn get_vtable() -> *const PluginVTable {
-    let contract_id: u64 = polyplug::abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = DENO_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -135,7 +135,7 @@ fn test_jsdeno_host_rust_guest() {
     // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
+        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

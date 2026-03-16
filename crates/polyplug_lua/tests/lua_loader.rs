@@ -19,13 +19,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -323,7 +323,7 @@ fn vtable_is_registered_after_load() {
     let path: PathBuf = write_temp_lua("lua_loader_vtable.lua", valid_plugin_script());
     load_script(&path).expect("valid bundle must load");
 
-    let contract_id: u64 = polyplug::abi::contract_id("test.loader", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
         TEST_REGISTRY.with(|cell| cell.borrow().find(contract_id, 0));
     assert!(
@@ -350,7 +350,7 @@ fn vtable_function_count_matches_script() {
     let path: PathBuf = write_temp_lua("lua_loader_two_fn.lua", two_function_plugin_script());
     load_script(&path).expect("two-function bundle must load");
 
-    let contract_id: u64 = polyplug::abi::contract_id("test.two", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.two", 1);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
         TEST_REGISTRY.with(|cell| cell.borrow().find(contract_id, 0));
     let handle: PluginHandle = handle.expect("test.two@1 must be registered");
@@ -372,7 +372,7 @@ fn vtable_contract_id_matches_computed_hash() {
     let path: PathBuf = write_temp_lua("lua_loader_cid.lua", valid_plugin_script());
     load_script(&path).expect("valid bundle must load");
 
-    let expected_cid: u64 = polyplug::abi::contract_id("test.loader", 1);
+    let expected_cid: u64 = polyplug_abi::contract_id("test.loader", 1);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
         TEST_REGISTRY.with(|cell| cell.borrow().find(expected_cid, 0));
     let handle: PluginHandle = handle.expect("test.loader@1 must be registered");
@@ -411,8 +411,8 @@ fn sequential_loads_both_succeed() {
         .expect("second sequential load must succeed");
 
     // Both contracts must be visible.
-    let cid1: u64 = polyplug::abi::contract_id("test.loader", 1);
-    let cid2: u64 = polyplug::abi::contract_id("test.two", 1);
+    let cid1: u64 = polyplug_abi::contract_id("test.loader", 1);
+    let cid2: u64 = polyplug_abi::contract_id("test.two", 1);
 
     let handle1: Result<PluginHandle, polyplug::error::RegistryError> =
         TEST_REGISTRY.with(|cell| cell.borrow().find(cid1, 0));
@@ -475,7 +475,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
     let path: PathBuf = write_temp_lua("lua_loader_dispatch.lua", valid_plugin_script());
     load_script(&path).expect("valid bundle must load");
 
-    let contract_id: u64 = polyplug::abi::contract_id("test.loader", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
     let handle: PluginHandle = TEST_REGISTRY
         .with(|cell| cell.borrow().find(contract_id, 0))
         .expect("test.loader@1 must be registered");

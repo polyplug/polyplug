@@ -65,7 +65,7 @@ pub fn scan_dir(dir: &Path) -> Vec<(PathBuf, ManifestData)> {
                     continue;
                 }
             };
-            manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+            manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
             results.push((entry_path, manifest));
         }
     }

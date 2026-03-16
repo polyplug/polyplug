@@ -16,7 +16,7 @@ use netcorehost::pdcstring::PdCString;
 
 use once_cell::sync::OnceCell;
 
-use polyplug::abi::PluginRegistrar;
+use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 
@@ -27,7 +27,7 @@ use crate::config::HostfxrLocation;
 /// Uses `extern "system"` because `netcorehost::ManagedFunction<F>` requires `F: ManagedFnPtr`
 /// which requires `<F as FnPtr>::Abi == System`. On Linux/macOS `"system"` is identical to `"C"`.
 pub(crate) type InitFn =
-    unsafe extern "system" fn(*mut PluginRegistrar, *const polyplug::abi::PluginContext) -> u32;
+    unsafe extern "system" fn(*mut PluginRegistrar, *const polyplug_abi::PluginContext) -> u32;
 
 /// DotnetContext holds the live CLR runtime and per-assembly loader cache.
 /// Created exactly once per process via CLR_CONTEXT.

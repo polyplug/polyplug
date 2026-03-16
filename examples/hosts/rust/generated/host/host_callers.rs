@@ -3,15 +3,15 @@
 #![allow(unused_imports)]
 #![allow(dead_code)]
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
-use polyplug::abi::ABI_ERROR_GENERIC;
-use polyplug::abi::ABI_ERROR_NOT_FOUND;
-use polyplug::abi::ABI_ERROR_STALE_HANDLE;
-use polyplug::abi::ABI_FUNCTION_NOT_AVAIL;
-use polyplug::abi::PluginHandle;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
+use polyplug_abi::ABI_ERROR_GENERIC;
+use polyplug_abi::ABI_ERROR_NOT_FOUND;
+use polyplug_abi::ABI_ERROR_STALE_HANDLE;
+use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
+use polyplug_abi::PluginHandle;
 use polyplug::runtime::Runtime;
 use super::types::*;
 
@@ -68,7 +68,7 @@ impl PipelineDecoderContract {
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug::abi::StringView::null() }
+                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
@@ -120,7 +120,7 @@ impl DataTransformerContract {
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug::abi::StringView::null() }
+                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
@@ -172,7 +172,7 @@ impl PipelineEncoderContract {
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug::abi::StringView::null() }
+                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
@@ -224,7 +224,7 @@ impl DataReporterContract {
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug::abi::StringView::null() }
+                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
@@ -276,7 +276,7 @@ impl PipelineValidatorContract {
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug::abi::StringView::null() }
+                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);

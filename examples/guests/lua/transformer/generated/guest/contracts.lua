@@ -17,7 +17,7 @@ function M.register_pipeline_Decoder(registrar_ptr)
     end
     local descriptor = ffi.new("PluginDescriptor")
     descriptor.name = polyplug_guest.string_view("pipeline_Decoder_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Decoder")
+    descriptor.contract_name = polyplug_guest.string_view("pipeline.Decoder@1")
     descriptor.version_major = 1
     descriptor.version_minor = 0
     descriptor.version_patch = 0
@@ -42,7 +42,7 @@ function M.register_data_Transformer(registrar_ptr)
     end
     local descriptor = ffi.new("PluginDescriptor")
     descriptor.name = polyplug_guest.string_view("data_Transformer_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("data.Transformer")
+    descriptor.contract_name = polyplug_guest.string_view("data.Transformer@1")
     descriptor.version_major = 1
     descriptor.version_minor = 0
     descriptor.version_patch = 0
@@ -67,7 +67,7 @@ function M.register_pipeline_Encoder(registrar_ptr)
     end
     local descriptor = ffi.new("PluginDescriptor")
     descriptor.name = polyplug_guest.string_view("pipeline_Encoder_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Encoder")
+    descriptor.contract_name = polyplug_guest.string_view("pipeline.Encoder@1")
     descriptor.version_major = 1
     descriptor.version_minor = 0
     descriptor.version_patch = 0
@@ -92,7 +92,7 @@ function M.register_data_Reporter(registrar_ptr)
     end
     local descriptor = ffi.new("PluginDescriptor")
     descriptor.name = polyplug_guest.string_view("data_Reporter_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("data.Reporter")
+    descriptor.contract_name = polyplug_guest.string_view("data.Reporter@1")
     descriptor.version_major = 1
     descriptor.version_minor = 0
     descriptor.version_patch = 0
@@ -117,7 +117,7 @@ function M.register_pipeline_Validator(registrar_ptr)
     end
     local descriptor = ffi.new("PluginDescriptor")
     descriptor.name = polyplug_guest.string_view("pipeline_Validator_plugin")
-    descriptor.contract_name = polyplug_guest.string_view("pipeline.Validator")
+    descriptor.contract_name = polyplug_guest.string_view("pipeline.Validator@1")
     descriptor.version_major = 1
     descriptor.version_minor = 0
     descriptor.version_patch = 0

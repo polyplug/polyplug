@@ -12,7 +12,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::contract_id as fnv_contract_id;
+use polyplug_abi::contract_id as fnv_contract_id;
 use polyplug_codegen::ir::PrimitiveType;
 use polyplug_codegen::ir::ResolvedContract;
 use polyplug_codegen::ir::ResolvedFunction;

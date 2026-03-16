@@ -10,11 +10,11 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 
-use polyplug::abi::AbiError;
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;

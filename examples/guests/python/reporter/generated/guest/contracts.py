@@ -15,170 +15,29 @@ POLYPLUG_ABI_VERSION: int = 1
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
 
-class PipelineDecoderPlugin:
-    def decode(self, input: StringView) -> StringView:
-        raise NotImplementedError
-
-_PIPELINE_DECODER_IMPL: PipelineDecoderPlugin | None = None
-def set_PIPELINE_DECODER_impl(impl: PipelineDecoderPlugin) -> None:
-    global _PIPELINE_DECODER_IMPL
-    _PIPELINE_DECODER_IMPL = impl
-
-class DataTransformerPlugin:
-    def transform(self, data: StringView) -> StringView:
-        raise NotImplementedError
-
-_DATA_TRANSFORMER_IMPL: DataTransformerPlugin | None = None
-def set_DATA_TRANSFORMER_impl(impl: DataTransformerPlugin) -> None:
-    global _DATA_TRANSFORMER_IMPL
-    _DATA_TRANSFORMER_IMPL = impl
-
-class PipelineEncoderPlugin:
-    def encode(self, data: StringView) -> StringView:
-        raise NotImplementedError
-
-_PIPELINE_ENCODER_IMPL: PipelineEncoderPlugin | None = None
-def set_PIPELINE_ENCODER_impl(impl: PipelineEncoderPlugin) -> None:
-    global _PIPELINE_ENCODER_IMPL
-    _PIPELINE_ENCODER_IMPL = impl
-
-class DataReporterPlugin:
+class PYTHON_REPORTERDataReporterPlugin:
     def report(self, data: StringView) -> StringView:
         raise NotImplementedError
 
-_DATA_REPORTER_IMPL: DataReporterPlugin | None = None
-def set_DATA_REPORTER_impl(impl: DataReporterPlugin) -> None:
-    global _DATA_REPORTER_IMPL
-    _DATA_REPORTER_IMPL = impl
+_python_reporter_IMPL: PYTHON_REPORTERDataReporterPlugin | None = None
+def set_python_reporter_impl(impl: PYTHON_REPORTERDataReporterPlugin) -> None:
+    global _python_reporter_IMPL
+    _python_reporter_IMPL = impl
 
-class PipelineValidatorPlugin:
-    def validate(self, data: StringView) -> StringView:
-        raise NotImplementedError
-
-_PIPELINE_VALIDATOR_IMPL: PipelineValidatorPlugin | None = None
-def set_PIPELINE_VALIDATOR_impl(impl: PipelineValidatorPlugin) -> None:
-    global _PIPELINE_VALIDATOR_IMPL
-    _PIPELINE_VALIDATOR_IMPL = impl
-
-PIPELINE_DECODER_PLUGIN_NAME_BYTES: bytes = b"pipeline_Decoder_plugin"
-PIPELINE_DECODER_CONTRACT_NAME_BYTES: bytes = b"pipeline.Decoder"
-PIPELINE_DECODER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PIPELINE_DECODER_PLUGIN_NAME_BYTES)
-PIPELINE_DECODER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PIPELINE_DECODER_CONTRACT_NAME_BYTES)
-PIPELINE_DECODER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=PIPELINE_DECODER_PLUGIN_NAME_C, len=len(PIPELINE_DECODER_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=PIPELINE_DECODER_CONTRACT_NAME_C, len=len(PIPELINE_DECODER_CONTRACT_NAME_BYTES)),
+PYTHON_REPORTER_PLUGIN_NAME_BYTES: bytes = b"python_reporter"
+PYTHON_REPORTER_CONTRACT_NAME_BYTES: bytes = b"data.Reporter@1"
+PYTHON_REPORTER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PYTHON_REPORTER_PLUGIN_NAME_BYTES)
+PYTHON_REPORTER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PYTHON_REPORTER_CONTRACT_NAME_BYTES)
+PYTHON_REPORTER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
+    name=StringView(ptr=PYTHON_REPORTER_PLUGIN_NAME_C, len=len(PYTHON_REPORTER_PLUGIN_NAME_BYTES)),
+    contract_name=StringView(ptr=PYTHON_REPORTER_CONTRACT_NAME_C, len=len(PYTHON_REPORTER_CONTRACT_NAME_BYTES)),
     version_major=1,
     version_minor=0,
     version_patch=0,
 )
 
-def pipeline_Decoder_decode_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: PipelineDecoderPlugin | None = _PIPELINE_DECODER_IMPL
-    if impl is None:
-        return ABI_ERROR_GENERIC
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    input: StringView = args_ptr_t.contents
-    result = impl.decode(input)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return ABI_OK
-
-PIPELINE_DECODER_pipeline_Decoder_decode_abi_CFUNC = _DISPATCH_FN_CTYPE(pipeline_Decoder_decode_abi)
-
-PIPELINE_DECODER_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(PIPELINE_DECODER_pipeline_Decoder_decode_abi_CFUNC, ctypes.c_void_p),
-)
-PIPELINE_DECODER_VTABLE: PluginVTable = PluginVTable(
-    contract_id=0x12F3C106B0C3DC1E,
-    contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(PIPELINE_DECODER_FNS, ctypes.c_void_p),
-)
-
-DATA_TRANSFORMER_PLUGIN_NAME_BYTES: bytes = b"data_Transformer_plugin"
-DATA_TRANSFORMER_CONTRACT_NAME_BYTES: bytes = b"data.Transformer"
-DATA_TRANSFORMER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(DATA_TRANSFORMER_PLUGIN_NAME_BYTES)
-DATA_TRANSFORMER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(DATA_TRANSFORMER_CONTRACT_NAME_BYTES)
-DATA_TRANSFORMER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=DATA_TRANSFORMER_PLUGIN_NAME_C, len=len(DATA_TRANSFORMER_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=DATA_TRANSFORMER_CONTRACT_NAME_C, len=len(DATA_TRANSFORMER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
-)
-
-def data_Transformer_transform_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: DataTransformerPlugin | None = _DATA_TRANSFORMER_IMPL
-    if impl is None:
-        return ABI_ERROR_GENERIC
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    data: StringView = args_ptr_t.contents
-    result = impl.transform(data)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return ABI_OK
-
-DATA_TRANSFORMER_data_Transformer_transform_abi_CFUNC = _DISPATCH_FN_CTYPE(data_Transformer_transform_abi)
-
-DATA_TRANSFORMER_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(DATA_TRANSFORMER_data_Transformer_transform_abi_CFUNC, ctypes.c_void_p),
-)
-DATA_TRANSFORMER_VTABLE: PluginVTable = PluginVTable(
-    contract_id=0x3D53C682F3F5A9EF,
-    contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(DATA_TRANSFORMER_FNS, ctypes.c_void_p),
-)
-
-PIPELINE_ENCODER_PLUGIN_NAME_BYTES: bytes = b"pipeline_Encoder_plugin"
-PIPELINE_ENCODER_CONTRACT_NAME_BYTES: bytes = b"pipeline.Encoder"
-PIPELINE_ENCODER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PIPELINE_ENCODER_PLUGIN_NAME_BYTES)
-PIPELINE_ENCODER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PIPELINE_ENCODER_CONTRACT_NAME_BYTES)
-PIPELINE_ENCODER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=PIPELINE_ENCODER_PLUGIN_NAME_C, len=len(PIPELINE_ENCODER_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=PIPELINE_ENCODER_CONTRACT_NAME_C, len=len(PIPELINE_ENCODER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
-)
-
-def pipeline_Encoder_encode_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: PipelineEncoderPlugin | None = _PIPELINE_ENCODER_IMPL
-    if impl is None:
-        return ABI_ERROR_GENERIC
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    data: StringView = args_ptr_t.contents
-    result = impl.encode(data)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return ABI_OK
-
-PIPELINE_ENCODER_pipeline_Encoder_encode_abi_CFUNC = _DISPATCH_FN_CTYPE(pipeline_Encoder_encode_abi)
-
-PIPELINE_ENCODER_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(PIPELINE_ENCODER_pipeline_Encoder_encode_abi_CFUNC, ctypes.c_void_p),
-)
-PIPELINE_ENCODER_VTABLE: PluginVTable = PluginVTable(
-    contract_id=0x127D1703C6EFB432,
-    contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(PIPELINE_ENCODER_FNS, ctypes.c_void_p),
-)
-
-DATA_REPORTER_PLUGIN_NAME_BYTES: bytes = b"data_Reporter_plugin"
-DATA_REPORTER_CONTRACT_NAME_BYTES: bytes = b"data.Reporter"
-DATA_REPORTER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(DATA_REPORTER_PLUGIN_NAME_BYTES)
-DATA_REPORTER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(DATA_REPORTER_CONTRACT_NAME_BYTES)
-DATA_REPORTER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=DATA_REPORTER_PLUGIN_NAME_C, len=len(DATA_REPORTER_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=DATA_REPORTER_CONTRACT_NAME_C, len=len(DATA_REPORTER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
-)
-
-def data_Reporter_report_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: DataReporterPlugin | None = _DATA_REPORTER_IMPL
+def python_reporter_report_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
+    impl: PYTHON_REPORTERDataReporterPlugin | None = _python_reporter_IMPL
     if impl is None:
         return ABI_ERROR_GENERIC
     args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
@@ -188,51 +47,16 @@ def data_Reporter_report_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p
     out_ptr_t[0] = result
     return ABI_OK
 
-DATA_REPORTER_data_Reporter_report_abi_CFUNC = _DISPATCH_FN_CTYPE(data_Reporter_report_abi)
+PYTHON_REPORTER_python_reporter_report_abi_CFUNC = _DISPATCH_FN_CTYPE(python_reporter_report_abi)
 
-DATA_REPORTER_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(DATA_REPORTER_data_Reporter_report_abi_CFUNC, ctypes.c_void_p),
+PYTHON_REPORTER_FNS = (ctypes.c_void_p * 1) (
+    ctypes.cast(PYTHON_REPORTER_python_reporter_report_abi_CFUNC, ctypes.c_void_p),
 )
-DATA_REPORTER_VTABLE: PluginVTable = PluginVTable(
+PYTHON_REPORTER_VTABLE: PluginVTable = PluginVTable(
     contract_id=0x81D41D43E511D297,
     contract_version=0,
     function_count=1,
-    functions=ctypes.cast(DATA_REPORTER_FNS, ctypes.c_void_p),
-)
-
-PIPELINE_VALIDATOR_PLUGIN_NAME_BYTES: bytes = b"pipeline_Validator_plugin"
-PIPELINE_VALIDATOR_CONTRACT_NAME_BYTES: bytes = b"pipeline.Validator"
-PIPELINE_VALIDATOR_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PIPELINE_VALIDATOR_PLUGIN_NAME_BYTES)
-PIPELINE_VALIDATOR_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(PIPELINE_VALIDATOR_CONTRACT_NAME_BYTES)
-PIPELINE_VALIDATOR_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
-    name=StringView(ptr=PIPELINE_VALIDATOR_PLUGIN_NAME_C, len=len(PIPELINE_VALIDATOR_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=PIPELINE_VALIDATOR_CONTRACT_NAME_C, len=len(PIPELINE_VALIDATOR_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
-)
-
-def pipeline_Validator_validate_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
-    impl: PipelineValidatorPlugin | None = _PIPELINE_VALIDATOR_IMPL
-    if impl is None:
-        return ABI_ERROR_GENERIC
-    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
-    data: StringView = args_ptr_t.contents
-    result = impl.validate(data)
-    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    out_ptr_t[0] = result
-    return ABI_OK
-
-PIPELINE_VALIDATOR_pipeline_Validator_validate_abi_CFUNC = _DISPATCH_FN_CTYPE(pipeline_Validator_validate_abi)
-
-PIPELINE_VALIDATOR_FNS = (ctypes.c_void_p * 1) (
-    ctypes.cast(PIPELINE_VALIDATOR_pipeline_Validator_validate_abi_CFUNC, ctypes.c_void_p),
-)
-PIPELINE_VALIDATOR_VTABLE: PluginVTable = PluginVTable(
-    contract_id=0xA553FAB5D11C7AF0,
-    contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(PIPELINE_VALIDATOR_FNS, ctypes.c_void_p),
+    functions=ctypes.cast(PYTHON_REPORTER_FNS, ctypes.c_void_p),
 )
 
 def polyplug_abi_version() -> int:
@@ -245,33 +69,9 @@ def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
         return
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))
-    err_PIPELINE_DECODER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(PIPELINE_DECODER_DESCRIPTOR), ctypes.byref(PIPELINE_DECODER_VTABLE)
+    err_PYTHON_REPORTER: AbiError = registrar_ptr.contents.register_plugin(
+        registrar_ptr, ctypes.byref(PYTHON_REPORTER_DESCRIPTOR), ctypes.byref(PYTHON_REPORTER_VTABLE)
     )
-    if err_PIPELINE_DECODER.code != ABI_OK:
-        raise RuntimeError("plugin registration failed")
-
-    err_DATA_TRANSFORMER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(DATA_TRANSFORMER_DESCRIPTOR), ctypes.byref(DATA_TRANSFORMER_VTABLE)
-    )
-    if err_DATA_TRANSFORMER.code != ABI_OK:
-        raise RuntimeError("plugin registration failed")
-
-    err_PIPELINE_ENCODER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(PIPELINE_ENCODER_DESCRIPTOR), ctypes.byref(PIPELINE_ENCODER_VTABLE)
-    )
-    if err_PIPELINE_ENCODER.code != ABI_OK:
-        raise RuntimeError("plugin registration failed")
-
-    err_DATA_REPORTER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(DATA_REPORTER_DESCRIPTOR), ctypes.byref(DATA_REPORTER_VTABLE)
-    )
-    if err_DATA_REPORTER.code != ABI_OK:
-        raise RuntimeError("plugin registration failed")
-
-    err_PIPELINE_VALIDATOR: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(PIPELINE_VALIDATOR_DESCRIPTOR), ctypes.byref(PIPELINE_VALIDATOR_VTABLE)
-    )
-    if err_PIPELINE_VALIDATOR.code != ABI_OK:
+    if err_PYTHON_REPORTER.code != ABI_OK:
         raise RuntimeError("plugin registration failed")
 

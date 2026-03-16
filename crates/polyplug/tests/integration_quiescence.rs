@@ -27,7 +27,7 @@ fn test_quiescence_timeout() {
         .expect("RELOAD_PLUGIN_CONTRACT_ID must be a valid u64");
 
     // Find a handle for the loaded plugin.
-    let mut handles: [polyplug::abi::PluginHandle; 4] = [polyplug::abi::PluginHandle {
+    let mut handles: [polyplug_abi::PluginHandle; 4] = [polyplug_abi::PluginHandle {
         index: 0u32,
         generation: 0u32,
     }; 4];
@@ -37,7 +37,7 @@ fn test_quiescence_timeout() {
         "must find at least one plugin for contract_id={:#x}",
         contract_id
     );
-    let handle: polyplug::abi::PluginHandle = handles[0];
+    let handle: polyplug_abi::PluginHandle = handles[0];
 
     // Pass PluginHandle fields (both Copy u32) to the background thread.
     // PluginHandle is a plain struct — both fields are Send/Copy.
@@ -49,7 +49,7 @@ fn test_quiescence_timeout() {
 
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         // Reconstruct handle on this thread.
-        let h: polyplug::abi::PluginHandle = polyplug::abi::PluginHandle { index, generation };
+        let h: polyplug_abi::PluginHandle = polyplug_abi::PluginHandle { index, generation };
         // Resolve guard HERE — PluginVTableGuard is !Send, must stay on this thread.
         let guard: polyplug::registry::PluginVTableGuard = registry_arc
             .resolve_guard(h)

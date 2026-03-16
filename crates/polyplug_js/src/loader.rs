@@ -23,14 +23,14 @@ use rquickjs::Runtime;
 use rquickjs::Value;
 
 use crate::config::JsConfig;
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -43,10 +43,14 @@ static QJS_RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
 
 // ─── Thread-local pending vtable (set from registerVtable callback) ───────────
 
+/// Pending vtable info from JS plugin registration.
+/// (contract_id, vtable_ptr, fn_count, contract_name)
+type PendingVtable = (u64, *const PluginVTable, usize, String);
+
 thread_local! {
     /// Set by the registerVtable() JS callback during bundle eval.
     /// Cleared before each eval; read after eval completes.
-    static PENDING_VTABLE: RefCell<Option<(u64, *const PluginVTable, usize)>> =
+    static PENDING_VTABLE: RefCell<Option<PendingVtable>> =
         const { RefCell::new(None) };
 }
 
@@ -431,16 +435,19 @@ fn register_host_functions<'js>(
 
     let register_vtable_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |contract_lo: u32, contract_hi: u32, vtable_lo: u32, vtable_hi: u32, fn_count: u32| {
+        |contract_lo: u32,
+         contract_hi: u32,
+         vtable_lo: u32,
+         vtable_hi: u32,
+         fn_count: u32,
+         contract_name: String| {
             let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
             let vtable_addr: u64 = (vtable_hi as u64) << 32 | vtable_lo as u64;
             let vtable_ptr: *const PluginVTable = vtable_addr as usize as *const PluginVTable;
             let fn_count_usize: usize = fn_count as usize;
-            PENDING_VTABLE.with(
-                |cell: &RefCell<Option<(u64, *const PluginVTable, usize)>>| {
-                    *cell.borrow_mut() = Some((contract_id, vtable_ptr, fn_count_usize));
-                },
-            );
+            PENDING_VTABLE.with(|cell: &RefCell<Option<PendingVtable>>| {
+                *cell.borrow_mut() = Some((contract_id, vtable_ptr, fn_count_usize, contract_name));
+            });
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -588,7 +595,7 @@ impl BundleLoader for JsLoader {
         })?;
 
         // 5. Clear PENDING_VTABLE before eval.
-        PENDING_VTABLE.with(|c: &RefCell<Option<(u64, *const PluginVTable, usize)>>| {
+        PENDING_VTABLE.with(|c: &RefCell<Option<PendingVtable>>| {
             *c.borrow_mut() = None;
         });
 
@@ -639,15 +646,19 @@ impl BundleLoader for JsLoader {
         eval_result?;
 
         // 7. Extract registered vtable from PENDING_VTABLE.
-        let (contract_id_val, vtable_ptr, fn_count): (u64, *const PluginVTable, usize) =
-            PENDING_VTABLE
-                .with(|c: &RefCell<Option<(u64, *const PluginVTable, usize)>>| *c.borrow())
-                .ok_or_else(|| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-quickjs".to_owned(),
-                        message: "bundle did not call polyplug.registerVtable()".to_owned(),
-                    })
-                })?;
+        let (contract_id_val, vtable_ptr, fn_count, contract_name_str): (
+            u64,
+            *const PluginVTable,
+            usize,
+            String,
+        ) = PENDING_VTABLE
+            .with(|c: &RefCell<Option<PendingVtable>>| c.borrow().clone())
+            .ok_or_else(|| {
+                PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                    runtime: "js-quickjs".to_owned(),
+                    message: "bundle did not call polyplug.registerVtable()".to_owned(),
+                })
+            })?;
 
         if vtable_ptr.is_null() {
             return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {
@@ -710,7 +721,6 @@ impl BundleLoader for JsLoader {
         let static_vtable: *const PluginVTable = Box::into_raw(Box::new(new_vtable));
 
         // 12. Build descriptor.
-        let contract_name_str: String = format!("contract_{:#x}", contract_id_val);
         let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-quickjs-plugin"),

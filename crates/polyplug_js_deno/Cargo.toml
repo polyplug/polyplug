@@ -12,6 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
 deno_core = { workspace = true }
 deno_error = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

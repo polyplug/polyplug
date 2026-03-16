@@ -24,9 +24,9 @@ use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
 
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::StringView;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::StringView;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -195,7 +195,7 @@ impl BundleLoader for PythonLoader {
                     ptr: bundle_path_static.as_ptr(),
                     len: bundle_path_static.len(),
                 },
-                host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
+                host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
             };
             let ctx_addr: usize = &ctx as *const PluginContext as usize;
             init_fn

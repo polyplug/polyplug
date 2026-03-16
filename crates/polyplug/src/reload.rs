@@ -29,7 +29,7 @@ pub struct ReloadEvent {
 }
 
 thread_local! {
-    static RELOAD_CAPTURED_VTABLES: core::cell::RefCell<Vec<*const crate::abi::PluginVTable>> =
+    static RELOAD_CAPTURED_VTABLES: core::cell::RefCell<Vec<*const polyplug_abi::PluginVTable>> =
         const { core::cell::RefCell::new(Vec::new()) };
 }
 
@@ -38,19 +38,19 @@ thread_local! {
 /// # Safety
 /// `vtable` must be a valid `PluginVTable` pointer from the reloaded library's init.
 pub(crate) unsafe extern "C" fn reload_registrar_callback(
-    _registrar: *mut crate::abi::PluginRegistrar,
-    _descriptor: *const crate::abi::PluginDescriptor,
-    vtable: *const crate::abi::PluginVTable,
-) -> crate::abi::AbiError {
+    _registrar: *mut polyplug_abi::PluginRegistrar,
+    _descriptor: *const polyplug_abi::PluginDescriptor,
+    vtable: *const polyplug_abi::PluginVTable,
+) -> polyplug_abi::AbiError {
     // SAFETY: vtable ptr comes from plugin init. Null check required before capture.
     if !vtable.is_null() {
         RELOAD_CAPTURED_VTABLES.with(
-            |v: &core::cell::RefCell<Vec<*const crate::abi::PluginVTable>>| {
+            |v: &core::cell::RefCell<Vec<*const polyplug_abi::PluginVTable>>| {
                 v.borrow_mut().push(vtable);
             },
         );
     }
-    crate::abi::AbiError::ok()
+    polyplug_abi::AbiError::ok()
 }
 
 /// Reload a bundle by path, with cascade depth tracking to prevent infinite loops.
@@ -84,7 +84,7 @@ pub(crate) fn reload_bundle_impl(
 
     let mut manifest: ManifestData = crate::loader::parse_manifest(&bundle_dir_path)
         .map_err(|e: crate::error::LoaderError| PolyplugError::Loader(e))?;
-    manifest.bundle_id = crate::abi::bundle_id(&manifest.bundle_name);
+    manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
     manifest.path = bundle_dir_path.clone();
     if manifest.runtime != "native" {
         crate::runtime::emit_warning(&format!(
@@ -128,23 +128,23 @@ pub(crate) fn reload_bundle_impl(
     };
     // SAFETY: abi_version_sym is a valid function pointer just resolved from the library.
     let found_version: u32 = unsafe { abi_version_sym() };
-    if found_version != crate::abi::POLYPLUG_ABI_VERSION {
+    if found_version != polyplug_abi::POLYPLUG_ABI_VERSION {
         return Err(PolyplugError::ReloadFailed {
             bundle: path_str.clone(),
             reason: format!(
                 "abi version mismatch: expected={}, found={}",
-                crate::abi::POLYPLUG_ABI_VERSION,
+                polyplug_abi::POLYPLUG_ABI_VERSION,
                 found_version
             ),
         });
     }
     let init_fn_ptr: unsafe extern "C" fn(
-        *mut crate::abi::PluginRegistrar,
-    ) -> crate::abi::AbiError = {
+        *mut polyplug_abi::PluginRegistrar,
+    ) -> polyplug_abi::AbiError = {
         // SAFETY: Symbol lookup returns a valid function pointer on success.
         let init_sym: libloading::Symbol<
             '_,
-            unsafe extern "C" fn(*mut crate::abi::PluginRegistrar) -> crate::abi::AbiError,
+            unsafe extern "C" fn(*mut polyplug_abi::PluginRegistrar) -> polyplug_abi::AbiError,
         > = unsafe {
             new_library
                 .get(b"polyplug_init\0")
@@ -157,23 +157,23 @@ pub(crate) fn reload_bundle_impl(
     };
 
     RELOAD_CAPTURED_VTABLES.with(|v| v.borrow_mut().clear());
-    let mut reload_registrar: crate::abi::PluginRegistrar = crate::abi::PluginRegistrar {
+    let mut reload_registrar: polyplug_abi::PluginRegistrar = polyplug_abi::PluginRegistrar {
         register_plugin: reload_registrar_callback,
-        host: runtime.host_vtable_ref() as *const crate::abi::HostVTable,
+        host: runtime.host_vtable_ref() as *const polyplug_abi::HostVTable,
     };
     // SAFETY: init_fn_ptr is resolved from new_library which remains alive for this call.
-    let init_result: crate::abi::AbiError =
-        unsafe { init_fn_ptr(&mut reload_registrar as *mut crate::abi::PluginRegistrar) };
-    if init_result.code != crate::abi::ABI_OK {
+    let init_result: polyplug_abi::AbiError =
+        unsafe { init_fn_ptr(&mut reload_registrar as *mut polyplug_abi::PluginRegistrar) };
+    if init_result.code != polyplug_abi::ABI_OK {
         return Err(PolyplugError::ReloadFailed {
             bundle: path_str.clone(),
             reason: format!("init failed with code {}", init_result.code),
         });
     }
-    let captured_vtables: Vec<*const crate::abi::PluginVTable> =
+    let captured_vtables: Vec<*const polyplug_abi::PluginVTable> =
         RELOAD_CAPTURED_VTABLES.with(|v| v.borrow().clone());
 
-    let mut new_vtable_map: HashMap<u64, *const crate::abi::PluginVTable> = HashMap::new();
+    let mut new_vtable_map: HashMap<u64, *const polyplug_abi::PluginVTable> = HashMap::new();
     for &vt_ptr in &captured_vtables {
         // SAFETY: vt_ptr returned by init() is valid while new_library is alive.
         let contract_id: u64 = unsafe { (*vt_ptr).contract_id };
@@ -186,7 +186,7 @@ pub(crate) fn reload_bundle_impl(
             Some(id) => id,
             None => continue,
         };
-        let new_vt_ptr: *const crate::abi::PluginVTable = match new_vtable_map.get(&contract_id) {
+        let new_vt_ptr: *const polyplug_abi::PluginVTable = match new_vtable_map.get(&contract_id) {
             Some(&ptr) => ptr,
             None => continue,
         };
@@ -302,7 +302,7 @@ impl Runtime {
         &self,
         contract_id: u64,
         min_version: u32,
-    ) -> Result<crate::abi::PluginHandle, crate::error::RegistryError> {
+    ) -> Result<polyplug_abi::PluginHandle, crate::error::RegistryError> {
         self.registry().find_by_contract(contract_id, min_version)
     }
 }

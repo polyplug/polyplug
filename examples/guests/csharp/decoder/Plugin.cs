@@ -1,21 +1,25 @@
-// Plugin.cs — Decoder plugin. ZERO unsafe. Pure business logic.
+// Decoder plugin — implements pipeline.Decoder@1
+// Input:  "name,value,42"
+// Output: "DECODED:name|value|42"
+
 using System.Text;
 using Polyplug.Guest;
+using static Polyplug.Guest.StringViewHelper;
 
 namespace CsvDecoder;
 
-// Business logic — pure safe C#.
-public static class DecoderImpl
+public class DecoderPlugin : IPipelineDecoderPlugin
 {
-    // pipeline.Decoder@1 contract ID
-    public const ulong DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EUL;
-
-    public static byte[] Decode(string input)
+    public StringView Decode(StringView input)
     {
         // Parse "name,value,42" → "DECODED:name|value|42"
-        string[] parts = input.Split(',');
+        string inputStr = input.ToString();
+        string[] parts = inputStr.Split(',');
         string joined = string.Join("|", parts);
         string result = $"DECODED:{joined}";
-        return Encoding.UTF8.GetBytes(result);
+        var (sv, handle) = FromStringPinned(result);
+        // Note: In real implementation, would allocate via host and free handle after copy
+        // For now, keeping handle alive (leak for demo)
+        return sv;
     }
 }

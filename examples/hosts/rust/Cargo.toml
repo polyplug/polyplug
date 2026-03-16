@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
 polyplug_native = { workspace = true }
 polyplug_dotnet = { workspace = true }
 polyplug_js = { workspace = true }

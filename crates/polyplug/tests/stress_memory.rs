@@ -5,17 +5,17 @@
 use core::cell::RefCell;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::Buffer;
-use polyplug::abi::HostVTable;
-use polyplug::abi::POLYPLUG_ABI_VERSION;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::Buffer;
+use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::allocator::polyplug_host_alloc;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::allocator::tracking::TrackingAllocator;
@@ -113,7 +113,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// Always safe to call; returns null pointer.
 unsafe extern "C" fn stub_resolve_plugin(
     _handle: PluginHandle,
-) -> *const polyplug::abi::PluginVTable {
+) -> *const polyplug_abi::PluginVTable {
     core::ptr::null()
 }
 
@@ -231,7 +231,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
 
-    let contract_id: u64 = polyplug::abi::contract_id("memory.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("memory.test", 1);
     let handle: PluginHandle = STRESS_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)

@@ -15,4 +15,118 @@ export const ContractIds = {
   PIPELINE_VALIDATOR_CONTRACT_ID: 0xA553FAB5D11C7AF0n,
 } as const;
 
-// TODO: implement host caller classes
+/** Host caller for contract `pipeline.Decoder` */
+export class PipelineDecoderContract {
+    private vtable: any;
+
+    constructor() {
+        this.vtable = (globalThis as any).Deno?.core?.ops?.op_get_vtable?.(ContractIds.PIPELINE_DECODER_CONTRACT_ID);
+        if (!this.vtable) throw new Error('vtable not found');
+    }
+
+    /** Call `decode` */
+    decode(input: { ptr: bigint; len: number }): { ptr: bigint; len: number } {
+        const argsPtr = input;
+        const fnPtr = this.vtable.functions[0];
+        if (!fnPtr) throw new Error('function not available');
+        const fn = fnPtr as unknown as (args: any, out: any) => bigint;
+        const outVal = { value: 0n };
+        const err = fn(argsPtr, outVal);
+        if (err !== 0n) throw new Error('call failed');
+        return outVal.value;
+    }
+
+}
+
+/** Host caller for contract `data.Transformer` */
+export class DataTransformerContract {
+    private vtable: any;
+
+    constructor() {
+        this.vtable = (globalThis as any).Deno?.core?.ops?.op_get_vtable?.(ContractIds.DATA_TRANSFORMER_CONTRACT_ID);
+        if (!this.vtable) throw new Error('vtable not found');
+    }
+
+    /** Call `transform` */
+    transform(data: { ptr: bigint; len: number }): { ptr: bigint; len: number } {
+        const argsPtr = data;
+        const fnPtr = this.vtable.functions[0];
+        if (!fnPtr) throw new Error('function not available');
+        const fn = fnPtr as unknown as (args: any, out: any) => bigint;
+        const outVal = { value: 0n };
+        const err = fn(argsPtr, outVal);
+        if (err !== 0n) throw new Error('call failed');
+        return outVal.value;
+    }
+
+}
+
+/** Host caller for contract `pipeline.Encoder` */
+export class PipelineEncoderContract {
+    private vtable: any;
+
+    constructor() {
+        this.vtable = (globalThis as any).Deno?.core?.ops?.op_get_vtable?.(ContractIds.PIPELINE_ENCODER_CONTRACT_ID);
+        if (!this.vtable) throw new Error('vtable not found');
+    }
+
+    /** Call `encode` */
+    encode(data: { ptr: bigint; len: number }): { ptr: bigint; len: number } {
+        const argsPtr = data;
+        const fnPtr = this.vtable.functions[0];
+        if (!fnPtr) throw new Error('function not available');
+        const fn = fnPtr as unknown as (args: any, out: any) => bigint;
+        const outVal = { value: 0n };
+        const err = fn(argsPtr, outVal);
+        if (err !== 0n) throw new Error('call failed');
+        return outVal.value;
+    }
+
+}
+
+/** Host caller for contract `data.Reporter` */
+export class DataReporterContract {
+    private vtable: any;
+
+    constructor() {
+        this.vtable = (globalThis as any).Deno?.core?.ops?.op_get_vtable?.(ContractIds.DATA_REPORTER_CONTRACT_ID);
+        if (!this.vtable) throw new Error('vtable not found');
+    }
+
+    /** Call `report` */
+    report(data: { ptr: bigint; len: number }): { ptr: bigint; len: number } {
+        const argsPtr = data;
+        const fnPtr = this.vtable.functions[0];
+        if (!fnPtr) throw new Error('function not available');
+        const fn = fnPtr as unknown as (args: any, out: any) => bigint;
+        const outVal = { value: 0n };
+        const err = fn(argsPtr, outVal);
+        if (err !== 0n) throw new Error('call failed');
+        return outVal.value;
+    }
+
+}
+
+/** Host caller for contract `pipeline.Validator` */
+export class PipelineValidatorContract {
+    private vtable: any;
+
+    constructor() {
+        this.vtable = (globalThis as any).Deno?.core?.ops?.op_get_vtable?.(ContractIds.PIPELINE_VALIDATOR_CONTRACT_ID);
+        if (!this.vtable) throw new Error('vtable not found');
+    }
+
+    /** Call `validate` */
+    validate(data: { ptr: bigint; len: number }): { ptr: bigint; len: number } {
+        const argsPtr = data;
+        const fnPtr = this.vtable.functions[0];
+        if (!fnPtr) throw new Error('function not available');
+        const fn = fnPtr as unknown as (args: any, out: any) => bigint;
+        const outVal = { value: 0n };
+        const err = fn(argsPtr, outVal);
+        if (err !== 0n) throw new Error('call failed');
+        return outVal.value;
+    }
+
+}
+

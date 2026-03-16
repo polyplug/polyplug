@@ -12,6 +12,7 @@ crate-type = ["rlib", "cdylib"]
 
 [dependencies]
 polyplug = { workspace = true }
+polyplug_abi = { workspace = true }
 rquickjs = { workspace = true, features = ["parallel"] }
 thiserror = { workspace = true }
 

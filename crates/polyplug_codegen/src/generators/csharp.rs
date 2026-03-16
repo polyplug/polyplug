@@ -269,96 +269,239 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Guest;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
 
-    for contract in &ir.contracts {
-        let lower: String = contract.name.replace('.', "_");
-        let class_name: String = contract_name_to_cs_class(&contract.name);
-        let upper: String = contract_name_to_upper_snake(&contract.name);
-        let iface_name: String = contract_name_to_cs_interface(&contract.name);
-        let contract_id: u64 = contract.contract_id;
-        let fn_count: usize = contract.functions.len();
-        let minor: u32 = contract.version.minor;
-        let patch: u32 = contract.version.patch;
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for contract_impl in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|c| {
+                    let contract_full =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    &contract_full == contract_impl
+                }) {
+                    generate_cs_guest_plugin_vtables(&mut out, &plugin.name, contract);
+                }
+            }
+        }
+    } else {
+        for contract in &ir.contracts {
+            let lower: String = contract.name.replace('.', "_");
+            let class_name: String = contract_name_to_cs_class(&contract.name);
+            let upper: String = contract_name_to_upper_snake(&contract.name);
+            let iface_name: String = contract_name_to_cs_interface(&contract.name);
+            let contract_id: u64 = contract.contract_id;
+            let fn_count: usize = contract.functions.len();
+            let minor: u32 = contract.version.minor;
+            let patch: u32 = contract.version.patch;
 
-        out.push_str(&format!("public static class {}Vtables {{\n", class_name));
-        out.push_str(&format!(
-            "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
-        ));
-        out.push_str(&format!(
-            "    private static {iface_name}? _impl_{lower};\n"
-        ));
-        out.push_str(&format!(
-            "    public static void Set{class_name}Impl({iface_name} impl) {{ _impl_{lower} = impl; }}\n\n"
-        ));
+            out.push_str(&format!("public static class {}Vtables {{\n", class_name));
+            out.push_str(&format!(
+                "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
+            ));
+            out.push_str(&format!(
+                "    private static {iface_name}? _impl_{lower};\n"
+            ));
+            out.push_str(&format!(
+                "    public static void Set{class_name}Impl({iface_name} impl) {{ _impl_{lower} = impl; }}\n\n"
+            ));
 
-        // [UnmanagedCallersOnly] ABI methods
-        for func in &contract.functions {
-            let fn_name: String = func.name.replace('-', "_");
-            let abi_method: String = format!("{lower}_{fn_name}_abi");
-            out.push_str(
-                "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
-            );
+            // [UnmanagedCallersOnly] ABI methods
+            for func in &contract.functions {
+                let fn_name: String = func.name.replace('-', "_");
+                let abi_method: String = format!("{lower}_{fn_name}_abi");
+                out.push_str(
+                    "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
+                );
+                out.push_str(&format!(
+                    "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
+                    abi_method
+                ));
+                out.push_str("        try {\n");
+                out.push_str(&format!(
+                    "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n"
+                ));
+                out.push_str("            // call impl\n");
+                out.push_str("            return AbiError.Ok;\n");
+                out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
+                out.push_str("            return new AbiError { Code = ex.Code };\n");
+                out.push_str("        } catch {\n");
+                out.push_str(
+                    "            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };\n",
+                );
+                out.push_str("        }\n");
+                out.push_str("    }\n\n");
+            }
+
+            // Function pointer array
             out.push_str(&format!(
-                "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
-                abi_method
+                "    private static readonly IntPtr[] {upper}_FNS;\n"
             ));
-            out.push_str("        try {\n");
+
+            // VTable field and static constructor (GCHandle pinning)
             out.push_str(&format!(
-                "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n"
+                "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
             ));
-            out.push_str("            // call impl\n");
-            out.push_str("            return AbiError.Ok;\n");
-            out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
-            out.push_str("            return new AbiError { Code = ex.Code };\n");
-            out.push_str("        } catch {\n");
-            out.push_str(
-                "            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };\n",
-            );
+            out.push_str(&format!(
+                "    public static PluginVTable {upper}_VTABLE;\n\n"
+            ));
+            // Static constructor instead of Init method
+            out.push_str(&format!("    static {class_name}Vtables() {{\n"));
+            out.push_str("        unsafe {\n");
+            out.push_str(&format!("            {upper}_FNS = new IntPtr[] {{\n"));
+            for func in &contract.functions {
+                let fn_name: String = func.name.replace('-', "_");
+                let abi_method: String = format!("{lower}_{fn_name}_abi");
+                out.push_str(&format!(
+                    "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+                ));
+            }
+            out.push_str("            };\n");
             out.push_str("        }\n");
-            out.push_str("    }\n\n");
-        }
-
-        // Function pointer array
-        out.push_str(&format!(
-            "    private static readonly IntPtr[] {upper}_FNS;\n"
-        ));
-
-        // VTable field and static constructor (GCHandle pinning)
-        out.push_str(&format!(
-            "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
-        ));
-        out.push_str(&format!(
-            "    public static PluginVTable {upper}_VTABLE;\n\n"
-        ));
-        // Static constructor instead of Init method
-        out.push_str(&format!("    static {class_name}Vtables() {{\n"));
-        out.push_str("        unsafe {\n");
-        out.push_str(&format!("            {upper}_FNS = new IntPtr[] {{\n"));
-        for func in &contract.functions {
-            let fn_name: String = func.name.replace('-', "_");
-            let abi_method: String = format!("{lower}_{fn_name}_abi");
             out.push_str(&format!(
-                "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+                "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
+            out.push_str(&format!("        {upper}_VTABLE = new PluginVTable {{\n"));
+            out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
+            out.push_str(&format!(
+                "            ContractVersion = {minor}u << 16 | {patch}u,\n"
+            ));
+            out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+            out.push_str(&format!(
+                "            FunctionsPtr = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
+            ));
+            out.push_str("        };\n");
+            out.push_str("    }\n");
+            out.push_str("}\n\n");
         }
-        out.push_str("            };\n");
-        out.push_str("        }\n");
-        out.push_str(&format!(
-            "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
-        ));
-        out.push_str(&format!("        {upper}_VTABLE = new PluginVTable {{\n"));
-        out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
-        out.push_str(&format!(
-            "            ContractVersion = {minor}u << 16 | {patch}u,\n"
-        ));
-        out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
-        out.push_str(&format!(
-            "            FunctionsPtr = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
-        ));
-        out.push_str("        };\n");
-        out.push_str("    }\n");
-        out.push_str("}\n\n");
     }
     out
+}
+
+fn generate_cs_guest_plugin_vtables(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+) {
+    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
+    let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    #[allow(unused_variables)]
+    let class_name: String = contract_name_to_cs_class(&contract.name);
+    let iface_name: String = contract_name_to_cs_interface(&contract.name);
+    let contract_id: u64 = contract.contract_id;
+    let fn_count: usize = contract.functions.len();
+    let minor: u32 = contract.version.minor;
+    let patch: u32 = contract.version.patch;
+
+    let class_name_pascal: String = plugin_name
+        .split('_')
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    out.push_str(&format!("// Plugin: {}\n", plugin_name));
+    out.push_str(&format!(
+        "public static class {}Vtables {{\n",
+        class_name_pascal
+    ));
+    out.push_str(&format!(
+        "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n",
+        upper = plugin_upper
+    ));
+    out.push_str(&format!(
+        "    private static {iface_name}? _impl_{lower};\n",
+        lower = plugin_lower
+    ));
+    out.push_str(&format!(
+        "    public static void Set{class_name}Impl({iface_name} impl) {{ _impl_{lower} = impl; }}\n\n",
+        class_name = class_name_pascal,
+        lower = plugin_lower
+    ));
+
+    // [UnmanagedCallersOnly] ABI methods
+    for func in &contract.functions {
+        let fn_name: String = func.name.replace('-', "_");
+        let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
+        out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+        out.push_str(&format!(
+            "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
+            abi_method
+        ));
+        out.push_str("        try {\n");
+        out.push_str(&format!(
+            "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n",
+            lower = plugin_lower
+        ));
+        out.push_str("            // call impl\n");
+        out.push_str("            return AbiError.Ok;\n");
+        out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
+        out.push_str("            return new AbiError { Code = ex.Code };\n");
+        out.push_str("        } catch {\n");
+        out.push_str("            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };\n");
+        out.push_str("        }\n");
+        out.push_str("    }\n\n");
+    }
+
+    // Function pointer array
+    out.push_str(&format!(
+        "    private static readonly IntPtr[] {upper}_FNS;\n",
+        upper = plugin_upper
+    ));
+
+    // VTable field and static constructor (GCHandle pinning)
+    out.push_str(&format!(
+        "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n",
+        upper = plugin_upper
+    ));
+    out.push_str(&format!(
+        "    public static PluginVTable {upper}_VTABLE;\n\n",
+        upper = plugin_upper
+    ));
+    // Static constructor instead of Init method
+    out.push_str(&format!(
+        "    static {class_name}Vtables() {{\n",
+        class_name = class_name_pascal
+    ));
+    out.push_str("        unsafe {\n");
+    out.push_str(&format!(
+        "            {upper}_FNS = new IntPtr[] {{\n",
+        upper = plugin_upper
+    ));
+    for func in &contract.functions {
+        let fn_name: String = func.name.replace('-', "_");
+        let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
+        out.push_str(&format!(
+            "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+        ));
+    }
+    out.push_str("            };\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n",
+        upper = plugin_upper
+    ));
+    out.push_str(&format!(
+        "        {upper}_VTABLE = new PluginVTable {{\n",
+        upper = plugin_upper
+    ));
+    out.push_str(&format!(
+        "            ContractId = {upper}_CONTRACT_ID,\n",
+        upper = plugin_upper
+    ));
+    out.push_str(&format!(
+        "            ContractVersion = {minor}u << 16 | {patch}u,\n"
+    ));
+    out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+    out.push_str(&format!(
+        "            FunctionsPtr = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
+        upper = plugin_upper
+    ));
+    out.push_str("        };\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
 }
 
 /// Generate `guest/Init.cs` — the [UnmanagedCallersOnly] PolyplugInit entry point.
@@ -395,55 +538,139 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         );
     }
 
-    for contract in &ir.contracts {
-        let lower: String = contract.name.replace('.', "_");
-        let class_name: String = contract_name_to_cs_class(&contract.name);
-        let upper: String = contract_name_to_upper_snake(&contract.name);
-        let major: u32 = contract.version.major;
-        let minor: u32 = contract.version.minor;
-        let patch: u32 = contract.version.patch;
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for contract_impl in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|c| {
+                    let contract_full =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    &contract_full == contract_impl
+                }) {
+                    let plugin_upper: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
+                    let plugin_lower: String = plugin.name.to_lowercase().replace(['.', '-'], "_");
+                    let plugin_pascal: String = plugin
+                        .name
+                        .split(['_', '.', '-'])
+                        .map(|s| {
+                            let mut chars = s.chars();
+                            match chars.next() {
+                                None => String::new(),
+                                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    let contract_name_full: String =
+                        format!("{}@{}", contract.name, contract.version.major);
+                    let major: u32 = contract.version.major;
+                    let minor: u32 = contract.version.minor;
+                    let patch: u32 = contract.version.patch;
 
-        out.push_str(&format!("            // Register {}\n", contract.name));
+                    out.push_str(&format!(
+                        "            // Register {} ({})\n",
+                        plugin.name, contract_name_full
+                    ));
+                    out.push_str(&format!(
+                        "            var plugin_name_{plugin_lower} = System.Text.Encoding.UTF8.GetBytes(\"{plugin_lower}\");\n"
+                    ));
+                    out.push_str(&format!(
+                        "            var contract_name_{plugin_lower} = System.Text.Encoding.UTF8.GetBytes(\"{}\");\n",
+                        contract_name_full
+                    ));
+                    out.push_str(&format!(
+                        "            var nameHandle_{plugin_lower} = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_{plugin_lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
+                    ));
+                    out.push_str(&format!(
+                        "            var contractHandle_{plugin_lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{plugin_lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
+                    ));
+                    out.push_str("            try {\n");
+                    out.push_str(&format!("            fixed (PluginVTable* vtablePtr_{plugin_lower} = &{}Vtables.{plugin_upper}_VTABLE) {{\n", plugin_pascal));
+                    out.push_str(&format!(
+                        "                var desc_{plugin_lower} = new PluginDescriptor {{\n"
+                    ));
+                    out.push_str(&format!(
+                        "                    Name = new StringView {{ Ptr = nameHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (ulong)plugin_name_{plugin_lower}.Length }},\n"
+                    ));
+                    out.push_str(&format!(
+                        "                    ContractName = new StringView {{ Ptr = contractHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (ulong)contract_name_{plugin_lower}.Length }},\n"
+                    ));
+                    out.push_str(&format!("                    VersionMajor = {major}u,\n"));
+                    out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
+                    out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
+                    out.push_str("                };\n");
+                    out.push_str(
+                        "                var registrar = (PluginRegistrar*)registrarPtr;\n",
+                    );
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;\n");
+                    out.push_str(&format!(
+                        "                var err_{plugin_lower} = registerFn(registrar, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
+                    ));
+                    out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiConstants.ABI_OK) return err_{plugin_lower}.Code;\n"));
+                    out.push_str("            }\n");
+                    out.push_str("            } finally {\n");
+                    out.push_str(&format!(
+                        "                nameHandle_{plugin_lower}.Free();\n"
+                    ));
+                    out.push_str(&format!(
+                        "                contractHandle_{plugin_lower}.Free();\n"
+                    ));
+                    out.push_str("            }\n");
+                }
+            }
+        }
+    } else {
+        for contract in &ir.contracts {
+            let lower: String = contract.name.replace('.', "_");
+            let class_name: String = contract_name_to_cs_class(&contract.name);
+            let upper: String = contract_name_to_upper_snake(&contract.name);
+            let major: u32 = contract.version.major;
+            let minor: u32 = contract.version.minor;
+            let patch: u32 = contract.version.patch;
 
-        out.push_str(&format!(
-            "            var plugin_name_{lower} = System.Text.Encoding.UTF8.GetBytes(\"{lower}_plugin\");\n"
-        ));
-        out.push_str(&format!(
-            "            var contract_name_{lower} = System.Text.Encoding.UTF8.GetBytes(\"{}\");\n",
-            contract.name
-        ));
-        out.push_str(&format!(
-            "            var nameHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
-        ));
-        out.push_str(&format!(
-            "            var contractHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
-        ));
-        out.push_str("            try {\n");
-        out.push_str(&format!("            fixed (PluginVTable* vtablePtr_{lower} = &{class_name}Vtables.{upper}_VTABLE) {{\n"));
-        out.push_str(&format!(
-            "                var desc_{lower} = new PluginDescriptor {{\n"
-        ));
-        out.push_str(&format!(
-            "                    Name = new StringView {{ Ptr = nameHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)plugin_name_{lower}.Length }},\n"
-        ));
-        out.push_str(&format!(
-            "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)contract_name_{lower}.Length }},\n"
-        ));
-        out.push_str(&format!("                    VersionMajor = {major}u,\n"));
-        out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
-        out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
-        out.push_str("                };\n");
-        out.push_str("                var registrar = (PluginRegistrar*)registrarPtr;\n");
-        out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;\n");
-        out.push_str(&format!(
-            "                var err_{lower} = registerFn(registrar, &desc_{lower}, vtablePtr_{lower});\n"
-        ));
-        out.push_str(&format!("                if (err_{lower}.Code != AbiConstants.ABI_OK) return err_{lower}.Code;\n"));
-        out.push_str("            }\n");
-        out.push_str("            } finally {\n");
-        out.push_str(&format!("                nameHandle_{lower}.Free();\n"));
-        out.push_str(&format!("                contractHandle_{lower}.Free();\n"));
-        out.push_str("            }\n");
+            out.push_str(&format!("            // Register {}\n", contract.name));
+
+            out.push_str(&format!(
+                "            var plugin_name_{lower} = System.Text.Encoding.UTF8.GetBytes(\"{lower}_plugin\");\n"
+            ));
+            let contract_name_full: String =
+                format!("{}@{}", contract.name, contract.version.major);
+            out.push_str(&format!(
+                "            var contract_name_{lower} = System.Text.Encoding.UTF8.GetBytes(\"{}\");\n",
+                contract_name_full
+            ));
+            out.push_str(&format!(
+                "            var nameHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
+            ));
+            out.push_str(&format!(
+                "            var contractHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
+            ));
+            out.push_str("            try {\n");
+            out.push_str(&format!("            fixed (PluginVTable* vtablePtr_{lower} = &{class_name}Vtables.{upper}_VTABLE) {{\n"));
+            out.push_str(&format!(
+                "                var desc_{lower} = new PluginDescriptor {{\n"
+            ));
+            out.push_str(&format!(
+                "                    Name = new StringView {{ Ptr = nameHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)plugin_name_{lower}.Length }},\n"
+            ));
+            out.push_str(&format!(
+                "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)contract_name_{lower}.Length }},\n"
+            ));
+            out.push_str(&format!("                    VersionMajor = {major}u,\n"));
+            out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
+            out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
+            out.push_str("                };\n");
+            out.push_str("                var registrar = (PluginRegistrar*)registrarPtr;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;\n");
+            out.push_str(&format!(
+                "                var err_{lower} = registerFn(registrar, &desc_{lower}, vtablePtr_{lower});\n"
+            ));
+            out.push_str(&format!("                if (err_{lower}.Code != AbiConstants.ABI_OK) return err_{lower}.Code;\n"));
+            out.push_str("            }\n");
+            out.push_str("            } finally {\n");
+            out.push_str(&format!("                nameHandle_{lower}.Free();\n"));
+            out.push_str(&format!("                contractHandle_{lower}.Free();\n"));
+            out.push_str("            }\n");
+        }
     }
 
     out.push_str("            return AbiConstants.ABI_OK;\n");
@@ -548,34 +775,27 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
         bundle.version.major, bundle.version.minor, bundle.version.patch
     );
 
-    // Collect provides first (needed for function_count filtering)
     let mut provides: Vec<String> = bundle
         .plugins
         .iter()
         .flat_map(|p| p.implements.iter().cloned())
+        .map(|impl_str: String| {
+            if let Some(at_pos) = impl_str.find('@') {
+                let contract_name: &str = &impl_str[..at_pos];
+                let version_part: &str = &impl_str[at_pos + 1..];
+                if let Some(dot_pos) = version_part.find('.') {
+                    let major: &str = &version_part[..dot_pos];
+                    format!("{}@{}", contract_name, major)
+                } else {
+                    impl_str
+                }
+            } else {
+                impl_str
+            }
+        })
         .collect();
     provides.sort();
     provides.dedup();
-
-    // Build function_count inline table: only for contracts this bundle PROVIDES
-    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
-    let fn_count_entries: Vec<String> = ir
-        .contracts
-        .iter()
-        .filter(|c: &&ResolvedContract| {
-            provides_set.contains(&format!(
-                "{}@{}.{}",
-                c.name, c.version.major, c.version.minor
-            ))
-        })
-        .map(|c: &ResolvedContract| {
-            let fn_count: u32 = c.functions.len() as u32;
-            format!("\"{}@{}\" = {}", c.name, c.version.major, fn_count)
-        })
-        .collect();
-    let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
-
-    let reinit: bool = bundle.needs_reinit_on_dep_reload;
 
     let provides_toml: String = if provides.is_empty() {
         String::from("[]")
@@ -589,6 +809,23 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
                 .join(", ")
         )
     };
+
+    // Build function_count inline table: only for contracts this bundle PROVIDES
+    let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
+    let fn_count_entries: Vec<String> = ir
+        .contracts
+        .iter()
+        .filter(|c: &&ResolvedContract| {
+            provides_set.contains(&format!("{}@{}", c.name, c.version.major))
+        })
+        .map(|c: &ResolvedContract| {
+            let fn_count: u32 = c.functions.len() as u32;
+            format!("\"{}@{}\" = {}", c.name, c.version.major, fn_count)
+        })
+        .collect();
+    let function_count_toml: String = format!("{{ {} }}", fn_count_entries.join(", "));
+
+    let reinit: bool = bundle.needs_reinit_on_dep_reload;
 
     // Build [[dependency]] tables
     let mut dep_tables: String = String::new();
@@ -625,14 +862,15 @@ fn generate_bundle_manifest_csharp(ir: &ValidatedIr) -> String {
     format!(
         "# THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n\
 name = \"{name}\"\n\
-bundle_name = \"{name}\"\n\
+bundle_id = {bundle_id}\n\
 version = \"{version}\"\n\
 runtime = \"{runtime}\"\n\
-{file_field}\n\
 provides = {provides_toml}\n\
 function_count = {function_count_toml}\n\
 needs_reinit_on_dep_reload = {reinit}\n\
-{dep_tables}"
+{file_field}\n\
+{dep_tables}",
+        bundle_id = bundle.bundle_id
     )
 }
 

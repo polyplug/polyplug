@@ -8,7 +8,7 @@
 use core::cell::Ref;
 use core::cell::RefCell;
 
-use crate::abi::PluginHandle;
+use polyplug_abi::PluginHandle;
 use crate::loader::BundleLoader;
 use crate::registry::PluginVTableGuard;
 use crate::runtime::Runtime;

@@ -10,13 +10,13 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -290,7 +290,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: init_fn is valid; registrar lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug::abi::POLYPLUG_ABI_VERSION,
+        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
     };
     // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

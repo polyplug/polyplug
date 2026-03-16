@@ -1,12 +1,10 @@
 [package]
-name    = "csv_encoder"
+name    = "rust_reporter"
 version = "1.0.0"
-edition = "2024"
+edition.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
 
-# IMPORTANT: NO polyplug dependency — cdylib cannot depend on it (circular dep)
-# All ABI types are mirrored inline (same pattern as csv_decoder)
-
-[workspace]
+[dependencies]
+polyplug_guest = { workspace = true }

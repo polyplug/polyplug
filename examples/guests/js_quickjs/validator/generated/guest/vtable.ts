@@ -3,7 +3,9 @@
 
 export function registerVtable(
 contractLo: number, contractHi: number,
-vtablePtrLo: number, vtablePtrHi: number
+vtablePtrLo: number, vtablePtrHi: number,
+fnCount: number,
+contractName: string
 ): void {
-    (globalThis as unknown as { polyplug: { registerVtable: (clo: number, chi: number, vlo: number, vhi: number) => void } }).polyplug.registerVtable(contractLo, contractHi, vtablePtrLo, vtablePtrHi);
+    (globalThis as unknown as { polyplug: { registerVtable: (clo: number, chi: number, vlo: number, vhi: number, fcnt: number, name: string) => void } }).polyplug.registerVtable(contractLo, contractHi, vtablePtrLo, vtablePtrHi, fnCount, contractName);
 }

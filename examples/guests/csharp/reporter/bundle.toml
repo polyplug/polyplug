@@ -1,5 +1,4 @@
 # bundle.toml — C# reporter guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang csharp --out generated/
 
 [bundle]
 name    = "csharp_reporter"

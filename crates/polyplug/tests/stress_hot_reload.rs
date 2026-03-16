@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use polyplug::ReloadEvent;
-use polyplug::abi::PluginVTable;
+use polyplug_abi::PluginVTable;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
@@ -69,7 +69,7 @@ fn v2_so_path() -> PathBuf {
 }
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let handle: polyplug::abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
+    let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
     let vtable_ptr: *const PluginVTable = rt.resolve_plugin(handle).ok()?;
     // SAFETY: vtable_ptr is from resolve_plugin and points to a valid vtable while
     // the library is loaded; slot 0 is a compatible extern "C" fn in the fixture.
@@ -95,7 +95,7 @@ fn stress_rapid_reload_cycles_100() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
 
     for i in 0_u32..CYCLES {
         let so_path: PathBuf = if i % 2_u32 == 0_u32 {
@@ -146,16 +146,16 @@ fn stress_memory_vtable_slot_released_after_reload() {
 
     let registry: Registry = Registry::new();
 
-    let descriptor: polyplug::abi::PluginDescriptor = polyplug::abi::PluginDescriptor {
-        name: polyplug::abi::StringView::from_static(b"stress-mem-plugin"),
-        contract_name: polyplug::abi::StringView::from_static(b"stress.mem.contract"),
+    let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+        name: polyplug_abi::StringView::from_static(b"stress-mem-plugin"),
+        contract_name: polyplug_abi::StringView::from_static(b"stress.mem.contract"),
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
 
     // SAFETY: VTABLE_MEM_A is 'static and valid for the lifetime of this test.
-    let handle: polyplug::abi::PluginHandle = unsafe {
+    let handle: polyplug_abi::PluginHandle = unsafe {
         registry
             .register(
                 descriptor,
@@ -209,16 +209,16 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
 
     let registry: Arc<Registry> = Arc::new(Registry::new());
 
-    let descriptor: polyplug::abi::PluginDescriptor = polyplug::abi::PluginDescriptor {
-        name: polyplug::abi::StringView::from_static(b"quiescence-load-plugin"),
-        contract_name: polyplug::abi::StringView::from_static(b"quiescence.load.contract"),
+    let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
+        name: polyplug_abi::StringView::from_static(b"quiescence-load-plugin"),
+        contract_name: polyplug_abi::StringView::from_static(b"quiescence.load.contract"),
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
 
     // SAFETY: VTABLE_QU_A is 'static and valid for the test lifetime.
-    let handle: polyplug::abi::PluginHandle = unsafe {
+    let handle: polyplug_abi::PluginHandle = unsafe {
         registry
             .register(
                 descriptor,
@@ -241,7 +241,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
         let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 let find_result: Result<
-                    polyplug::abi::PluginHandle,
+                    polyplug_abi::PluginHandle,
                     polyplug::error::RegistryError,
                 > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64, 0_u32);
                 if let Ok(resolved_handle) = find_result {
@@ -311,7 +311,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
 
     let stop_flag: Arc<core::sync::atomic::AtomicBool> =
         Arc::new(core::sync::atomic::AtomicBool::new(false));
@@ -328,7 +328,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
         let dispatcher_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 let handle_result: Result<
-                    polyplug::abi::PluginHandle,
+                    polyplug_abi::PluginHandle,
                     polyplug::error::RegistryError,
                 > = rt_clone.find_by_contract(contract_id, 0_u32);
 
@@ -408,7 +408,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
 
     for i in 0_u32..CYCLES {
         let so_path: PathBuf = if i % 2_u32 == 0_u32 {
@@ -461,7 +461,7 @@ fn stress_concurrent_reload_threads_no_panic() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug::abi::contract_id("reload.test", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
     let rt_a: Arc<Runtime> = Arc::clone(&rt);
     let rt_b: Arc<Runtime> = Arc::clone(&rt);
 

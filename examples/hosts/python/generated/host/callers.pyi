@@ -6,9 +6,8 @@ from __future__ import annotations
 import ctypes
 from typing import Callable
 
-ABI_OK: int
-ABI_ERROR_GENERIC: int
-class StringView(ctypes.Structure): ...
+from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, StringView
+
 class ContractError(Exception): ...
 
 PIPELINE_DECODER_CONTRACT_ID: int

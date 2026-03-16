@@ -2,15 +2,15 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::POLYPLUG_ABI_VERSION;
-use polyplug::abi::PluginContext;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::registry::Registry;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
@@ -126,7 +126,7 @@ fn test_dispatch_add_function() {
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
 
     // Look up the test.add plugin.
-    let contract_id: u64 = polyplug::abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -213,7 +213,7 @@ fn test_dispatch_add_with_zero() {
     };
     assert_eq!(init_result.code, ABI_OK);
 
-    let contract_id: u64 = polyplug::abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -285,7 +285,7 @@ fn test_dispatch_add_wrapping_overflow() {
     };
     assert_eq!(init_result.code, ABI_OK);
 
-    let contract_id: u64 = polyplug::abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)

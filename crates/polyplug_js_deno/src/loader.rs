@@ -23,14 +23,14 @@ use deno_core::ModuleType;
 use deno_core::ResolutionKind;
 use deno_core::op2;
 use deno_error::JsErrorBox;
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
@@ -47,7 +47,8 @@ thread_local! {
 // Channel sender for vtable registration result.
 // VtableSenderInner uses a type alias so the thread_local! macro can parse the angle brackets
 // without hitting the type_complexity lint.
-type VtableSenderInner = std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize)>;
+// Sends: (vtable_ptr, contract_id, fn_count, contract_name)
+type VtableSenderInner = std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>;
 
 thread_local! {
     static VTABLE_SENDER: core::cell::RefCell<Option<VtableSenderInner>> =
@@ -371,7 +372,12 @@ fn op_get_extension(extension_id: u32) -> u64 {
 }
 
 #[op2(fast)]
-fn op_register_vtable(#[bigint] contract_id: u64, #[bigint] vtable_ptr: u64, fn_count: u32) {
+fn op_register_vtable(
+    #[bigint] contract_id: u64,
+    #[bigint] vtable_ptr: u64,
+    fn_count: u32,
+    #[string] contract_name: String,
+) {
     VTABLE_SENDER.with(|c: &core::cell::RefCell<Option<VtableSenderInner>>| {
         let borrow: core::cell::Ref<'_, Option<VtableSenderInner>> = c.borrow();
         if let Some(tx) = borrow.as_ref() {
@@ -380,6 +386,7 @@ fn op_register_vtable(#[bigint] contract_id: u64, #[bigint] vtable_ptr: u64, fn_
                 SendPluginVTable(vtable_ptr as *const PluginVTable),
                 contract_id,
                 fn_count_usize,
+                contract_name,
             ));
         }
     });
@@ -500,8 +507,10 @@ impl BundleLoader for JsDenoLoader {
         let host_vtable_addr: usize = registrar.host as usize;
 
         // 2. Create channel for vtable registration (bounded 1 = oneshot)
-        let (vtable_tx, vtable_rx): VtableChannelPair =
-            std::sync::mpsc::sync_channel::<(SendPluginVTable, u64, usize)>(1);
+        let (vtable_tx, vtable_rx): (
+            std::sync::mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>,
+            std::sync::mpsc::Receiver<(SendPluginVTable, u64, usize, String)>,
+        ) = std::sync::mpsc::sync_channel(1);
 
         // 2b. Create channel for propagating init errors from the bundle thread.
         let (err_tx, err_rx): (
@@ -663,7 +672,7 @@ impl BundleLoader for JsDenoLoader {
         let _leaked: &'static std::thread::JoinHandle<()> = Box::leak(Box::new(thread_handle));
 
         // 6. Receive the registered vtable ptr from the bundle thread (30s timeout)
-        let (raw_vtable_wrapped, contract_id_val, fn_count): (SendPluginVTable, u64, usize) =
+        let (raw_vtable_wrapped, contract_id_val, fn_count, contract_name_str): (SendPluginVTable, u64, usize, String) =
             vtable_rx
                 .recv_timeout(core::time::Duration::from_secs(30))
                 .map_err(|_: std::sync::mpsc::RecvTimeoutError| {
@@ -739,7 +748,6 @@ impl BundleLoader for JsDenoLoader {
         let static_vtable: *const PluginVTable = Box::into_raw(Box::new(new_vtable));
 
         // 9. Build descriptor
-        let contract_name_str: String = format!("contract_{:#x}", contract_id_val);
         let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-deno-plugin"),

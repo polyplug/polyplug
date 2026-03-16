@@ -4,23 +4,23 @@
 
 import type { } from './types';
 
-export abstract class PipelineDecoder {
-    abstract decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
-}
+// Plugin: js_quickjs_decoder (pipeline.Decoder@1)
+//   decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-export abstract class DataTransformer {
-    abstract transform(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
-}
+const JS_QUICKJS_DECODER_VTABLE = {
+    contractLo: 0xB0C3DC1E,
+    contractHi: 0x12F3C106,
+    fnCount: 1,
+    functions: null as unknown as number[],
+    contractName: "pipeline.Decoder@1"
+};
 
-export abstract class PipelineEncoder {
-    abstract encode(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
+export function setJsQuickjsDecoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
+    JS_QUICKJS_DECODER_VTABLE.functions = [fn0];
+    registerVtable(
+        JS_QUICKJS_DECODER_VTABLE.contractLo, JS_QUICKJS_DECODER_VTABLE.contractHi,
+        1, 0, // vtable ptr (placeholder - host allocates)
+        JS_QUICKJS_DECODER_VTABLE.fnCount,
+        JS_QUICKJS_DECODER_VTABLE.contractName
+    );
 }
-
-export abstract class DataReporter {
-    abstract report(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
-}
-
-export abstract class PipelineValidator {
-    abstract validate(data: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number };
-}
-

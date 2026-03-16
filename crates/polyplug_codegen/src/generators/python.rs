@@ -364,12 +364,24 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n",
     );
 
-    for contract in &ir.contracts {
-        generate_guest_contract_trait(&mut out, contract);
-    }
-
-    for contract in &ir.contracts {
-        generate_guest_contract_vtable(&mut out, contract);
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            for contract_impl in &plugin.implements {
+                if let Some(contract) = ir.contracts.iter().find(|c| {
+                    let contract_full =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    &contract_full == contract_impl
+                }) {
+                    generate_guest_plugin_trait(&mut out, &plugin.name, contract);
+                    generate_guest_plugin_vtable(&mut out, &plugin.name, contract);
+                }
+            }
+        }
+    } else {
+        for contract in &ir.contracts {
+            generate_guest_contract_trait(&mut out, contract);
+            generate_guest_contract_vtable(&mut out, contract);
+        }
     }
 
     out.push_str("def polyplug_abi_version() -> int:\n");
@@ -384,15 +396,28 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         "    registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))\n",
     );
 
-    for contract in &ir.contracts {
-        let upper: String = contract_name_to_upper_snake(&contract.name);
-        out.push_str(&format!(
-            "    err_{upper}: AbiError = registrar_ptr.contents.register_plugin(\n"
-        ));
-        out.push_str(&format!("        registrar_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"));
-        out.push_str("    )\n");
-        out.push_str(&format!("    if err_{upper}.code != ABI_OK:\n"));
-        out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
+            out.push_str(&format!(
+                "    err_{plugin_upper}: AbiError = registrar_ptr.contents.register_plugin(\n"
+            ));
+            out.push_str(&format!("        registrar_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_VTABLE)\n"));
+            out.push_str("    )\n");
+            out.push_str(&format!("    if err_{plugin_upper}.code != ABI_OK:\n"));
+            out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
+        }
+    } else {
+        for contract in &ir.contracts {
+            let upper: String = contract_name_to_upper_snake(&contract.name);
+            out.push_str(&format!(
+                "    err_{upper}: AbiError = registrar_ptr.contents.register_plugin(\n"
+            ));
+            out.push_str(&format!("        registrar_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"));
+            out.push_str("    )\n");
+            out.push_str(&format!("    if err_{upper}.code != ABI_OK:\n"));
+            out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
+        }
     }
 
     out
@@ -648,6 +673,24 @@ fn generate_guest_contract_trait(out: &mut String, contract: &ResolvedContract) 
     out.push_str(&format!("    _{upper}_IMPL = impl\n\n"));
 }
 
+fn generate_guest_plugin_trait(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
+    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
+    let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    let trait_name: String = contract_name_to_guest_trait(&contract.name);
+    out.push_str(&format!("class {plugin_upper}{trait_name}:\n"));
+    for func in &contract.functions {
+        generate_guest_trait_method(out, func, &contract_name_to_struct(&contract.name));
+    }
+    out.push_str(&format!(
+        "\n_{plugin_lower}_IMPL: {plugin_upper}{trait_name} | None = None\n"
+    ));
+    out.push_str(&format!(
+        "def set_{plugin_lower}_impl(impl: {plugin_upper}{trait_name}) -> None:\n"
+    ));
+    out.push_str(&format!("    global _{plugin_lower}_IMPL\n"));
+    out.push_str(&format!("    _{plugin_lower}_IMPL = impl\n\n"));
+}
+
 fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
     let sig_params: String = build_python_sig_params(func, contract_struct);
     let ret_type: String = python_return_type(&func.returns);
@@ -678,7 +721,7 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract)
     let struct_name: String = contract_name_to_struct(&contract.name);
     let fn_count: usize = contract.functions.len();
     let plugin_name: String = format!("{lower}_plugin");
-    let contract_name: String = contract.name.clone();
+    let contract_name: String = format!("{}@{}", contract.name, contract.version.major);
     let version_major: u32 = contract.version.major;
     let version_minor: u32 = contract.version.minor;
     let version_patch: u32 = contract.version.patch;
@@ -742,6 +785,86 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract)
     out.push_str(&format!("    function_count={fn_count},\n"));
     out.push_str(&format!(
         "    functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"
+    ));
+    out.push_str(")\n\n");
+}
+
+fn generate_guest_plugin_vtable(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
+    let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
+    let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
+    let trait_name: String = contract_name_to_guest_trait(&contract.name);
+    let struct_name: String = contract_name_to_struct(&contract.name);
+    let fn_count: usize = contract.functions.len();
+    let contract_name: String = format!("{}@{}", contract.name, contract.version.major);
+    let version_major: u32 = contract.version.major;
+    let version_minor: u32 = contract.version.minor;
+    let version_patch: u32 = contract.version.patch;
+    let contract_version: u32 = (version_minor << 16) | version_patch;
+
+    out.push_str(&format!(
+        "{plugin_upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_upper}_CONTRACT_NAME_BYTES: bytes = b\"{contract_name}\"\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_upper}_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p({plugin_upper}_PLUGIN_NAME_BYTES)\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_upper}_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p({plugin_upper}_CONTRACT_NAME_BYTES)\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_upper}_DESCRIPTOR: PluginDescriptor = PluginDescriptor(\n"
+    ));
+    out.push_str(&format!(
+        "    name=StringView(ptr={plugin_upper}_PLUGIN_NAME_C, len=len({plugin_upper}_PLUGIN_NAME_BYTES)),\n"
+    ));
+    out.push_str(&format!("    contract_name=StringView(ptr={plugin_upper}_CONTRACT_NAME_C, len=len({plugin_upper}_CONTRACT_NAME_BYTES)),\n"));
+    out.push_str(&format!("    version_major={version_major},\n"));
+    out.push_str(&format!("    version_minor={version_minor},\n"));
+    out.push_str(&format!("    version_patch={version_patch},\n"));
+    out.push_str(")\n\n");
+
+    for func in &contract.functions {
+        let abi_name: String = format!("{plugin_lower}_{}_abi", func.name);
+        out.push_str(&format!(
+            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:\n"
+        ));
+        out.push_str(&format!(
+            "    impl: {plugin_upper}{trait_name} | None = _{plugin_lower}_IMPL\n"
+        ));
+        out.push_str("    if impl is None:\n");
+        out.push_str("        return ABI_ERROR_GENERIC\n");
+        emit_guest_abi_args_unpack(out, func, &struct_name);
+        emit_guest_abi_call(out, func);
+        emit_guest_abi_return(out, func);
+        out.push('\n');
+        out.push_str(&format!(
+            "{plugin_upper}_{abi_name}_CFUNC = _DISPATCH_FN_CTYPE({abi_name})\n\n"
+        ));
+    }
+
+    out.push_str(&format!(
+        "{plugin_upper}_FNS = (ctypes.c_void_p * {fn_count}) (\n"
+    ));
+    for func in &contract.functions {
+        let abi_name: String = format!("{plugin_lower}_{}_abi", func.name);
+        out.push_str(&format!(
+            "    ctypes.cast({plugin_upper}_{abi_name}_CFUNC, ctypes.c_void_p),\n"
+        ));
+    }
+    out.push_str(")\n");
+    out.push_str(&format!(
+        "{plugin_upper}_VTABLE: PluginVTable = PluginVTable(\n"
+    ));
+    out.push_str(&format!(
+        "    contract_id=0x{:016X},\n",
+        contract.contract_id
+    ));
+    out.push_str(&format!("    contract_version={contract_version},\n"));
+    out.push_str(&format!("    function_count={fn_count},\n"));
+    out.push_str(&format!(
+        "    functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"
     ));
     out.push_str(")\n\n");
 }
@@ -945,6 +1068,20 @@ fn generate_bundle_manifest_python(ir: &ValidatedIr) -> String {
         .plugins
         .iter()
         .flat_map(|p: &ResolvedPlugin| p.implements.iter().cloned())
+        .map(|impl_str: String| {
+            if let Some(at_pos) = impl_str.find('@') {
+                let contract_name: &str = &impl_str[..at_pos];
+                let version_part: &str = &impl_str[at_pos + 1..];
+                if let Some(dot_pos) = version_part.find('.') {
+                    let major: &str = &version_part[..dot_pos];
+                    format!("{}@{}", contract_name, major)
+                } else {
+                    impl_str
+                }
+            } else {
+                impl_str
+            }
+        })
         .collect();
     provides.sort();
     provides.dedup();
@@ -962,16 +1099,12 @@ fn generate_bundle_manifest_python(ir: &ValidatedIr) -> String {
         )
     };
 
-    // Build function_count inline table: only for contracts this bundle PROVIDES
     let provides_set: std::collections::HashSet<String> = provides.iter().cloned().collect();
     let fn_count_entries: Vec<String> = ir
         .contracts
         .iter()
         .filter(|c: &&ResolvedContract| {
-            provides_set.contains(&format!(
-                "{}@{}.{}",
-                c.name, c.version.major, c.version.minor
-            ))
+            provides_set.contains(&format!("{}@{}", c.name, c.version.major))
         })
         .map(|c: &ResolvedContract| {
             let fn_count: u32 = c.functions.len() as u32;
@@ -1014,14 +1147,15 @@ fn generate_bundle_manifest_python(ir: &ValidatedIr) -> String {
     format!(
         "# THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n\
          name = \"{name}\"\n\
-         bundle_name = \"{name}\"\n\
+         bundle_id = {bundle_id}\n\
          version = \"{version}\"\n\
          runtime = \"{runtime}\"\n\
-         {file_field}\n\
          provides = {provides_toml}\n\
          function_count = {function_count_toml}\n\
          needs_reinit_on_dep_reload = {reinit}\n\
-         {dep_toml}"
+         {file_field}\n\
+         {dep_toml}",
+        bundle_id = bundle.bundle_id
     )
 }
 

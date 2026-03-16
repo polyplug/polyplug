@@ -1,14 +1,13 @@
-# bundle.toml — Python transformer guest plugin
-# Run: polyplugc generate --bundle bundle.toml --lang python --out generated/
+# bundle.toml — Python decoder guest plugin
 
 [bundle]
-name    = "python_transformer"
+name    = "python_decoder"
 version = "1.0.0"
 runtime = "python"
 file    = "decoder.py"
 api     = "../../../api.toml"
 
 [[plugin]]
-name       = "python_transformer"
+name       = "python_decoder"
 version    = "1.0.0"
-implements = ["data.Transformer@1.0"]
+implements = ["pipeline.Decoder@1.0"]

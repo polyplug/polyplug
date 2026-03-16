@@ -10,14 +10,14 @@ use core::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::abi::ABI_OK;
-use polyplug::abi::AbiError;
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginRegistrar;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::loader::BundleLoader;
 use polyplug_js_deno::JsDenoConfig;
 use polyplug_js_deno::JsDenoLoader;
@@ -190,7 +190,7 @@ fn loader_construction_does_not_panic() {
 
 #[test]
 fn load_valid_bundle_registers_vtable() {
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.noop", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.noop", 1);
 
     // Build a static vtable pointer to pass through JS (non-null).
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
@@ -232,7 +232,7 @@ fn load_valid_bundle_registers_vtable() {
 
 #[test]
 fn load_bundle_with_functions_registers_correct_count() {
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.math", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.math", 1);
     let fn_count: u32 = 3;
 
     let dummy_fn_array: Box<[*const ()]> = vec![core::ptr::null(); fn_count as usize].into();
@@ -265,7 +265,7 @@ fn load_bundle_with_functions_registers_correct_count() {
 
 #[test]
 fn load_accepts_directory_path() {
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.dir", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.dir", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -377,7 +377,7 @@ fn load_bundle_without_register_vtable_returns_error() {
 
 #[test]
 fn load_bundle_null_vtable_pointer_returns_error() {
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.null_vtable", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.null_vtable", 1);
 
     // Pass vtable_ptr=0n → null pointer.
     let bundle: String = format!("Deno.core.ops.op_register_vtable({contract_id}n, 0n, 1);\n");
@@ -417,7 +417,7 @@ fn load_nonexistent_file_returns_error() {
 #[test]
 fn bundle_path_global_is_injected() {
     // The loader injects `globalThis.bundlePath` before evaluating the module.
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.bundlepath", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.bundlepath", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -453,7 +453,7 @@ Deno.core.ops.op_register_vtable({contract_id}n, {vtable_ptr}n, 0);
 #[test]
 fn deno_core_ops_are_accessible() {
     // Verify that all polyplug Deno ops are accessible via Deno.core.ops.
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.ops", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.ops", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -498,7 +498,7 @@ Deno.core.ops.op_register_vtable({contract_id}n, {vtable_ptr}n, 0);
 #[test]
 fn vtable_contract_id_roundtrip() {
     // Use a well-known FNV-1a contract.
-    let contract_id: u64 = polyplug::abi::contract_id("image.decode", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("image.decode", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -561,7 +561,7 @@ unsafe extern "C" fn trampoline_capture_register(
 
 #[test]
 fn trampoline_fn_pointers_are_non_null_and_callable() {
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.trampoline", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.trampoline", 1);
     let fn_count: u32 = 2;
 
     let dummy_fn_array: Box<[*const ()]> = vec![core::ptr::null(); fn_count as usize].into();
@@ -626,7 +626,7 @@ fn no_subprocess_permissions_required() {
     // V8 is embedded in-process — no Deno CLI --allow-* flags are needed.
     // This test confirms a basic bundle load succeeds without any special
     // environment setup (simulating a zero-permission environment).
-    let contract_id: u64 = polyplug::abi::contract_id("deno.test.noperm", 1);
+    let contract_id: u64 = polyplug_abi::contract_id("deno.test.noperm", 1);
 
     let dummy_fn_array: Box<[*const ()]> = Box::new([]);
     let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -665,7 +665,7 @@ fn concurrent_loads_do_not_panic() {
             let errors_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&errors);
             std::thread::spawn(move || {
                 let contract_id: u64 =
-                    polyplug::abi::contract_id(&format!("deno.test.concurrent.{i}"), 1);
+                    polyplug_abi::contract_id(&format!("deno.test.concurrent.{i}"), 1);
 
                 let dummy_fn_array: Box<[*const ()]> = Box::new([]);
                 let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
@@ -712,7 +712,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
     let loader: JsDenoLoader = JsDenoLoader::new(JsDenoConfig {});
 
     for i in 0..4_u32 {
-        let contract_id: u64 = polyplug::abi::contract_id(&format!("deno.test.sequential.{i}"), 1);
+        let contract_id: u64 = polyplug_abi::contract_id(&format!("deno.test.sequential.{i}"), 1);
 
         let dummy_fn_array: Box<[*const ()]> = Box::new([]);
         let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {

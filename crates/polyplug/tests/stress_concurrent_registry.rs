@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::Instant;
 
-use polyplug::abi::PluginDescriptor;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::PluginVTable;
-use polyplug::abi::StringView;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug::error::RegistryError;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::registry::Registry;

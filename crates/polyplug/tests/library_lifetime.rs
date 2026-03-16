@@ -5,9 +5,9 @@
 //! dlclose() would unmap plugin code pages while vtable fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
 
-use polyplug::abi::HostVTable;
-use polyplug::abi::PluginHandle;
-use polyplug::abi::bundle_id;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::bundle_id;
 use polyplug::allocator::polyplug_host_alloc;
 use polyplug::allocator::polyplug_host_free;
 use polyplug::loader::load_bundle;
@@ -48,7 +48,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_resolve_plugin(
     _handle: PluginHandle,
-) -> *const polyplug::abi::PluginVTable {
+) -> *const polyplug_abi::PluginVTable {
     core::ptr::null()
 }
 

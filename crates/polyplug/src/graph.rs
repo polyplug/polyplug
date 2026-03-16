@@ -11,7 +11,7 @@ use petgraph::algo;
 use petgraph::graph::DiGraph;
 use petgraph::graph::NodeIndex;
 
-use crate::abi::contract_id as compute_contract_id;
+use polyplug_abi::contract_id as compute_contract_id;
 use crate::error::GraphError;
 use crate::loader::manifest::ManifestData;
 use crate::loader::manifest::ManifestDependency;
@@ -378,8 +378,8 @@ mod tests {
 
     #[test]
     fn from_manifests_chain_order() {
-        let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
-        let cid_y: u64 = crate::abi::contract_id("contract.Y", 1);
+        let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
+        let cid_y: u64 = polyplug_abi::contract_id("contract.Y", 1);
 
         let dep_b: RawManifestDependency = RawManifestDependency {
             kind: "contract".to_owned(),
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn from_manifests_bybundle_missing_fails() {
-        let cid_x: u64 = crate::abi::contract_id("contract.X", 1);
+        let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
 
         let dep_b: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
