@@ -21,8 +21,34 @@ class Program
 
     static void Run()
     {
-        var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH") 
-            ?? Path.Combine(Directory.GetCurrentDirectory(), "examples", "plugins");
+        var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH");
+        
+        // Try to find plugins relative to workspace
+        if (string.IsNullOrEmpty(pluginPath))
+        {
+            var dir = Directory.GetCurrentDirectory();
+            // Try various paths
+            var candidates = new[] {
+                Path.Combine(dir, "examples", "plugins"),
+                Path.Combine(dir, "..", "..", "..", "examples", "plugins"),
+                Path.Combine(dir, "..", "..", "plugins"),
+                "/mnt/data/Projects/Utils/polyplug/examples/plugins"
+            };
+            
+            foreach (var candidate in candidates)
+            {
+                if (Directory.Exists(candidate))
+                {
+                    pluginPath = candidate;
+                    break;
+                }
+            }
+        }
+        
+        if (string.IsNullOrEmpty(pluginPath) || !Directory.Exists(pluginPath))
+        {
+            throw new Exception($"plugins directory not found");
+        }
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
@@ -30,7 +56,11 @@ class Program
             .PluginDir(pluginPath)
             .Init();
 
-        var bundles = Scanner.ScanDir(pluginPath);
+        // Scan for manifest.toml files
+        var bundles = Directory.GetDirectories(pluginPath)
+            .Where(dir => File.Exists(Path.Combine(dir, "manifest.toml")))
+            .ToList();
+
         if (bundles.Count == 0)
         {
             throw new Exception($"no plugins found in {pluginPath}");
@@ -38,10 +68,14 @@ class Program
 
         Console.Error.WriteLine($"discovered {bundles.Count} bundles\n");
 
-        foreach (var bundle in bundles)
+        foreach (var bundleDir in bundles)
         {
-            rt.LoadBundle(bundle.Item1);
-            Console.Error.WriteLine($"  loaded: {bundle.Item2.BundleName}");
+            rt.LoadBundle(bundleDir);
+            var manifestPath = Path.Combine(bundleDir, "manifest.toml");
+            var manifest = File.ReadAllText(manifestPath);
+            var name = manifest.Split('\n').FirstOrDefault(line => line.StartsWith("bundle_name"))?
+                .Split('=').LastOrDefault()?.Trim().Trim('"') ?? "unknown";
+            Console.Error.WriteLine($"  loaded: {name}");
         }
 
         Console.WriteLine("\n=== Pipeline Host (C#) ===\n");
