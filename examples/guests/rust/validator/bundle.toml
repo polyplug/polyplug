@@ -1,0 +1,19 @@
+# bundle.toml — Rust validator guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang rust --out generated/
+
+[bundle]
+name    = "rust_validator"
+version = "1.0.0"
+runtime = "native"
+api     = "../../../api.toml"
+
+[bundle.file]
+linux.x86_64   = "libdata_validator.so"
+linux.aarch64  = "libdata_validator.so"
+macos.aarch64  = "libdata_validator.dylib"
+windows.x86_64 = "data_validator.dll"
+
+[[plugin]]
+name       = "rust_validator"
+version    = "1.0.0"
+implements = ["pipeline.Validator@1.0"]

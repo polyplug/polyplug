@@ -1,0 +1,14 @@
+# bundle.toml — Python validator guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang python --out generated/
+
+[bundle]
+name    = "python_validator"
+version = "1.0.0"
+runtime = "python"
+file    = "validator.py"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "python_validator"
+version    = "1.0.0"
+implements = ["pipeline.Validator@1.0"]

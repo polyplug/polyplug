@@ -166,7 +166,7 @@ generate_guest_bindings() {
 printf "\n${BOLD}Step 3: Build guest plugins → examples/plugins/${RESET}\n"
 
 printf "\n  ${BOLD}[rust]${RESET}\n"
-for guest in decoder reporter; do
+for guest in decoder encoder validator reporter; do
     guest_dir="${GUESTS_DIR}/rust/${guest}"
     label="rust/${guest}"
     printf "  %-40s " "${label} ..."
@@ -193,7 +193,7 @@ for guest in decoder reporter; do
 done
 
 printf "\n  ${BOLD}[cpp]${RESET}\n"
-for guest in transformer reporter; do
+for guest in transformer encoder validator reporter; do
     guest_dir="${GUESTS_DIR}/cpp/${guest}"
     label="cpp/${guest}"
     printf "  %-40s " "${label} ..."
@@ -215,7 +215,7 @@ for guest in transformer reporter; do
 done
 
 printf "\n  ${BOLD}[csharp]${RESET}\n"
-for guest in encoder reporter; do
+for guest in decoder encoder validator reporter; do
     guest_dir="${GUESTS_DIR}/csharp/${guest}"
     label="csharp/${guest}"
     printf "  %-40s " "${label} ..."
@@ -237,7 +237,7 @@ for guest in encoder reporter; do
 done
 
 printf "\n  ${BOLD}[python]${RESET}\n"
-for guest in decoder reporter; do
+for guest in decoder encoder validator reporter; do
     guest_dir="${GUESTS_DIR}/python/${guest}"
     label="python/${guest}"
     printf "  %-40s " "${label} ..."
@@ -255,7 +255,7 @@ for guest in decoder reporter; do
 done
 
 printf "\n  ${BOLD}[lua]${RESET}\n"
-for guest in transformer reporter; do
+for guest in transformer decoder encoder validator reporter; do
     guest_dir="${GUESTS_DIR}/lua/${guest}"
     label="lua/${guest}"
     printf "  %-40s " "${label} ..."
@@ -273,7 +273,7 @@ for guest in transformer reporter; do
 done
 
 printf "\n  ${BOLD}[js_quickjs]${RESET}\n"
-for guest in transformer reporter; do
+for guest in decoder encoder validator transformer reporter; do
     guest_dir="${GUESTS_DIR}/js_quickjs/${guest}"
     label="js_quickjs/${guest}"
     printf "  %-40s " "${label} ..."

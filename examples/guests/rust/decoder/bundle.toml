@@ -1,8 +1,8 @@
-# bundle.toml — Rust transformer guest plugin
+# bundle.toml — Rust decoder guest plugin
 # Run: polyplugc generate --bundle bundle.toml --lang rust --out generated/
 
 [bundle]
-name    = "rust_transformer"
+name    = "rust_decoder"
 version = "1.0.0"
 runtime = "native"
 api     = "../../../api.toml"
@@ -14,6 +14,6 @@ macos.aarch64  = "libcsv_decoder.dylib"
 windows.x86_64 = "csv_decoder.dll"
 
 [[plugin]]
-name       = "rust_transformer"
+name       = "rust_decoder"
 version    = "1.0.0"
-implements = ["data.Transformer@1.0"]
+implements = ["pipeline.Decoder@1.0"]

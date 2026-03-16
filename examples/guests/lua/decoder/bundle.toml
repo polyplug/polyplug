@@ -1,0 +1,14 @@
+# bundle.toml — Lua decoder guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang lua --out generated/
+
+[bundle]
+name    = "lua_decoder"
+version = "1.0.0"
+runtime = "lua"
+file    = "decoder.lua"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "lua_decoder"
+version    = "1.0.0"
+implements = ["pipeline.Decoder@1.0"]

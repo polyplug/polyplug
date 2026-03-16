@@ -1,0 +1,14 @@
+# bundle.toml — C# validator guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang csharp --out generated/
+
+[bundle]
+name    = "csharp_validator"
+version = "1.0.0"
+runtime = "dotnet"
+file    = "Validator.dll"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "csharp_validator"
+version    = "1.0.0"
+implements = ["pipeline.Validator@1.0"]

@@ -125,6 +125,8 @@ fn generate_python_types_file(ir: &ValidatedIr) -> String {
     if !ir.enums.is_empty() {
         out.push_str("import enum\n\n");
     }
+
+    // Guest types file - no contract IDs here
     for e in &ir.enums {
         generate_python_enum(&mut out, e);
         out.push('\n');
@@ -186,8 +188,51 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Callable, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_OK, Buffer, StringView\n");
+    out.push_str("from typing import Callable, TypeAlias\n\n");
+
+    // Host-side ABI constants
+    out.push_str("# Host-side ABI constants\n");
+    out.push_str("ABI_OK: int = 0\n");
+    out.push_str("ABI_ERROR_GENERIC: int = 1\n\n");
+
+    // Host-side StringView struct (mirrors guest but for host use)
+    out.push_str("# Host-side StringView struct\n");
+    out.push_str("class StringView(ctypes.Structure):\n");
+    out.push_str("    _fields_: list[tuple[str, type]] = [\n");
+    out.push_str("        (\"ptr\", ctypes.c_void_p),\n");
+    out.push_str("        (\"len\", ctypes.c_size_t),\n");
+    out.push_str("    ]\n\n");
+    out.push_str("    @classmethod\n");
+    out.push_str("    def from_bytes(cls, data: bytes) -> \"StringView\":\n");
+    out.push_str("        sv = cls()\n");
+    out.push_str(
+        "        sv.ptr = ctypes.cast(ctypes.create_string_buffer(data), ctypes.c_void_p)\n",
+    );
+    out.push_str("        sv.len = len(data)\n");
+    out.push_str("        return sv\n\n");
+    out.push_str("    def to_bytes(self) -> bytes:\n");
+    out.push_str("        if self.ptr is None or self.len == 0:\n");
+    out.push_str("            return b\"\"\n");
+    out.push_str("        return ctypes.string_at(self.ptr, self.len)\n\n");
+    out.push_str("    def to_str(self) -> str:\n");
+    out.push_str("        return self.to_bytes().decode(\"utf-8\", errors=\"replace\")\n\n");
+
+    // ContractError class for host-side error handling
+    out.push_str("class ContractError(Exception):\n");
+    out.push_str("    def __init__(self, message: str, code: int = ABI_ERROR_GENERIC) -> None:\n");
+    out.push_str("        super().__init__(message)\n");
+    out.push_str("        self.code: int = code\n\n");
+
+    // Contract ID constants
+    out.push_str("# Contract ID constants\n");
+    for contract in &ir.contracts {
+        let upper_name: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "{}_CONTRACT_ID: int = 0x{:016X}\n",
+            upper_name, contract.contract_id
+        ));
+    }
+    out.push('\n');
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -222,8 +267,19 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import Buffer, StringView\n\n");
+    out.push_str("from typing import Callable\n\n");
+
+    out.push_str("ABI_OK: int\n");
+    out.push_str("ABI_ERROR_GENERIC: int\n");
+    out.push_str("class StringView(ctypes.Structure): ...\n");
+    out.push_str("class ContractError(Exception): ...\n\n");
+
+    // Contract ID constants in stub
+    for contract in &ir.contracts {
+        let upper_name: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!("{}_CONTRACT_ID: int\n", upper_name));
+    }
+    out.push('\n');
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -232,7 +288,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("POLYPLUG_ABI_VERSION: int\n");
-    out.push_str("_DISPATCH_FN_TYPE: Any\n\n");
+    out.push_str("_DISPATCH_FN_TYPE = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n");
 
     for contract in &ir.contracts {
         let struct_name: String = contract_name_to_struct(&contract.name);

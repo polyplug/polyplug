@@ -1,0 +1,14 @@
+# bundle.toml — Lua validator guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang lua --out generated/
+
+[bundle]
+name    = "lua_validator"
+version = "1.0.0"
+runtime = "lua"
+file    = "validator.lua"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "lua_validator"
+version    = "1.0.0"
+implements = ["pipeline.Validator@1.0"]

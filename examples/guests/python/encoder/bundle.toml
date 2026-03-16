@@ -1,0 +1,14 @@
+# bundle.toml — Python encoder guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang python --out generated/
+
+[bundle]
+name    = "python_encoder"
+version = "1.0.0"
+runtime = "python"
+file    = "encoder.py"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "python_encoder"
+version    = "1.0.0"
+implements = ["pipeline.Encoder@1.0"]

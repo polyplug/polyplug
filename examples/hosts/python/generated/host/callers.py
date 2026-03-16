@@ -5,7 +5,45 @@
 from __future__ import annotations
 import ctypes
 from typing import Callable, TypeAlias
-from polyplug_guest.abi import ABI_OK, Buffer, StringView
+
+# Host-side ABI constants
+ABI_OK: int = 0
+ABI_ERROR_GENERIC: int = 1
+
+# Host-side StringView struct
+class StringView(ctypes.Structure):
+    _fields_: list[tuple[str, type]] = [
+        ("ptr", ctypes.c_void_p),
+        ("len", ctypes.c_size_t),
+    ]
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "StringView":
+        sv = cls()
+        sv.ptr = ctypes.cast(ctypes.create_string_buffer(data), ctypes.c_void_p)
+        sv.len = len(data)
+        return sv
+
+    def to_bytes(self) -> bytes:
+        if self.ptr is None or self.len == 0:
+            return b""
+        return ctypes.string_at(self.ptr, self.len)
+
+    def to_str(self) -> str:
+        return self.to_bytes().decode("utf-8", errors="replace")
+
+class ContractError(Exception):
+    def __init__(self, message: str, code: int = ABI_ERROR_GENERIC) -> None:
+        super().__init__(message)
+        self.code: int = code
+
+# Contract ID constants
+PIPELINE_DECODER_CONTRACT_ID: int = 0x12F3C106B0C3DC1E
+DATA_TRANSFORMER_CONTRACT_ID: int = 0x3D53C682F3F5A9EF
+PIPELINE_ENCODER_CONTRACT_ID: int = 0x127D1703C6EFB432
+DATA_REPORTER_CONTRACT_ID: int = 0x81D41D43E511D297
+PIPELINE_VALIDATOR_CONTRACT_ID: int = 0xA553FAB5D11C7AF0
+
 POLYPLUG_ABI_VERSION: int = 1
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]

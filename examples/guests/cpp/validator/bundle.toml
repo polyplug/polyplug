@@ -1,0 +1,16 @@
+[bundle]
+name    = "cpp_validator"
+version = "1.0.0"
+runtime = "native"
+api     = "../../../api.toml"
+
+[bundle.file]
+linux.x86_64   = "libvalidator.so"
+linux.aarch64  = "libvalidator.so"
+macos.aarch64  = "libvalidator.dylib"
+windows.x86_64 = "validator.dll"
+
+[[plugin]]
+name       = "cpp_validator"
+version    = "1.0.0"
+implements = ["pipeline.Validator@1.0"]

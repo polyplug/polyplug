@@ -424,9 +424,25 @@ fn generate_callers_ts(ir: &ValidatedIr) -> String {
          // DO NOT EDIT BY HAND\n\
          // Runtime: js-deno (host-side callers)\n\n",
     );
+
+    // ABI constants
+    out.push_str("// ABI constants\n");
+    out.push_str("export const ABI_OK = 0;\n");
+    out.push_str("export const ABI_ERROR_GENERIC = 1;\n\n");
+
+    // Contract ID constants
+    out.push_str("// Contract ID constants\n");
+    out.push_str("export const ContractIds = {\n");
+    for contract in &ir.contracts {
+        let upper_name: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "  {}_CONTRACT_ID: 0x{:016X}n,\n",
+            upper_name, contract.contract_id
+        ));
+    }
+    out.push_str("} as const;\n\n");
+
     out.push_str("// TODO: implement host caller classes\n");
-    // ir reserved for future caller generation
-    let _: &ValidatedIr = ir;
     out
 }
 

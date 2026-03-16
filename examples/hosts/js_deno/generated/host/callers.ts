@@ -2,4 +2,17 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-deno (host-side callers)
 
+// ABI constants
+export const ABI_OK = 0;
+export const ABI_ERROR_GENERIC = 1;
+
+// Contract ID constants
+export const ContractIds = {
+  PIPELINE_DECODER_CONTRACT_ID: 0x12F3C106B0C3DC1En,
+  DATA_TRANSFORMER_CONTRACT_ID: 0x3D53C682F3F5A9EFn,
+  PIPELINE_ENCODER_CONTRACT_ID: 0x127D1703C6EFB432n,
+  DATA_REPORTER_CONTRACT_ID: 0x81D41D43E511D297n,
+  PIPELINE_VALIDATOR_CONTRACT_ID: 0xA553FAB5D11C7AF0n,
+} as const;
+
 // TODO: implement host caller classes

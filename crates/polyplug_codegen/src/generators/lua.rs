@@ -218,8 +218,24 @@ fn generate_lua_types_file(ir: &ValidatedIr) -> String {
 fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
-    out.push_str("local ffi = require(\"ffi\")\n");
-    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+    out.push_str("local ffi = require(\"ffi\")\n\n");
+    
+    // ABI constants for host
+    out.push_str("-- ABI constants\n");
+    out.push_str("local ABI_OK = 0\n");
+    out.push_str("local ABI_ERROR_GENERIC = 1\n\n");
+    
+    // Contract ID constants
+    out.push_str("-- Contract ID constants\n");
+    for contract in &ir.contracts {
+        let upper_name: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "local {}_CONTRACT_ID = 0x{:016X}ULL\n",
+            upper_name, contract.contract_id
+        ));
+    }
+    out.push('\n');
+    
     out.push_str("local M = {}\n\n");
 
     for contract in &ir.contracts {

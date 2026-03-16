@@ -1,0 +1,14 @@
+# bundle.toml — JS/QuickJS validator guest plugin
+# Run: polyplugc generate --bundle bundle.toml --lang js-quickjs --out generated/
+
+[bundle]
+name    = "js_quickjs_validator"
+version = "1.0.0"
+runtime = "js-quickjs"
+file    = "bundle.js"
+api     = "../../../api.toml"
+
+[[plugin]]
+name       = "js_quickjs_validator"
+version    = "1.0.0"
+implements = ["pipeline.Validator@1.0"]

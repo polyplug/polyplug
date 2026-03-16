@@ -3,7 +3,17 @@
 -- Re-generate with: polyplugc generate --api <api.toml> --lang lua --out <dir>
 
 local ffi = require("ffi")
-local polyplug_guest = require("polyplug_guest")
+
+-- ABI constants
+local ABI_OK = 0
+local ABI_ERROR_GENERIC = 1
+
+-- Contract ID constants
+local PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EULL
+local DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL
+local PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432ULL
+local DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297ULL
+local PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0ULL
 
 local M = {}
 

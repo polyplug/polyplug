@@ -4,11 +4,21 @@
 
 from __future__ import annotations
 import ctypes
-from typing import Any
-from polyplug_guest.abi import Buffer, StringView
+from typing import Callable
+
+ABI_OK: int
+ABI_ERROR_GENERIC: int
+class StringView(ctypes.Structure): ...
+class ContractError(Exception): ...
+
+PIPELINE_DECODER_CONTRACT_ID: int
+DATA_TRANSFORMER_CONTRACT_ID: int
+PIPELINE_ENCODER_CONTRACT_ID: int
+DATA_REPORTER_CONTRACT_ID: int
+PIPELINE_VALIDATOR_CONTRACT_ID: int
 
 POLYPLUG_ABI_VERSION: int
-_DISPATCH_FN_TYPE: Any
+_DISPATCH_FN_TYPE = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
 
 class PipelineDecoderContractCaller:
     def __init__(self, dispatch_fn: _DISPATCH_FN_TYPE) -> None: ...
