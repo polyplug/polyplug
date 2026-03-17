@@ -11,8 +11,8 @@ use core::sync::atomic::Ordering;
 #[cfg(debug_assertions)]
 use std::collections::HashSet;
 
-use crate::polyplug_host_alloc;
-use crate::polyplug_host_free;
+use crate::ffi::polyplug_host_alloc;
+use crate::ffi::polyplug_host_free;
 
 thread_local! {
     static TLS_ALLOC_COUNT: AtomicUsize = const { AtomicUsize::new(0) };
@@ -66,6 +66,7 @@ unsafe extern "C" fn tracking_free(ptr: *mut u8, size: usize, align: usize) {
             }
         });
     }
+
     // SAFETY: ptr was allocated by polyplug_host_alloc via tracking_alloc with this layout.
     // Caller guarantees size and align match the original allocation.
     unsafe { polyplug_host_free(ptr, size, align) }

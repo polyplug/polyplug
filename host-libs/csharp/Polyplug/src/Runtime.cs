@@ -174,10 +174,12 @@ public sealed class Runtime
         {
             return string.Empty;
         }
+
         if (length > int.MaxValue)
         {
             return "polyplug error message too large";
         }
+
         byte[] buffer = new byte[(int)length];
         GCHandle pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
         try
@@ -196,7 +198,10 @@ public sealed class Runtime
         }
     }
 
-    internal static nint GetVTablePtr(nint guard) => NativeMethods.PolyplugRuntimePluginVTable(guard);
+    internal static nint GetVTablePtr(nint guard)
+    {
+        return NativeMethods.PolyplugRuntimePluginVTable(guard);
+    }
 
     internal static void ReleaseGuard(nint guard)
     {
@@ -204,13 +209,6 @@ public sealed class Runtime
         {
             NativeMethods.PolyplugRuntimePluginRelease(guard);
         }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct DotnetLoaderConfig
-    {
-        public nint MinFrameworkPtr;
-        public nuint MinFrameworkLen;
     }
 
     [StructLayout(LayoutKind.Sequential)]

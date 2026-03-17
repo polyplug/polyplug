@@ -157,12 +157,12 @@ pub use polyplug_abi::extension_id;
 ///
 /// All memory that crosses the plugin/host boundary must use this allocator.
 /// Returns null for size=0 or invalid alignment.
-pub use polyplug_abi::polyplug_host_alloc;
+pub use polyplug_abi::ffi::polyplug_host_alloc;
 
 /// Free memory previously allocated by `polyplug_host_alloc`.
 ///
 /// Passing null or size=0 is a safe no-op.
-pub use polyplug_abi::polyplug_host_free;
+pub use polyplug_abi::ffi::polyplug_host_free;
 
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 

@@ -3,8 +3,14 @@ use std::path::PathBuf;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
+use polyplug_abi::PluginHandle;
 use polyplug_native::{NativeConfig, NativeLoader};
-use polyplug_abi::{StringView, PluginVTable, AbiError, polyplug_host_free};
+use polyplug_abi::StringView;
+
+mod generated;
+
+use generated::host::types::*;
+use generated::host::host_callers::*;
 
 fn main() {
     if let Err(e) = run() {
@@ -41,106 +47,76 @@ fn run() -> Result<(), String> {
 
     println!("\n=== Pipeline Host (Rust) ===\n");
 
-    let input = "name,value,42";
+    let input: &str = "name,value,42";
     println!("Input: \"{input}\"\n");
 
     for (_, manifest) in &bundles {
-        let bid = polyplug_abi::bundle_id(&manifest.bundle_name);
+        for contract in &manifest.provides {
+            let contract_id = match contract.as_str() {
+                "pipeline.Decoder@1.0" => PIPELINE_DECODER_CONTRACT_ID,
+                "data.Transformer@1.0" => DATA_TRANSFORMER_CONTRACT_ID,
+                "pipeline.Encoder@1.0" => PIPELINE_ENCODER_CONTRACT_ID,
+                "data.Reporter@1.0" => DATA_REPORTER_CONTRACT_ID,
+                "pipeline.Validator@1.0" => PIPELINE_VALIDATOR_CONTRACT_ID,
+                _ => continue,
+            };
 
-        if manifest.provides.iter().any(|c| c.starts_with("pipeline.Decoder@1")) {
-            let cid = polyplug_abi::contract_id("pipeline.Decoder", 1);
-            let handle = runtime.find_by_bundle(bid, cid, 0)
+            let handle: PluginHandle = runtime.find_by_contract(contract_id, 0)
                 .map_err(|e| format!("find failed: {e}"))?;
-            if !handle.is_null() {
-                let guard = runtime.registry().resolve_guard(handle)
-                    .map_err(|e| format!("resolve failed: {e}"))?;
-                let vtable = guard.vtable();
-                let result = call_string_fn(vtable, 0, input);
-                println!("[{}] decode(\"{}\") = \"{}\"", manifest.bundle_name, input, result);
+            if handle.is_null() {
+                continue;
             }
-        }
 
-        if manifest.provides.iter().any(|c| c.starts_with("data.Transformer@1")) {
-            let cid = polyplug_abi::contract_id("data.Transformer", 1);
-            let handle = runtime.find_by_bundle(bid, cid, 0)
-                .map_err(|e| format!("find failed: {e}"))?;
-            if !handle.is_null() {
-                let guard = runtime.registry().resolve_guard(handle)
-                    .map_err(|e| format!("resolve failed: {e}"))?;
-                let vtable = guard.vtable();
-                let decoded = format!("DECODED:{}", input.replace(',', "|"));
-                let result = call_string_fn(vtable, 0, &decoded);
-                println!("[{}] transform(\"{}\") = \"{}\"", manifest.bundle_name, decoded, result);
-            }
-        }
-
-        if manifest.provides.iter().any(|c| c.starts_with("pipeline.Encoder@1")) {
-            let cid = polyplug_abi::contract_id("pipeline.Encoder", 1);
-            let handle = runtime.find_by_bundle(bid, cid, 0)
-                .map_err(|e| format!("find failed: {e}"))?;
-            if !handle.is_null() {
-                let guard = runtime.registry().resolve_guard(handle)
-                    .map_err(|e| format!("resolve failed: {e}"))?;
-                let vtable = guard.vtable();
-                let transformed = "TRANSFORMED:NAME|value (transformed)|43";
-                let result = call_string_fn(vtable, 0, transformed);
-                println!("[{}] encode(\"{}\") = \"{}\"", manifest.bundle_name, transformed, result);
-            }
-        }
-
-        if manifest.provides.iter().any(|c| c.starts_with("data.Reporter@1")) {
-            let cid = polyplug_abi::contract_id("data.Reporter", 1);
-            let handle = runtime.find_by_bundle(bid, cid, 0)
-                .map_err(|e| format!("find failed: {e}"))?;
-            if !handle.is_null() {
-                let guard = runtime.registry().resolve_guard(handle)
-                    .map_err(|e| format!("resolve failed: {e}"))?;
-                let vtable = guard.vtable();
-                let transformed = "TRANSFORMED:NAME|value (transformed)|43";
-                let result = call_string_fn(vtable, 0, transformed);
-                println!("[{}] report(\"{}\") = \"{}\"", manifest.bundle_name, transformed, result);
-            }
-        }
-
-        if manifest.provides.iter().any(|c| c.starts_with("pipeline.Validator@1")) {
-            let cid = polyplug_abi::contract_id("pipeline.Validator", 1);
-            let handle = runtime.find_by_bundle(bid, cid, 0)
-                .map_err(|e| format!("find failed: {e}"))?;
-            if !handle.is_null() {
-                let guard = runtime.registry().resolve_guard(handle)
-                    .map_err(|e| format!("resolve failed: {e}"))?;
-                let vtable = guard.vtable();
-                let decoded = format!("DECODED:{}", input.replace(',', "|"));
-                let result = call_string_fn(vtable, 0, &decoded);
-                println!("[{}] validate(\"{}\") = \"{}\"", manifest.bundle_name, decoded, result);
+            match contract.as_str() {
+                "pipeline.Decoder@1.0" => {
+                    let decoder = PipelineDecoderContract::new(handle, runtime);
+                    let result_sv = decoder.decode(StringView { ptr: input.as_ptr(), len: input.len() })
+                        .map_err(|e| format!("call failed: {}", e.code))?;
+                    let result = unsafe { std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len)) }
+                        .map_err(|e| e.to_string())?;
+                    println!("[{}] decode(\"{}\") = \"{}\"", manifest.bundle_name, input, result);
+                }
+                "data.Transformer@1.0" => {
+                    let decoded = format!("DECODED:{}", input.replace(',', "|"));
+                    let transformer = DataTransformerContract::new(handle, runtime);
+                    let result_sv = transformer.transform(StringView { ptr: decoded.as_ptr(), len: decoded.len() })
+                        .map_err(|e| format!("call failed: {}", e.code))?;
+                    let result = unsafe { std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len)) }
+                        .map_err(|e| e.to_string())?;
+                    println!("[{}] transform(\"{}\") = \"{}\"", manifest.bundle_name, decoded, result);
+                }
+                "pipeline.Encoder@1.0" => {
+                    let transformed = "TRANSFORMED:NAME|value (transformed)|43";
+                    let encoder = PipelineEncoderContract::new(handle, runtime);
+                    let result_sv = encoder.encode(StringView { ptr: transformed.as_ptr(), len: transformed.len() })
+                        .map_err(|e| format!("call failed: {}", e.code))?;
+                    let result = unsafe { std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len)) }
+                        .map_err(|e| e.to_string())?;
+                    println!("[{}] encode(\"{}\") = \"{}\"", manifest.bundle_name, transformed, result);
+                }
+                "data.Reporter@1.0" => {
+                    let transformed = "TRANSFORMED:NAME|value (transformed)|43";
+                    let reporter = DataReporterContract::new(handle, runtime);
+                    let result_sv = reporter.report(StringView { ptr: transformed.as_ptr(), len: transformed.len() })
+                        .map_err(|e| format!("call failed: {}", e.code))?;
+                    let result = unsafe { std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len)) }
+                        .map_err(|e| e.to_string())?;
+                    println!("[{}] report(\"{}\") = \"{}\"", manifest.bundle_name, transformed, result);
+                }
+                "pipeline.Validator@1.0" => {
+                    let decoded = format!("DECODED:{}", input.replace(',', "|"));
+                    let validator = PipelineValidatorContract::new(handle, runtime);
+                    let result_sv = validator.validate(StringView { ptr: decoded.as_ptr(), len: decoded.len() })
+                        .map_err(|e| format!("call failed: {}", e.code))?;
+                    let result = unsafe { std::str::from_utf8(std::slice::from_raw_parts(result_sv.ptr, result_sv.len)) }
+                        .map_err(|e| e.to_string())?;
+                    println!("[{}] validate(\"{}\") = \"{}\"", manifest.bundle_name, decoded, result);
+                }
+                _ => {}
             }
         }
     }
 
     println!("\ndone.");
     Ok(())
-}
-
-fn call_string_fn(vtable: *const PluginVTable, func_idx: usize, input: &str) -> String {
-    let vtable = unsafe { &*vtable };
-    let funcs: &[*const ()] = unsafe { std::slice::from_raw_parts(vtable.functions.cast(), vtable.function_count as usize) };
-    let func_ptr = funcs[func_idx];
-    let func: extern "C" fn(*const (), *mut ()) -> AbiError = unsafe { std::mem::transmute(func_ptr) };
-
-    let input_sv = StringView { ptr: input.as_ptr(), len: input.len() };
-    let mut output_sv = StringView { ptr: std::ptr::null(), len: 0 };
-
-    let err = func(&input_sv as *const _ as *const (), &mut output_sv as *mut _ as *mut ());
-    
-    if err.code == 0 && !output_sv.ptr.is_null() && output_sv.len > 0 {
-        let result = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(output_sv.ptr, output_sv.len))
-                .unwrap_or("(invalid utf-8)")
-                .to_string()
-        };
-        unsafe { polyplug_host_free(output_sv.ptr as *mut _, output_sv.len, 1) };
-        result
-    } else {
-        format!("(error code={})", err.code)
-    }
 }

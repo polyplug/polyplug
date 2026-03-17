@@ -7,8 +7,7 @@ namespace Polyplug.Loaders;
 [StructLayout(LayoutKind.Sequential)]
 internal struct DotnetConfig
 {
-    public IntPtr MinFrameworkPtr;
-    public UIntPtr MinFrameworkLen;
+    public StringView MinFramework;
 }
 
 public static class DotnetLoaderExtensions
@@ -21,6 +20,7 @@ public static class DotnetLoaderExtensions
 
     public static void RegisterDotnetLoader(this Runtime runtime, string minFramework = "10.0")
     {
+        StringView
         byte[] bytes = Encoding.UTF8.GetBytes(minFramework);
         var stringHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
         try {

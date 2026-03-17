@@ -5,6 +5,11 @@
 use core::cell::RefCell;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use polyplug::registry::Registry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
@@ -16,13 +21,9 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::polyplug_host_alloc;
-use polyplug_abi::polyplug_host_free;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
-use polyplug::registry::Registry;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 

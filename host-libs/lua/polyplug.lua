@@ -4,6 +4,28 @@
 local ffi = require('ffi')
 local M = {}
 
+local FNV_OFFSET = 0xcbf29ce484222325ULL
+local FNV_PRIME = 0x00000100000001B3ULL
+
+local function fnv1a_64(str)
+    local h = FNV_OFFSET
+    for i = 1, #str do
+        local b = str:byte(i)
+        h = ffi.bit.bxor(h, b)
+        h = h * FNV_PRIME
+    end
+    return h
+end
+
+function M.contract_id(name, major_version)
+    local s = name .. '@' .. tostring(major_version)
+    return fnv1a_64(s)
+end
+
+function M.bundle_id(name)
+    return fnv1a_64(name)
+end
+
 ffi.cdef([[
     typedef struct OpaqueRuntime OpaqueRuntime;
     typedef struct OpaqueGuard OpaqueGuard;
@@ -175,5 +197,57 @@ end
 M.to_str = to_str
 M.to_string = to_str
 M.str_as_view = str_as_view
+
+function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
+    local lib = get_lib()
+    
+    -- Resolve plugin to get guard
+    local guard_ptr = lib.polyplug_runtime_resolve_plugin(ffi.cast("OpaqueRuntime*", rt_ptr), packed_handle)
+    if guard_ptr == nil then
+        error("failed to resolve plugin")
+    end
+    
+    -- Get vtable from guard
+    local vtable_ptr = lib.polyplug_runtime_guard_vtable(guard_ptr)
+    if vtable_ptr == nil then
+        error("failed to get vtable")
+    end
+    
+    -- Read vtable: { function_count: usize, functions: *const *const () }
+    local vtable = ffi.cast("const void**", vtable_ptr)
+    local func_count = ffi.cast("size_t*", vtable)[0]
+    local funcs = ffi.cast("void***", vtable + 1)[0]
+    
+    if func_idx >= func_count then
+        lib.polyplug_runtime_guard_destroy(guard_ptr)
+        error("function index " .. func_idx .. " out of bounds")
+    end
+    
+    local func_ptr = funcs[func_idx]
+    local func = ffi.cast("uint32_t (*)(const void*, void*)", func_ptr)
+    
+    -- Prepare input StringView
+    local input_data = ffi.new("uint8_t[?]", #input)
+    ffi.copy(input_data, input, #input)
+    local input_sv = ffi.new("StringView", { ptr = input_data, len = #input })
+    
+    -- Prepare output StringView
+    local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
+    
+    -- Call function
+    local err_code = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
+    
+    -- Release guard
+    lib.polyplug_runtime_guard_destroy(guard_ptr)
+    
+    if err_code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
+        local result = to_str(output_sv)
+        -- Free output
+        lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
+        return result
+    else
+        error("plugin returned error code=" .. err_code)
+    end
+end
 
 return M

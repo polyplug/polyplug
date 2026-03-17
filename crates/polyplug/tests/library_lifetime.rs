@@ -8,8 +8,8 @@
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::bundle_id;
-use polyplug_abi::polyplug_host_alloc;
-use polyplug_abi::polyplug_host_free;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug::loader::load_bundle;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::parse_manifest;

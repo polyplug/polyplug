@@ -82,20 +82,36 @@ class PluginHandle(ctypes.Structure):
 NULL_HANDLE: int = (1 << 64) - 1
 
 
-def contract_id(name: str, major: int) -> int:
-    """Compute FNV-1a 64-bit hash of 'name@major'."""
-    s = f"{name}@{major}"
-    h = 0xcbf29ce484222325
-    for b in s.encode('utf-8'):
-        h ^= b
-        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
-    return h
+class AbiError(ctypes.Structure):
+    """ABI error structure."""
+
+    _fields_ = [
+        ("code", ctypes.c_uint32),
+        ("_pad", ctypes.c_uint32),
+        ("message", StringView),
+    ]
+
+
+# Load polyplug library for host_free
+try:
+    _polyplug_lib = ctypes.CDLL(
+        ctypes.util.find_library("polyplug") or "libpolyplug.so"
+    )
+
+    def polyplug_host_free(ptr: ctypes.c_void_p, size: int, align: int) -> None:
+        """Free memory allocated by polyplug."""
+        _polyplug_lib.polyplug_host_free(ptr, size, align)
+except:
+
+    def polyplug_host_free(ptr: ctypes.c_void_p, size: int, align: int) -> None:
+        """Stub polyplug_host_free."""
+        pass
 
 
 def bundle_id(name: str) -> int:
     """Compute FNV-1a 64-bit hash of bundle name."""
-    h = 0xcbf29ce484222325
-    for b in name.encode('utf-8'):
+    h = 0xCBF29CE484222325
+    for b in name.encode("utf-8"):
         h ^= b
-        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h

@@ -6,9 +6,5 @@ license.workspace = true
 rust-version.workspace = true
 description = "ABI type definitions for the polyplug plugin runtime"
 
-[lib]
-name = "polyplug_abi"
-path = "src/lib.rs"
-
 [lints]
 workspace = true

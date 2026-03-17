@@ -12,6 +12,9 @@
 
 //! ABI — `#[repr(C)]` types, constants, and FNV-1a hashing for the polyplug ABI boundary.
 
+pub mod tracking;
+pub mod ffi;
+
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
 
@@ -36,6 +39,15 @@ pub struct StringView {
     /// Byte count.
     pub len: usize,
 }
+
+// SAFETY: StringView is a read-only view into externally-owned data.
+// The data pointed to is either 'static or valid for the lifetime of the call.
+// Using StringView from multiple threads concurrently only reads the pointer —
+// no mutation occurs. The caller guarantees the pointed-to data remains valid.
+unsafe impl Send for StringView {}
+
+// SAFETY: Same reasoning as Send — concurrent reads are safe.
+unsafe impl Sync for StringView {}
 
 impl StringView {
     /// Construct a StringView from a static byte slice.
@@ -80,6 +92,24 @@ impl StringView {
     }
 }
 
+/// Owning byte buffer.
+///
+/// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
+/// Owner calls `polyplug_host_free(ptr, cap, align)` when done.
+#[repr(C)]
+#[derive(Debug)]
+pub struct Buffer {
+    pub ptr: *mut u8,
+    /// Bytes currently used.
+    pub len: usize,
+    /// Bytes allocated.
+    pub cap: usize,
+}
+
+// SAFETY: Buffer owns its heap-allocated data through the host allocator.
+// Sending between threads is safe because the host allocator is thread-safe.
+unsafe impl Send for Buffer {}
+
 impl Buffer {
     /// Returns the buffer contents as a byte slice.
     ///
@@ -100,32 +130,6 @@ impl Buffer {
         unsafe { core::slice::from_raw_parts_mut(self.ptr, self.cap) }
     }
 }
-
-// SAFETY: StringView is a read-only view into externally-owned data.
-// The data pointed to is either 'static or valid for the lifetime of the call.
-// Using StringView from multiple threads concurrently only reads the pointer —
-// no mutation occurs. The caller guarantees the pointed-to data remains valid.
-unsafe impl Send for StringView {}
-// SAFETY: Same reasoning as Send — concurrent reads are safe.
-unsafe impl Sync for StringView {}
-
-/// Owning byte buffer.
-///
-/// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
-/// Owner calls `polyplug_host_free(ptr, cap, align)` when done.
-#[repr(C)]
-#[derive(Debug)]
-pub struct Buffer {
-    pub ptr: *mut u8,
-    /// Bytes currently used.
-    pub len: usize,
-    /// Bytes allocated.
-    pub cap: usize,
-}
-
-// SAFETY: Buffer owns its heap-allocated data through the host allocator.
-// Sending between threads is safe because the host allocator is thread-safe.
-unsafe impl Send for Buffer {}
 
 /// ABI error — returned by value from all ABI calls.
 ///
@@ -166,6 +170,7 @@ impl AbiError {
 
 // SAFETY: AbiError contains a StringView which is Send+Sync, and a u32 code.
 unsafe impl Send for AbiError {}
+
 // SAFETY: AbiError contains a StringView which is Send+Sync (concurrent reads are safe), and a u32 code.
 unsafe impl Sync for AbiError {}
 
@@ -217,6 +222,7 @@ pub struct PluginVTable {
 // points to a static array). All fields are copy types or static pointers.
 // Sending/sharing across threads only reads these static pointers.
 unsafe impl Send for PluginVTable {}
+
 // SAFETY: PluginVTable only contains data that is 'static (the functions pointer
 // points to a static array). All fields are copy types or static pointers.
 // Sending/sharing across threads only reads these static pointers.
@@ -246,6 +252,7 @@ pub struct HostVTable {
 // Function pointers are inherently thread-safe to call from any thread
 // (the functions themselves must handle their own synchronization).
 unsafe impl Send for HostVTable {}
+
 // SAFETY: HostVTable contains only function pointers.
 // Function pointers are inherently thread-safe to call from any thread
 // (the functions themselves must handle their own synchronization).
@@ -271,6 +278,7 @@ pub struct PluginDescriptor {
 // SAFETY: PluginDescriptor contains only StringViews (which are Send+Sync)
 // and u32 values. All safe to share across threads.
 unsafe impl Send for PluginDescriptor {}
+
 // SAFETY: PluginDescriptor contains only StringViews (which are Send+Sync)
 // and u32 values. All safe to share across threads.
 unsafe impl Sync for PluginDescriptor {}
@@ -320,6 +328,7 @@ pub struct ExtensionEntry {
 
 // SAFETY: ExtensionEntry holds a u32 and a pointer to a static vtable.
 unsafe impl Send for ExtensionEntry {}
+
 // SAFETY: ExtensionEntry holds a u32 and a pointer to a static vtable.
 // Sharing across threads only reads these values — no mutation after construction.
 unsafe impl Sync for ExtensionEntry {}
@@ -575,65 +584,3 @@ mod tests {
         assert_eq!(offset_of!(PluginContext, host_abi_version), 16);
     }
 }
-
-// Allocator — host_alloc/host_free cross-boundary memory management.
-// These functions are exported with C linkage and used by all plugins
-// to allocate memory that crosses the plugin/host boundary.
-
-pub mod tracking;
-
-use core::alloc::GlobalAlloc;
-use core::alloc::Layout;
-use std::alloc::System;
-
-/// Allocate memory via the host system allocator.
-///
-/// Returns null for size=0 or invalid alignment.
-///
-/// # Safety
-/// Callers must:
-/// - Free the returned pointer with `polyplug_host_free` using the SAME `size` and `align`.
-/// - Not use the returned pointer after calling `polyplug_host_free`.
-#[unsafe(no_mangle)]
-pub extern "C" fn polyplug_host_alloc(size: usize, align: usize) -> *mut u8 {
-    if size == 0 {
-        return core::ptr::null_mut();
-    }
-    let layout: Layout = match Layout::from_size_align(size, align) {
-        Ok(l) => l,
-        Err(_) => return core::ptr::null_mut(),
-    };
-    // SAFETY: layout is non-zero size and power-of-two alignment, validated above.
-    // Caller is generated code that always passes correct alignment for the type.
-    // System allocator is thread-safe on all supported platforms.
-    unsafe { System.alloc(layout) }
-}
-
-/// Free memory previously allocated by `polyplug_host_alloc`.
-///
-/// Passing null or size=0 is a safe no-op.
-///
-/// # Safety
-/// Callers must:
-/// - Pass a pointer returned by `polyplug_host_alloc`.
-/// - Pass the SAME `size` and `align` used in the original allocation.
-/// - Not use the pointer after this call.
-/// - Not call this twice with the same pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_host_free(ptr: *mut u8, size: usize, align: usize) {
-    if ptr.is_null() || size == 0 {
-        return;
-    }
-    let layout: Layout = match Layout::from_size_align(size, align) {
-        Ok(l) => l,
-        Err(_) => {
-            // Invalid layout — cannot safely free. Intentional leak to avoid UB.
-            return;
-        }
-    };
-    // SAFETY: ptr was allocated by polyplug_host_alloc with this exact layout.
-    // The caller guarantees size and align match the original allocation.
-    // System allocator is thread-safe on all supported platforms.
-    unsafe { System.dealloc(ptr, layout) }
-}
-

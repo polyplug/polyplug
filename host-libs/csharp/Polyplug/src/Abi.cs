@@ -6,9 +6,10 @@ namespace Polyplug;
 [StructLayout(LayoutKind.Sequential)]
 public struct StringView
 {
-    public nint Ptr;   // 8 bytes — ABI-identical to byte*
-    public ulong Len;   // 8 bytes
     public static readonly StringView Empty = default;
+
+    public nint Ptr;    // 8 bytes — ABI-identical to byte*
+    public ulong Len;   // 8 bytes
 
     public readonly bool IsEmpty()
     {
@@ -113,8 +114,11 @@ public struct PluginDescriptor
 [StructLayout(LayoutKind.Sequential)]
 public struct PluginRegistrar
 {
+    [MarshalAs(UnmanagedType.FunctionPtr)]
     public nint RegisterPluginPtr;  // delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>
-    public nint HostPtr;            // HostVTable*
+
+    [MarshalAs(UnmanagedType.LPStruct)]
+    public HostVTable HostPtr;            // HostVTable*
 }
 
 public static class AbiConstants
@@ -123,4 +127,35 @@ public static class AbiConstants
     public const uint ABI_ERROR_GENERIC = 1;
     public const uint ABI_BUFFER_TOO_SMALL = 2;
     public const uint ABI_ERROR_PANIC = 3;
+}
+
+public static class ContractId
+{
+    private const ulong FNV_OFFSET = 0xcbf29ce484222325UL;
+    private const ulong FNV_PRIME = 0x00000100000001B3UL;
+
+    public static ulong Compute(string name, uint majorVersion)
+    {
+        var s = $"{name}@{majorVersion}";
+        var bytes = System.Text.Encoding.UTF8.GetBytes(s);
+        ulong h = FNV_OFFSET;
+        foreach (var b in bytes)
+        {
+            h ^= b;
+            h = checked(h * FNV_PRIME);
+        }
+        return h;
+    }
+
+    public static ulong BundleId(string name)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(name);
+        ulong h = FNV_OFFSET;
+        foreach (var b in bytes)
+        {
+            h ^= b;
+            h = checked(h * FNV_PRIME);
+        }
+        return h;
+    }
 }

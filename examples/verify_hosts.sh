@@ -56,8 +56,8 @@ echo ""
 
 # Run JS/Deno host
 echo "=== JavaScript (Deno) Host ==="
-if command -v deno &> /dev/null && [ -f "hosts/js/host.ts" ]; then
-    if deno run --allow-read --allow-ffi --allow-env hosts/js/host.ts 2>&1; then
+if command -v deno &> /dev/null && [ -f "hosts/js/host.js" ]; then
+    if deno run --allow-read --allow-ffi --allow-env hosts/js/host.js 2>&1; then
         echo "✓ js host passed"
     else
         echo "✗ js host failed"
@@ -97,10 +97,74 @@ fi
 echo ""
 
 echo "=== Verification Summary ==="
-if [ $FAILED -eq 0 ]; then
-    echo "✓ All available hosts passed!"
+
+# Check for pipeline output from each host
+PIPELINE_OK=0
+
+if [ -f "$WORKSPACE_DIR/target/release/pipeline_host" ]; then
+    OUTPUT=$("$WORKSPACE_DIR/target/release/pipeline_host" 2>&1)
+    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+        echo "✓ rust host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ rust host: pipeline output missing"
+    fi
+fi
+
+if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
+    OUTPUT=$(PYTHONPATH="$WORKSPACE_DIR/host-libs/python" python3 hosts/python/host.py 2>&1)
+    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+        echo "✓ python host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ python host: pipeline output missing"
+    fi
+fi
+
+if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
+    OUTPUT=$(LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1)
+    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+        echo "✓ lua host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ lua host: pipeline output missing"
+    fi
+fi
+
+if command -v deno &> /dev/null && [ -f "hosts/js/host.js" ]; then
+    OUTPUT=$(deno run --allow-read --allow-ffi --allow-env hosts/js/host.js 2>&1)
+    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+        echo "✓ javascript host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ javascript host: pipeline output missing"
+    fi
+fi
+
+if command -v dotnet &> /dev/null && [ -f "hosts/csharp/Host.csproj" ]; then
+    OUTPUT=$(cd hosts/csharp && dotnet run 2>&1)
+    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+        echo "✓ csharp host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ csharp host: pipeline output missing"
+    fi
+fi
+
+if [ -f "hosts/cpp/host" ]; then
+    OUTPUT=$(LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/host 2>&1)
+    if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
+        echo "✓ cpp host: full pipeline executed"
+        PIPELINE_OK=$((PIPELINE_OK + 1))
+    else
+        echo "✗ cpp host: pipeline output missing"
+    fi
+fi
+
+if [ $FAILED -eq 0 ] && [ $PIPELINE_OK -gt 0 ]; then
+    echo "✓ All available hosts passed with full pipeline execution!"
     exit 0
 else
-    echo "✗ $FAILED host(s) failed"
+    echo "✗ $FAILED host(s) failed, $PIPELINE_OK executed full pipeline"
     exit 1
 fi

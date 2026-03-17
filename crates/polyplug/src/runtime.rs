@@ -22,8 +22,8 @@ use polyplug_abi::HostVTable;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::polyplug_host_alloc;
-use polyplug_abi::polyplug_host_free;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use crate::error::GraphError;
 use crate::error::LoaderError;
 use crate::error::PolyplugError;
@@ -245,7 +245,6 @@ impl RuntimeBuilder {
         // Build the static HostVTable. This must be 'static.
         let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
             alloc: polyplug_host_alloc,
-            // SAFETY: polyplug_host_free is unsafe extern C — we store its pointer for the vtable.
             free: polyplug_host_free,
             find_by_contract: host_find_by_contract,
             find_by_bundle: host_find_by_bundle,

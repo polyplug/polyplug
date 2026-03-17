@@ -9,7 +9,7 @@ internal static partial class NativeMethods
     internal const string NativeLoaderPythonLib = "polyplug_python";
     internal const string NativeLoaderLuaLib = "polyplug_lua";
     internal const string NativeLoaderJsLib = "polyplug_js";
-    
+
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial nint PolyplugRuntimeCreate();
@@ -67,6 +67,10 @@ internal static partial class NativeMethods
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_loader")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial uint PolyplugRuntimeRegisterLoader(nint rt, nint loaderPtr);
+
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_host_free")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial void PolyplugHostFree(nint ptr, nuint len, nuint align);
 
     [LibraryImport(NativeLoaderNativeLib, EntryPoint = "polyplug_native_loader_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

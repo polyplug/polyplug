@@ -8,6 +8,8 @@ use libloading::os::unix::Library as UnixLibrary;
 use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
+
+use polyplug::registry::Registry;
 use polyplug_abi::ABI_ERROR_PANIC;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
@@ -19,9 +21,9 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::polyplug_host_free;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
-use polyplug::registry::Registry;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 
@@ -353,8 +355,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // Build a HostVTable that routes find_by_contract and resolve_plugin through the
     // thread-local ERROR_REGISTRY that contains error_plugin's vtable.
     let chain_host_vtable: HostVTable = HostVTable {
-        alloc: polyplug_abi::polyplug_host_alloc,
-        // SAFETY: polyplug_host_free is a valid extern "C" fn pointer.
+        alloc: polyplug_host_alloc,
         free: polyplug_host_free,
         find_by_contract: chain_find_by_contract,
         find_by_bundle: chain_find_by_bundle,

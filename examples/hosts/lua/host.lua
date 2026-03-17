@@ -52,5 +52,46 @@ for _, bundle in ipairs(bundles) do
 end
 
 print('\n=== Pipeline Host (Lua) ===\n')
-print('Lua host loaded all plugins successfully!')
+
+local input_str = 'name,value,42'
+print('Input: "' .. input_str .. '"\n')
+
+for _, bundle in ipairs(bundles) do
+    local bundle_name = bundle.manifest.bundle_name or 'unknown'
+    local bid = polyplug.bundle_id(bundle_name)
+    local provides = bundle.manifest.provides or {}
+    
+    for _, contract in ipairs(provides) do
+        local contract_name, version_str = contract:match('([^@]+)@(.+)')
+        if contract_name then
+            local major = tonumber(version_str:match('^(%d+)')) or 1
+            local cid = polyplug.contract_id(contract_name, major)
+            local handle = rt:find_by_bundle(bid, cid, 0)
+            
+            if handle ~= polyplug.NULL_HANDLE then
+                if contract_name == 'pipeline.Decoder' then
+                    local result = polyplug.call_plugin_fn(rt._ptr, handle, 0, input_str)
+                    print('[' .. bundle_name .. '] decode("' .. input_str .. '") = "' .. result .. '"')
+                elseif contract_name == 'data.Transformer' then
+                    local decoded = 'DECODED:' .. input_str:gsub(',', '|')
+                    local result = polyplug.call_plugin_fn(rt._ptr, handle, 0, decoded)
+                    print('[' .. bundle_name .. '] transform("' .. decoded .. '") = "' .. result .. '"')
+                elseif contract_name == 'pipeline.Encoder' then
+                    local transformed = 'TRANSFORMED:NAME|value (transformed)|43'
+                    local result = polyplug.call_plugin_fn(rt._ptr, handle, 0, transformed)
+                    print('[' .. bundle_name .. '] encode("' .. transformed .. '") = "' .. result .. '"')
+                elseif contract_name == 'data.Reporter' then
+                    local transformed = 'TRANSFORMED:NAME|value (transformed)|43'
+                    local result = polyplug.call_plugin_fn(rt._ptr, handle, 0, transformed)
+                    print('[' .. bundle_name .. '] report("' .. transformed .. '") = "' .. result .. '"')
+                elseif contract_name == 'pipeline.Validator' then
+                    local decoded = 'DECODED:' .. input_str:gsub(',', '|')
+                    local result = polyplug.call_plugin_fn(rt._ptr, handle, 0, decoded)
+                    print('[' .. bundle_name .. '] validate("' .. decoded .. '") = "' .. result .. '"')
+                end
+            end
+        end
+    end
+end
+
 print('\ndone.')
