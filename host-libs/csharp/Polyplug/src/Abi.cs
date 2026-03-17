@@ -11,6 +11,12 @@ public struct StringView
     public nint Ptr;    // 8 bytes — ABI-identical to byte*
     public ulong Len;   // 8 bytes
 
+    public StringView(nint ptr, ulong len)
+    {
+        Ptr = ptr;
+        Len = len;
+    }
+
     public readonly bool IsEmpty()
     {
         return Len == 0;

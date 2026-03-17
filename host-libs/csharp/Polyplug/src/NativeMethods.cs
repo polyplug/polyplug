@@ -3,12 +3,11 @@ using System.Runtime.InteropServices;
 
 internal static partial class NativeMethods
 {
-    internal const string NativeLib = "polyplug";
-    internal const string NativeLoaderNativeLib = "polyplug_native";
-    internal const string NativeLoaderDotnetLib = "polyplug_dotnet";
-    internal const string NativeLoaderPythonLib = "polyplug_python";
-    internal const string NativeLoaderLuaLib = "polyplug_lua";
-    internal const string NativeLoaderJsLib = "polyplug_js";
+    private const string NativeLib = "polyplug";
+    private const string NativeLoaderNativeLib = "polyplug_native";
+    private const string NativeLoaderPythonLib = "polyplug_python";
+    private const string NativeLoaderLuaLib = "polyplug_lua";
+    private const string NativeLoaderJsLib = "polyplug_js";
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
@@ -72,13 +71,15 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void PolyplugHostFree(nint ptr, nuint len, nuint align);
 
+
+
+
+
+
+
     [LibraryImport(NativeLoaderNativeLib, EntryPoint = "polyplug_native_loader_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial nint PolyplugNativeLoaderCreate(nint cfgPtr);
-
-    [LibraryImport(NativeLoaderDotnetLib, EntryPoint = "polyplug_dotnet_loader_create")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nint PolyplugDotnetLoaderCreate(nint cfgPtr);
 
     [LibraryImport(NativeLoaderPythonLib, EntryPoint = "polyplug_python_loader_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

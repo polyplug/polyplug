@@ -34,6 +34,13 @@ public sealed class Runtime
         throw new ObjectDisposedException(nameof(Runtime));
     }
 
+    public uint RegisterLoader(nint loaderPtr)
+    {
+        EnsureHandle();
+
+        return NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
+    }
+
     public void LoadBundle(string path)
     {
         EnsureHandle();
@@ -163,6 +170,7 @@ public sealed class Runtime
         {
             message = fallbackMessage;
         }
+
         throw new InvalidOperationException(message);
     }
 
@@ -205,10 +213,12 @@ public sealed class Runtime
 
     internal static void ReleaseGuard(nint guard)
     {
-        if (guard != nint.Zero)
+        if (guard == nint.Zero)
         {
-            NativeMethods.PolyplugRuntimePluginRelease(guard);
+            return;
         }
+
+        NativeMethods.PolyplugRuntimePluginRelease(guard);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -228,44 +238,6 @@ public sealed class Runtime
     private struct NativeLoaderConfig
     {
         public byte Reserved;
-    }
-
-    public void RegisterDotnetLoader(string minFramework = "10.0")
-    {
-        EnsureHandle();
-        byte[] bytes = Encoding.UTF8.GetBytes(minFramework);
-        GCHandle stringHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
-        try
-        {
-            DotnetLoaderConfig cfg = new DotnetLoaderConfig
-            {
-                MinFrameworkPtr = stringHandle.AddrOfPinnedObject(),
-                MinFrameworkLen = (nuint)bytes.Length,
-            };
-            nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<DotnetLoaderConfig>());
-            try
-            {
-                Marshal.StructureToPtr(cfg, cfgPtr, false);
-                nint loaderPtr = NativeMethods.PolyplugDotnetLoaderCreate(cfgPtr);
-                if (loaderPtr == nint.Zero)
-                {
-                    throw new InvalidOperationException("polyplug: dotnet loader create failed");
-                }
-                uint err = NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
-                if (err != 0u)
-                {
-                    ThrowLastError($"polyplug: dotnet loader register failed: {err}");
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(cfgPtr);
-            }
-        }
-        finally
-        {
-            stringHandle.Free();
-        }
     }
 
     public void RegisterPythonLoader(string minVersion = "3.11")
