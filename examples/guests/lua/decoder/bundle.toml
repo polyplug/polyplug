@@ -8,4 +8,4 @@ file = "decoder.lua"
 [[plugin]]
 name = "decoder"
 version = "1.0.0"
-contracts = ["pipeline.Decoder@1.0"]
+implements = ["pipeline.Decoder@1.0"]

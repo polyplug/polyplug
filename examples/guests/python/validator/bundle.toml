@@ -8,4 +8,4 @@ file = "validator.py"
 [[plugin]]
 name = "validator"
 version = "1.0.0"
-contracts = ["pipeline.Validator@1.0"]
+implements = ["pipeline.Validator@1.0"]

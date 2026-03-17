@@ -85,7 +85,7 @@ echo ""
 # Run C++ host
 echo "=== C++ Host ==="
 if [ -f "hosts/cpp/host" ]; then
-    if ./hosts/cpp/host 2>&1; then
+    if LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps" hosts/cpp/host 2>&1; then
         echo "✓ cpp host passed"
     else
         echo "✗ cpp host failed"

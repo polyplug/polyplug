@@ -10,4 +10,4 @@ linux.x86_64 = "libencoder.so"
 [[plugin]]
 name = "encoder"
 version = "1.0.0"
-contracts = ["pipeline.Encoder@1.0"]
+implements = ["pipeline.Encoder@1.0"]

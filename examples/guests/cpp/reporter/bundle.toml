@@ -10,4 +10,4 @@ linux.x86_64 = "libreporter.so"
 [[plugin]]
 name = "reporter"
 version = "1.0.0"
-contracts = ["data.Reporter@1.0"]
+implements = ["data.Reporter@1.0"]

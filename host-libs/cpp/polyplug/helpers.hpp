@@ -1,3 +1,4 @@
+#include <cstring>
 
 // Host-side helpers
 namespace host {

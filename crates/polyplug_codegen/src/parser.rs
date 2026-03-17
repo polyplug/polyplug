@@ -138,8 +138,8 @@ impl Default for RawBundleFile {
 pub(crate) struct RawPlugin {
     pub name: String,
     pub version: String,
-    /// Legacy field name — maps to `contracts` for backward compatibility
-    #[serde(default, alias = "contracts")]
+
+    #[serde(default)]
     pub implements: Vec<String>,
     #[serde(default)]
     pub optional: Vec<String>,
