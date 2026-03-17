@@ -1546,6 +1546,7 @@ version = "0.1.0"
 dependencies = [
  "libloading 0.9.0",
  "polyplug",
+ "polyplug_abi",
  "polyplug_dotnet",
  "polyplug_js",
  "polyplug_js_deno",

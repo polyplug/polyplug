@@ -9,7 +9,7 @@
 //!
 //! ```rust,ignore
 //! // In Cargo.toml: crate-type = ["cdylib"]
-//! use polyplug_guest::*;
+//! use polyplug_abi::*;
 //!
 //! // 1. Compute the contract ID at compile time (FNV-1a of "my.contract@1")
 //! const MY_CONTRACT_ID: u64 = /* polyplugc generates this */;
@@ -140,7 +140,7 @@ pub use polyplug_abi::PluginRegistrar;
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::contract_id;
+/// use polyplug_abi::contract_id;
 /// assert_eq!(contract_id("test.add", 1), 0xCC4232FAB0410D2B);
 /// ```
 pub use polyplug_abi::contract_id;
@@ -222,7 +222,7 @@ impl core::error::Error for PluginError {}
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{StringView, to_str};
+/// use polyplug_abi::{StringView, to_str};
 ///
 /// let sv = StringView { ptr: b"hello".as_ptr(), len: 5 };
 /// let s: &str = to_str(sv);
@@ -245,15 +245,15 @@ pub fn to_str(sv: StringView) -> &'static str {
 ///
 /// # Example
 /// ```rust
-/// use polyplug_guest::{alloc_string, StringView};
+/// use polyplug_abi::{alloc_string, StringView};
 ///
 /// let sv: StringView = alloc_string("hello").unwrap();
 /// // sv.ptr points to host-allocated memory
 /// // Host must call polyplug_host_free(sv.ptr, sv.len, 1) when done
 /// ```
 pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
-    let bytes = s.as_bytes();
-    let ptr = unsafe { polyplug_host_alloc(bytes.len(), 1) };
+    let bytes: &[u8] = s.as_bytes();
+    let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
     if ptr.is_null() {
         return Err(PluginError {
             code: ABI_ERROR_GENERIC,
