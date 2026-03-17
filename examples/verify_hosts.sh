@@ -5,24 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-export POLYPLUG_PLUGIN_PATH="$SCRIPT_DIR/plugins"
-
-# Set library paths for loader .so files
-DEPS_DIR="$WORKSPACE_DIR/target/release/deps"
-if [ ! -d "$DEPS_DIR" ]; then
-    DEPS_DIR="$WORKSPACE_DIR/target/debug/deps"
-fi
-
-export LD_LIBRARY_PATH="$DEPS_DIR:${LD_LIBRARY_PATH:-}"
-export DYLD_LIBRARY_PATH="$DEPS_DIR:${DYLD_LIBRARY_PATH:-}"
-
-# Set POLYPLUG_LIB_PATH for main runtime
-if [ -f "$DEPS_DIR/libpolyplug.so" ]; then
-    export POLYPLUG_LIB_PATH="$DEPS_DIR/libpolyplug.so"
-fi
+export POLYPLUG_PLUGIN_PATH="$WORKSPACE_DIR/examples/plugins"
+export LD_LIBRARY_PATH="$WORKSPACE_DIR/target/release/deps:${LD_LIBRARY_PATH:-}"
+export POLYPLUG_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug.so"
+export POLYPLUG_NATIVE_LIB_PATH="$WORKSPACE_DIR/target/release/deps/libpolyplug_native.so"
 
 echo "=== polyplug Examples Verification ==="
-echo "Library path: $DEPS_DIR"
+echo "Library path: $WORKSPACE_DIR/target/release/deps"
 echo ""
 
 FAILED=0
@@ -47,42 +36,56 @@ if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
         FAILED=$((FAILED + 1))
     fi
 else
-    echo "⊘ python host skipped (python3 not available or host.py not found)"
+    echo "⊘ python host skipped"
 fi
 echo ""
 
 # Run Lua host
 echo "=== Lua Host ==="
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    if LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;$WORKSPACE_DIR/host-libs/lua/?/init.lua;;" luajit hosts/lua/host.lua 2>&1; then
+    if LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1; then
         echo "✓ lua host passed"
     else
         echo "✗ lua host failed"
         FAILED=$((FAILED + 1))
     fi
 else
-    echo "⊘ lua host skipped (luajit not available or host.lua not found)"
+    echo "⊘ lua host skipped"
 fi
 echo ""
 
 # Run JS/Deno host
 echo "=== JavaScript (Deno) Host ==="
 if command -v deno &> /dev/null && [ -f "hosts/js/host.ts" ]; then
-    if deno run --allow-read --allow-ffi --allow-env --allow-ffi="$DEPS_DIR/*" hosts/js/host.ts 2>&1; then
+    if deno run --allow-read --allow-ffi --allow-env hosts/js/host.ts 2>&1; then
         echo "✓ js host passed"
     else
         echo "✗ js host failed"
         FAILED=$((FAILED + 1))
     fi
 else
-    echo "⊘ js host skipped (deno not available or host.ts not found)"
+    echo "⊘ js host skipped"
+fi
+echo ""
+
+# Run C# host
+echo "=== C# Host ==="
+if command -v dotnet &> /dev/null && [ -f "hosts/csharp/Host.csproj" ]; then
+    if (cd hosts/csharp && dotnet run 2>&1); then
+        echo "✓ csharp host passed"
+    else
+        echo "✗ csharp host failed"
+        FAILED=$((FAILED + 1))
+    fi
+else
+    echo "⊘ csharp host skipped"
 fi
 echo ""
 
 # Run C++ host
 echo "=== C++ Host ==="
 if [ -f "hosts/cpp/host" ]; then
-    if LD_LIBRARY_PATH="$DEPS_DIR:$LD_LIBRARY_PATH" ./hosts/cpp/host 2>&1; then
+    if ./hosts/cpp/host 2>&1; then
         echo "✓ cpp host passed"
     else
         echo "✗ cpp host failed"
@@ -90,20 +93,6 @@ if [ -f "hosts/cpp/host" ]; then
     fi
 else
     echo "⊘ cpp host skipped (not built)"
-fi
-echo ""
-
-# Run C# host
-echo "=== C# Host ==="
-if command -v dotnet &> /dev/null && [ -f "hosts/csharp/Host.csproj" ]; then
-    if (cd hosts/csharp && LD_LIBRARY_PATH="$DEPS_DIR:$LD_LIBRARY_PATH" dotnet run 2>&1); then
-        echo "✓ csharp host passed"
-    else
-        echo "✗ csharp host failed"
-        FAILED=$((FAILED + 1))
-    fi
-else
-    echo "⊘ csharp host skipped (dotnet not available or project not found)"
 fi
 echo ""
 

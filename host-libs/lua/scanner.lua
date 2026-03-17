@@ -1,6 +1,5 @@
 -- Scanner module for discovering polyplug plugin bundles
 
-local ffi = require('ffi')
 local M = {}
 
 local function parse_toml(content)
@@ -47,7 +46,7 @@ end
 function M.scan_dir(dir_path)
     local bundles = {}
     
-    local dir = io.popen('find "' .. dir_path .. '" -maxdepth 1 -type d -mindepth 1')
+    local dir = io.popen('find "' .. dir_path .. '" -maxdepth 1 -type d -mindepth 1 2>/dev/null')
     for subdir in dir:lines() do
         local manifest_path = subdir .. '/manifest.toml'
         local file = io.open(manifest_path, 'r')

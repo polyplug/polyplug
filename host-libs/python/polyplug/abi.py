@@ -80,3 +80,22 @@ class PluginHandle(ctypes.Structure):
 
 # Sentinel value for invalid handles
 NULL_HANDLE: int = (1 << 64) - 1
+
+
+def contract_id(name: str, major: int) -> int:
+    """Compute FNV-1a 64-bit hash of 'name@major'."""
+    s = f"{name}@{major}"
+    h = 0xcbf29ce484222325
+    for b in s.encode('utf-8'):
+        h ^= b
+        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+def bundle_id(name: str) -> int:
+    """Compute FNV-1a 64-bit hash of bundle name."""
+    h = 0xcbf29ce484222325
+    for b in name.encode('utf-8'):
+        h ^= b
+        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return h
