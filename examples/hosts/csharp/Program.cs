@@ -3,9 +3,9 @@ using System.IO;
 using System.Linq;
 using Polyplug;
 
-private class Program
+class Program
 {
-    private static int Main(string[] args)
+    static int Main(string[] args)
     {
         try
         {
@@ -19,19 +19,18 @@ private class Program
         }
     }
 
-    private static void Run()
+    static void Run()
     {
         var pluginPath = Environment.GetEnvironmentVariable("POLYPLUG_PLUGIN_PATH");
         
-        // Try to find plugins relative to workspace
         if (string.IsNullOrEmpty(pluginPath))
         {
             var dir = Directory.GetCurrentDirectory();
-            // Try various paths
             var candidates = new[] {
                 Path.Combine(dir, "examples", "plugins"),
                 Path.Combine(dir, "..", "..", "..", "examples", "plugins"),
                 Path.Combine(dir, "..", "..", "plugins"),
+                "/mnt/data/Projects/Utils/polyplug/examples/plugins"
             };
             
             foreach (var candidate in candidates)
@@ -51,11 +50,10 @@ private class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
-        var rt = Runtime.Builder()
+        var rt = new RuntimeBuilder()
             .PluginDir(pluginPath)
-            .Init();
+            .Build();
 
-        // Scan for manifest.toml files
         var bundles = Directory.GetDirectories(pluginPath)
             .Where(dir => File.Exists(Path.Combine(dir, "manifest.toml")))
             .ToList();
