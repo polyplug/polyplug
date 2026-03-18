@@ -1,5 +1,5 @@
 #pragma once
-#include "../runtime.hpp"
+#include "../../polyplug/runtime.hpp"
 extern "C" {
     struct PolyplugJsDenoConfig { uint8_t _reserved; };
     void* polyplug_js_deno_loader_create(const PolyplugJsDenoConfig* cfg);

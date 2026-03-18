@@ -1,0 +1,538 @@
+# polyplug C++ Host Library
+
+Header-only C++17 binding for the polyplug plugin runtime. Provides RAII wrappers, type-safe plugin resolution, and loader registration for multiple language runtimes.
+
+## Prerequisites
+
+- **C++17** or later — required for `std::string_view` and move semantics
+- **libpolyplug.so** — the core polyplug shared library (compiled separately)
+- A C++ compiler with C++17 support (GCC 8+, Clang 7+, MSVC 2019+)
+
+## Quick Start
+
+```cpp
+#include <polyplug.hpp>
+#include <polyplug/runtime.hpp>
+
+int main() {
+    // 1. Create a runtime using the fluent builder
+    auto rt = polyplug::Runtime::builder()
+        .plugin_dir("/path/to/plugins")
+        .build();
+
+    // 2. Load a plugin bundle
+    rt.load_bundle("/path/to/my_plugin_bundle");
+
+    // 3. Find a plugin by contract ID
+    constexpr uint64_t CONTRACT_ID = 0xCC4232FAB0410D2BULL;
+    uint64_t handle = rt.find(CONTRACT_ID, 1);  // min_version = 1
+
+    if (handle == UINT64_MAX) {
+        // Plugin not found — handle error
+        return 1;
+    }
+
+    // 4. Resolve to a PluginGuard with cached vtable
+    polyplug::PluginGuard guard = rt.resolve_plugin(handle);
+    if (!guard) {
+        // Resolution failed
+        return 1;
+    }
+
+    // 5. Get the cached vtable and call plugin functions
+    const auto* vtable = guard.vtable();
+    // Cast to your contract-specific vtable type and dispatch
+}
+```
+
+## Runtime API
+
+### Builder Pattern
+
+The `Runtime` class uses a fluent builder for construction:
+
+```cpp
+auto rt = polyplug::Runtime::builder()
+    .plugin_dir("/path/to/plugins")      // Optional: set plugin search directory
+    .compatibility(0)                    // Optional: compatibility mode flags
+    .build();                            // Throws std::runtime_error on failure
+```
+
+**Methods:**
+
+- `plugin_dir(std::string_view path)` — Add a directory to the plugin search path (call multiple times for multiple directories)
+- `compatibility(uint32_t mode)` — Set compatibility mode flags (default: 0)
+- `build()` — Construct the Runtime instance (throws on failure)
+
+### Core Runtime Methods
+
+```cpp
+class Runtime {
+public:
+    // Find a plugin by contract ID and minimum version
+    // Returns UINT64_MAX if not found
+    uint64_t find(uint64_t contract_id, uint32_t min_version) const noexcept;
+
+    // Resolve a packed handle to a PluginGuard with cached vtable
+    PluginGuard resolve_plugin(uint64_t packed_handle) const noexcept;
+
+    // Load a plugin bundle from disk
+    // Throws std::runtime_error on failure
+    void load_bundle(std::string_view path);
+
+    // Get the underlying runtime handle (for FFI)
+    RuntimeHandle handle() const noexcept;
+};
+```
+
+## PluginGuard API
+
+The `PluginGuard` class provides RAII management of resolved plugins with **zero-overhead vtable access** via caching.
+
+### Key Features
+
+- **Vtable caching** — The vtable pointer is cached at construction time (no FFI call on access)
+- **RAII cleanup** — Plugin is automatically released when the guard goes out of scope
+- **Move-only** — Guards can be moved but not copied (prevents double-free)
+- **Null safety** — Failed resolution creates a null guard (no exceptions)
+
+### Usage Pattern
+
+```cpp
+// Resolve plugin and get cached vtable
+polyplug::PluginGuard guard = rt.resolve_plugin(handle);
+
+// Check if resolution succeeded
+if (!guard) {
+    // Handle null guard (resolution failed)
+    return;
+}
+
+// Get cached vtable — zero FFI overhead
+const auto* vtable = guard.vtable();
+
+// Cast to your contract-specific type
+struct MyContractVTable {
+    int32_t (*add)(int32_t a, int32_t b);
+    void (*destroy)();
+};
+
+const auto* contract = static_cast<const MyContractVTable*>(vtable);
+
+// Call plugin functions
+int32_t result = contract->add(1, 2);
+```
+
+### PluginGuard Methods
+
+```cpp
+class PluginGuard {
+public:
+    PluginGuard() noexcept;                              // Null guard
+    PluginGuard(RuntimeHandle, uint64_t) noexcept;       // Resolve and cache
+    ~PluginGuard() noexcept;                             // RAII release
+
+    const PluginVTable* vtable() const noexcept;         // Cached vtable (no FFI)
+    bool is_null() const noexcept;                       // Check if null
+    explicit operator bool() const noexcept;             // Boolean conversion
+
+    // Move-only
+    PluginGuard(PluginGuard&&) noexcept;
+    PluginGuard& operator=(PluginGuard&&) noexcept;
+
+    // Copy disabled
+    PluginGuard(const PluginGuard&) = delete;
+    PluginGuard& operator=(const PluginGuard&) = delete;
+};
+```
+
+### Performance: Hot Path Dispatch
+
+The PluginGuard is designed for **zero-overhead dispatch** in hot paths:
+
+```cpp
+// Construction: One guard load, one pointer dereference, one indirect call
+auto guard = rt.resolve_plugin(handle);  // FFI call happens here
+const auto* vtable = guard.vtable();     // NO FFI — returns cached pointer
+
+// Hot path: Direct vtable dispatch (no FFI overhead)
+while (running) {
+    result = vtable->process(data);  // Pure indirect call — no runtime overhead
+}
+```
+
+**Why this matters:** The vtable pointer is fetched once during guard construction. Every subsequent `vtable()` call is a simple pointer return — no FFI, no locking, no overhead.
+
+## Loader Package Structure
+
+Polyplug supports loading plugins from multiple language runtimes. **Each loader is a separate package** under the `loaders/` directory:
+
+```
+host-libs/cpp/
+├── polyplug.hpp              # Main include (includes all headers)
+├── polyplug/
+│   ├── runtime.hpp           # Runtime and PluginGuard API
+│   ├── abi.hpp               # ABI definitions
+│   ├── error.hpp             # Error handling
+│   └── handle.hpp            # Handle types
+└── loaders/
+    ├── native/               # Native C/C++ loader
+    │   ├── CMakeLists.txt
+    │   └── polyplug_loaders_native.hpp
+    ├── python/               # Python loader
+    │   ├── CMakeLists.txt
+    │   └── polyplug_loaders_python.hpp
+    ├── lua/                  # LuaJIT loader
+    │   ├── CMakeLists.txt
+    │   └── polyplug_loaders_lua.hpp
+    ├── js/                   # QuickJS loader
+    │   ├── CMakeLists.txt
+    │   └── polyplug_loaders_js.hpp
+    ├── js_deno/              # Deno loader
+    │   ├── CMakeLists.txt
+    │   └── polyplug_loaders_js_deno.hpp
+    └── dotnet/               # .NET loader
+        ├── CMakeLists.txt
+        └── polyplug_loaders_dotnet.hpp
+```
+
+### Loader Registration Pattern
+
+Each loader provides a `register_*` function in the `polyplug::loaders` namespace:
+
+```cpp
+#include <polyplug/loaders/native/polyplug_loaders_native.hpp>
+#include <polyplug/loaders/python/polyplug_loaders_python.hpp>
+
+// Register native C/C++ loader
+polyplug::loaders::register_native(rt);
+
+// Register Python loader with minimum version requirement
+polyplug::loaders::register_python(rt, "3.11");
+
+// Register LuaJIT loader
+polyplug::loaders::register_lua(rt);
+
+// Register QuickJS loader
+polyplug::loaders::register_js(rt);
+
+// Register Deno loader
+polyplug::loaders::register_js_deno(rt);
+
+// Register .NET loader with minimum framework version
+polyplug::loaders::register_dotnet(rt, "10.0");
+```
+
+### Installation Instructions
+
+Each loader is a separate CMake package. Add to your `CMakeLists.txt`:
+
+```cmake
+# Find the core polyplug library
+find_package(polyplug REQUIRED)
+
+# Find and link specific loaders
+find_package(polyplug_loaders_native REQUIRED)
+find_package(polyplug_loaders_python REQUIRED)
+
+target_link_libraries(your_app
+    PRIVATE
+        polyplug::polyplug
+        polyplug::loaders_native
+        polyplug::loaders_python
+)
+```
+
+**Include paths:**
+
+```cpp
+// Core runtime
+#include <polyplug/runtime.hpp>
+
+// Individual loaders (separate packages)
+#include <loaders/native/polyplug_loaders_native.hpp>
+#include <loaders/python/polyplug_loaders_python.hpp>
+#include <loaders/lua/polyplug_loaders_lua.hpp>
+#include <loaders/js/polyplug_loaders_js.hpp>
+#include <loaders/js_deno/polyplug_loaders_js_deno.hpp>
+#include <loaders/dotnet/polyplug_loaders_dotnet.hpp>
+```
+
+### Loader-Specific Configuration
+
+Some loaders accept configuration parameters:
+
+**Python loader:**
+```cpp
+// Require Python 3.11 or later
+polyplug::loaders::register_python(rt, "3.11");
+```
+
+**.NET loader:**
+```cpp
+// Require .NET 10.0 or later
+polyplug::loaders::register_dotnet(rt, "10.0");
+```
+
+**Native, Lua, JS, Deno loaders:**
+```cpp
+// No configuration required
+polyplug::loaders::register_native(rt);
+polyplug::loaders::register_lua(rt);
+polyplug::loaders::register_js(rt);
+polyplug::loaders::register_js_deno(rt);
+```
+
+## Error Handling
+
+### Exception-Based Errors
+
+Runtime construction and bundle loading throw `std::runtime_error` on failure:
+
+```cpp
+try {
+    auto rt = polyplug::Runtime::builder().build();
+    rt.load_bundle("/path/to/bundle");
+} catch (const std::runtime_error& e) {
+    // Handle error: e.what() contains the error message
+    std::cerr << "Runtime error: " << e.what() << std::endl;
+}
+```
+
+### Loader Registration Errors
+
+Loader registration functions throw `std::runtime_error` if creation or registration fails:
+
+```cpp
+try {
+    polyplug::loaders::register_python(rt, "3.11");
+} catch (const std::runtime_error& e) {
+    // Handle error: loader creation or registration failed
+    std::cerr << "Loader error: " << e.what() << std::endl;
+}
+```
+
+### Null Guard Pattern
+
+Plugin resolution does **not** throw exceptions. Failed resolution returns a null guard:
+
+```cpp
+// Check for null guard using boolean conversion
+polyplug::PluginGuard guard = rt.resolve_plugin(handle);
+if (!guard) {
+    // Resolution failed — handle gracefully
+    return;
+}
+
+// Or use explicit check
+if (guard.is_null()) {
+    // Resolution failed
+    return;
+}
+```
+
+### Handle Sentinel
+
+The `find()` method returns `UINT64_MAX` as a sentinel for "not found":
+
+```cpp
+uint64_t handle = rt.find(CONTRACT_ID, 1);
+if (handle == UINT64_MAX) {
+    // Plugin not found — handle error
+    return;
+}
+```
+
+## Memory Management
+
+### RAII Guarantees
+
+All polyplug C++ types use RAII for automatic cleanup:
+
+- **Runtime** — Destroyed automatically when it goes out of scope
+- **PluginGuard** — Releases the plugin when destroyed (moved-from guards are safe)
+- **No manual cleanup required** — Destructors handle all resource release
+
+```cpp
+void use_plugin() {
+    auto rt = polyplug::Runtime::builder().build();
+    rt.load_bundle("/path/to/bundle");
+
+    auto guard = rt.resolve_plugin(handle);
+    const auto* vtable = guard.vtable();
+
+    // Use plugin...
+
+    // Automatic cleanup:
+    // 1. guard destructor releases the plugin
+    // 2. rt destructor destroys the runtime
+    // No manual cleanup needed!
+}
+```
+
+### Move Semantics
+
+Runtime and PluginGuard support move semantics for efficient transfer:
+
+```cpp
+// Move Runtime
+auto rt1 = polyplug::Runtime::builder().build();
+auto rt2 = std::move(rt1);  // rt1 is now null, rt2 owns the runtime
+
+// Move PluginGuard
+auto guard1 = rt.resolve_plugin(handle);
+auto guard2 = std::move(guard1);  // guard1 is now null, guard2 owns the plugin
+```
+
+**Important:** After a move, the source object is null. Do not use it:
+
+```cpp
+auto guard1 = rt.resolve_plugin(handle);
+auto guard2 = std::move(guard1);
+
+if (!guard1) {
+    // guard1 is null after move — expected!
+}
+if (guard2) {
+    // guard2 now owns the plugin
+}
+```
+
+## Complete Example
+
+```cpp
+#include <polyplug.hpp>
+#include <polyplug/runtime.hpp>
+#include <loaders/native/polyplug_loaders_native.hpp>
+#include <loaders/python/polyplug_loaders_python.hpp>
+#include <iostream>
+
+// Define your contract vtable structure
+struct MathContractVTable {
+    int32_t (*add)(int32_t a, int32_t b);
+    int32_t (*multiply)(int32_t a, int32_t b);
+    void (*destroy)();
+};
+
+int main() {
+    try {
+        // 1. Create runtime with plugin directory
+        auto rt = polyplug::Runtime::builder()
+            .plugin_dir("/usr/local/lib/polyplug/plugins")
+            .build();
+
+        // 2. Register loaders for different language runtimes
+        polyplug::loaders::register_native(rt);
+        polyplug::loaders::register_python(rt, "3.11");
+
+        // 3. Load plugin bundles
+        rt.load_bundle("/path/to/math_plugin");
+        rt.load_bundle("/path/to/utils_plugin");
+
+        // 4. Find and resolve the math plugin
+        constexpr uint64_t MATH_CONTRACT = 0xCC4232FAB0410D2BULL;
+        uint64_t handle = rt.find(MATH_CONTRACT, 1);
+
+        if (handle == UINT64_MAX) {
+            std::cerr << "Math plugin not found" << std::endl;
+            return 1;
+        }
+
+        // 5. Resolve with cached vtable
+        polyplug::PluginGuard guard = rt.resolve_plugin(handle);
+        if (!guard) {
+            std::cerr << "Failed to resolve math plugin" << std::endl;
+            return 1;
+        }
+
+        // 6. Cast vtable to contract type
+        const auto* math = static_cast<const MathContractVTable*>(guard.vtable());
+
+        // 7. Call plugin functions (zero FFI overhead on vtable access)
+        int32_t sum = math->add(10, 20);
+        int32_t product = math->multiply(3, 7);
+
+        std::cout << "10 + 20 = " << sum << std::endl;
+        std::cout << "3 * 7 = " << product << std::endl;
+
+        // 8. Automatic cleanup via RAII
+        // guard releases plugin, rt destroys runtime
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+
+    return 0;
+}
+```
+
+## Build Integration
+
+### CMake Example
+
+```cmake
+cmake_minimum_required(VERSION 3.14)
+project(my_app LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find polyplug and loaders
+find_package(polyplug REQUIRED)
+find_package(polyplug_loaders_native REQUIRED)
+find_package(polyplug_loaders_python REQUIRED)
+
+# Create executable
+add_executable(my_app main.cpp)
+
+# Link libraries
+target_link_libraries(my_app
+    PRIVATE
+        polyplug::polyplug
+        polyplug::loaders_native
+        polyplug::loaders_python
+)
+
+# Include directories (if not provided by find_package)
+target_include_directories(my_app
+    PRIVATE
+        /path/to/polyplug/host-libs/cpp
+)
+```
+
+### Compiler Flags
+
+Minimum compiler requirements:
+
+- **GCC**: 8.0 or later
+- **Clang**: 7.0 or later
+- **MSVC**: 2019 (v16.0) or later
+
+Required flags:
+
+```bash
+# GCC/Clang
+-std=c++17
+
+# MSVC
+/std:c++17
+```
+
+## ABI Stability
+
+The polyplug ABI is **frozen at version 1**. All structures and function signatures in `abi.hpp` are stable and will not change between minor versions.
+
+**Important:** If you see this error:
+
+```cpp
+static_assert(POLYPLUG_ABI_VERSION == 1,
+    "polyplug header version mismatch — recompile against updated headers");
+```
+
+It means your headers are out of sync with the compiled `libpolyplug.so`. Rebuild both the library and your application against matching header versions.
+
+## Further Reading
+
+- `TRUST_MODEL.md` — Bundle identity, declared dependencies, and ABI freeze details
+- `host-libs/lua/README.md` — LuaJIT FFI binding documentation
+- `crates/polyplug/` — Rust runtime core implementation

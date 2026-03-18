@@ -900,18 +900,17 @@ fn generate_cpp_host_contract(
     ));
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
     out.push_str(&format!(
-        "    explicit {}(PluginHandle handle, const HostVTable* host) noexcept\n",
+        "    explicit {}(const PluginVTable* vtable) noexcept\n",
         class_name
     ));
-    out.push_str("        : handle_(handle), host_(host) {}\n\n");
+    out.push_str("        : vtable_(vtable) {}\n\n");
 
     for func in &contract.functions {
         generate_cpp_host_function(out, &class_name, func)?;
     }
 
     out.push_str("private:\n");
-    out.push_str("    PluginHandle handle_;\n");
-    out.push_str("    const HostVTable* host_;\n");
+    out.push_str("    const PluginVTable* vtable_;\n");
     out.push_str("};\n\n");
     Ok(())
 }
@@ -954,7 +953,6 @@ fn generate_cpp_host_function(
     );
 
     if is_void_return {
-        out.push_str("        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n");
         out.push_str(&format!(
             "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->functions[{}U]);\n",
             fn_id
@@ -964,7 +962,6 @@ fn generate_cpp_host_function(
     } else {
         out.push_str(&format!("        {} out{{}};\n", return_type));
         out.push_str("        void* out_ptr = &out;\n");
-        out.push_str("        const PolyplugVTable* vtable_ = (host_->resolve_plugin)(handle_);\n");
         out.push_str(&format!(
             "        if (!vtable_ || {}_u32 >= vtable_->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
             fn_id

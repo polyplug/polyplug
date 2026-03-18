@@ -1,5 +1,5 @@
 #pragma once
-#include "../runtime.hpp"
+#include "../../polyplug/runtime.hpp"
 extern "C" {
     struct PolyplugNativeConfig { uint8_t _reserved; };
     void* polyplug_native_loader_create(const PolyplugNativeConfig* cfg);

@@ -1,5 +1,5 @@
 #pragma once
-#include "../runtime.hpp"
+#include "../../polyplug/runtime.hpp"
 #include <string_view>
 extern "C" {
     struct PolyplugDotnetConfig { const uint8_t* min_framework_ptr; size_t min_framework_len; };
