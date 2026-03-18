@@ -29,17 +29,17 @@ const SYMBOLS = {
   polyplug_runtime_resolve_plugin: { parameters: ["pointer", "u64"], result: "pointer" },
   polyplug_runtime_last_error: { parameters: ["pointer", "usize"], result: "usize" },
   polyplug_runtime_error_message_len: { parameters: [], result: "usize" },
-  polyplug_host_free: { parameters: ["u64", "usize", "usize"], result: "void" },
+  polyplug_host_free: { parameters: ["pointer", "usize", "usize"], result: "void" },
 };
 
-/** Cache for function pointers to avoid repeated UnsafeFnPointer creation */
+// Module-level caches for hot path performance
 const _funcCache = new Map();
-
-/** Prototype for dispatch function signature */
 const _DISPATCH_FN_TYPE = new Deno.UnsafeFunctionPrototype({
     parameters: ["pointer", "pointer"],
     result: "u32"
 });
+const _encoder = new TextEncoder();
+const _decoder = new TextDecoder();
 
 /**
  * Compute FNV-1a 64-bit hash.
@@ -47,7 +47,7 @@ const _DISPATCH_FN_TYPE = new Deno.UnsafeFunctionPrototype({
  * @returns {bigint} 64-bit hash
  */
 export function fnv1a64(data) {
-    const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const bytes = typeof data === 'string' ? _encoder.encode(data) : data;
     let h = FNV_OFFSET;
     for (const b of bytes) {
         h = (h ^ BigInt(b)) * FNV_PRIME;
@@ -92,61 +92,6 @@ export function toStr(sv) {
  */
 export const toString = toStr;
 
-/**
- * Call a plugin function by vtable index.
- * @param {Deno.DynamicLibrary} lib - Deno dynamic library instance
- * @param {Deno.PointerValue} vtablePtr - Pointer to plugin vtable
- * @param {number} funcIdx - Function index (0-based)
- * @param {string} input - Input string
- * @returns {string} Output string from plugin
- */
-export function callPluginFn(lib, vtablePtr, funcIdx, input) {
-    // Read vtable as BigUint64Array for faster access
-    const vtableBuf = new Deno.UnsafePointerView(vtablePtr).getArrayBuffer(16);
-    const vtable = new BigUint64Array(vtableBuf);
-    const funcCount = vtable[0];
-    const funcsPtr = vtable[1];
-    
-    if (funcIdx >= Number(funcCount)) {
-        throw new Error(`function index ${funcIdx} out of bounds`);
-    }
-    
-    // Read function pointer from funcs array
-    const funcsBuf = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr)).getArrayBuffer(Number(funcCount) * 8);
-    const funcs = new BigUint64Array(funcsBuf);
-    const funcPtr = funcs[funcIdx];
-    
-    let func = _funcCache.get(funcPtr);
-    if (!func) {
-        func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_TYPE);
-        _funcCache.set(funcPtr, func);
-    }
-    
-    const encoder = new TextEncoder();
-    const inputData = encoder.encode(input);
-    const inputBuf = new Uint8Array(inputData);
-    const inputPtr = Deno.UnsafePointer.of(inputBuf);
-    
-    const outputBuf = new Uint8Array(16);
-    const outputPtr = Deno.UnsafePointer.of(outputBuf);
-    
-    const errCode = func.call(inputPtr, outputPtr);
-    
-    if (errCode === 0) {
-        const outputView = new Deno.UnsafePointerView(outputPtr);
-        const outPtr = outputView.getBigUint64(0);
-        const outLen = Number(outputView.getBigUint64(8));
-        
-        if (outPtr !== 0n && outLen > 0) {
-            const result = new Deno.UnsafePointerView(outPtr).getUtf8String(outLen);
-            lib.symbols.polyplug_host_free(outPtr, BigInt(outLen), 1);
-            return result;
-        }
-    }
-    
-    throw new Error(`plugin returned error code=${errCode}`);
-}
-
 export class Runtime {
   #lib;
   #ptr;
@@ -186,7 +131,7 @@ export class Runtime {
     const buf = new Uint8Array(len);
     const ptr = Deno.UnsafePointer.of(buf);
     this.#lib.symbols.polyplug_runtime_last_error(ptr, BigInt(len));
-    return new TextDecoder().decode(buf);
+    return _decoder.decode(buf);
   }
 
   /**
@@ -194,7 +139,7 @@ export class Runtime {
    * @param {string} path - Path to bundle directory
    */
   loadBundle(path) {
-    const encoded = new TextEncoder().encode(path);
+    const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
     const result = this.#lib.symbols.polyplug_runtime_load_bundle(this.#ptr, ptr, BigInt(encoded.length));
     if (result !== 0) throw new Error(`polyplug_runtime_load_bundle failed: ${this.lastError()}`);
@@ -205,7 +150,7 @@ export class Runtime {
    * @param {string} path - Path to bundle directory
    */
   reloadBundle(path) {
-    const encoded = new TextEncoder().encode(path);
+    const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
     const result = this.#lib.symbols.polyplug_runtime_reload_bundle(this.#ptr, ptr, BigInt(encoded.length));
     if (result !== 0) throw new Error(`polyplug_runtime_reload_bundle failed: ${this.lastError()}`);
@@ -248,32 +193,110 @@ export class Runtime {
 
   /**
    * Resolve plugin handle to guard.
+   * Guard stores handle for hot-reload safety - re-resolves vtable on each call.
    * @param {bigint} packedHandle - Packed plugin handle
    * @returns {Guard} Plugin guard
    */
   resolvePlugin(packedHandle) {
-    const vtablePtr = this.#lib.symbols.polyplug_runtime_resolve_plugin(this.#ptr, packedHandle);
-    if (vtablePtr === null) throw new Error(`polyplug_runtime_resolve_plugin failed: ${this.lastError()}`);
-    return new Guard(vtablePtr);
+    if (packedHandle === NULL_HANDLE) {
+      throw new Error("null plugin handle");
+    }
+    return new Guard(this, packedHandle);
   }
 }
 
+/**
+ * Guard stores runtime + handle for hot-reload safety.
+ * Re-resolves vtable on each call to detect stale handles after hot-reload.
+ */
 export class Guard {
-  #vtable;
+  #runtime;
+  #handle;
 
   /**
-   * @param {Deno.PointerValue} vtablePtr - Vtable pointer
+   * @param {Runtime} runtime - Runtime instance
+   * @param {bigint} handle - Packed plugin handle
    */
-  constructor(vtablePtr) {
-    this.#vtable = vtablePtr;
+  constructor(runtime, handle) {
+    this.#runtime = runtime;
+    this.#handle = handle;
   }
 
   /**
-   * Get vtable pointer.
+   * Get the packed handle.
+   * @returns {bigint}
+   */
+  handle() {
+    return this.#handle;
+  }
+
+  /**
+   * Internal: resolve vtable for this call (hot-reload safe).
    * @returns {Deno.PointerValue}
    */
-  vtable() {
-    return this.#vtable;
+  #resolveVtable() {
+    const vtablePtr = this.#runtime.#lib.symbols.polyplug_runtime_resolve_plugin(
+      this.#runtime.#ptr,
+      this.#handle
+    );
+    if (vtablePtr === null) {
+      throw new Error(`polyplug_runtime_resolve_plugin failed: ${this.#runtime.lastError()}`);
+    }
+    return vtablePtr;
+  }
+
+  /**
+   * Call a plugin function by index (hot-reload safe).
+   * Re-resolves vtable on each call to detect stale handles.
+   * @param {number} funcIdx - Function index (0-based)
+   * @param {string} input - Input string
+   * @returns {string} Output string from plugin
+   */
+  call(funcIdx, input) {
+    const vtablePtr = this.#resolveVtable();
+    
+    // Read vtable as BigUint64Array for faster access
+    const vtableBuf = new Deno.UnsafePointerView(vtablePtr).getArrayBuffer(16);
+    const vtable = new BigUint64Array(vtableBuf);
+    const funcCount = vtable[0];
+    const funcsPtr = vtable[1];
+    
+    if (funcIdx >= Number(funcCount)) {
+      throw new Error(`function index ${funcIdx} out of bounds`);
+    }
+    
+    // Read function pointer from funcs array
+    const funcsBuf = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr)).getArrayBuffer(Number(funcCount) * 8);
+    const funcs = new BigUint64Array(funcsBuf);
+    const funcPtr = funcs[funcIdx];
+    
+    let func = _funcCache.get(funcPtr);
+    if (!func) {
+      func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_TYPE);
+      _funcCache.set(funcPtr, func);
+    }
+    
+    const inputData = _encoder.encode(input);
+    const inputPtr = Deno.UnsafePointer.of(inputData);
+    
+    const outputBuf = new Uint8Array(16);
+    const outputPtr = Deno.UnsafePointer.of(outputBuf);
+    
+    const errCode = func.call(inputPtr, outputPtr);
+    
+    if (errCode === 0) {
+      const outputView = new Deno.UnsafePointerView(outputPtr);
+      const outPtr = outputView.getBigUint64(0);
+      const outLen = Number(outputView.getBigUint64(8));
+      
+      if (outPtr !== 0n && outLen > 0) {
+        const result = new Deno.UnsafePointerView(outPtr).getUtf8String(outLen);
+        this.#runtime.#lib.symbols.polyplug_host_free(outPtr, BigInt(outLen), 1);
+        return result;
+      }
+    }
+    
+    throw new Error(`plugin returned error code=${errCode}`);
   }
 }
 
@@ -300,7 +323,7 @@ export function runtimeNew(lib) {
     if (len > 0) {
       const buf = new Uint8Array(len);
       lib.symbols.polyplug_runtime_last_error(Deno.UnsafePointer.of(buf), BigInt(len));
-      errMsg += ": " + new TextDecoder().decode(buf);
+      errMsg += ": " + _decoder.decode(buf);
     }
     throw new Error(errMsg);
   }

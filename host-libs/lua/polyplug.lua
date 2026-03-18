@@ -52,6 +52,7 @@ ffi.cdef([[
     uint32_t polyplug_runtime_error_message_len(void);
     void polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
     uint32_t polyplug_runtime_register_loader(OpaqueRuntime* rt, void* loader_ptr);
+    void polyplug_host_free(void* ptr, size_t size, size_t align);
 
     typedef struct { uint8_t _reserved; } PolyplugNativeConfig;
     void* polyplug_native_loader_create(const PolyplugNativeConfig* cfg);
@@ -110,6 +111,15 @@ function M.Runtime:load_bundle(path)
     end
 end
 
+function M.Runtime:reload_bundle(path)
+    local lib = self._lib
+    local path_str = tostring(path)
+    local result = lib.polyplug_runtime_reload_bundle(self._ptr, path_str, #path_str)
+    if result ~= 0 then
+        error("polyplug_runtime_reload_bundle failed: " .. result)
+    end
+end
+
 function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
     local lib = self._lib
     return lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
@@ -136,12 +146,9 @@ function M.Runtime:resolve_plugin(packed_handle)
     if packed_handle == M.NULL_HANDLE then
         return nil, "null handle"
     end
-    local lib = self._lib
-    local vtable_ptr = lib.polyplug_runtime_resolve_plugin(self._ptr, packed_handle)
-    if vtable_ptr == nil then
-        return nil, M.last_error(lib)
-    end
-    return M.Guard.new(vtable_ptr)
+    -- Guard stores runtime and handle for hot-reload safety
+    -- Each call re-resolves vtable to detect stale handles
+    return M.Guard.new(self, packed_handle)
 end
 
 function M.Runtime:destroy()
@@ -152,26 +159,82 @@ function M.Runtime:destroy()
     end
 end
 
-function M.Runtime:call(handle, func_name, arg)
-    -- Simplified: just return the arg for testing
-    return arg
-end
-
+-- Guard stores runtime + handle for hot-reload safety
+-- Re-resolves vtable on each call to detect stale handles after hot-reload
 M.Guard = {}
 M.Guard.__index = M.Guard
 
-function M.Guard.new(vtable_ptr)
-    if vtable_ptr == nil then
-        error("polyplug: vtable_ptr is nil")
+function M.Guard.new(runtime, packed_handle)
+    if runtime == nil then
+        error("polyplug: runtime is nil")
+    end
+    if packed_handle == nil then
+        error("polyplug: packed_handle is nil")
     end
     local self = {
-        _vtable = vtable_ptr,
+        _runtime = runtime,
+        _handle = packed_handle,
     }
     return setmetatable(self, M.Guard)
 end
 
-function M.Guard:vtable()
-    return self._vtable
+function M.Guard:handle()
+    return self._handle
+end
+
+-- Internal: resolve vtable for this call (hot-reload safe)
+function M.Guard:_resolve_vtable()
+    local rt = self._runtime
+    if rt._destroyed then
+        return nil, "runtime destroyed"
+    end
+    local lib = rt._lib
+    local vtable_ptr = lib.polyplug_runtime_resolve_plugin(rt._ptr, self._handle)
+    if vtable_ptr == nil then
+        return nil, M.last_error(lib)
+    end
+    return vtable_ptr, nil
+end
+
+-- Call a plugin function by index (hot-reload safe)
+-- Re-resolves vtable on each call to detect stale handles
+function M.Guard:call(func_idx, input)
+    local vtable_ptr, err = self:_resolve_vtable()
+    if vtable_ptr == nil then
+        error("polyplug: failed to resolve vtable: " .. (err or "unknown"))
+    end
+    
+    local lib = self._runtime._lib
+    local vtable = ffi.cast(VTableType, vtable_ptr)
+    local func_count = ffi.cast("size_t*", vtable)[0]
+    local funcs = ffi.cast("void***", vtable + 1)[0]
+    
+    if func_idx >= func_count then
+        error("function index " .. func_idx .. " out of bounds")
+    end
+    
+    local func_ptr = funcs[func_idx]
+    local func = func_cache[func_ptr]
+    if func == nil then
+        func = ffi.cast(DispatchFnType, func_ptr)
+        func_cache[func_ptr] = func
+    end
+    
+    local input_data = ffi.new("uint8_t[?]", #input)
+    ffi.copy(input_data, input, #input)
+    local input_sv = ffi.new("StringView", { ptr = input_data, len = #input })
+    
+    local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
+    
+    local err_code = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
+    
+    if err_code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
+        local result = ffi.string(output_sv.ptr, output_sv.len)
+        lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
+        return result
+    else
+        error("plugin returned error code=" .. err_code)
+    end
 end
 
 -- Loader registration
@@ -208,7 +271,6 @@ local function parse_toml(content)
     for line in content:gmatch('[^\n]+') do
         line = line:gsub('^%s+', ''):gsub('%s+$', '')
         if #line > 0 and not line:match('^#') then
-            -- Section header [bundle] or [section]
             local section = line:match('^%[(.+)%]$')
             if section then
                 current_section = section
@@ -216,7 +278,6 @@ local function parse_toml(content)
                     result[section] = {}
                 end
             else
-                -- Key-value pair
                 local key, value = line:match('^([%w_]+)%s*=%s*(.+)$')
                 if key and value then
                     value = value:gsub('^"', ''):gsub('"$', '')
@@ -271,45 +332,5 @@ end
 
 M.to_str = to_str
 M.to_string = to_str
-
-function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
-    local lib = get_lib()
-    
-    local vtable_ptr = lib.polyplug_runtime_resolve_plugin(ffi.cast("OpaqueRuntime*", rt_ptr), packed_handle)
-    if vtable_ptr == nil then
-        error("failed to resolve plugin vtable")
-    end
-    
-    local vtable = ffi.cast(VTableType, vtable_ptr)
-    local func_count = ffi.cast("size_t*", vtable)[0]
-    local funcs = ffi.cast("void***", vtable + 1)[0]
-    
-    if func_idx >= func_count then
-        error("function index " .. func_idx .. " out of bounds")
-    end
-    
-    local func_ptr = funcs[func_idx]
-    local func = func_cache[func_ptr]
-    if func == nil then
-        func = ffi.cast(DispatchFnType, func_ptr)
-        func_cache[func_ptr] = func
-    end
-    
-    local input_data = ffi.new("uint8_t[?]", #input)
-    ffi.copy(input_data, input, #input)
-    local input_sv = ffi.new("StringView", { ptr = input_data, len = #input })
-    
-    local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
-    
-    local err_code = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
-    
-    if err_code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
-        local result = to_str(output_sv)
-        lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
-        return result
-    else
-        error("plugin returned error code=" .. err_code)
-    end
-end
 
 return M
