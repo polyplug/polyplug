@@ -302,21 +302,36 @@ def _create_backend(lib_path: str) -> Backend:
 
 
 class PluginGuard:
-    """Guard for a resolved plugin with cached vtable pointer."""
+    """Guard for a resolved plugin handle.
 
-    def __init__(self, vtable_ptr: int) -> None:
-        if vtable_ptr == 0:
-            raise RuntimeError("PluginGuard vtable is null")
-        self._vtable: int = vtable_ptr
+    Stores runtime + handle for hot-reload safety.
+    Re-resolves vtable on each call to detect stale handles.
+    """
+
+    def __init__(self, backend: Backend, runtime_ptr: int, handle: int) -> None:
+        self._backend: Backend = backend
+        self._runtime: int = runtime_ptr
+        self._handle: int = handle
 
     @property
     def vtable(self) -> int:
-        """Return cached vtable pointer (no FFI call)."""
-        return self._vtable
+        """Re-resolve vtable on each call (hot-reload safe)."""
+        if self._runtime == 0 or self._handle == _NULL_HANDLE:
+            return 0
+        return self._backend.resolve_plugin(self._runtime, self._handle)
+
+    @property
+    def handle(self) -> int:
+        """Return the stored handle."""
+        return self._handle
 
     def get_vtable(self) -> int:
         """Deprecated: use guard.vtable property instead."""
-        return self._vtable
+        return self.vtable
+
+    def is_null(self) -> bool:
+        """Return True if this guard is null."""
+        return self._runtime == 0 or self._handle == _NULL_HANDLE
 
 
 def _last_error(backend: Backend) -> str:
@@ -417,11 +432,9 @@ class Runtime:
         if packed_handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
         runtime_ptr: int = self._ensure_runtime()
-        vtable_ptr: int = self._backend.resolve_plugin(runtime_ptr, packed_handle)
-        if vtable_ptr == 0:
-            msg: str = _last_error(self._backend)
-            raise RuntimeError(msg or "polyplug_runtime_resolve_plugin failed")
-        return PluginGuard(vtable_ptr)
+        # Don't resolve vtable here - let PluginGuard do it on each call
+        # This ensures hot-reload safety (stale handle detection)
+        return PluginGuard(self._backend, runtime_ptr, packed_handle)
 
     def get_extension(self, extension_id: int) -> None:
         _ = extension_id

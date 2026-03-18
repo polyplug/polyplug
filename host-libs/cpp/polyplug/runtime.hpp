@@ -19,37 +19,36 @@ static_assert(POLYPLUG_ABI_VERSION == 1,
 namespace polyplug {
 
 /// RAII guard for a resolved plugin handle.
-/// Caches the vtable pointer at construction for zero-overhead access.
+/// Stores runtime + handle for hot-reload safety.
+/// Re-resolves vtable on each call to detect stale handles.
 /// Move-only; copy is disabled.
 class PluginGuard {
 public:
     /// Constructs a null guard.
-    PluginGuard() noexcept : vtable_(nullptr) {}
+    PluginGuard() noexcept : rt_(nullptr), handle_(UINT64_MAX) {}
 
-    /// Resolves a packed handle and caches the vtable.
-    /// If packed_handle is UINT64_MAX or resolution fails, creates a null guard.
+    /// Stores runtime + handle for hot-reload safety.
+    /// Does NOT cache vtable - re-resolves on each vtable() call.
     PluginGuard(RuntimeHandle rt, uint64_t packed_handle) noexcept
-        : vtable_(nullptr) {
-        if (packed_handle != UINT64_MAX && rt != nullptr) {
-            vtable_ = static_cast<const PluginVTable*>(
-                polyplug_runtime_resolve_plugin(rt, packed_handle));
-        }
-    }
+        : rt_(rt), handle_(packed_handle) {}
 
-    /// No release needed — vtable pointer is borrowed from runtime.
+    /// No release needed — no owned resources.
     ~PluginGuard() noexcept = default;
 
     /// Move constructor.
     PluginGuard(PluginGuard&& other) noexcept
-        : vtable_(other.vtable_) {
-        other.vtable_ = nullptr;
+        : rt_(other.rt_), handle_(other.handle_) {
+        other.rt_ = nullptr;
+        other.handle_ = UINT64_MAX;
     }
 
     /// Move assignment.
     PluginGuard& operator=(PluginGuard&& other) noexcept {
         if (this != &other) {
-            vtable_ = other.vtable_;
-            other.vtable_ = nullptr;
+            rt_ = other.rt_;
+            handle_ = other.handle_;
+            other.rt_ = nullptr;
+            other.handle_ = UINT64_MAX;
         }
         return *this;
     }
@@ -58,24 +57,34 @@ public:
     PluginGuard(const PluginGuard&) = delete;
     PluginGuard& operator=(const PluginGuard&) = delete;
 
-    /// Returns the cached vtable pointer (no FFI call).
-    /// Returns nullptr if this is a null guard.
+    /// Re-resolves vtable on each call (hot-reload safe).
+    /// Returns nullptr if this is a null guard or resolution fails.
     const PluginVTable* vtable() const noexcept {
-        return vtable_;
+        if (rt_ == nullptr || handle_ == UINT64_MAX) {
+            return nullptr;
+        }
+        return static_cast<const PluginVTable*>(
+            polyplug_runtime_resolve_plugin(rt_, handle_));
     }
 
-    /// Returns true if this guard is null (resolution failed or moved-from).
+    /// Returns the stored handle.
+    uint64_t handle() const noexcept {
+        return handle_;
+    }
+
+    /// Returns true if this guard is null (no runtime or null handle).
     bool is_null() const noexcept {
-        return vtable_ == nullptr;
+        return rt_ == nullptr || handle_ == UINT64_MAX;
     }
 
     /// Returns true if this guard holds a valid plugin.
     explicit operator bool() const noexcept {
-        return vtable_ != nullptr;
+        return !is_null();
     }
 
 private:
-    const PluginVTable* vtable_;   ///< Cached vtable pointer (borrowed from runtime)
+    RuntimeHandle rt_;       ///< Runtime pointer (not owned)
+    uint64_t handle_;        ///< Packed plugin handle
 };
 
 class Runtime {
@@ -150,8 +159,9 @@ public:
         return handles;
     }
 
-    /// Resolves a packed handle to a PluginGuard with cached vtable.
-    /// Returns a null guard if packed_handle is UINT64_MAX or resolution fails.
+    /// Resolves a packed handle to a PluginGuard.
+    /// Guard stores runtime + handle for hot-reload safety.
+    /// Returns a null guard if packed_handle is UINT64_MAX.
     PluginGuard resolve_plugin(uint64_t packed_handle) const noexcept {
         return PluginGuard(handle_, packed_handle);
     }
@@ -165,6 +175,14 @@ public:
         uint32_t result = polyplug_runtime_load_bundle(handle_, bytes, path.size());
         if (result != 0) {
             throw std::runtime_error("Failed to load bundle: " + std::string(path));
+        }
+    }
+
+    void reload_bundle(std::string_view path) {
+        auto bytes = reinterpret_cast<const uint8_t*>(path.data());
+        uint32_t result = polyplug_runtime_reload_bundle(handle_, bytes, path.size());
+        if (result != 0) {
+            throw std::runtime_error("Failed to reload bundle: " + std::string(path));
         }
     }
 

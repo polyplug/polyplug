@@ -165,12 +165,11 @@ All host libraries implement the same hot-reload safety pattern:
 │                                                                  │
 │   Guard stores: runtime + handle (NOT cached vtable)            │
 │                                                                  │
-│   On each call:                                                  │
-│   1. Guard.call() → resolve_plugin(runtime, handle)             │
+│   On each vtable() call:                                         │
+│   1. Guard.vtable() → resolve_plugin(runtime, handle)           │
 │   2. Runtime validates generation counter                        │
-│   3. If stale (hot-reload happened) → returns error             │
+│   3. If stale (hot-reload happened) → returns null/error        │
 │   4. If valid → returns current vtable pointer                   │
-│   5. Call through vtable                                         │
 │                                                                  │
 │   This ensures:                                                  │
 │   - Hot-reload invalidates old handles                           │
@@ -182,16 +181,23 @@ All host libraries implement the same hot-reload safety pattern:
 
 **Why not cache vtable?**
 
-If we cached the vtable pointer in Guard:
-1. Hot-reload swaps the vtable
-2. Old Guard still has old vtable pointer
-3. Call through old vtable = use-after-free
+When hot-reload happens, the Rust runtime:
+1. Swaps the vtable Arc in the slot
+2. Returns the old Arc
+3. If no Rust guard holds it, the old vtable is **freed**
 
-By storing handle and re-resolving:
-1. Hot-reload increments generation counter
-2. Old handle's generation doesn't match
-3. `resolve_plugin` returns error
-4. Caller gets clear error instead of crash
+Any cached raw pointer becomes a **dangling pointer** → use-after-free crash.
+
+**Overhead:**
+
+| Operation | Cost | Impact |
+|-----------|------|--------|
+| Cached vtable | ~0-5 ns | ❌ Crash on hot-reload |
+| Re-resolve vtable | ~10-50 ns | ✅ Safe |
+
+For typical plugin calls (>1μs), the 10-50ns overhead is <5%.
+
+**Future consideration:** A "red-green" state mechanism where the runtime pauses all plugin calls during hot-reload, allowing cached vtables to be safely invalidated. This would eliminate the per-call overhead while maintaining safety.
 
 ---
 
