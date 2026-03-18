@@ -685,46 +685,151 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out
 }
 
-/// Generate `host/Callers.cs` — scaffold host caller classes (stubs).
+/// Generate `host/Callers.cs` — zero-overhead host caller classes.
 fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug;\n\n");
+    out.push_str("using Polyplug;\n");
+    out.push_str("using System.Runtime.CompilerServices;\n");
+    out.push_str("using System.Runtime.InteropServices;\n\n");
     out.push_str("namespace Polyplug.Generated;\n\n");
 
     for contract in &ir.contracts {
         let class_name: String = contract_name_to_cs_class(&contract.name);
         let caller_name: String = format!("{class_name}Caller");
+        let fn_count: usize = contract.functions.len();
 
-        out.push_str(&format!("public sealed class {caller_name} {{\n"));
-        out.push_str("    private readonly PluginHandle _handle;\n");
+        // Contract ID constant
+        let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!("public static class {class_name}Constants {{\n"));
         out.push_str(&format!(
-            "    public {caller_name}(PluginHandle handle) {{ _handle = handle; }}\n\n"
+            "    public const ulong {contract_upper}_CONTRACT_ID = 0x{:016X}UL;\n",
+            contract.contract_id
+        ));
+        out.push_str(&format!(
+            "    public const uint {contract_upper}_FUNCTION_COUNT = {fn_count}u;\n"
+        ));
+        out.push_str("}\n\n");
+
+        // Caller class - stores PluginGuard (cached vtable)
+        out.push_str(&format!("public sealed class {caller_name} {{\n"));
+        out.push_str("    private readonly PluginGuard _guard;\n\n");
+        out.push_str(&format!(
+            "    public {caller_name}(PluginGuard guard) {{ _guard = guard; }}\n\n"
         ));
 
+        // Generate each function caller
         for func in &contract.functions {
-            let ret: String = cs_return_type(func);
-            let method_name: String = pascal_case(&func.name);
-
-            let params_str: String = if func.params.is_empty() {
-                String::new()
-            } else if needs_arg_pack(&func.params) {
-                let cls: String = contract_name_to_cs_class(&contract.name);
-                format!("{cls}{}Args args", pascal_case(&func.name))
-            } else {
-                let p: &ResolvedParam = &func.params[0];
-                format!("{} {}", cs_type_name(&p.ty), p.name)
-            };
-
-            out.push_str(&format!(
-                "    public {ret} {method_name}({params_str}) {{\n"
-            ));
-            out.push_str("        throw new System.NotImplementedException(\"polyplug host-libs: not yet implemented\");\n");
-            out.push_str("    }\n\n");
+            generate_host_fn_caller(&mut out, func, contract, &class_name);
         }
+
         out.push_str("}\n\n");
     }
     out
+}
+
+/// Generate a single host caller method for a contract function.
+fn generate_host_fn_caller(
+    out: &mut String,
+    func: &ResolvedFunction,
+    _contract: &ResolvedContract,
+    _contract_struct: &str,
+) {
+    let fn_id: u32 = func.function_id;
+    let method_name: String = pascal_case(&func.name);
+    let ret: String = cs_return_type(func);
+    let has_return: bool = func.returns.is_some();
+
+    // Build parameter list
+    let params_sig: String = if func.params.is_empty() {
+        String::new()
+    } else if needs_arg_pack(&func.params) {
+        // Multiple params: arg-pack struct by ref
+        let args_struct: String = format!("{}{}Args", _contract_struct, method_name);
+        format!("ref {args_struct} args")
+    } else {
+        // Single param: by value for primitives, by ref for structs
+        let p: &ResolvedParam = &func.params[0];
+        let cs_ty: String = cs_type_name(&p.ty);
+        match &p.ty {
+            ResolvedTypeRef::UserDefined(_) => {
+                format!("ref {cs_ty} {name}", name = p.name, cs_ty = cs_ty)
+            }
+            _ => format!("{cs_ty} {name}", name = p.name, cs_ty = cs_ty),
+        }
+    };
+
+    out.push_str(&format!(
+        "    public {ret} {method_name}({params_sig}) {{\n"
+    ));
+
+    // Get vtable pointer from guard (already cached, no P/Invoke)
+    out.push_str("        nint vtablePtr = _guard.VTable;\n");
+    out.push_str("        if (vtablePtr == nint.Zero) {\n");
+    out.push_str("            throw new System.ObjectDisposedException(nameof(PluginGuard));\n");
+    out.push_str("        }\n\n");
+
+    // Read function pointer from vtable
+    out.push_str("        unsafe {\n");
+    out.push_str(&format!(
+        "            nint funcsArray = *(nint*)(vtablePtr + {offset});\n",
+        offset = 16
+    ));
+    out.push_str(&format!(
+        "            nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
+    ));
+    out.push_str(&format!(
+        "            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint, uint>)funcPtr;\n"
+    ));
+
+    // Setup args pointer
+    if func.params.is_empty() {
+        out.push_str("            nint argsPtr = nint.Zero;\n");
+    } else if needs_arg_pack(&func.params) {
+        out.push_str("            nint argsPtr = (nint)(&args);\n");
+    } else {
+        // Single param
+        let p: &ResolvedParam = &func.params[0];
+        match &p.ty {
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "            nint argsPtr = (nint)(&{name});\n",
+                    name = p.name
+                ));
+            }
+            _ => {
+                // Primitive - need to copy to local for pointer
+                out.push_str(&format!(
+                    "            {ty} {name}_arg = {name};\n",
+                    ty = cs_type_name(&p.ty),
+                    name = p.name
+                ));
+                out.push_str(&format!(
+                    "            nint argsPtr = (nint)(&{name}_arg);\n",
+                    name = p.name
+                ));
+            }
+        }
+    }
+
+    // Setup out pointer
+    if has_return {
+        out.push_str(&format!("            {ret} result = default;\n"));
+        out.push_str("            nint outPtr = (nint)(&result);\n");
+    } else {
+        out.push_str("            nint outPtr = nint.Zero;\n");
+    }
+
+    // The call
+    out.push_str("            uint err = dispatch(argsPtr, outPtr);\n");
+    out.push_str("            if (err != 0u) {\n");
+    out.push_str("                throw new System.InvalidOperationException($\"plugin call failed: code={err}\");\n");
+    out.push_str("            }\n");
+    if has_return {
+        out.push_str("            return result;\n");
+    }
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
 }
 
 /// Generate `host/manifest.toml` — standard manifest content.

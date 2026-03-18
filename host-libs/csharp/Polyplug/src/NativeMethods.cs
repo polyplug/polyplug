@@ -4,11 +4,8 @@ using System.Runtime.InteropServices;
 internal static partial class NativeMethods
 {
     private const string NativeLib = "polyplug";
-    private const string NativeLoaderNativeLib = "polyplug_native";
-    private const string NativeLoaderPythonLib = "polyplug_python";
-    private const string NativeLoaderLuaLib = "polyplug_lua";
-    private const string NativeLoaderJsLib = "polyplug_js";
 
+    // Lifecycle (init-time only, no SuppressGCTransition needed)
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial nint PolyplugRuntimeCreate();
@@ -25,16 +22,21 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial uint PolyplugRuntimeReloadBundle(nint rt, nint path, nuint pathLen);
 
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_contract")]
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_loader")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial uint PolyplugRuntimeRegisterLoader(nint rt, nint loaderPtr);
+
+    // Hot path — SuppressGCTransition for zero-overhead
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_contract")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial ulong PolyplugRuntimeFindByContract(nint rt, ulong contractId, uint minVersion);
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_bundle")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial ulong PolyplugRuntimeFindByBundle(nint rt, ulong bundleId, ulong contractId, uint minVersion);
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_all_by_contract")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial nuint PolyplugRuntimeFindAllByContract(
         nint rt,
         ulong contractId,
@@ -44,17 +46,18 @@ internal static partial class NativeMethods
     );
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_resolve_plugin")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial nint PolyplugRuntimeResolvePlugin(nint rt, ulong packedHandle);
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_plugin_vtable")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial nint PolyplugRuntimePluginVTable(nint guard);
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_plugin_release")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial void PolyplugRuntimePluginRelease(nint guard);
 
+    // Error handling (error path only, no SuppressGCTransition)
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_last_error")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial nuint PolyplugRuntimeLastError(nint buf, nuint bufLen);
@@ -63,33 +66,8 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial nuint PolyplugRuntimeErrorMessageLen();
 
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_loader")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeRegisterLoader(nint rt, nint loaderPtr);
-
+    // Memory — NO SuppressGCTransition (may trigger GC per PRD)
     [LibraryImport(NativeLib, EntryPoint = "polyplug_host_free")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial void PolyplugHostFree(nint ptr, nuint len, nuint align);
-
-
-
-
-
-
-
-    [LibraryImport(NativeLoaderNativeLib, EntryPoint = "polyplug_native_loader_create")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nint PolyplugNativeLoaderCreate(nint cfgPtr);
-
-    [LibraryImport(NativeLoaderPythonLib, EntryPoint = "polyplug_python_loader_create")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nint PolyplugPythonLoaderCreate(nint cfgPtr);
-
-    [LibraryImport(NativeLoaderLuaLib, EntryPoint = "polyplug_lua_loader_create")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nint PolyplugLuaLoaderCreate(nint cfgPtr);
-
-    [LibraryImport(NativeLoaderJsLib, EntryPoint = "polyplug_js_loader_create")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nint PolyplugJsLoaderCreate(nint cfgPtr);
 }

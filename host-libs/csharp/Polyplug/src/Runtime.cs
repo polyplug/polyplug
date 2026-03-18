@@ -67,18 +67,18 @@ public sealed class Runtime
         });
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong FindByContract(ulong contractId, uint minVersion)
     {
         EnsureHandle();
-        ulong packed = NativeMethods.PolyplugRuntimeFindByContract(Handle, contractId, minVersion);
-        return packed;
+        return NativeMethods.PolyplugRuntimeFindByContract(Handle, contractId, minVersion);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong FindByBundle(ulong bundleId, ulong contractId, uint minVersion)
     {
         EnsureHandle();
-        ulong packed = NativeMethods.PolyplugRuntimeFindByBundle(Handle, bundleId, contractId, minVersion);
-        return packed;
+        return NativeMethods.PolyplugRuntimeFindByBundle(Handle, bundleId, contractId, minVersion);
     }
 
     public ulong[] FindAllByContract(ulong contractId, uint minVersion)
@@ -88,18 +88,17 @@ public sealed class Runtime
         int capacity = 16;
         while (true)
         {
-            var handles = new ulong[capacity];
+            ulong[] handles = new ulong[capacity];
             GCHandle pinned = GCHandle.Alloc(handles, GCHandleType.Pinned);
             try
             {
                 nint outPtr = pinned.AddrOfPinnedObject();
-                nuint outCap = (nuint)handles.Length;
                 nuint written = NativeMethods.PolyplugRuntimeFindAllByContract(
                     Handle,
                     contractId,
                     minVersion,
                     outPtr,
-                    outCap
+                    (nuint)handles.Length
                 );
                 ulong count = written.ToUInt64();
                 if (count == 0ul)
@@ -126,16 +125,17 @@ public sealed class Runtime
         EnsureHandle();
         if (packedHandle == ulong.MaxValue)
         {
-            return new PluginGuard(nint.Zero);
+            return new PluginGuard(nint.Zero, nint.Zero);
         }
 
-        nint guard = NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
-        if (guard == nint.Zero)
+        nint guardHandle = NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
+        if (guardHandle == nint.Zero)
         {
             ThrowLastError("Failed to resolve plugin.");
         }
 
-        return new PluginGuard(guard);
+        nint vtablePtr = NativeMethods.PolyplugRuntimePluginVTable(guardHandle);
+        return new PluginGuard(guardHandle, vtablePtr);
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)
@@ -163,7 +163,7 @@ public sealed class Runtime
         }
     }
 
-    internal static void ThrowLastError(string fallbackMessage)
+    public static void ThrowLastError(string fallbackMessage)
     {
         string message = GetLastError();
         if (string.IsNullOrEmpty(message))
@@ -203,154 +203,6 @@ public sealed class Runtime
         finally
         {
             pinned.Free();
-        }
-    }
-
-    internal static nint GetVTablePtr(nint guard)
-    {
-        return NativeMethods.PolyplugRuntimePluginVTable(guard);
-    }
-
-    internal static void ReleaseGuard(nint guard)
-    {
-        if (guard == nint.Zero)
-        {
-            return;
-        }
-
-        NativeMethods.PolyplugRuntimePluginRelease(guard);
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PythonLoaderConfig
-    {
-        public nint MinVersionPtr;
-        public nuint MinVersionLen;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct EmptyLoaderConfig
-    {
-        public byte Reserved;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativeLoaderConfig
-    {
-        public byte Reserved;
-    }
-
-    public void RegisterPythonLoader(string minVersion = "3.11")
-    {
-        EnsureHandle();
-        byte[] bytes = Encoding.UTF8.GetBytes(minVersion);
-        GCHandle stringHandle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
-        try
-        {
-            PythonLoaderConfig cfg = new PythonLoaderConfig
-            {
-                MinVersionPtr = stringHandle.AddrOfPinnedObject(),
-                MinVersionLen = (nuint)bytes.Length,
-            };
-            nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<PythonLoaderConfig>());
-            try
-            {
-                Marshal.StructureToPtr(cfg, cfgPtr, false);
-                nint loaderPtr = NativeMethods.PolyplugPythonLoaderCreate(cfgPtr);
-                if (loaderPtr == nint.Zero)
-                {
-                    throw new InvalidOperationException("polyplug: python loader create failed");
-                }
-                uint err = NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
-                if (err != 0u)
-                {
-                    ThrowLastError($"polyplug: python loader register failed: {err}");
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(cfgPtr);
-            }
-        }
-        finally
-        {
-            stringHandle.Free();
-        }
-    }
-
-    public void RegisterLuaLoader()
-    {
-        EnsureHandle();
-        EmptyLoaderConfig cfg = new EmptyLoaderConfig { Reserved = 0 };
-        nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<EmptyLoaderConfig>());
-        try
-        {
-            Marshal.StructureToPtr(cfg, cfgPtr, false);
-            nint loaderPtr = NativeMethods.PolyplugLuaLoaderCreate(cfgPtr);
-            if (loaderPtr == nint.Zero)
-            {
-                throw new InvalidOperationException("polyplug: lua loader create failed");
-            }
-            uint err = NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
-            if (err != 0u)
-            {
-                ThrowLastError($"polyplug: lua loader register failed: {err}");
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(cfgPtr);
-        }
-    }
-
-    public void RegisterJsLoader()
-    {
-        EnsureHandle();
-        EmptyLoaderConfig cfg = new EmptyLoaderConfig { Reserved = 0 };
-        nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<EmptyLoaderConfig>());
-        try
-        {
-            Marshal.StructureToPtr(cfg, cfgPtr, false);
-            nint loaderPtr = NativeMethods.PolyplugJsLoaderCreate(cfgPtr);
-            if (loaderPtr == nint.Zero)
-            {
-                throw new InvalidOperationException("polyplug: js loader create failed");
-            }
-            uint err = NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
-            if (err != 0u)
-            {
-                ThrowLastError($"polyplug: js loader register failed: {err}");
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(cfgPtr);
-        }
-    }
-
-    public void RegisterNativeLoader()
-    {
-        EnsureHandle();
-        var cfg = new NativeLoaderConfig { Reserved = 0 };
-        nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<NativeLoaderConfig>());
-        try
-        {
-            Marshal.StructureToPtr(cfg, cfgPtr, false);
-            nint loaderPtr = NativeMethods.PolyplugNativeLoaderCreate(cfgPtr);
-            if (loaderPtr == nint.Zero)
-            {
-                throw new InvalidOperationException("polyplug: native loader create failed");
-            }
-
-            uint err = NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
-            if (err != 0u)
-            {
-                ThrowLastError($"polyplug: native loader register failed: {err}");
-            }
-        }
-        finally
-        {
-            Marshal.FreeHGlobal(cfgPtr);
         }
     }
 }

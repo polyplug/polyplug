@@ -1,9 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Polyplug.Loaders.Dotnet</AssemblyName>
+    <RootNamespace>Polyplug.Loaders</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>true</IsPackable>
+    <Description>Polyplug .NET loader for loading .NET-based plugins</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../Polyplug/Polyplug.csproj" />

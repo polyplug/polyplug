@@ -1,35 +1,58 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Polyplug.Loaders;
 
-[StructLayout(LayoutKind.Sequential)]
-internal struct JsConfig
+/// <summary>
+/// Extension methods for registering the JavaScript (QuickJS) loader.
+/// </summary>
+public static partial class JsLoaderExtensions
 {
-    public byte Reserved;
-}
+    private const string NativeLoaderLib = "polyplug_js";
 
-public static class JsLoaderExtensions
-{
-    [DllImport("polyplug_js", EntryPoint = "polyplug_js_loader_create")]
-    private static extern IntPtr CreateLoader(IntPtr cfgPtr);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JsLoaderConfig
+    {
+        public byte Reserved;
+    }
 
-    [DllImport("polyplug", EntryPoint = "polyplug_runtime_register_loader")]
-    private static extern uint RegisterLoader(IntPtr rt, IntPtr loader);
+    [LibraryImport(NativeLoaderLib, EntryPoint = "polyplug_js_loader_create")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    private static partial nint PolyplugJsLoaderCreate(nint cfgPtr);
 
+    /// <summary>
+    /// Registers the JavaScript (QuickJS) loader with the runtime.
+    /// </summary>
+    /// <param name="runtime">The runtime to register the loader with.</param>
+    /// <exception cref="InvalidOperationException">Thrown if loader creation or registration fails.</exception>
     public static void RegisterJsLoader(this Runtime runtime)
     {
-        JsConfig cfg = new JsConfig { Reserved = 0 };
-        var handle = GCHandle.Alloc(cfg, GCHandleType.Pinned);
-        try {
-            IntPtr loader = CreateLoader(handle.AddrOfPinnedObject());
-            if (loader == IntPtr.Zero)
+        if (runtime is null)
+        {
+            throw new ArgumentNullException(nameof(runtime));
+        }
+
+        JsLoaderConfig cfg = new JsLoaderConfig { Reserved = 0 };
+        nint cfgPtr = Marshal.AllocHGlobal(Marshal.SizeOf<JsLoaderConfig>());
+        try
+        {
+            Marshal.StructureToPtr(cfg, cfgPtr, false);
+            nint loaderPtr = PolyplugJsLoaderCreate(cfgPtr);
+            if (loaderPtr == nint.Zero)
+            {
                 throw new InvalidOperationException("polyplug: js loader create failed");
-            uint err = RegisterLoader(runtime.Handle, loader);
-            if (err != 0)
-                throw new InvalidOperationException($"polyplug: js loader register failed ({err})");
-        } finally {
-            handle.Free();
+            }
+
+            uint err = runtime.RegisterLoader(loaderPtr);
+            if (err != 0u)
+            {
+                Runtime.ThrowLastError($"polyplug: js loader register failed: {err}");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(cfgPtr);
         }
     }
 }

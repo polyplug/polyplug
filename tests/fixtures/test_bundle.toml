@@ -3,7 +3,11 @@ name = "test_bundle"
 version = "1.0.0"
 api = "test_api.toml"
 runtime = "native"
-file = "libtest.so"
+
+[bundle.file]
+linux.x86_64 = "libtest.x86_64.so"
+windows.x86_64 = "test.x86_64.dll"
+macos.x86_64 = "libtest.x86_64.dylib"
 
 [[plugin]]
 name = "test_adder"
