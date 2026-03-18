@@ -1,16 +1,13 @@
 //! Integration tests: null pointer safety of all C facade FFI functions.
 //! Every function that takes a pointer must handle null without panicking.
 
-use polyplug::ffi::OpaquePluginGuard;
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::ffi::polyplug_runtime_plugin_release;
-use polyplug::ffi::polyplug_runtime_plugin_vtable;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::OpaqueRuntime;
 
 #[test]
 fn test_runtime_free_null() {
@@ -90,10 +87,10 @@ fn test_resolve_plugin_null_handle() {
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     // SAFETY: rt is valid (asserted above); u64::MAX is the sentinel NULL_HANDLE value.
-    let guard: *mut OpaquePluginGuard =
+    let vtable: *const () =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
-        guard.is_null(),
+        vtable.is_null(),
         "resolve_plugin(NULL_HANDLE) must return null"
     );
     // Verify no last_error was set
@@ -103,21 +100,6 @@ fn test_resolve_plugin_null_handle() {
     assert_eq!(n, 0, "last_error must be empty after NULL_HANDLE resolve");
     // SAFETY: rt is valid and was allocated by polyplug_runtime_create().
     unsafe { polyplug_runtime_destroy(rt) };
-}
-
-#[test]
-fn test_guard_free_null() {
-    // polyplug_runtime_plugin_release(null) must be a no-op
-    // SAFETY: passing null is explicitly part of the null-safety contract being tested.
-    unsafe { polyplug_runtime_plugin_release(core::ptr::null_mut()) };
-}
-
-#[test]
-fn test_get_vtable_null_guard() {
-    // polyplug_runtime_plugin_vtable(null) must return null, not crash
-    // SAFETY: passing null is explicitly part of the null-safety contract being tested.
-    let vtable: *const () = unsafe { polyplug_runtime_plugin_vtable(core::ptr::null()) };
-    assert!(vtable.is_null(), "get_vtable(null) must return null");
 }
 
 #[test]

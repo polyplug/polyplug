@@ -8,13 +8,11 @@
 use core::cell::Ref;
 use core::cell::RefCell;
 
-use polyplug_abi::PluginHandle;
 use crate::loader::BundleLoader;
-use crate::registry::PluginVTableGuard;
 use crate::runtime::Runtime;
+use polyplug_abi::PluginHandle;
 
 pub struct OpaqueRuntime(pub Runtime);
-pub struct OpaquePluginGuard(pub(crate) PluginVTableGuard);
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -250,31 +248,16 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
             );
             return 0usize;
         }
-        // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
-        let runtime: &OpaqueRuntime = unsafe { &*rt };
         if out_cap == 0usize {
             return 0usize;
         }
-        // Allocate a temporary PluginHandle buffer matching the caller's capacity.
-        // Registry::find_all_by_contract fills it in a single pass — no pagination needed.
-        let mut handle_buf: Vec<PluginHandle> = vec![
-            PluginHandle {
-                index: 0u32,
-                generation: 0u32,
-            };
-            out_cap
-        ];
-        let count: usize =
-            runtime
-                .0
-                .find_all_by_contract(contract_id, min_version, &mut handle_buf);
-        for (i, handle) in handle_buf[..count].iter().enumerate() {
-            // SAFETY: out is valid for out_cap u64 elements per ABI contract.
-            unsafe {
-                out.add(i).write(pack_handle(*handle));
-            }
-        }
-        count
+        // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
+        let runtime: &OpaqueRuntime = unsafe { &*rt };
+        // SAFETY: out is valid for out_cap u64 elements per ABI contract.
+        let out_slice: &mut [u64] = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
+        runtime
+            .0
+            .find_all_by_contract_packed(contract_id, min_version, out_slice)
     }))
     .unwrap_or_else(|_| {
         set_last_error("panic in polyplug_runtime_find_all_by_contract");
@@ -282,73 +265,51 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
     })
 }
 
+/// Resolve a plugin handle and return the vtable pointer directly.
+///
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
+/// - `rt` must be a valid pointer returned by `polyplug_runtime_create`.
+/// - The returned vtable pointer is valid as long as the runtime is alive and
+///   no hot-reload occurs for this plugin.
+///
+/// # Returns
+/// - Non-null pointer to `PluginVTable` on success
+/// - Null on error (check `polyplug_runtime_last_error` for details)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
-) -> *mut OpaquePluginGuard {
+) -> *const () {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
             set_last_error("null runtime");
-            return core::ptr::null_mut();
+            return core::ptr::null();
         }
         const NULL_HANDLE: u64 = u64::MAX;
         if packed_handle == NULL_HANDLE {
-            // Null handle — return null guard without setting last_error.
-            // Callers that receive NULL_HANDLE back from find functions use this as a sentinel.
-            return core::ptr::null_mut();
+            // Null handle — return null without setting last_error.
+            return core::ptr::null();
         }
         let handle: PluginHandle = unpack_handle(packed_handle);
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime.0.registry().resolve_guard(handle) {
-            Ok(guard) => Box::into_raw(Box::new(OpaquePluginGuard(guard))),
+            Ok(guard) => {
+                // Get the vtable pointer from the guard.
+                // The guard is dropped here, but the vtable pointer remains valid
+                // because it points to 'static data in the loaded library.
+                // SAFETY: vtable pointer points to 'static plugin data that remains
+                // valid for the lifetime of the loaded library.
+                guard.vtable() as *const ()
+            }
             Err(e) => {
                 set_last_error(e.to_string());
-                core::ptr::null_mut()
+                core::ptr::null()
             }
         }
     }))
     .unwrap_or_else(|_| {
         set_last_error("panic in polyplug_runtime_resolve_plugin");
-        core::ptr::null_mut()
-    })
-}
-
-/// # Safety
-/// `guard` must be a non-null pointer previously returned by `polyplug_runtime_resolve_plugin`.
-/// Must not be called more than once for the same pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_plugin_release(guard: *mut OpaquePluginGuard) {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !guard.is_null() {
-            // SAFETY: guard was allocated by polyplug_runtime_resolve_plugin via Box::new. Caller guarantees single call per pointer.
-            drop(unsafe { Box::from_raw(guard) });
-        }
-    }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_plugin_release");
-    });
-}
-
-/// # Safety
-/// `guard` must be a valid pointer returned by `polyplug_runtime_resolve_plugin`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_plugin_vtable(
-    guard: *const OpaquePluginGuard,
-) -> *const () {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if guard.is_null() {
-            set_last_error("null guard");
-            return core::ptr::null();
-        }
-        // SAFETY: guard is non-null valid OpaquePluginGuard per ABI contract.
-        unsafe { (*guard).0.vtable() as *const () }
-    }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_plugin_vtable");
         core::ptr::null()
     })
 }

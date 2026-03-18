@@ -68,12 +68,6 @@ def _setup_lib_bindings(lib: ctypes.CDLL) -> None:
     ]
     lib.polyplug_runtime_resolve_plugin.restype = ctypes.c_void_p
 
-    lib.polyplug_runtime_plugin_vtable.argtypes = [ctypes.c_void_p]
-    lib.polyplug_runtime_plugin_vtable.restype = ctypes.c_void_p
-
-    lib.polyplug_runtime_plugin_release.argtypes = [ctypes.c_void_p]
-    lib.polyplug_runtime_plugin_release.restype = None
-
     lib.polyplug_runtime_last_error.argtypes = [
         ctypes.POINTER(ctypes.c_uint8),
         ctypes.c_size_t,
@@ -99,24 +93,10 @@ class PluginHandle(ctypes.Structure):
 
 
 class PluginGuard:
-    def __init__(self, lib: ctypes.CDLL, guard_ptr: ctypes.c_void_p) -> None:
-        self._lib: ctypes.CDLL = lib
-        self._guard: ctypes.c_void_p = guard_ptr
-        # Cache vtable pointer at construction to avoid repeated FFI calls
-        if guard_ptr is None or guard_ptr == 0:
-            raise RuntimeError("PluginGuard is null")
-        vtable_ptr: ctypes.c_void_p = lib.polyplug_runtime_plugin_vtable(guard_ptr)
+    def __init__(self, vtable_ptr: ctypes.c_void_p) -> None:
         if vtable_ptr is None or vtable_ptr == 0:
-            msg: str = _last_error(lib)
-            raise RuntimeError(msg or "polyplug_runtime_plugin_vtable failed")
+            raise RuntimeError("PluginGuard vtable is null")
         self._vtable: ctypes.c_void_p = vtable_ptr
-
-    def __del__(self) -> None:
-        guard: ctypes.c_void_p = getattr(self, "_guard", None)
-        lib: ctypes.CDLL = getattr(self, "_lib", None)
-        if guard is not None and lib is not None and guard != 0:
-            lib.polyplug_runtime_plugin_release(guard)
-            self._guard = ctypes.c_void_p()
 
     @property
     def vtable(self) -> ctypes.c_void_p:
@@ -253,13 +233,13 @@ class Runtime:
         if packed_handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
         runtime_ptr: ctypes.c_void_p = self._ensure_runtime()
-        guard_ptr: ctypes.c_void_p = self._lib.polyplug_runtime_resolve_plugin(
+        vtable_ptr: ctypes.c_void_p = self._lib.polyplug_runtime_resolve_plugin(
             runtime_ptr, ctypes.c_uint64(packed_handle)
         )
-        if guard_ptr is None or guard_ptr == 0:
+        if vtable_ptr is None or vtable_ptr == 0:
             msg: str = _last_error(self._lib)
             raise RuntimeError(msg or "polyplug_runtime_resolve_plugin failed")
-        return PluginGuard(self._lib, guard_ptr)
+        return PluginGuard(vtable_ptr)
 
     def get_extension(self, extension_id: int) -> None:
         _ = extension_id

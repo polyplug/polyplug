@@ -31,30 +31,8 @@ class StringView(ctypes.Structure):
         ("len", ctypes.c_size_t),
     ]
 
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "StringView":
-        """Create a StringView from bytes (uses host allocator)."""
-        sv: StringView = cls()
-        if data:
-            buf: ctypes.Array = ctypes.create_string_buffer(data)
-            sv.ptr = ctypes.cast(buf, ctypes.c_void_p)
-            sv.len = len(data)
-        else:
-            sv.ptr = ctypes.c_void_p(0)
-            sv.len = 0
-        return sv
-
-    @classmethod
-    def from_static(cls, data: bytes) -> "StringView":
-        """Create a StringView from static bytes (no copy)."""
-        sv: StringView = cls()
-        if data:
-            sv.ptr = ctypes.cast(ctypes.c_char_p(data), ctypes.c_void_p)
-            sv.len = len(data)
-        else:
-            sv.ptr = ctypes.c_void_p(0)
-            sv.len = 0
-        return sv
+    # SAFETY: StringView is non-owning. Callers must keep buffer alive during FFI calls.
+    # Use inline buffer creation: buf = (ctypes.c_uint8 * len(data))(*data)
 
     def to_bytes(self) -> bytes:
         """Convert StringView to bytes."""

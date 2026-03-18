@@ -46,13 +46,6 @@ export function toStr(sv: { ptr: bigint; len: number }): string;
 export const toString: (sv: { ptr: bigint; len: number }) => string;
 
 /**
- * Create StringView from JavaScript string (owned copy).
- * @param s - JavaScript string
- * @returns StringView with allocated memory
- */
-export function strAsView(s: string): { ptr: bigint; len: number };
-
-/**
  * Call a plugin function by vtable index.
  * @param lib - Deno dynamic library instance
  * @param vtablePtr - Pointer to plugin vtable

@@ -9,7 +9,6 @@ members = [
     "tests/fixtures/reload_plugin_v2",
     "tests/fixtures/depender_plugin",
     "tests/fixtures/no_init_plugin",
-    "host-libs/rust",
     "guest-libs/rust",
     "tests/integration",
     "examples/hosts/rust",
@@ -38,7 +37,6 @@ polyplug_lua = { path = "crates/polyplug_lua" }
 polyplug_python = { path = "crates/polyplug_python" }
 polyplug_native = { path = "crates/polyplug_native" }
 polyplug_guest = { path = "guest-libs/rust" }
-polyplug_host = { path = "host-libs/rust" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

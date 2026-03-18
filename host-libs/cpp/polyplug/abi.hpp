@@ -130,10 +130,6 @@ struct PluginContext {
 struct OpaqueRuntime;
 using RuntimeHandle = OpaqueRuntime*;
 
-/// Opaque guard returned by polyplug_runtime_resolve_plugin.
-/// Holds a lock on the plugin slot; free with polyplug_runtime_plugin_release.
-struct OpaqueGuard;
-
 // ─── C ABI exports ───────────────────────────────────────────────────────────
 
 /// Allocate memory via the host allocator.
@@ -167,16 +163,10 @@ uint64_t polyplug_runtime_find_by_bundle(const OpaqueRuntime* rt, uint64_t bundl
 /// Returns the number of handles written (each is a packed u64).
 size_t polyplug_runtime_find_all_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
 
-/// Resolve a packed handle to an OpaqueGuard that holds a vtable pointer.
-/// Returns null if the handle is stale or null. Free the guard with polyplug_runtime_plugin_release.
-OpaqueGuard* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
-
-/// Retrieve the raw vtable pointer from a guard returned by polyplug_runtime_resolve_plugin.
-const void* polyplug_runtime_plugin_vtable(const OpaqueGuard* guard);
-
-/// Release an OpaqueGuard previously returned by polyplug_runtime_resolve_plugin.
-/// Must be called exactly once per pointer.
-void polyplug_runtime_plugin_release(OpaqueGuard* guard);
+/// Resolve a packed handle to a vtable pointer directly.
+/// Returns null if the handle is stale or null.
+/// The returned pointer is valid as long as the runtime is alive and no hot-reload occurs.
+const void* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
 
 /// Copy the last error message into buf (up to buf_len bytes). Returns bytes written.
 /// Clears the stored error after reading.

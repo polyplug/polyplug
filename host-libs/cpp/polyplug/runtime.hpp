@@ -24,46 +24,31 @@ namespace polyplug {
 class PluginGuard {
 public:
     /// Constructs a null guard.
-    PluginGuard() noexcept : guard_(nullptr), vtable_(nullptr) {}
+    PluginGuard() noexcept : vtable_(nullptr) {}
 
     /// Resolves a packed handle and caches the vtable.
     /// If packed_handle is UINT64_MAX or resolution fails, creates a null guard.
     PluginGuard(RuntimeHandle rt, uint64_t packed_handle) noexcept
-        : guard_(nullptr), vtable_(nullptr) {
+        : vtable_(nullptr) {
         if (packed_handle != UINT64_MAX && rt != nullptr) {
-            guard_ = polyplug_runtime_resolve_plugin(rt, packed_handle);
-            if (guard_ != nullptr) {
-                vtable_ = static_cast<const PluginVTable*>(
-                    polyplug_runtime_plugin_vtable(guard_));
-            }
+            vtable_ = static_cast<const PluginVTable*>(
+                polyplug_runtime_resolve_plugin(rt, packed_handle));
         }
     }
 
-    /// Releases the guard via RAII.
-    ~PluginGuard() noexcept {
-        if (guard_ != nullptr) {
-            polyplug_runtime_plugin_release(guard_);
-            guard_ = nullptr;
-            vtable_ = nullptr;
-        }
-    }
+    /// No release needed — vtable pointer is borrowed from runtime.
+    ~PluginGuard() noexcept = default;
 
     /// Move constructor.
     PluginGuard(PluginGuard&& other) noexcept
-        : guard_(other.guard_), vtable_(other.vtable_) {
-        other.guard_ = nullptr;
+        : vtable_(other.vtable_) {
         other.vtable_ = nullptr;
     }
 
     /// Move assignment.
     PluginGuard& operator=(PluginGuard&& other) noexcept {
         if (this != &other) {
-            if (guard_ != nullptr) {
-                polyplug_runtime_plugin_release(guard_);
-            }
-            guard_ = other.guard_;
             vtable_ = other.vtable_;
-            other.guard_ = nullptr;
             other.vtable_ = nullptr;
         }
         return *this;
@@ -81,17 +66,16 @@ public:
 
     /// Returns true if this guard is null (resolution failed or moved-from).
     bool is_null() const noexcept {
-        return guard_ == nullptr;
+        return vtable_ == nullptr;
     }
 
     /// Returns true if this guard holds a valid plugin.
     explicit operator bool() const noexcept {
-        return guard_ != nullptr;
+        return vtable_ != nullptr;
     }
 
 private:
-    OpaqueGuard* guard_;           ///< Opaque guard handle from resolve_plugin
-    const PluginVTable* vtable_;   ///< Cached vtable pointer (no FFI on access)
+    const PluginVTable* vtable_;   ///< Cached vtable pointer (borrowed from runtime)
 };
 
 class Runtime {
@@ -152,6 +136,18 @@ public:
 
     uint64_t find(uint64_t contract_id, uint32_t min_version) const noexcept {
         return polyplug_runtime_find_by_contract(handle_, contract_id, min_version);
+    }
+
+    uint64_t find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version) const noexcept {
+        return polyplug_runtime_find_by_bundle(handle_, bundle_id, contract_id, min_version);
+    }
+
+    std::vector<uint64_t> find_all_by_contract(uint64_t contract_id, uint32_t min_version, size_t cap = 64) const {
+        std::vector<uint64_t> handles(cap);
+        size_t count = polyplug_runtime_find_all_by_contract(
+            handle_, contract_id, min_version, handles.data(), cap);
+        handles.resize(count);
+        return handles;
     }
 
     /// Resolves a packed handle to a PluginGuard with cached vtable.

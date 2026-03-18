@@ -1,89 +1,102 @@
 # Rust Host Lib Fix Plan
 
-## Status: MINOR IMPROVEMENTS NEEDED
+## Status: ✅ COMPLETE — NO CHANGES NEEDED
 
 ## Summary
 
-The Rust host lib is the reference implementation and is already well-optimized. The only recommended change is adding `PluginGuard` for consistency with other languages and RAII safety.
+After analysis, **Rust does not need a separate `host-libs/rust/` package** because:
+
+1. **Rust hosts use `polyplug` crate directly** — no FFI needed
+2. **FFI layer already exists** in `crates/polyplug/src/ffi.rs` with `OpaquePluginGuard`
+3. **Guard pattern already exists** — `PluginVTableGuard` in registry.rs for Rust, `OpaquePluginGuard` in ffi.rs for C ABI
 
 ---
 
-## [OPTIONAL] Phase 1: Add PluginGuard Wrapper
+## Architectural Decision
 
-**Blockers:** None  
-**Parallel:** No
+### Deleted: `host-libs/rust/` (polyplug_host crate)
 
-**Decision Required:** Should we add `PluginGuard` to Rust host lib?
+**Rationale:**
 
-**Pros:**
-- Consistency with C#, Python, JS, Lua
-- RAII safety (automatic guard release via `Drop`)
-- Cached vtable pointer
+| Language | How it Accesses polyplug | Needs host-libs? |
+|----------|-------------------------|------------------|
+| C# | FFI → `libpolyplug.so` | ✅ Yes — P/Invoke bindings |
+| Python | FFI → `libpolyplug.so` | ✅ Yes — ctypes bindings |
+| Lua | FFI → `libpolyplug.so` | ✅ Yes — LuaJIT FFI |
+| JS | FFI → `libpolyplug.so` | ✅ Yes — Deno.dlopen |
+| **Rust** | **Direct crate dependency** | ❌ **No — same language!** |
 
-**Cons:**
-- Raw pointers are idiomatic Rust for FFI
-- Adds abstraction layer
-- Not strictly necessary for correctness
+**PRD Quote:**
+> `Rust host-libs/rust/ → polyplug crate (crates.io)`
 
----
+This means Rust uses `polyplug` directly, not a separate host lib.
 
-### If Proceeding:
+### What Was Removed
 
-- [ ] Add `PluginGuard` struct to `host-libs/rust/src/lib.rs` with vtable caching
-  - **Verification:** `PluginGuard` has `guard: *mut OpaqueGuard` and `vtable: *const PluginVTable` fields; vtable cached in constructor
-
-- [ ] Implement `Drop` for `PluginGuard` to release guard
-  - **Verification:** `Drop::drop` calls `polyplug_runtime_plugin_release(self.guard)`; no double-free
-
-- [ ] Add `PluginGuard::vtable()` method returning cached pointer
-  - **Verification:** Method returns `self.vtable` with no FFI call
-
-- [ ] Add `Runtime::resolve_plugin(&self, handle: PluginHandle) -> Option<PluginGuard>` method
-  - **Verification:** Method calls `polyplug_runtime_resolve_plugin`, caches vtable, returns `Some(PluginGuard)`
-
-- [ ] Add SAFETY comments to all `unsafe` blocks in `PluginGuard` implementation
-  - **Verification:** Every `unsafe` block has `// SAFETY:` comment explaining why operation is sound
-
-- [ ] Run `cargo test` to verify all tests pass
-  - **Verification:** All Rust tests pass with exit code 0
-
-- [ ] Run `cargo clippy -- -D warnings` to verify no lints
-  - **Verification:** Clippy exits with code 0; no warnings
+- `host-libs/rust/` directory
+- `polyplug_host` from workspace members
+- `polyplug_host` from workspace.dependencies
 
 ---
 
-## Phase 2: No Changes Required
+## Existing Guard Patterns (No Changes Needed)
 
-**Blockers:** N/A  
-**Parallel:** N/A
+### For Rust Hosts (Internal API)
 
-- [ ] **No action needed** - Rust loaders are already separate adapter crates (`polyplug-dotnet`, `polyplug-python`, etc.)
-  - **Verification:** Confirmed loaders are in `crates/polyplug-dotnet/`, `crates/polyplug-python/`, etc.
+```rust
+// crates/polyplug/src/registry.rs
+pub struct PluginVTableGuard {
+    slot: Arc<VTableSlot>,
+    _not_send: PhantomData<Cell<()>>,  // NOT Send - must re-resolve per thread
+}
 
-- [ ] **No action needed** - Rust codegen already generates optimal vtable dispatch
-  - **Verification:** Generated code uses direct `vtable.functions.add(fn_id)` with one indirect call
+// Usage:
+let guard: PluginVTableGuard = runtime.resolve_guard(handle)?;
+let vtable: *const PluginVTable = guard.vtable();
+```
+
+### For Non-Rust Hosts (C ABI)
+
+```rust
+// crates/polyplug/src/ffi.rs
+pub struct OpaquePluginGuard(pub(crate) PluginVTableGuard);
+
+// FFI functions:
+polyplug_runtime_resolve_plugin(rt, handle) → *mut OpaquePluginGuard
+polyplug_runtime_plugin_vtable(guard) → *const PluginVTable
+polyplug_runtime_plugin_release(guard)
+```
 
 ---
 
-## Recommendation
+## Phase 1: N/A — Deleted
 
-**Proceed with Phase 1** for consistency across all host libs, even though the current raw pointer approach is idiomatic Rust. The benefits are:
-
-1. **Consistency**: All host libs (C#, Python, JS, Lua, Rust) have the same `PluginGuard` pattern
-2. **RAII Safety**: Automatic cleanup via `Drop` trait
-3. **Performance**: Cached vtable eliminates one FFI call per plugin interaction
+The `PluginGuard` implementation that was added to `polyplug_host` was removed along with the crate, as it was architecturally incorrect.
 
 ---
 
-## Estimated Effort (If Proceeding)
+## Phase 2: ✅ Verified
 
-- Phase 1: 1 hour
-- Testing: 30 minutes
+- [x] **No action needed** - Rust loaders are already separate adapter crates
+  - **Verification:** `crates/polyplug_dotnet/`, `crates/polyplug_python/`, `crates/polyplug_lua/`, `crates/polyplug_js/`, `crates/polyplug_js_deno/`, `crates/polyplug_native/`
 
-**Total: ~1.5 hours (optional)**
+- [x] **No action needed** - Rust codegen already generates optimal vtable dispatch
+  - **Verification:** Generated code uses `*vtable.functions.add(fn_id)` with one indirect call
+
+- [x] **No action needed** - FFI layer already has guard pattern
+  - **Verification:** `OpaquePluginGuard` in `ffi.rs` with `resolve_plugin`, `plugin_vtable`, `plugin_release`
+
+---
+
+## Verification
+
+- [x] `cargo check --workspace` passes
+- [x] No code references `polyplug_host`
+- [x] Rust hosts use `polyplug` directly (e.g., `examples/hosts/rust/`)
 
 ---
 
 ## PRD References
 
 - PRD §8: "polyplug crate (crates.io) — PluginRuntime builder, type-safe ABI wrappers"
+- PRD §443-460: Rust example shows direct `use polyplug::PluginRuntime` — no host lib

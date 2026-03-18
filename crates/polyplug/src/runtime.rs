@@ -425,6 +425,18 @@ impl Runtime {
             .find_all_by_contract(contract_id, min_version, out)
     }
 
+    /// Find all providers of a contract, packing handles directly into a u64 buffer.
+    #[inline(always)]
+    pub fn find_all_by_contract_packed(
+        &self,
+        contract_id: u64,
+        min_version: u32,
+        out: &mut [u64],
+    ) -> usize {
+        self.registry
+            .find_all_by_contract_packed(contract_id, min_version, out)
+    }
+
     /// Resolve a plugin handle to a vtable pointer.
     #[inline(always)]
     pub fn resolve_plugin(

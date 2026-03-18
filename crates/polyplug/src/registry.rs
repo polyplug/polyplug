@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -63,7 +64,8 @@ impl PluginVTableGuard {
 //  generation is incremented each time the slot is vacated (plugin unloaded).
 pub(crate) struct RegistrySlot {
     /// Current generation counter. Compared against PluginHandle::generation.
-    pub generation: u32,
+    /// Uses AtomicU32 for lock-free reads during handle validation.
+    pub generation: AtomicU32,
     /// Slot contents — None if vacant (after unload).
     pub entry: Option<RegistryEntry>,
     /// ArcSwap vtable — allows lock-free hot-swapping of implementations.
@@ -81,25 +83,45 @@ pub(crate) struct RegistryEntry {
     pub bundle_id: u64,
 }
 
+/// Internal data protected by a single RwLock.
+///
+/// This structure groups all mutable registry state together to enable
+/// single-lock acquisition on the hot path, reducing lock overhead.
+struct RegistryData {
+    /// Slot storage — each slot holds a plugin registration or is vacant.
+    slots: Vec<RegistrySlot>,
+    /// Maps contract_id (FNV-1a u64) to the Vec of registered slot indices (multi-impl support).
+    contract_index: HashMap<u64, Vec<u32>>,
+    /// Maps bundle_id to the first slot index registered for that bundle.
+    bundle_index: HashMap<u64, u32>,
+    /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
+    declared_deps: HashMap<u64, HashSet<u64>>,
+}
+
+impl RegistryData {
+    /// Create empty registry data.
+    fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            contract_index: HashMap::new(),
+            bundle_index: HashMap::new(),
+            declared_deps: HashMap::new(),
+        }
+    }
+}
+
 /// Thread-safe plugin registry.
 //
-//  slots: RwLock protects all writes (registration/unload).
-//  Reads (find, resolve) take a read guard and are concurrent.
-//  contract_index maps contract_id -> Vec<slot_index> to support multiple implementations.
-//  bundle_index maps bundle_id -> first slot_index for bundle-scoped lookups.
-//  declared_deps tracks which contract_ids each bundle has declared as dependencies.
+//  Uses a single RwLock to protect all mutable state, reducing lock acquisition
+//  overhead on the hot path. Writes (registration/unload) are rare, so contention
+//  is minimal. Reads (find, resolve) take a read guard and are concurrent.
 pub struct Registry {
     /// Library handles for all loaded native bundles.
     /// Declared FIRST so they drop LAST (Rust drops fields in reverse order).
     /// This ensures vtable pointers in `slots` are never dangling during drop.
     loaded_libraries: Mutex<Vec<libloading::Library>>,
-    slots: RwLock<Vec<RegistrySlot>>,
-    /// Maps contract_id (FNV-1a u64) to the Vec of registered slot indices (multi-impl support).
-    contract_index: RwLock<HashMap<u64, Vec<u32>>>,
-    /// Maps bundle_id to the first slot index registered for that bundle.
-    bundle_index: RwLock<HashMap<u64, u32>>,
-    /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
-    declared_deps: RwLock<HashMap<u64, HashSet<u64>>>,
+    /// Single RwLock protecting all mutable registry state.
+    data: RwLock<RegistryData>,
 }
 
 impl Registry {
@@ -107,10 +129,7 @@ impl Registry {
     pub fn new() -> Registry {
         Registry {
             loaded_libraries: Mutex::new(Vec::new()),
-            slots: RwLock::new(Vec::new()),
-            contract_index: RwLock::new(HashMap::new()),
-            bundle_index: RwLock::new(HashMap::new()),
-            declared_deps: RwLock::new(HashMap::new()),
+            data: RwLock::new(RegistryData::new()),
         }
     }
 
@@ -155,19 +174,13 @@ impl Registry {
         // The ABI contract requires the pointer to remain valid for the library lifetime.
         let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
 
-        let mut slots: std::sync::RwLockWriteGuard<'_, Vec<RegistrySlot>> =
-            self.slots.write().unwrap_or_else(|e| e.into_inner());
-        let mut index_map: std::sync::RwLockWriteGuard<'_, HashMap<u64, Vec<u32>>> = self
-            .contract_index
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        let mut bundle_idx_map: std::sync::RwLockWriteGuard<'_, HashMap<u64, u32>> =
-            self.bundle_index.write().unwrap_or_else(|e| e.into_inner());
+        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+            self.data.write().unwrap_or_else(|e| e.into_inner());
 
         // Check existing slots for this contract_id
-        if let Some(existing_indices) = index_map.get(&contract_id) {
+        if let Some(existing_indices) = data.contract_index.get(&contract_id) {
             for &existing_idx in existing_indices.iter() {
-                let existing_slot: &RegistrySlot = &slots[existing_idx as usize];
+                let existing_slot: &RegistrySlot = &data.slots[existing_idx as usize];
                 if let Some(ref existing_entry) = existing_slot.entry {
                     // Hash collision: same contract_id, different contract_name
                     if existing_entry.contract_name != contract_name {
@@ -190,22 +203,23 @@ impl Registry {
         }
 
         // Find a vacant slot or push a new one
-        let slot_idx: u32 = slots
+        let slot_idx: u32 = data
+            .slots
             .iter()
             .position(|s| s.entry.is_none())
             .map(|i| i as u32)
             .unwrap_or_else(|| {
-                let new_idx: u32 = slots.len() as u32;
-                slots.push(RegistrySlot {
-                    generation: 0,
+                let new_idx: u32 = data.slots.len() as u32;
+                data.slots.push(RegistrySlot {
+                    generation: AtomicU32::new(0_u32),
                     entry: None,
                     vtable: None,
                 });
                 new_idx
             });
 
-        let slot: &mut RegistrySlot = &mut slots[slot_idx as usize];
-        let generation: u32 = slot.generation;
+        let slot: &mut RegistrySlot = &mut data.slots[slot_idx as usize];
+        let generation: u32 = slot.generation.load(Ordering::Acquire);
         slot.entry = Some(RegistryEntry {
             descriptor,
             contract_name,
@@ -214,10 +228,10 @@ impl Registry {
         slot.vtable = Some(ArcSwap::new(Arc::new(VTableSlot(vtable_ptr))));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
-        index_map.entry(contract_id).or_default().push(slot_idx);
+        data.contract_index.entry(contract_id).or_default().push(slot_idx);
 
         // Update bundle_index: record first slot for this bundle_id
-        bundle_idx_map.entry(bundle_id).or_insert(slot_idx);
+        data.bundle_index.entry(bundle_id).or_insert(slot_idx);
 
         Ok(PluginHandle {
             index: slot_idx,
@@ -234,11 +248,9 @@ impl Registry {
         bundle_id: u64,
         contract_ids: Vec<u64>,
     ) -> Result<(), RegistryError> {
-        let mut deps: std::sync::RwLockWriteGuard<'_, HashMap<u64, HashSet<u64>>> = self
-            .declared_deps
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
-        let set: &mut HashSet<u64> = deps.entry(bundle_id).or_default();
+        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+            self.data.write().unwrap_or_else(|e| e.into_inner());
+        let set: &mut HashSet<u64> = data.declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
             set.insert(cid);
         }
@@ -247,12 +259,11 @@ impl Registry {
 
     /// Returns true if `bundle_id` has declared `contract_id` as a dependency.
     pub(crate) fn is_dependency_declared(&self, bundle_id: u64, contract_id: u64) -> bool {
-        match self.declared_deps.read() {
-            Ok(guard) => guard
-                .get(&bundle_id)
-                .is_some_and(|s| s.contains(&contract_id)),
-            Err(_) => false,
-        }
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
+        data.declared_deps
+            .get(&bundle_id)
+            .is_some_and(|s| s.contains(&contract_id))
     }
 
     /// Find any registered plugin satisfying the given contract_id and minimum version.
@@ -264,14 +275,10 @@ impl Registry {
         contract_id: u64,
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            self.slots.read().unwrap_or_else(|e| e.into_inner());
-        let index_map: std::sync::RwLockReadGuard<'_, HashMap<u64, Vec<u32>>> = self
-            .contract_index
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
 
-        let indices: &Vec<u32> = match index_map.get(&contract_id) {
+        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
             None => {
                 return Err(RegistryError::PluginNotFound {
@@ -282,7 +289,7 @@ impl Registry {
         };
 
         for &slot_idx in indices.iter() {
-            let slot: &RegistrySlot = &slots[slot_idx as usize];
+            let slot: &RegistrySlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref arc_vtable) = slot.vtable
             {
@@ -293,7 +300,7 @@ impl Registry {
                 if version >= min_version {
                     return Ok(PluginHandle {
                         index: slot_idx,
-                        generation: slot.generation,
+                        generation: slot.generation.load(Ordering::Acquire),
                     });
                 }
             }
@@ -311,12 +318,10 @@ impl Registry {
         contract_id: u64,
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            self.slots.read().unwrap_or_else(|e| e.into_inner());
-        let bundle_idx_map: std::sync::RwLockReadGuard<'_, HashMap<u64, u32>> =
-            self.bundle_index.read().unwrap_or_else(|e| e.into_inner());
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
 
-        let &slot_idx: &u32 = match bundle_idx_map.get(&bundle_id) {
+        let &slot_idx: &u32 = match data.bundle_index.get(&bundle_id) {
             Some(i) => i,
             None => {
                 return Err(RegistryError::PluginNotFound {
@@ -326,7 +331,7 @@ impl Registry {
             }
         };
 
-        let slot: &RegistrySlot = &slots[slot_idx as usize];
+        let slot: &RegistrySlot = &data.slots[slot_idx as usize];
         if let Some(ref entry) = slot.entry
             && let Some(ref arc_vtable) = slot.vtable
         {
@@ -340,7 +345,7 @@ impl Registry {
             {
                 return Ok(PluginHandle {
                     index: slot_idx,
-                    generation: slot.generation,
+                    generation: slot.generation.load(Ordering::Acquire),
                 });
             }
         }
@@ -357,14 +362,10 @@ impl Registry {
         min_version: u32,
         out: &mut [PluginHandle],
     ) -> usize {
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            self.slots.read().unwrap_or_else(|e| e.into_inner());
-        let index_map: std::sync::RwLockReadGuard<'_, HashMap<u64, Vec<u32>>> = self
-            .contract_index
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
 
-        let indices: &Vec<u32> = match index_map.get(&contract_id) {
+        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -377,7 +378,7 @@ impl Registry {
             if write_count >= out.len() {
                 break;
             }
-            let slot: &RegistrySlot = &slots[slot_idx as usize];
+            let slot: &RegistrySlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref arc_vtable) = slot.vtable
             {
@@ -388,8 +389,56 @@ impl Registry {
                 if version >= min_version {
                     out[write_count] = PluginHandle {
                         index: slot_idx,
-                        generation: slot.generation,
+                        generation: slot.generation.load(Ordering::Acquire),
                     };
+                    write_count += 1usize;
+                }
+            }
+        }
+        write_count
+    }
+
+    /// Find all plugins satisfying the given contract_id and minimum version,
+    /// packing handles directly into a u64 buffer.
+    ///
+    /// This is an optimized version of `find_all_by_contract` that avoids
+    /// intermediate allocation by packing handles directly during iteration.
+    /// Each handle is packed as: `(generation as u64) << 32 | index as u64`.
+    ///
+    /// Returns the number of packed handles written to `out`.
+    pub fn find_all_by_contract_packed(
+        &self,
+        contract_id: u64,
+        min_version: u32,
+        out: &mut [u64],
+    ) -> usize {
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
+
+        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return 0usize,
+        };
+
+        if out.is_empty() {
+            return 0usize;
+        }
+        let mut write_count: usize = 0usize;
+        for &slot_idx in indices.iter() {
+            if write_count >= out.len() {
+                break;
+            }
+            let slot: &RegistrySlot = &data.slots[slot_idx as usize];
+            if slot.entry.is_some()
+                && let Some(ref arc_vtable) = slot.vtable
+            {
+                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
+                // SAFETY: VTableSlot.0 is 'static valid for Registry lifetime.
+                // Read-only access after registration.
+                let version: u32 = unsafe { (*guard.0).contract_version };
+                if version >= min_version {
+                    // Pack handle directly: (generation << 32) | index
+                    out[write_count] = (slot.generation.load(Ordering::Acquire) as u64) << 32 | slot_idx as u64;
                     write_count += 1usize;
                 }
             }
@@ -402,11 +451,11 @@ impl Registry {
     //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
     //  Returns Err(StaleHandle) if the slot is vacant or has no vtable.
     pub fn resolve_guard(&self, handle: PluginHandle) -> Result<PluginVTableGuard, RegistryError> {
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            self.slots.read().unwrap_or_else(|e| e.into_inner());
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
 
         let slot_idx: usize = handle.index as usize;
-        if slot_idx >= slots.len() {
+        if slot_idx >= data.slots.len() {
             return Err(RegistryError::StaleHandle {
                 index: handle.index,
                 expected: handle.generation,
@@ -414,12 +463,13 @@ impl Registry {
             });
         }
 
-        let slot: &RegistrySlot = &slots[slot_idx];
-        if slot.generation != handle.generation {
+        let slot: &RegistrySlot = &data.slots[slot_idx];
+        let slot_generation: u32 = slot.generation.load(Ordering::Acquire);
+        if slot_generation != handle.generation {
             return Err(RegistryError::StaleHandle {
                 index: handle.index,
                 expected: handle.generation,
-                found: slot.generation,
+                found: slot_generation,
             });
         }
 
@@ -431,7 +481,7 @@ impl Registry {
             None => Err(RegistryError::StaleHandle {
                 index: handle.index,
                 expected: handle.generation,
-                found: slot.generation,
+                found: slot_generation,
             }),
         }
     }
@@ -468,28 +518,28 @@ impl Registry {
         slot_index: u32,
         new_vtable: Arc<VTableSlot>,
     ) -> Result<Arc<VTableSlot>, RegistryError> {
-        let mut slots: std::sync::RwLockWriteGuard<'_, Vec<RegistrySlot>> =
-            self.slots.write().unwrap_or_else(|e| e.into_inner());
+        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+            self.data.write().unwrap_or_else(|e| e.into_inner());
         let slot_idx: usize = slot_index as usize;
-        if slot_idx >= slots.len() {
+        if slot_idx >= data.slots.len() {
             return Err(RegistryError::StaleHandle {
                 index: slot_index,
                 expected: 0_u32,
                 found: 0_u32,
             });
         }
-        let slot: &mut RegistrySlot = &mut slots[slot_idx];
+        let slot: &mut RegistrySlot = &mut data.slots[slot_idx];
         match slot.vtable {
             Some(ref arc_swap) => {
                 let old_arc: Arc<VTableSlot> = arc_swap.swap(new_vtable);
                 // Bump generation so stale PluginHandles from before reload are detected.
-                slot.generation = slot.generation.wrapping_add(1_u32);
+                slot.generation.fetch_add(1_u32, Ordering::AcqRel);
                 Ok(old_arc)
             }
             None => Err(RegistryError::StaleHandle {
                 index: slot_index,
                 expected: 0_u32,
-                found: slot.generation,
+                found: slot.generation.load(Ordering::Acquire),
             }),
         }
     }
@@ -499,10 +549,10 @@ impl Registry {
     /// Returns an empty `Vec` if the bundle has no registered slots.
     /// Used by `reload_bundle()` to locate every vtable slot to swap.
     pub fn find_slots_by_bundle(&self, bundle_id: u64) -> Vec<u32> {
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            self.slots.read().unwrap_or_else(|e| e.into_inner());
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
         let mut result: Vec<u32> = Vec::new();
-        for (i, slot) in slots.iter().enumerate() {
+        for (i, slot) in data.slots.iter().enumerate() {
             if let Some(ref entry) = slot.entry
                 && entry.bundle_id == bundle_id
             {
@@ -515,9 +565,9 @@ impl Registry {
     /// Get the contract_id for the vtable currently stored in `slot_index`.
     /// Returns None if the slot is empty or has no vtable.
     pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<u64> {
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            self.slots.read().unwrap_or_else(|e| e.into_inner());
-        let slot: &RegistrySlot = slots.get(slot_index as usize)?;
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
+        let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
         let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
         let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
         // SAFETY: VTableSlot.0 is a valid 'static PluginVTable written at registration.
@@ -775,9 +825,9 @@ mod tests {
         assert_eq!(old_contract_id, MOCK_VTABLE.contract_id);
 
         // Verify generation was bumped
-        let slots: std::sync::RwLockReadGuard<'_, Vec<RegistrySlot>> =
-            registry.slots.read().unwrap_or_else(|e| e.into_inner());
-        let new_gen: u32 = slots[handle.index as usize].generation;
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            registry.data.read().unwrap_or_else(|e| e.into_inner());
+        let new_gen: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
         assert_eq!(new_gen, gen_before.wrapping_add(1_u32));
     }
 
@@ -813,5 +863,58 @@ mod tests {
 
         let slots: Vec<u32> = registry.find_slots_by_bundle(bundle_id);
         assert_eq!(slots.len(), 2, "both slots should be found for the bundle");
+    }
+
+    #[test]
+    fn concurrent_generation_reads() {
+        let registry: Registry = Registry::new();
+        let descriptor: PluginDescriptor = make_descriptor("concurrent_test", "concurrent.contract");
+        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        let handle: PluginHandle = unsafe {
+            registry.register(descriptor, &MOCK_VTABLE, "concurrent.contract".to_owned(), 999u64)
+        }
+        .expect("registration should succeed");
+
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            registry.data.read().unwrap_or_else(|e| e.into_inner());
+        let gen1: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
+        let gen2: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
+        assert_eq!(gen1, gen2, "consecutive loads should return same value");
+        assert_eq!(gen1, handle.generation, "loaded generation should match handle");
+    }
+
+    #[test]
+    fn generation_increment_during_swap() {
+        let registry: Registry = Registry::new();
+        let descriptor: PluginDescriptor = make_descriptor("swap_test", "swap.test.contract");
+        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        let handle: PluginHandle = unsafe {
+            registry.register(descriptor, &MOCK_VTABLE, "swap.test.contract".to_owned(), 888u64)
+        }
+        .expect("registration should succeed");
+
+        static NEW_VTABLE: PluginVTable = PluginVTable {
+            contract_id: 0x1234_5678_9ABC_DEF0,
+            contract_version: (3 << 16),
+            function_count: 0,
+            functions: MOCK_FNS.as_ptr(),
+        };
+
+        let original_gen: u32 = handle.generation;
+        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_VTABLE));
+        let _: Arc<VTableSlot> = registry
+            .swap_vtable(handle.index, new_arc)
+            .expect("swap_vtable should succeed");
+
+        let result: Result<*const PluginVTable, RegistryError> = registry.resolve(handle);
+        assert!(
+            matches!(result, Err(RegistryError::StaleHandle { .. })),
+            "old handle should be stale after generation bump"
+        );
+
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            registry.data.read().unwrap_or_else(|e| e.into_inner());
+        let new_gen: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
+        assert_eq!(new_gen, original_gen.wrapping_add(1_u32), "generation should increment by 1");
     }
 }

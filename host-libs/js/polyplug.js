@@ -27,8 +27,6 @@ const SYMBOLS = {
   polyplug_runtime_find_by_bundle: { parameters: ["pointer", "u64", "u64", "u32"], result: "u64" },
   polyplug_runtime_find_all_by_contract: { parameters: ["pointer", "u64", "u32", "pointer", "usize"], result: "usize" },
   polyplug_runtime_resolve_plugin: { parameters: ["pointer", "u64"], result: "pointer" },
-  polyplug_runtime_plugin_release: { parameters: ["pointer"], result: "void" },
-  polyplug_runtime_plugin_vtable: { parameters: ["pointer"], result: "pointer" },
   polyplug_runtime_last_error: { parameters: ["pointer", "usize"], result: "usize" },
   polyplug_runtime_error_message_len: { parameters: [], result: "usize" },
   polyplug_host_free: { parameters: ["u64", "usize", "usize"], result: "void" },
@@ -93,18 +91,6 @@ export function toStr(sv) {
  * @returns {string} JavaScript string
  */
 export const toString = toStr;
-
-/**
- * Create StringView from JavaScript string (owned copy).
- * @param {string} s - JavaScript string
- * @returns {{ ptr: bigint; len: number }} StringView with allocated memory
- */
-export function strAsView(s) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(s);
-    const ptr = Deno.UnsafePointer.of(new Uint8Array(data));
-    return { ptr: Deno.UnsafePointer.value(ptr), len: data.length };
-}
 
 /**
  * Call a plugin function by vtable index.
@@ -266,33 +252,20 @@ export class Runtime {
    * @returns {Guard} Plugin guard
    */
   resolvePlugin(packedHandle) {
-    const ptr = this.#lib.symbols.polyplug_runtime_resolve_plugin(this.#ptr, packedHandle);
-    if (ptr === null) throw new Error(`polyplug_runtime_resolve_plugin failed: ${this.lastError()}`);
-    return new Guard(this.#lib, ptr);
+    const vtablePtr = this.#lib.symbols.polyplug_runtime_resolve_plugin(this.#ptr, packedHandle);
+    if (vtablePtr === null) throw new Error(`polyplug_runtime_resolve_plugin failed: ${this.lastError()}`);
+    return new Guard(vtablePtr);
   }
 }
 
 export class Guard {
-  #lib;
-  #ptr;
   #vtable;
 
   /**
-   * @param {Deno.DynamicLibrary} lib - Dynamic library instance
-   * @param {Deno.PointerValue} ptr - Guard pointer
+   * @param {Deno.PointerValue} vtablePtr - Vtable pointer
    */
-  constructor(lib, ptr) {
-    this.#lib = lib;
-    this.#ptr = ptr;
-    this.#vtable = lib.symbols.polyplug_runtime_plugin_vtable(ptr);
-  }
-
-  registerNativeLoader() {
-    // Native loader is built-in to the runtime
-  }
-
-  [Symbol.dispose]() {
-    this.#lib.symbols.polyplug_runtime_plugin_release(this.#ptr);
+  constructor(vtablePtr) {
+    this.#vtable = vtablePtr;
   }
 
   /**

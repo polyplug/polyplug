@@ -37,3 +37,19 @@ toml = { workspace = true }
 name = "vtable_dispatch"
 harness = false
 
+[[bench]]
+name = "ffi_resolve"
+harness = false
+
+[[bench]]
+name = "ffi_find_all"
+harness = false
+
+[[bench]]
+name = "registry_resolve"
+harness = false
+
+[[bench]]
+name = "registry_find"
+harness = false
+

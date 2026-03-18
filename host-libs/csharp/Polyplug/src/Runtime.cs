@@ -125,17 +125,16 @@ public sealed class Runtime
         EnsureHandle();
         if (packedHandle == ulong.MaxValue)
         {
-            return new PluginGuard(nint.Zero, nint.Zero);
+            return new PluginGuard(nint.Zero);
         }
 
-        nint guardHandle = NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
-        if (guardHandle == nint.Zero)
+        nint vtablePtr = NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
+        if (vtablePtr == nint.Zero)
         {
             ThrowLastError("Failed to resolve plugin.");
         }
 
-        nint vtablePtr = NativeMethods.PolyplugRuntimePluginVTable(guardHandle);
-        return new PluginGuard(guardHandle, vtablePtr);
+        return new PluginGuard(vtablePtr);
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)

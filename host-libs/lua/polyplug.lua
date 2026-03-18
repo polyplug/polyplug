@@ -40,7 +40,6 @@ end
 
 ffi.cdef([[
     typedef struct OpaqueRuntime OpaqueRuntime;
-    typedef struct OpaqueGuard OpaqueGuard;
 
     OpaqueRuntime* polyplug_runtime_create(void);
     void polyplug_runtime_destroy(OpaqueRuntime* rt);
@@ -49,9 +48,7 @@ ffi.cdef([[
     uint64_t polyplug_runtime_find_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version);
     uint64_t polyplug_runtime_find_by_bundle(const OpaqueRuntime* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t polyplug_runtime_find_all_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
-    OpaqueGuard* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
-    void polyplug_runtime_guard_destroy(OpaqueGuard* guard);
-    const void* polyplug_runtime_guard_vtable(const OpaqueGuard* guard);
+    const void* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
     uint32_t polyplug_runtime_error_message_len(void);
     void polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
     uint32_t polyplug_runtime_register_loader(OpaqueRuntime* rt, void* loader_ptr);
@@ -94,8 +91,14 @@ function M.Runtime.new()
     if rt_ptr == nil then
         error("polyplug_runtime_create failed")
     end
-    local self = { _ptr = rt_ptr, _lib = lib }
-    return setmetatable(self, M.Runtime)
+    local self = { _ptr = rt_ptr, _lib = lib, _destroyed = false }
+    local obj = setmetatable(self, M.Runtime)
+    ffi.gc(rt_ptr, function(ptr)
+        if not self._destroyed and ptr ~= nil then
+            lib.polyplug_runtime_destroy(ptr)
+        end
+    end)
+    return obj
 end
 
 function M.Runtime:load_bundle(path)
@@ -112,6 +115,43 @@ function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
     return lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
 end
 
+function M.Runtime:find_by_contract(contract_id, min_version)
+    local lib = self._lib
+    return lib.polyplug_runtime_find_by_contract(self._ptr, contract_id, min_version)
+end
+
+function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
+    cap = cap or 64
+    local lib = self._lib
+    local out = ffi.new("uint64_t[?]", cap)
+    local count = lib.polyplug_runtime_find_all_by_contract(self._ptr, contract_id, min_version, out, cap)
+    local result = {}
+    for i = 0, math.min(count, cap) - 1 do
+        table.insert(result, out[i])
+    end
+    return result
+end
+
+function M.Runtime:resolve_plugin(packed_handle)
+    if packed_handle == M.NULL_HANDLE then
+        return nil, "null handle"
+    end
+    local lib = self._lib
+    local vtable_ptr = lib.polyplug_runtime_resolve_plugin(self._ptr, packed_handle)
+    if vtable_ptr == nil then
+        return nil, M.last_error(lib)
+    end
+    return M.Guard.new(vtable_ptr)
+end
+
+function M.Runtime:destroy()
+    if self._ptr ~= nil and not self._destroyed then
+        self._lib.polyplug_runtime_destroy(self._ptr)
+        self._destroyed = true
+        self._ptr = nil
+    end
+end
+
 function M.Runtime:call(handle, func_name, arg)
     -- Simplified: just return the arg for testing
     return arg
@@ -120,41 +160,18 @@ end
 M.Guard = {}
 M.Guard.__index = M.Guard
 
-function M.Guard.new(lib, guard_ptr)
-    if guard_ptr == nil then
-        error("polyplug: guard_ptr is nil")
-    end
-    local vtable_ptr = lib.polyplug_runtime_guard_vtable(guard_ptr)
+function M.Guard.new(vtable_ptr)
     if vtable_ptr == nil then
-        lib.polyplug_runtime_guard_destroy(guard_ptr)
-        error("polyplug: failed to get vtable from guard")
+        error("polyplug: vtable_ptr is nil")
     end
     local self = {
-        _guard = guard_ptr,
         _vtable = vtable_ptr,
-        _lib = lib,
-        _destroyed = false,
     }
-    -- Set up GC finalizer for automatic cleanup
-    ffi.gc(guard_ptr, function()
-        if not self._destroyed then
-            lib.polyplug_runtime_guard_destroy(guard_ptr)
-        end
-    end)
     return setmetatable(self, M.Guard)
 end
 
 function M.Guard:vtable()
     return self._vtable
-end
-
-function M.Guard:destroy()
-    if self._destroyed then
-        return
-    end
-    self._lib.polyplug_runtime_guard_destroy(self._guard)
-    self._destroyed = true
-    self._guard = nil
 end
 
 -- Loader registration
@@ -252,25 +269,15 @@ local function to_str(sv)
     return ffi.string(sv.ptr, sv.len)
 end
 
-local function str_as_view(s)
-    return M.string_view(s)
-end
-
 M.to_str = to_str
 M.to_string = to_str
-M.str_as_view = str_as_view
 
 function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
     local lib = get_lib()
     
-    local guard_ptr = lib.polyplug_runtime_resolve_plugin(ffi.cast("OpaqueRuntime*", rt_ptr), packed_handle)
-    if guard_ptr == nil then
-        error("failed to resolve plugin")
-    end
-    
-    local vtable_ptr = lib.polyplug_runtime_guard_vtable(guard_ptr)
+    local vtable_ptr = lib.polyplug_runtime_resolve_plugin(ffi.cast("OpaqueRuntime*", rt_ptr), packed_handle)
     if vtable_ptr == nil then
-        error("failed to get vtable")
+        error("failed to resolve plugin vtable")
     end
     
     local vtable = ffi.cast(VTableType, vtable_ptr)
@@ -278,7 +285,6 @@ function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
     local funcs = ffi.cast("void***", vtable + 1)[0]
     
     if func_idx >= func_count then
-        lib.polyplug_runtime_guard_destroy(guard_ptr)
         error("function index " .. func_idx .. " out of bounds")
     end
     
@@ -296,8 +302,6 @@ function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
     local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
     
     local err_code = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
-    
-    lib.polyplug_runtime_guard_destroy(guard_ptr)
     
     if err_code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
         local result = to_str(output_sv)
