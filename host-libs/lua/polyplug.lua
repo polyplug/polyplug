@@ -4,6 +4,18 @@
 local ffi = require('ffi')
 local M = {}
 
+-- Error code constants matching polyplug ABI
+M.PolyplugError = {
+    NOT_FOUND = 4,
+    STALE_HANDLE = 5,
+    FUNCTION_NOT_AVAIL = 6
+}
+
+-- Module-level FFI type caching for hot path performance
+local VTableType = ffi.typeof("const void**")
+local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")
+local func_cache = {}
+
 local FNV_OFFSET = 0xcbf29ce484222325ULL
 local FNV_PRIME = 0x00000100000001B3ULL
 
@@ -62,6 +74,17 @@ local function get_lib()
     return M._lib
 end
 
+function M.last_error(lib)
+    lib = lib or get_lib()
+    local len = lib.polyplug_runtime_error_message_len()
+    if len == 0 then
+        return ""
+    end
+    local buf = ffi.new("uint8_t[?]", len)
+    lib.polyplug_runtime_last_error(buf, len)
+    return ffi.string(buf, len)
+end
+
 M.Runtime = {}
 M.Runtime.__index = M.Runtime
 
@@ -84,15 +107,54 @@ function M.Runtime:load_bundle(path)
     end
 end
 
-function M.Runtime:find_by_bundle(bundle_name, contract, min_version)
-    -- Simplified: just return a handle for testing
+function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
     local lib = self._lib
-    return ffi.cast("uint64_t", 1)
+    return lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
 end
 
 function M.Runtime:call(handle, func_name, arg)
     -- Simplified: just return the arg for testing
     return arg
+end
+
+M.Guard = {}
+M.Guard.__index = M.Guard
+
+function M.Guard.new(lib, guard_ptr)
+    if guard_ptr == nil then
+        error("polyplug: guard_ptr is nil")
+    end
+    local vtable_ptr = lib.polyplug_runtime_guard_vtable(guard_ptr)
+    if vtable_ptr == nil then
+        lib.polyplug_runtime_guard_destroy(guard_ptr)
+        error("polyplug: failed to get vtable from guard")
+    end
+    local self = {
+        _guard = guard_ptr,
+        _vtable = vtable_ptr,
+        _lib = lib,
+        _destroyed = false,
+    }
+    -- Set up GC finalizer for automatic cleanup
+    ffi.gc(guard_ptr, function()
+        if not self._destroyed then
+            lib.polyplug_runtime_guard_destroy(guard_ptr)
+        end
+    end)
+    return setmetatable(self, M.Guard)
+end
+
+function M.Guard:vtable()
+    return self._vtable
+end
+
+function M.Guard:destroy()
+    if self._destroyed then
+        return
+    end
+    self._lib.polyplug_runtime_guard_destroy(self._guard)
+    self._destroyed = true
+    self._guard = nil
 end
 
 -- Loader registration
@@ -201,20 +263,17 @@ M.str_as_view = str_as_view
 function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
     local lib = get_lib()
     
-    -- Resolve plugin to get guard
     local guard_ptr = lib.polyplug_runtime_resolve_plugin(ffi.cast("OpaqueRuntime*", rt_ptr), packed_handle)
     if guard_ptr == nil then
         error("failed to resolve plugin")
     end
     
-    -- Get vtable from guard
     local vtable_ptr = lib.polyplug_runtime_guard_vtable(guard_ptr)
     if vtable_ptr == nil then
         error("failed to get vtable")
     end
     
-    -- Read vtable: { function_count: usize, functions: *const *const () }
-    local vtable = ffi.cast("const void**", vtable_ptr)
+    local vtable = ffi.cast(VTableType, vtable_ptr)
     local func_count = ffi.cast("size_t*", vtable)[0]
     local funcs = ffi.cast("void***", vtable + 1)[0]
     
@@ -224,25 +283,24 @@ function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
     end
     
     local func_ptr = funcs[func_idx]
-    local func = ffi.cast("uint32_t (*)(const void*, void*)", func_ptr)
+    local func = func_cache[func_ptr]
+    if func == nil then
+        func = ffi.cast(DispatchFnType, func_ptr)
+        func_cache[func_ptr] = func
+    end
     
-    -- Prepare input StringView
     local input_data = ffi.new("uint8_t[?]", #input)
     ffi.copy(input_data, input, #input)
     local input_sv = ffi.new("StringView", { ptr = input_data, len = #input })
     
-    -- Prepare output StringView
     local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
     
-    -- Call function
     local err_code = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
     
-    -- Release guard
     lib.polyplug_runtime_guard_destroy(guard_ptr)
     
     if err_code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
         local result = to_str(output_sv)
-        -- Free output
         lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
         return result
     else

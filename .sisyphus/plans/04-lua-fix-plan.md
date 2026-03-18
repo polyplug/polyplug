@@ -13,7 +13,7 @@ The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the c
 **Blockers:** None  
 **Parallel:** No - **MUST BE DONE FIRST**
 
-- [ ] Fix `M.Runtime:find_by_bundle` in `host-libs/lua/polyplug.lua` to call actual runtime function
+- [x] Fix `M.Runtime:find_by_bundle` in `host-libs/lua/polyplug.lua` to call actual runtime function
   - **Verification:** Function calls `lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)` instead of returning `ffi.cast("uint64_t", 1)`
 
 ---
@@ -23,13 +23,13 @@ The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the c
 **Blockers:** Phase 0 complete  
 **Parallel:** No
 
-- [ ] Create `Guard` class in `host-libs/lua/polyplug.lua` with vtable caching at construction
+- [x] Create `Guard` class in `host-libs/lua/polyplug.lua` with vtable caching at construction
   - **Verification:** `Guard.new(lib, guard_ptr)` calls `lib.polyplug_runtime_guard_vtable(guard_ptr)` once and stores in `self._vtable`
 
-- [ ] Add `Guard:vtable()` method that returns cached pointer
+- [x] Add `Guard:vtable()` method that returns cached pointer
   - **Verification:** `guard:vtable()` returns `self._vtable`; no FFI call on method invocation
 
-- [ ] Add `Guard:destroy()` method for explicit cleanup
+- [x] Add `Guard:destroy()` method for explicit cleanup
   - **Verification:** `guard:destroy()` calls `polyplug_runtime_guard_destroy`; sets `self._guard = nil` to prevent double-free
 
 ---
@@ -39,16 +39,16 @@ The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the c
 **Blockers:** None  
 **Parallel:** Yes - can be done independently of Phase 1
 
-- [ ] Add module-level `VTableType` using `ffi.typeof("const PluginVTable*")`
+- [x] Add module-level `VTableType` using `ffi.typeof("const PluginVTable*")`
   - **Verification:** `VTableType` defined once at module scope; reused in all vtable casts
 
-- [ ] Add module-level `DispatchFnType` using `ffi.typeof("uint32_t (*)(const void*, void*)")`
+- [x] Add module-level `DispatchFnType` using `ffi.typeof("uint32_t (*)(const void*, void*)")`
   - **Verification:** `DispatchFnType` defined once at module scope; reused for all function pointer casts
 
-- [ ] Add `func_cache` table for caching function pointer wrappers
+- [x] Add `func_cache` table for caching function pointer wrappers
   - **Verification:** `func_cache = {}` at module scope; populated on first call, reused on subsequent calls
 
-- [ ] Rewrite `M.call_plugin_fn` to use cached types and function pointers
+- [x] Rewrite `M.call_plugin_fn` to use cached types and function pointers
   - **Verification:** Function uses `ffi.cast(VTableType, ...)`, checks `func_cache[func_ptr]`; no `ffi.typeof` or repeated `ffi.cast` inside function body
 
 ---
@@ -58,10 +58,10 @@ The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the c
 **Blockers:** None  
 **Parallel:** Yes
 
-- [ ] Add `PolyplugError` table with error code constants
+- [x] Add `PolyplugError` table with error code constants
   - **Verification:** `PolyplugError = { NOT_FOUND = 4, STALE_HANDLE = 5, FUNCTION_NOT_AVAIL = 6 }` exists at module scope
 
-- [ ] Add `M.last_error(lib)` function for retrieving error messages
+- [x] Add `M.last_error(lib)` function for retrieving error messages
   - **Verification:** Function calls `polyplug_runtime_error_message_len()` and `polyplug_runtime_last_error()`; returns string
 
 ---
@@ -71,25 +71,25 @@ The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the c
 **Blockers:** None  
 **Parallel:** Yes - all 6 loaders can be restructured in parallel
 
-- [ ] Create `host-libs/lua/loaders/polyplug-loaders-native/` with `.rockspec` and module structure
+- [x] Create `host-libs/lua/loaders/polyplug-loaders-native/` with `.rockspec` and module structure
   - **Verification:** `luarocks pack host-libs/lua/loaders/polyplug-loaders-native/polyplug-loaders-native-1.0-1.rockspec` succeeds
 
-- [ ] Create `host-libs/lua/loaders/polyplug-loaders-python/` with `.rockspec`
+- [x] Create `host-libs/lua/loaders/polyplug-loaders-python/` with `.rockspec`
   - **Verification:** `luarocks pack` succeeds for python loader
 
-- [ ] Create `host-libs/lua/loaders/polyplug-loaders-lua/` with `.rockspec`
+- [x] Create `host-libs/lua/loaders/polyplug-loaders-lua/` with `.rockspec`
   - **Verification:** `luarocks pack` succeeds for lua loader
 
-- [ ] Create `host-libs/lua/loaders/polyplug-loaders-js/` with `.rockspec`
+- [x] Create `host-libs/lua/loaders/polyplug-loaders-js/` with `.rockspec`
   - **Verification:** `luarocks pack` succeeds for js loader
 
-- [ ] Create `host-libs/lua/loaders/polyplug-loaders-js-deno/` with `.rockspec`
+- [x] Create `host-libs/lua/loaders/polyplug-loaders-js-deno/` with `.rockspec`
   - **Verification:** `luarocks pack` succeeds for js-deno loader
 
-- [ ] Create `host-libs/lua/loaders/polyplug-loaders-dotnet/` with `.rockspec`
+- [x] Create `host-libs/lua/loaders/polyplug-loaders-dotnet/` with `.rockspec`
   - **Verification:** `luarocks pack` succeeds for dotnet loader
 
-- [ ] Remove old loader files from `host-libs/lua/loaders/`
+- [x] Remove old loader files from `host-libs/lua/loaders/`
   - **Verification:** Old `host-libs/lua/loaders/*.lua` files deleted; no `require` references old paths
 
 ---
@@ -99,10 +99,10 @@ The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the c
 **Blockers:** Phase 2 complete  
 **Parallel:** No
 
-- [ ] Update `generate_host_caller_function` in `crates/polyplug_codegen/src/generators/lua.rs` to use cached FFI types
+- [x] Update `generate_host_caller_function` in `crates/polyplug_codegen/src/generators/lua.rs` to use cached FFI types
   - **Verification:** Generated code uses module-level `VTableType` and `DispatchFnType`; no `ffi.cast` per call
 
-- [ ] Run `cargo test --lib lua` to verify codegen tests pass
+- [x] Run `cargo test --lib lua` to verify codegen tests pass
   - **Verification:** All Lua codegen tests pass with exit code 0
 
 ---

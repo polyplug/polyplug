@@ -248,6 +248,10 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push('\n');
     
     out.push_str("local M = {}\n\n");
+    
+    // Cached FFI types for hot path performance
+    out.push_str("-- Cached FFI types for hot path performance\n");
+    out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, void*)\")\n\n");
 
     for contract in &ir.contracts {
         let contract_prefix: String = contract_name_to_prefix(&contract.name);
@@ -336,7 +340,7 @@ fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, pref
     out.push_str("    if fn_ptr == nil then\n");
     out.push_str("        error(\"missing function pointer\", 2)\n");
     out.push_str("    end\n");
-    out.push_str("    local fn = ffi.cast(\"uint32_t (*)(const void*, void*)\", fn_ptr)\n");
+    out.push_str("    local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
     out.push_str("    local err = fn(args_ptr, out_ptr)\n");
     out.push_str("    if err ~= 0 then\n");
     out.push_str("        error(\"polyplug call failed\", 2)\n");
