@@ -34,6 +34,15 @@ const SYMBOLS = {
   polyplug_host_free: { parameters: ["u64", "usize", "usize"], result: "void" },
 };
 
+/** Cache for function pointers to avoid repeated UnsafeFnPointer creation */
+const _funcCache = new Map();
+
+/** Prototype for dispatch function signature */
+const _DISPATCH_FN_TYPE = new Deno.UnsafeFunctionPrototype({
+    parameters: ["pointer", "pointer"],
+    result: "u32"
+});
+
 /**
  * Compute FNV-1a 64-bit hash.
  * @param {Uint8Array | string} data - Data to hash
@@ -106,24 +115,26 @@ export function strAsView(s) {
  * @returns {string} Output string from plugin
  */
 export function callPluginFn(lib, vtablePtr, funcIdx, input) {
-    // Convert pointer object to bigint if needed
-    // vtablePtr is already a Deno.PointerValue object
-    
-    const view = new Deno.UnsafePointerView(vtablePtr);
-    const funcCount = view.getBigUint64(0);
-    const funcsPtr = view.getBigUint64(8);
+    // Read vtable as BigUint64Array for faster access
+    const vtableBuf = new Deno.UnsafePointerView(vtablePtr).getArrayBuffer(16);
+    const vtable = new BigUint64Array(vtableBuf);
+    const funcCount = vtable[0];
+    const funcsPtr = vtable[1];
     
     if (funcIdx >= Number(funcCount)) {
         throw new Error(`function index ${funcIdx} out of bounds`);
     }
     
-    const funcsView = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr));
-    const funcPtr = funcsView.getBigUint64(funcIdx * 8);
+    // Read function pointer from funcs array
+    const funcsBuf = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr)).getArrayBuffer(Number(funcCount) * 8);
+    const funcs = new BigUint64Array(funcsBuf);
+    const funcPtr = funcs[funcIdx];
     
-    const func = new Deno.UnsafeFnPointer(
-        funcPtr,
-        new Deno.UnsafeFunctionPrototype({ parameters: ["pointer", "pointer"], result: "u32" })
-    );
+    let func = _funcCache.get(funcPtr);
+    if (!func) {
+        func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_TYPE);
+        _funcCache.set(funcPtr, func);
+    }
     
     const encoder = new TextEncoder();
     const inputData = encoder.encode(input);
@@ -264,6 +275,7 @@ export class Runtime {
 export class Guard {
   #lib;
   #ptr;
+  #vtable;
 
   /**
    * @param {Deno.DynamicLibrary} lib - Dynamic library instance
@@ -272,6 +284,7 @@ export class Guard {
   constructor(lib, ptr) {
     this.#lib = lib;
     this.#ptr = ptr;
+    this.#vtable = lib.symbols.polyplug_runtime_plugin_vtable(ptr);
   }
 
   registerNativeLoader() {
@@ -287,7 +300,7 @@ export class Guard {
    * @returns {Deno.PointerValue}
    */
   vtable() {
-    return this.#lib.symbols.polyplug_runtime_plugin_vtable(this.#ptr);
+    return this.#vtable;
   }
 }
 

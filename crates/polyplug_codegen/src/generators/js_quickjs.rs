@@ -542,6 +542,10 @@ fn generate_callers_ts(ir: &ValidatedIr) -> String {
 
     out.push_str("import { getVtable } from './types';\n\n");
 
+    // Module-level function pointer cache to avoid repeated type casting
+    out.push_str("// Function pointer cache - avoids repeated type casting overhead\n");
+    out.push_str("const _funcCache = new Map<number, (args: any, out: any) => { lo: number; hi: number }>();\n\n");
+
     for contract in &ir.contracts {
         generate_host_caller_class_quickjs(&mut out, contract);
     }
@@ -602,7 +606,11 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
             func.function_id
         ));
         out.push_str("        if (!fnPtr) throw new Error('function not available');\n");
-        out.push_str("        const fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };\n");
+        out.push_str("        let fn = _funcCache.get(fnPtr);\n");
+        out.push_str("        if (!fn) {\n");
+        out.push_str("            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };\n");
+        out.push_str("            _funcCache.set(fnPtr, fn);\n");
+        out.push_str("        }\n");
         out.push_str("        const outVal = { lo: 0, hi: 0 };\n");
         out.push_str("        const err = fn(argsPtr, outVal);\n");
         out.push_str("        if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');\n");
