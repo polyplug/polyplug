@@ -97,20 +97,28 @@ def str_as_view_owned(s: str) -> StringView:
     return StringView(ptr, len(data))
 
 
+# Module-level cached types for hot path performance
+class _VTableStruct(ctypes.Structure):
+    """VTable structure: { contract_id: u64, contract_version: u32, function_count: u32, functions: *const *const () }"""
+
+    _fields_ = [
+        ("contract_id", ctypes.c_uint64),
+        ("contract_version", ctypes.c_uint32),
+        ("function_count", ctypes.c_uint32),
+        ("functions", ctypes.c_void_p),
+    ]
+
+
+_DISPATCH_FN_TYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
+_func_cache: dict[int, ctypes._CFuncPtr] = {}
+
+
 def call_plugin_fn(lib: ctypes.CDLL, vtable_ptr: int, func_idx: int, input: str) -> str:
     """Call a plugin function by vtable index."""
     from polyplug.abi import StringView, polyplug_host_free
 
-    # Read vtable structure: { contract_id: u64, contract_version: u32, function_count: u32, functions: *const *const () }
-    class VTableStruct(ctypes.Structure):
-        _fields_ = [
-            ("contract_id", ctypes.c_uint64),
-            ("contract_version", ctypes.c_uint32),
-            ("function_count", ctypes.c_uint32),
-            ("functions", ctypes.c_void_p),
-        ]
-
-    vtable = VTableStruct.from_address(vtable_ptr)
+    # Read vtable structure using cached type
+    vtable = _VTableStruct.from_address(vtable_ptr)
     if func_idx >= vtable.function_count:
         raise RuntimeError(f"function index {func_idx} out of bounds")
 
@@ -118,9 +126,10 @@ def call_plugin_fn(lib: ctypes.CDLL, vtable_ptr: int, func_idx: int, input: str)
     funcs = ctypes.cast(vtable.functions, ctypes.POINTER(ctypes.c_void_p))
     func_ptr = funcs[func_idx]
 
-    # Define function type: extern "C" fn(*const (), *mut ()) -> u32
-    FUNC_TYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
-    func = FUNC_TYPE(func_ptr)
+    # Get or create cached function wrapper
+    if func_ptr not in _func_cache:
+        _func_cache[func_ptr] = _DISPATCH_FN_TYPE(func_ptr)
+    func = _func_cache[func_ptr]
 
     # Prepare input StringView - keep buffer alive
     input_data = input.encode("utf-8")

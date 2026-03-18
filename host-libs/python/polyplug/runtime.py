@@ -9,6 +9,79 @@ from typing import Any
 
 _LIB_NAME: str = "polyplug"
 _NULL_HANDLE: int = (1 << 64) - 1
+_lib_bindings_initialized: bool = False
+
+
+def _setup_lib_bindings(lib: ctypes.CDLL) -> None:
+    global _lib_bindings_initialized
+    if _lib_bindings_initialized:
+        return
+    _lib_bindings_initialized = True
+
+    lib.polyplug_runtime_create.argtypes = []
+    lib.polyplug_runtime_create.restype = ctypes.c_void_p
+
+    lib.polyplug_runtime_destroy.argtypes = [ctypes.c_void_p]
+    lib.polyplug_runtime_destroy.restype = None
+
+    lib.polyplug_runtime_load_bundle.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+    ]
+    lib.polyplug_runtime_load_bundle.restype = ctypes.c_uint32
+
+    lib.polyplug_runtime_reload_bundle.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+    ]
+    lib.polyplug_runtime_reload_bundle.restype = ctypes.c_uint32
+
+    lib.polyplug_runtime_find_by_contract.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+    ]
+    lib.polyplug_runtime_find_by_contract.restype = ctypes.c_uint64
+
+    lib.polyplug_runtime_find_by_bundle.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+    ]
+    lib.polyplug_runtime_find_by_bundle.restype = ctypes.c_uint64
+
+    lib.polyplug_runtime_find_all_by_contract.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint64,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.c_size_t,
+    ]
+    lib.polyplug_runtime_find_all_by_contract.restype = ctypes.c_size_t
+
+    lib.polyplug_runtime_resolve_plugin.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint64,
+    ]
+    lib.polyplug_runtime_resolve_plugin.restype = ctypes.c_void_p
+
+    lib.polyplug_runtime_plugin_vtable.argtypes = [ctypes.c_void_p]
+    lib.polyplug_runtime_plugin_vtable.restype = ctypes.c_void_p
+
+    lib.polyplug_runtime_plugin_release.argtypes = [ctypes.c_void_p]
+    lib.polyplug_runtime_plugin_release.restype = None
+
+    lib.polyplug_runtime_last_error.argtypes = [
+        ctypes.POINTER(ctypes.c_uint8),
+        ctypes.c_size_t,
+    ]
+    lib.polyplug_runtime_last_error.restype = ctypes.c_size_t
+
+    lib.polyplug_runtime_error_message_len.argtypes = []
+    lib.polyplug_runtime_error_message_len.restype = ctypes.c_size_t
 
 
 class StringView(ctypes.Structure):
@@ -29,6 +102,14 @@ class PluginGuard:
     def __init__(self, lib: ctypes.CDLL, guard_ptr: ctypes.c_void_p) -> None:
         self._lib: ctypes.CDLL = lib
         self._guard: ctypes.c_void_p = guard_ptr
+        # Cache vtable pointer at construction to avoid repeated FFI calls
+        if guard_ptr is None or guard_ptr == 0:
+            raise RuntimeError("PluginGuard is null")
+        vtable_ptr: ctypes.c_void_p = lib.polyplug_runtime_plugin_vtable(guard_ptr)
+        if vtable_ptr is None or vtable_ptr == 0:
+            msg: str = _last_error(lib)
+            raise RuntimeError(msg or "polyplug_runtime_plugin_vtable failed")
+        self._vtable: ctypes.c_void_p = vtable_ptr
 
     def __del__(self) -> None:
         guard: ctypes.c_void_p = getattr(self, "_guard", None)
@@ -37,16 +118,14 @@ class PluginGuard:
             lib.polyplug_runtime_plugin_release(guard)
             self._guard = ctypes.c_void_p()
 
+    @property
+    def vtable(self) -> ctypes.c_void_p:
+        """Return cached vtable pointer (no FFI call)."""
+        return self._vtable
+
     def get_vtable(self) -> ctypes.c_void_p:
-        if self._guard is None or self._guard == 0:
-            raise RuntimeError("PluginGuard is null")
-        vtable_ptr: ctypes.c_void_p = self._lib.polyplug_runtime_plugin_vtable(
-            self._guard
-        )
-        if vtable_ptr is None or vtable_ptr == 0:
-            msg: str = _last_error(self._lib)
-            raise RuntimeError(msg or "polyplug_runtime_plugin_vtable failed")
-        return vtable_ptr
+        """Deprecated: use guard.vtable property instead. Returns cached vtable."""
+        return self._vtable
 
 
 def _resolve_lib_path() -> str:
@@ -84,7 +163,7 @@ class Runtime:
     def __init__(self) -> None:
         lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
         self._lib: ctypes.CDLL = ctypes.CDLL(lib_path)
-        self._bind_functions(self._lib)
+        _setup_lib_bindings(self._lib)
         rt_ptr: ctypes.c_void_p = ctypes.c_void_p(self._lib.polyplug_runtime_create())
         if rt_ptr.value is None:
             msg: str = _last_error(self._lib)
@@ -97,73 +176,6 @@ class Runtime:
         if rt_ptr is not None and lib is not None and rt_ptr.value is not None:
             lib.polyplug_runtime_destroy(rt_ptr)
             self._runtime = ctypes.c_void_p()
-
-    @staticmethod
-    def _bind_functions(lib: ctypes.CDLL) -> None:
-        lib.polyplug_runtime_create.argtypes = []
-        lib.polyplug_runtime_create.restype = ctypes.c_void_p
-
-        lib.polyplug_runtime_destroy.argtypes = [ctypes.c_void_p]
-        lib.polyplug_runtime_destroy.restype = None
-
-        lib.polyplug_runtime_load_bundle.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.c_uint8),
-            ctypes.c_size_t,
-        ]
-        lib.polyplug_runtime_load_bundle.restype = ctypes.c_uint32
-
-        lib.polyplug_runtime_reload_bundle.argtypes = [
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.c_uint8),
-            ctypes.c_size_t,
-        ]
-        lib.polyplug_runtime_reload_bundle.restype = ctypes.c_uint32
-
-        lib.polyplug_runtime_find_by_contract.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_uint64,
-            ctypes.c_uint32,
-        ]
-        lib.polyplug_runtime_find_by_contract.restype = ctypes.c_uint64
-
-        lib.polyplug_runtime_find_by_bundle.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_uint64,
-            ctypes.c_uint64,
-            ctypes.c_uint32,
-        ]
-        lib.polyplug_runtime_find_by_bundle.restype = ctypes.c_uint64
-
-        lib.polyplug_runtime_find_all_by_contract.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_uint64,
-            ctypes.c_uint32,
-            ctypes.POINTER(ctypes.c_uint64),
-            ctypes.c_size_t,
-        ]
-        lib.polyplug_runtime_find_all_by_contract.restype = ctypes.c_size_t
-
-        lib.polyplug_runtime_resolve_plugin.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_uint64,
-        ]
-        lib.polyplug_runtime_resolve_plugin.restype = ctypes.c_void_p
-
-        lib.polyplug_runtime_plugin_vtable.argtypes = [ctypes.c_void_p]
-        lib.polyplug_runtime_plugin_vtable.restype = ctypes.c_void_p
-
-        lib.polyplug_runtime_plugin_release.argtypes = [ctypes.c_void_p]
-        lib.polyplug_runtime_plugin_release.restype = None
-
-        lib.polyplug_runtime_last_error.argtypes = [
-            ctypes.POINTER(ctypes.c_uint8),
-            ctypes.c_size_t,
-        ]
-        lib.polyplug_runtime_last_error.restype = ctypes.c_size_t
-
-        lib.polyplug_runtime_error_message_len.argtypes = []
-        lib.polyplug_runtime_error_message_len.restype = ctypes.c_size_t
 
     def _ensure_runtime(self) -> ctypes.c_void_p:
         if self._runtime.value is None:

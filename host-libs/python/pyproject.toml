@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyplug-workspace"
+version = "0.1.0"
+description = "Polyplug Python workspace with all loaders"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+native = ["polyplug-loaders-native"]
+python = ["polyplug-loaders-python"]
+lua = ["polyplug-loaders-lua"]
+js = ["polyplug-loaders-js"]
+js-deno = ["polyplug-loaders-js-deno"]
+dotnet = ["polyplug-loaders-dotnet"]
+all = [
+    "polyplug-loaders-native",
+    "polyplug-loaders-python",
+    "polyplug-loaders-lua",
+    "polyplug-loaders-js",
+    "polyplug-loaders-js-deno",
+    "polyplug-loaders-dotnet",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["polyplug*"]

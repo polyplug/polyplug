@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyplug-loaders-dotnet"
+version = "0.1.0"
+description = ".NET loader for polyplug"
+requires-python = ">=3.8"
+dependencies = [
+    "polyplug",
+]
+
+[tool.setuptools.packages.find]
+include = ["polyplug_loaders_dotnet*"]

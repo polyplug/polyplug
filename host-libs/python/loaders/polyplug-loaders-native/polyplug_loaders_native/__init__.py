@@ -35,3 +35,6 @@ def register_native_loader(runtime: Runtime) -> None:
     err = polyplug_lib.polyplug_runtime_register_loader(runtime._runtime, loader_ptr)
     if err != 0:
         raise RuntimeError(f"polyplug: native loader register failed: {err}")
+
+
+__all__ = ["register_native_loader"]
