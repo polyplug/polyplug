@@ -778,9 +778,7 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "            nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    out.push_str(&format!(
-        "            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint, uint>)funcPtr;\n"
-    ));
+    out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint, uint>)funcPtr;\n");
 
     // Setup args pointer
     if func.params.is_empty() {

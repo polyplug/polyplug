@@ -42,8 +42,8 @@ pub fn set_transformer_impl(impl_: Box<dyn DataTransformerPlugin>) -> Result<(),
 // SAFETY: args and out pointers are validated by the host runtime ABI contract.
 extern "C" fn transformer_transform_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &Box<dyn DataTransformerPlugin> = match TRANSFORMER_IMPL.get() {
-            Some(i) => i,
+        let impl_ref: &dyn DataTransformerPlugin = match TRANSFORMER_IMPL.get() {
+            Some(i) => i.as_ref(),
             None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
         // SAFETY: args is a valid *const StringView per ABI contract.

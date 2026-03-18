@@ -232,6 +232,8 @@ pub fn to_str(sv: StringView) -> &'static str {
     if sv.ptr.is_null() || sv.len == 0 {
         return "";
     }
+    // SAFETY: sv.ptr is non-null (checked above) and sv.len is the valid length.
+    // The caller guarantees the pointer is valid for sv.len bytes and points to UTF-8 data.
     unsafe { core::str::from_utf8(core::slice::from_raw_parts(sv.ptr, sv.len)).unwrap_or("") }
 }
 
@@ -260,6 +262,9 @@ pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
             message: "allocation failed".to_string(),
         });
     }
+    // SAFETY: ptr is non-null (checked above) and was allocated by polyplug_host_alloc
+    // with size bytes.len() and align 1. The source bytes.as_ptr() is valid for
+    // bytes.len() bytes. The destination is valid for bytes.len() bytes.
     unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
     Ok(StringView {
         ptr,

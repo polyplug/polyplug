@@ -46,6 +46,7 @@ impl PipelineDecoderContract {
     }
 
     /// Call `decode` (function_id=0)
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
@@ -98,6 +99,7 @@ impl DataTransformerContract {
     }
 
     /// Call `transform` (function_id=0)
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub fn transform(&self, input: StringView) -> Result<StringView, ContractError> {
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
@@ -150,6 +152,7 @@ impl PipelineEncoderContract {
     }
 
     /// Call `encode` (function_id=0)
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub fn encode(&self, input: StringView) -> Result<StringView, ContractError> {
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
@@ -202,6 +205,7 @@ impl DataReporterContract {
     }
 
     /// Call `report` (function_id=0)
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub fn report(&self, input: StringView) -> Result<StringView, ContractError> {
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();
@@ -254,6 +258,7 @@ impl PipelineValidatorContract {
     }
 
     /// Call `validate` (function_id=0)
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub fn validate(&self, input: StringView) -> Result<StringView, ContractError> {
         let input_val: StringView = input;
         let args_ptr: *const () = &input_val as *const StringView as *const ();

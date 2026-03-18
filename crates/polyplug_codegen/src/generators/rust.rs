@@ -717,9 +717,9 @@ fn generate_guest_abi_wrapper(
     ));
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
     out.push_str(&format!(
-        "        let impl_ref: &Box<dyn {trait_name}> = match {contract_upper}_IMPL.get() {{\n"
+        "        let impl_ref: &dyn {trait_name} = match {contract_upper}_IMPL.get() {{\n"
     ));
-    out.push_str("            Some(i) => i,\n");
+    out.push_str("            Some(i) => i.as_ref(),\n");
     out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },\n");
     out.push_str("        };\n");
 
@@ -1109,6 +1109,7 @@ fn generate_host_fn_caller(
         "    /// Call `{}` (function_id={})\n",
         func.name, fn_id
     ));
+    out.push_str("    #[allow(clippy::absurd_extreme_comparisons)]\n");
     out.push_str(&format!(
         "    pub fn {}(&self{}) -> Result<{ret_type}, ContractError> {{\n",
         func.name, sig_params

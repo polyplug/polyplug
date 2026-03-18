@@ -502,7 +502,7 @@ impl BundleLoader for JsDenoLoader {
 
         // 2. Create channel for vtable registration (bounded 1 = oneshot)
         let (vtable_tx, vtable_rx): (
-            mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>,
+            VtableSenderInner,
             mpsc::Receiver<(SendPluginVTable, u64, usize, String)>,
         ) = mpsc::sync_channel(1);
 

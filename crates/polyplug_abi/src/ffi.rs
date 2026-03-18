@@ -1,6 +1,6 @@
-///! Allocator — host_alloc/host_free cross-boundary memory management.
-///! These functions are exported with C linkage and used by all plugins
-///! to allocate memory that crosses the plugin/host boundary.
+//! Allocator — host_alloc/host_free cross-boundary memory management.
+//! These functions are exported with C linkage and used by all plugins
+//! to allocate memory that crosses the plugin/host boundary.
 
 use core::alloc::GlobalAlloc;
 use core::alloc::Layout;
@@ -56,4 +56,3 @@ pub unsafe extern "C" fn polyplug_host_free(ptr: *mut u8, size: usize, align: us
     // System allocator is thread-safe on all supported platforms.
     unsafe { System.dealloc(ptr, layout) }
 }
-

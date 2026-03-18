@@ -42,8 +42,8 @@ pub fn set_reporter_impl(impl_: Box<dyn DataReporterPlugin>) -> Result<(), &'sta
 // SAFETY: args and out pointers are validated by the host runtime ABI contract.
 extern "C" fn reporter_report_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &Box<dyn DataReporterPlugin> = match REPORTER_IMPL.get() {
-            Some(i) => i,
+        let impl_ref: &dyn DataReporterPlugin = match REPORTER_IMPL.get() {
+            Some(i) => i.as_ref(),
             None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
         // SAFETY: args is a valid *const StringView per ABI contract.
