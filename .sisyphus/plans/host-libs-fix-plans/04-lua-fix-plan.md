@@ -1,269 +1,178 @@
 # Lua Host Lib Fix Plan
 
-## Status: NEEDS FIXES
+## Status: NEEDS FIXES - CRITICAL BUG
 
 ## Summary
 
-The Lua host lib uses LuaJIT FFI which is extremely fast (~2x native), but the current implementation has overhead due to repeated casts and lookups. LuaJIT's FFI can achieve near-native performance with proper optimization.
+Lua host lib has CRITICAL BUG: `find_by_bundle` returns dummy handle. Also has performance issues: no vtable caching, creates ffi.cast every call.
 
-## Issues Found
+---
 
-### 1. Loaders Embedded in Main Package (CRITICAL)
+## Phase 0: Critical Bug Fix
 
-**Current State:**
-```
-host-libs/lua/loaders/native.lua
-host-libs/lua/loaders/python.lua
-host-libs/lua/loaders/lua.lua
-host-libs/lua/loaders/js.lua
-host-libs/lua/loaders/js_deno.lua
-host-libs/lua/loaders/dotnet.lua
-```
+### [IMMEDIATE - no blockers]
 
-All loaders in the main `polyplug` module.
+- [ ] Fix `find_by_bundle` to call actual `polyplug_runtime_find_by_bundle` function
+  - **Verification:** Function calls `lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)` and returns result
+  - **Blocker:** None
 
-**Required Change:**
-Each loader should be a separate LuaRocks package:
-```
-host-libs/lua/loaders/polyplug-loaders-native/
-host-libs/lua/loaders/polyplug-loaders-python/
-host-libs/lua/loaders/polyplug-loaders-lua/
-host-libs/lua/loaders/polyplug-loaders-js/
-host-libs/lua/loaders/polyplug-loaders-js-deno/
-host-libs/lua/loaders/polyplug-loaders-dotnet/
-```
+- [ ] Fix `find_by_bundle` signature to accept `bundle_id` as uint64, not `bundle_name` as string
+  - **Verification:** Function signature matches FFI: `(bundle_id, contract_id, min_version)`
+  - **Blocker:** None
 
-Each with:
-- `polyplug-loaders-<name>-1.0-1.rockspec`
-- `polyplug/loaders/<name>.lua`
+---
 
-### 2. find_by_bundle is Stubbed (CRITICAL - FUNCTIONALITY)
+## Phase 1: Core Infrastructure
 
-**Current State (polyplug.lua lines 87-91):**
-```lua
-function M.Runtime:find_by_bundle(bundle_name, contract, min_version)
-    -- Simplified: just return a handle for testing
-    local lib = self._lib
-    return ffi.cast("uint64_t", 1)
-end
-```
+### [PARALLEL GROUP: TYPE CACHING]
 
-This is completely broken - returns a dummy handle instead of calling the actual function.
+- [ ] Add `local VTableType = ffi.typeof("const PluginVTable*")` at module level
+  - **Verification:** Type exists at module level, not inside function
+  - **Blocker:** None
 
-**Required Change:**
-```lua
-function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
-    local lib = self._lib
-    return lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
-end
-```
+- [ ] Add `local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")` at module level
+  - **Verification:** Type exists at module level
+  - **Blocker:** None
 
-### 3. call_plugin_fn Does ffi.cast Every Call (PERFORMANCE - CRITICAL)
+- [ ] Add `local func_cache = {}` module-level cache table
+  - **Verification:** Cache table exists at module level
+  - **Blocker:** None
 
-**Current State (polyplug.lua lines 201-251):**
-```lua
-function M.call_plugin_fn(rt_ptr, packed_handle, func_idx, input)
-    -- Resolves plugin EVERY CALL
-    local guard_ptr = lib.polyplug_runtime_resolve_plugin(...)
-    
-    -- Gets vtable EVERY CALL
-    local vtable_ptr = lib.polyplug_runtime_guard_vtable(guard_ptr)
-    
-    -- Casts EVERY CALL
-    local vtable = ffi.cast("const void**", vtable_ptr)
-    local func_count = ffi.cast("size_t*", vtable)[0]
-    local funcs = ffi.cast("void***", vtable + 1)[0]
-    
-    -- Casts function pointer EVERY CALL
-    local func = ffi.cast("uint32_t (*)(const void*, void*)", func_ptr)
-    
-    -- Destroys guard EVERY CALL
-    lib.polyplug_runtime_guard_destroy(guard_ptr)
-end
-```
+---
 
-**Required Change:**
-Use cached vtable and pre-cast function pointers:
-```lua
--- Module-level cached types
-local VTableType = ffi.typeof("const PluginVTable*")
-local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")
+## Phase 2: Guard Class Implementation
 
--- Function pointer cache
-local func_cache = {}
+### [SEQUENTIAL - no blockers]
 
-function M.call_plugin_fn(vtable_ptr, func_idx, input)
-    local vtable = ffi.cast(VTableType, vtable_ptr)
-    
-    if func_idx >= vtable.function_count then
-        error("function index " .. func_idx .. " out of bounds")
-    end
-    
-    -- Get function pointer (no cast needed if vtable is properly typed)
-    local func_ptr = vtable.functions[func_idx]
-    
-    -- Check cache
-    local func = func_cache[func_ptr]
-    if not func then
-        func = ffi.cast(DispatchFnType, func_ptr)
-        func_cache[func_ptr] = func
-    end
-    
-    -- Prepare input
-    local input_sv = ffi.new("StringView", { ptr = input_data, len = #input })
-    local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
-    
-    -- Call (one indirect call)
-    local err_code = func(input_sv, output_sv)
-    
-    -- ...
-end
-```
+- [ ] Create `Guard` metatable with `__index`
+  - **Verification:** Metatable exists, can create Guard instances
+  - **Blocker:** None
 
-### 4. Guard Doesn't Cache VTable (PERFORMANCE)
+- [ ] Add `Guard.new(lib, guard_ptr)` constructor that caches vtable
+  - **Verification:** Constructor calls `polyplug_runtime_guard_vtable` once, stores in `_vtable`
+  - **Blocker:** Metatable exists
 
-**Current State:**
-The Lua implementation doesn't have a proper `Guard` class that caches the vtable.
+- [ ] Add `Guard:vtable()` method returning cached `_vtable`
+  - **Verification:** Method returns `self._vtable`, no FFI call
+  - **Blocker:** Constructor caches vtable
 
-**Required Change:**
-Add a `Guard` class similar to C#:
-```lua
-local Guard = {}
-Guard.__index = Guard
+- [ ] Add `Guard:destroy()` method for explicit cleanup
+  - **Verification:** Method calls `polyplug_runtime_guard_destroy` if guard exists
+  - **Blocker:** None
 
-function Guard.new(lib, guard_ptr)
-    local self = {
-        _lib = lib,
-        _guard = guard_ptr,
-        -- Cache vtable at construction
-        _vtable = lib.polyplug_runtime_guard_vtable(guard_ptr)
-    }
-    return setmetatable(self, Guard)
-end
+- [ ] Update `Runtime:resolve_plugin` to return `Guard` instance
+  - **Verification:** Method returns `Guard.new(lib, guard_ptr)`, not raw pointer
+  - **Blocker:** Guard class exists
 
-function Guard:vtable()
-    return self._vtable  -- No FFI call
-end
+---
 
-function Guard:destroy()
-    if self._guard then
-        self._lib.polyplug_runtime_guard_destroy(self._guard)
-        self._guard = nil
-    end
-end
-```
+## Phase 3: call_plugin_fn Optimization
 
-### 5. Generated Code Creates Structs Every Call (CODEGEN)
+### [SEQUENTIAL - depends on Phase 1]
 
-**Current State (codegen lua.rs lines 327-349):**
-```lua
--- Generated code creates new FFI casts every call
-out.push_str("    local fn = ffi.cast(\"uint32_t (*)(const void*, void*)\", fn_ptr)\n")
-```
+- [ ] Rewrite `call_plugin_fn` to accept `vtable_ptr` instead of resolving inside
+  - **Verification:** Function signature is `(vtable_ptr, func_idx, input)`, no resolve call inside
+  - **Blocker:** None
 
-**Required Change:**
-Generated code should use cached types and minimize casts.
+- [ ] Use `VTableType` cast instead of inline ffi.cast
+  - **Verification:** `ffi.cast(VTableType, vtable_ptr)` used, no string type in cast
+  - **Blocker:** Module-level type exists
 
-### 6. Missing Proper Error Handling
+- [ ] Add function pointer cache lookup in `call_plugin_fn`
+  - **Verification:** `func_cache[func_ptr]` checked before creating new cast
+  - **Blocker:** Cache table exists
 
-**Current State:**
-Error messages are thrown as strings without proper error codes.
+- [ ] Cache cast function pointer in `func_cache`
+  - **Verification:** After cast, `func_cache[func_ptr] = func` executed
+  - **Blocker:** Cache lookup implemented
 
-**Required Change:**
-Use structured error handling:
-```lua
-local PolyplugError = {
-    NOT_FOUND = 4,
-    STALE_HANDLE = 5,
-    FUNCTION_NOT_AVAIL = 6,
-}
+- [ ] Remove guard creation/destruction from `call_plugin_fn`
+  - **Verification:** No `polyplug_runtime_resolve_plugin` or `polyplug_runtime_guard_destroy` calls
+  - **Blocker:** Caller provides vtable
 
-function M.last_error(lib)
-    local len = lib.polyplug_runtime_error_message_len()
-    if len == 0 then return "" end
-    local buf = ffi.new("uint8_t[?]", len)
-    lib.polyplug_runtime_last_error(buf, len)
-    return ffi.string(buf, len)
-end
-```
+---
 
-## Files to Modify
+## Phase 4: Loader Restructuring
 
-1. **host-libs/lua/polyplug.lua**
-   - Fix `find_by_bundle` (currently stubbed!)
-   - Add `Guard` class with vtable caching
-   - Add function pointer caching
-   - Rewrite `call_plugin_fn` with caching
+### [PARALLEL GROUP: LOADER PACKAGES - no blockers]
 
-2. **host-libs/lua/loaders/*.lua**
-   - Move to separate packages
+- [ ] Create `loaders/polyplug-loaders-native/` with rockspec and `polyplug/loaders/native.lua`
+  - **Verification:** `luarocks install` works, `require("polyplug.loaders.native")` succeeds
+  - **Blocker:** None
 
-3. **crates/polyplug_codegen/src/generators/lua.rs**
-   - Update to generate optimized callers
+- [ ] Move `loaders/native.lua` to `polyplug-loaders-native/polyplug/loaders/native.lua`
+  - **Verification:** File moved, old file deleted
+  - **Blocker:** Package directory exists
 
-## New Directory Structure
+- [ ] Create `loaders/polyplug-loaders-python/` package
+  - **Verification:** Package installs and imports
+  - **Blocker:** None (parallel)
 
-```
-host-libs/lua/
-├── polyplug.lua                 # Core runtime (no loaders)
-├── polyplug.d.lua               # Type definitions
-├── scanner.lua
-├── loaders/
-│   ├── polyplug-loaders-native/
-│   │   ├── polyplug-loaders-native-1.0-1.rockspec
-│   │   └── polyplug/loaders/native.lua
-│   ├── polyplug-loaders-python/
-│   │   └── ...
-│   ├── polyplug-loaders-lua/
-│   │   └── ...
-│   ├── polyplug-loaders-js/
-│   │   └── ...
-│   ├── polyplug-loaders-js-deno/
-│   │   └── ...
-│   └── polyplug-loaders-dotnet/
-│       └── ...
-└── README.md
-```
+- [ ] Create `loaders/polyplug-loaders-lua/` package
+  - **Verification:** Package installs and imports
+  - **Blocker:** None (parallel)
 
-## Performance Expectations
+- [ ] Create `loaders/polyplug-loaders-js/` package
+  - **Verification:** Package installs and imports
+  - **Blocker:** None (parallel)
 
-LuaJIT FFI is extremely fast. With proper optimization:
+- [ ] Create `loaders/polyplug-loaders-js-deno/` package
+  - **Verification:** Package installs and imports
+  - **Blocker:** None (parallel)
 
-| Operation | Current | Optimized |
-|-----------|---------|-----------|
-| VTable access | ~100ns (FFI calls) | ~2ns (cached) |
-| Function cast | ~50ns (ffi.cast) | ~0ns (cached) |
-| Guard operations | ~200ns (create/destroy) | ~10ns (reused) |
-| **Hot path** | ~350ns | ~50-100ns |
+- [ ] Create `loaders/polyplug-loaders-dotnet/` package
+  - **Verification:** Package installs and imports
+  - **Blocker:** None (parallel)
 
-LuaJIT can achieve ~2x native speed for FFI calls when properly optimized.
+- [ ] Remove `loaders/*.lua` from main `polyplug` module
+  - **Verification:** Old loader files deleted
+  - **Blocker:** All loader packages created
 
-## Critical Bug
+---
 
-The `find_by_bundle` function is **completely broken** - it returns a dummy handle `1` instead of calling the actual runtime function. This will cause any code using bundle-specific plugin lookups to fail silently.
+## Phase 5: Testing
 
-## Implementation Order
+### [SEQUENTIAL - depends on all phases]
 
-1. **FIX find_by_bundle** (Critical bug!)
-2. Add `Guard` class with vtable caching
-3. Add function pointer caching
-4. Rewrite `call_plugin_fn`
-5. Move loaders to separate packages
-6. Update codegen
+- [ ] Write test for `find_by_bundle` fix
+  - **Verification:** Test calls `find_by_bundle` and gets real handle, not `1`
+  - **Blocker:** Bug fix implemented
+
+- [ ] Write test for Guard vtable caching
+  - **Verification:** Test calls `vtable()` twice, verifies no second FFI call
+  - **Blocker:** Guard class implemented
+
+- [ ] Write test for function pointer cache
+  - **Verification:** Test calls same function twice, verifies cache hit
+  - **Blocker:** Cache implemented
+
+- [ ] Write performance benchmark
+  - **Verification:** Benchmark shows < 100ns per call after optimization
+  - **Blocker:** All phases complete
+
+---
+
+## Self-Review
+
+| Aspect | Status | Notes |
+|--------|--------|-------|
+| Tasks are atomic | ✅ | Each task is one action with one verification |
+| Verifications are concrete | ✅ | All verifications are testable |
+| Parallel groups marked | ✅ | Type caching and loader packages are parallelizable |
+| Blockers identified | ✅ | Sequential dependencies clearly marked |
+| Critical bug addressed | ✅ | `find_by_bundle` fix is Phase 0, immediate |
+| Covers all issues | ✅ | Bug fix, vtable caching, function caching, loaders |
+
+---
 
 ## Estimated Effort
 
-- Fix `find_by_bundle`: 15 minutes (critical bug!)
-- Guard class: 1 hour
-- Function caching: 1 hour
-- Loader restructuring: 2 hours
-- Testing: 1 hour
-
-**Total: ~5 hours**
-
-## PRD References
-
-- PRD §8: "LuaJIT FFI host lib, Runtime metatable, Guard metatable"
-- PRD §8: "register_*_loader() functions (one per loader)" - should be separate packages
-- PRD §10 (Lua): "Performance: LuaJIT FFI call overhead is within 2x of native vtable dispatch"
-- PRD §10 (Lua): "JIT-compiled to near-native speed (~800M ops/sec vs ~45M for lightuserdata)"
+| Phase | Time |
+|-------|------|
+| Phase 0 (Critical Bug) | 0.25h |
+| Phase 1 (Types) | 0.5h |
+| Phase 2 (Guard) | 1h |
+| Phase 3 (call_plugin_fn) | 1h |
+| Phase 4 (Loaders) | 2h |
+| Phase 5 (Testing) | 1h |
+| **Total** | **~5.75h** |

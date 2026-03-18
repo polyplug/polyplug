@@ -4,63 +4,81 @@
 
 Analysis of all host libraries for zero-overhead and MAX performance issues, following the C# fix as the reference implementation.
 
-## Status
+---
 
-| Host Lib | Status | Critical Issues | Est. Effort |
-|----------|--------|-----------------|-------------|
-| C# | ✅ DONE | Fixed | 8h (completed) |
-| C++ | 🔴 NEEDS FIXES | Loaders embedded, no vtable caching | ~8h |
-| Python | 🔴 NEEDS FIXES | ctypes overhead, no caching | ~5.5h |
-| JavaScript | 🔴 NEEDS FIXES | FFI object creation, no caching | ~5.5h |
-| Lua | 🔴 NEEDS FIXES | **Broken find_by_bundle**, no caching | ~5h |
-| Rust | 🟡 MINOR | Optional PluginGuard for consistency | ~1.5h (optional) |
+## Status Matrix
 
-**Total estimated effort: ~25.5 hours**
+| Host Lib | Status | Critical Bug | Est. Effort |
+|----------|--------|--------------|-------------|
+| C# | ✅ DONE | None | Completed |
+| C++ | 🔴 NEEDS FIXES | None | ~9h |
+| Python | 🔴 NEEDS FIXES | None | ~6.5h |
+| JavaScript | 🔴 NEEDS FIXES | None | ~6h |
+| Lua | 🔴 NEEDS FIXES + BUG | `find_by_bundle` returns `1` | ~5.75h |
+| Rust | 🟡 OPTIONAL | None | ~1.75h (optional) |
+
+**Total effort: ~28.75 hours (26.75h required + 1.75h optional)**
+
+---
 
 ## Plans
 
-1. [C++ Fix Plan](./01-cpp-fix-plan.md)
-2. [Python Fix Plan](./02-python-fix-plan.md)
-3. [JavaScript Fix Plan](./03-js-fix-plan.md)
-4. [Lua Fix Plan](./04-lua-fix-plan.md)
-5. [Rust Fix Plan](./05-rust-fix-plan.md)
+| Plan | Critical Bug | Key Issues |
+|------|--------------|------------|
+| [01-cpp-fix-plan.md](./01-cpp-fix-plan.md) | None | Loaders embedded, no vtable caching, codegen resolves every call |
+| [02-python-fix-plan.md](./02-python-fix-plan.md) | None | ctypes types created every call, no caching, no vtable caching |
+| [03-js-fix-plan.md](./03-js-fix-plan.md) | None | UnsafeFnPointer created every call, no vtable caching |
+| [04-lua-fix-plan.md](./04-lua-fix-plan.md) | **YES** | `find_by_bundle` broken, no Guard class, ffi.cast every call |
+| [05-rust-fix-plan.md](./05-rust-fix-plan.md) | None | Optional PluginGuard for RAII consistency |
 
-## Common Issues Across All Hosts
+---
+
+## Common Issues Across Hosts
 
 ### 1. Loaders Embedded in Main Package
-
-All host libs (except Rust which uses adapter crates) have loaders embedded in the main package. Per PRD §8 and §24, each loader should be a separate package.
+All host libs (except Rust) have loaders embedded. Per PRD, each loader should be a separate package.
 
 **Affected:** C++, Python, JavaScript, Lua
 
 ### 2. No VTable Caching
+All host libs resolve vtable on every call instead of caching at Guard construction.
 
-All host libs resolve the vtable on every call instead of caching it at `PluginGuard` construction.
-
-**PRD §7 Quote:** "Hot path call: One guard load. One pointer dereference. One indirect call."
+**PRD §7:** "Hot path call: One guard load. One pointer dereference. One indirect call."
 
 **Affected:** C++, Python, JavaScript, Lua
 
-### 3. Function Pointer Casts on Every Call
+### 3. Function Pointer Wrappers Created Every Call
+All host libs create new function pointer wrappers on every call.
 
-All host libs create new function pointer wrappers on every call instead of caching them.
+**Affected:** Python (CFUNCTYPE), JavaScript (UnsafeFnPointer), Lua (ffi.cast)
 
-**PRD §10 Quote:** "delegate* unmanaged used for vtable calls: calli IL = ~4–6x faster than Marshal.GetDelegateForFunctionPointer"
+---
 
-**Affected:** Python (ctypes.CFUNCTYPE), JavaScript (UnsafeFnPointer), Lua (ffi.cast)
-
-## Critical Bug
-
-**Lua `find_by_bundle` is completely broken:**
+## Critical Bug: Lua `find_by_bundle`
 
 ```lua
--- Current (WRONG):
+-- BROKEN: Returns dummy handle
 function M.Runtime:find_by_bundle(bundle_name, contract, min_version)
-    return ffi.cast("uint64_t", 1)  -- Returns dummy handle!
+    return ffi.cast("uint64_t", 1)  -- WRONG!
 end
 ```
 
-This must be fixed immediately as it breaks all bundle-specific plugin lookups.
+**Impact:** All bundle-specific plugin lookups fail silently.
+
+**Fix Priority:** IMMEDIATE (Phase 0 in Lua plan)
+
+---
+
+## Implementation Order Recommendation
+
+1. **Lua Phase 0** - Fix `find_by_bundle` bug (15 min)
+2. **C++ Full Fix** - Most similar to C#, native interop priority
+3. **Python Full Fix** - High-usage language
+4. **JavaScript Full Fix** - High-usage language
+5. **Lua Phases 1-5** - Complete remaining fixes
+6. **Rust Optional** - If consistency desired
+
+---
 
 ## PRD Compliance Matrix
 
@@ -70,73 +88,47 @@ This must be fixed immediately as it breaks all bundle-specific plugin lookups.
 | VTable caching | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Function pointer caching | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Zero-overhead hot path | ✅ | ⚠️ | ❌ | ⚠️ | ❌ | ✅ |
-| caller-provides-buffer | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
-
-## Recommended Implementation Order
-
-1. **Lua: Fix `find_by_bundle`** - Critical bug, 15 minutes
-2. **C++: Full fix** - Most similar to C#, highest priority for native interop
-3. **Python: Full fix** - High-usage language
-4. **JavaScript: Full fix** - High-usage language
-5. **Lua: Full fix** - Complete the remaining issues
-6. **Rust: Optional PluginGuard** - For consistency
-
-## Next Steps
-
-1. Commit these plans
-2. Pick the first host lib to fix (recommend C++ as most similar to C#)
-3. Create a dedicated session for that host lib's fixes
-4. After host libs are fixed, do the same analysis for guest libs
-
-## Files Created
-
-```
-.sisyphus/plans/host-libs-fix-plans/
-├── README.md (this file)
-├── 01-cpp-fix-plan.md
-├── 02-python-fix-plan.md
-├── 03-js-fix-plan.md
-├── 04-lua-fix-plan.md
-└── 05-rust-fix-plan.md
-```
 
 ---
 
 ## Key Learnings from C# Fix
 
-### What We Fixed in C#
+### What We Fixed
 
-1. **Loaders to separate packages**
-   - Before: All in `Polyplug/` project
-   - After: `Loaders/Native/`, `Loaders/Python/`, etc.
+| Issue | Before | After |
+|-------|--------|-------|
+| Loader packages | Embedded in main | Separate NuGet packages |
+| P/Invoke style | DllImport | LibraryImport (source-generated) |
+| GC transition | 50-200ns per call | ~5-15ns with SuppressGCTransition |
+| Dispatch style | Marshal.GetDelegateForFunctionPointer | delegate* unmanaged (4-6x faster) |
+| VTable access | P/Invoke every call | Cached in PluginGuard |
 
-2. **`LibraryImport` instead of `DllImport`**
-   - Source-generated P/Invoke (AOT-safe)
-   - Faster than runtime marshalling
-
-3. **`[SuppressGCTransition]` on hot path**
-   - Eliminates GC transition overhead (~50-200ns → ~5-15ns)
-   - NOT on `host_alloc/host_free` (may trigger GC)
-
-4. **`delegate* unmanaged` for vtable dispatch**
-   - Direct function pointer call
-   - ~4-6x faster than `Marshal.GetDelegateForFunctionPointer`
-
-5. **VTable caching in `PluginGuard`**
-   - Cache vtable pointer at construction
-   - No P/Invoke on hot path
-
-6. **No `CallFunction` extension method**
-   - Violated zero-overhead
-   - Generated code should dispatch directly
-
-### Performance Numbers (C#)
+### Performance Numbers
 
 | Operation | Before | After |
 |-----------|--------|-------|
-| Guard creation | ~100ns | ~100ns (unchanged) |
-| VTable access | ~50-200ns (P/Invoke) | ~0ns (cached) |
-| Function dispatch | ~250-800ns | ~5-15ns |
-| **Hot path** | ~300-1000ns | ~20-30ns |
+| VTable access | 50-200ns | ~0ns (cached) |
+| Function dispatch | 250-800ns | 5-15ns |
+| **Hot path** | 300-1000ns | 20-30ns |
 
-Apply similar optimizations to each host lib.
+---
+
+## Next Steps
+
+1. Pick first host lib to fix (recommend C++)
+2. Create dedicated session for implementation
+3. After host libs fixed, analyze guest libs
+
+---
+
+## Self-Review
+
+| Aspect | Status | Notes |
+|--------|--------|-------|
+| All plans have checkbox format | ✅ | All tasks use `- [ ]` |
+| Tasks are atomic | ✅ | Each task = one action + one verification |
+| Verifications are concrete | ✅ | All verifications are testable |
+| Parallel groups marked | ✅ | Each plan shows [PARALLEL GROUP: X] |
+| Blockers identified | ✅ | Sequential dependencies clearly stated |
+| Critical bug highlighted | ✅ | Lua `find_by_bundle` in Phase 0 |
+| Effort estimated | ✅ | Each plan has time breakdown |

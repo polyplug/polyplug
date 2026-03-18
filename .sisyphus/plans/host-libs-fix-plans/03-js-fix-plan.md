@@ -4,252 +4,169 @@
 
 ## Summary
 
-The JavaScript host lib for Deno has performance issues with FFI calls and vtable access. Deno's FFI is fast (V8 fast calls ~50-200ns), but the current implementation creates overhead through repeated operations.
+JS host lib has FFI overhead: no vtable caching, creates UnsafeFnPointer every call, creates buffers every call.
 
-## Issues Found
+---
 
-### 1. Loaders Embedded in Main Package (CRITICAL)
+## Phase 0: Critical Bug Fix
 
-**Current State:**
-```
-host-libs/js/loaders/native.ts
-host-libs/js/loaders/python.ts
-host-libs/js/loaders/lua.ts
-host-libs/js/loaders/js.ts
-host-libs/js/loaders/js_deno.ts
-host-libs/js/loaders/dotnet.ts
-```
+### [IMMEDIATE - no blockers]
 
-All loaders in the main `polyplug` module.
+- [ ] ~~No critical bugs found in JS host lib~~
+  - **Verification:** N/A
+  - **Blocker:** None
 
-**Required Change:**
-Each loader should be a separate JSR package:
-```
-host-libs/js/loaders/@polyplug/loaders-native/
-host-libs/js/loaders/@polyplug/loaders-python/
-host-libs/js/loaders/@polyplug/loaders-lua/
-host-libs/js/loaders/@polyplug/loaders-js/
-host-libs/js/loaders/@polyplug/loaders-js-deno/
-host-libs/js/loaders/@polyplug/loaders-dotnet/
-```
+---
 
-Each with:
-- `deno.json` or `jsr.json`
-- `mod.ts`
-- `deno.d.ts`
+## Phase 1: Core Infrastructure
 
-### 2. No VTable Caching in Guard (PERFORMANCE)
+### [PARALLEL GROUP: TYPE CACHING]
 
-**Current State (polyplug.js lines 264-292):**
-```javascript
-export class Guard {
-  #lib;
-  #ptr;
+- [ ] Add `_DISPATCH_FN_TYPE` module-level UnsafeFunctionPrototype
+  - **Verification:** Type defined once, reused by all callers
+  - **Blocker:** None
 
-  constructor(lib, ptr) {
-    this.#lib = lib;
-    this.#ptr = ptr;
-  }
+- [ ] Add `_funcCache: Map<bigint, Deno.UnsafeFnPointer>` module-level cache
+  - **Verification:** Map exists at module level, properly typed
+  - **Blocker:** None
 
-  vtable() {
-    return this.#lib.symbols.polyplug_runtime_plugin_vtable(this.#ptr);
-  }
-}
-```
+- [ ] Move SYMBOLS definition to module level (already there, verify)
+  - **Verification:** SYMBOLS is module-level const, not inside function
+  - **Blocker:** None
 
-Every call to `vtable()` performs a P/Invoke call.
+---
 
-**Required Change:**
-Cache the vtable pointer at construction:
-```typescript
-export class Guard {
-  #lib: Deno.DynamicLibrary<typeof SYMBOLS>;
-  #ptr: Deno.PointerValue;
-  #vtable: Deno.PointerValue;  // Cached
+## Phase 2: Guard VTable Caching
 
-  constructor(lib: Deno.DynamicLibrary<typeof SYMBOLS>, ptr: Deno.PointerValue) {
-    this.#lib = lib;
-    this.#ptr = ptr;
-    // Cache vtable at construction - one P/Invoke
-    this.#vtable = lib.symbols.polyplug_runtime_plugin_vtable(ptr);
-  }
+### [SEQUENTIAL - no blockers]
 
-  vtable(): Deno.PointerValue {
-    return this.#vtable;  // No P/Invoke on hot path
-  }
-}
-```
+- [ ] Add `#vtable` private field to `Guard` class
+  - **Verification:** Field exists, initialized in constructor
+  - **Blocker:** None
 
-### 3. callPluginFn Creates New Objects Every Call (PERFORMANCE - CRITICAL)
+- [ ] Cache vtable in `Guard` constructor by calling `polyplug_runtime_plugin_vtable`
+  - **Verification:** Constructor calls FFI once, stores result in `#vtable`
+  - **Blocker:** Field exists
 
-**Current State (polyplug.js lines 108-151):**
-```javascript
-export function callPluginFn(lib, vtablePtr, funcIdx, input) {
-  // Creates new UnsafePointerView every call
-  const view = new Deno.UnsafePointerView(vtablePtr);
-  const funcCount = view.getBigUint64(0);
-  const funcsPtr = view.getBigUint64(8);
-  
-  // Creates new UnsafePointerView every call
-  const funcsView = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr));
-  const funcPtr = funcsView.getBigUint64(funcIdx * 8);
-  
-  // Creates new UnsafeFnPointer EVERY CALL
-  const func = new Deno.UnsafeFnPointer(
-    funcPtr,
-    new Deno.UnsafeFunctionPrototype({ parameters: ["pointer", "pointer"], result: "u32" })
-  );
-  
-  // Creates new buffers every call
-  const inputBuf = new Uint8Array(inputData);
-  const outputBuf = new Uint8Array(16);
-  // ...
-}
-```
+- [ ] Change `vtable()` method to return cached `#vtable`
+  - **Verification:** Method returns `this.#vtable`, no FFI call
+  - **Blocker:** Caching implemented
 
-**Required Change:**
-Cache function pointer wrappers and reuse buffers:
-```typescript
-// Module-level cache for function wrappers
-const _funcCache = new Map<bigint, Deno.UnsafeFnPointer>();
+---
 
-// Pre-defined function type (created once)
-const _DISPATCH_FN_TYPE = new Deno.UnsafeFunctionPrototype(
-  { parameters: ["pointer", "pointer"], result: "u32" }
-);
+## Phase 3: callPluginFn Optimization
 
-export function callPluginFn(
-  vtablePtr: Deno.PointerValue,
-  funcIdx: number,
-  input: string
-): string {
-  // Direct memory access without creating new views
-  const vtableData = new BigUint64Array(
-    Deno.UnsafePointerView.getArrayBuffer(vtablePtr, 16)
-  );
-  const funcCount = vtableData[0];
-  const funcsPtr = vtableData[1];
-  
-  if (funcIdx >= Number(funcCount)) {
-    throw new Error(`function index ${funcIdx} out of bounds`);
-  }
-  
-  // Get function pointer
-  const funcPtr = new BigUint64Array(
-    Deno.UnsafePointerView.getArrayBuffer(funcsPtr, 8 * Number(funcCount))
-  )[funcIdx];
-  
-  // Check cache for function wrapper
-  let func = _funcCache.get(funcPtr);
-  if (!func) {
-    func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_TYPE);
-    _funcCache.set(funcPtr, func);
-  }
-  
-  // ... rest of call
-}
-```
+### [SEQUENTIAL - depends on Phase 1]
 
-### 4. Generated Code Creates Objects Every Call (CODEGEN)
+- [ ] Rewrite `callPluginFn` to use cached `_DISPATCH_FN_TYPE`
+  - **Verification:** No `new Deno.UnsafeFunctionPrototype()` inside function
+  - **Blocker:** Module-level type exists
 
-**Current State (codegen js_quickjs.rs lines 586-616):**
-```typescript
-// Generated code creates new objects every call
-out.push_str("        const fnPtr = this.vtable.functions[");  // Array access
-out.push_str("        const fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };\n");
-out.push_str("        const outVal = { lo: 0, hi: 0 };\n");
-```
+- [ ] Add function pointer cache lookup in `callPluginFn`
+  - **Verification:** Function checks `_funcCache.get(funcPtr)`, only creates if missing
+  - **Blocker:** Cache map exists
 
-**Required Change:**
-Generated code should use cached function pointers and pre-allocated output.
+- [ ] Cache created function pointer in `_funcCache`
+  - **Verification:** After creation, `_funcCache.set(funcPtr, func)` called
+  - **Blocker:** Cache lookup implemented
 
-### 5. Missing BigInt Handling Optimization
+- [ ] Reuse typed arrays for input/output buffers
+  - **Verification:** Buffers allocated once and reused, not created every call
+  - **Blocker:** None
 
-**Current State:**
-JavaScript/TypeScript uses `bigint` for u64 values, which is slower than number.
+---
 
-**Required Change:**
-For hot-path operations, use the lo/hi split pattern (as done in QuickJS generator):
-```typescript
-// Instead of: bigint (slow)
-const contractId: bigint = 0xCC4232FAB0410D2Bn;
+## Phase 4: Loader Restructuring
 
-// Use: lo/hi pair (fast)
-const contractId = { lo: 0xB0410D2B, hi: 0xCC4232FA };
-```
+### [PARALLEL GROUP: LOADER PACKAGES - no blockers]
 
-## Files to Modify
+- [ ] Create `loaders/@polyplug/loaders-native/` with `deno.json` and `mod.ts`
+  - **Verification:** `deno test` works, package imports successfully
+  - **Blocker:** None
 
-1. **host-libs/js/polyplug.js**
-   - Add vtable caching to `Guard` class
-   - Add function pointer caching
-   - Optimize `callPluginFn`
+- [ ] Move `loaders/native.ts` to `@polyplug/loaders-native/mod.ts`
+  - **Verification:** `import { registerNativeLoader } from "@polyplug/loaders-native"` works
+  - **Blocker:** Package directory exists
 
-2. **host-libs/js/polyplug.d.ts**
-   - Update type definitions
+- [ ] Create `loaders/@polyplug/loaders-python/` package
+  - **Verification:** Package imports and works
+  - **Blocker:** None (parallel)
 
-3. **host-libs/js/loaders/*.ts**
-   - Move to separate packages
+- [ ] Create `loaders/@polyplug/loaders-lua/` package
+  - **Verification:** Package imports and works
+  - **Blocker:** None (parallel)
 
-4. **crates/polyplug_codegen/src/generators/js_quickjs.rs**
-   - Apply similar optimizations to generated callers
+- [ ] Create `loaders/@polyplug/loaders-js/` package
+  - **Verification:** Package imports and works
+  - **Blocker:** None (parallel)
 
-## New Directory Structure
+- [ ] Create `loaders/@polyplug/loaders-js-deno/` package
+  - **Verification:** Package imports and works
+  - **Blocker:** None (parallel)
 
-```
-host-libs/js/
-├── polyplug.ts                  # Core runtime (no loaders)
-├── polyplug.d.ts
-├── deno.json
-├── loaders/
-│   ├── @polyplug/loaders-native/
-│   │   ├── deno.json
-│   │   ├── mod.ts
-│   │   └── deno.d.ts
-│   ├── @polyplug/loaders-python/
-│   │   └── ...
-│   ├── @polyplug/loaders-lua/
-│   │   └── ...
-│   ├── @polyplug/loaders-js/
-│   │   └── ...
-│   ├── @polyplug/loaders-js-deno/
-│   │   └── ...
-│   └── @polyplug/loaders-dotnet/
-│       └── ...
-└── README.md
-```
+- [ ] Create `loaders/@polyplug/loaders-dotnet/` package
+  - **Verification:** Package imports and works
+  - **Blocker:** None (parallel)
 
-## Performance Expectations
+- [ ] Remove `loaders/*.ts` from main `polyplug` module
+  - **Verification:** Old loader files deleted
+  - **Blocker:** All loader packages created
 
-| Operation | Current | Optimized |
-|-----------|---------|-----------|
-| VTable access | ~150ns (FFI call) | ~10ns (cached) |
-| Function pointer creation | ~200ns (new) | ~0ns (cached) |
-| Type cast | ~50ns | ~0ns |
-| **Hot path** | ~400-500ns | ~50-100ns |
+---
 
-Deno FFI can achieve near-native performance with proper caching.
+## Phase 5: Type Definitions
 
-## Implementation Order
+### [SEQUENTIAL - depends on Phase 2, 3]
 
-1. Add vtable caching to `Guard`
-2. Add function pointer caching module-level
-3. Rewrite `callPluginFn` with caching
-4. Move loaders to separate packages
-5. Update codegen
+- [ ] Update `polyplug.d.ts` with cached `Guard.vtable` property
+  - **Verification:** Type definition shows `vtable(): Deno.PointerValue` returns cached value
+  - **Blocker:** Implementation complete
+
+- [ ] Add type definitions for loader packages
+  - **Verification:** Each loader has `deno.d.ts` or `.d.ts` file
+  - **Blocker:** Loader packages created
+
+---
+
+## Phase 6: Testing
+
+### [SEQUENTIAL - depends on all phases]
+
+- [ ] Write unit test for Guard vtable caching
+  - **Verification:** Test verifies `vtable()` returns same value without FFI call
+  - **Blocker:** Caching implemented
+
+- [ ] Write unit test for function pointer cache
+  - **Verification:** Test verifies cache hit on second call to same function
+  - **Blocker:** Cache implemented
+
+- [ ] Write performance benchmark
+  - **Verification:** Benchmark shows < 100ns per call after optimization
+  - **Blocker:** All phases complete
+
+---
+
+## Self-Review
+
+| Aspect | Status | Notes |
+|--------|--------|-------|
+| Tasks are atomic | ✅ | Each task is one action with one verification |
+| Verifications are concrete | ✅ | All verifications are testable |
+| Parallel groups marked | ✅ | Type caching and loader packages are parallelizable |
+| Blockers identified | ✅ | Sequential dependencies for codegen, testing |
+| Covers all issues | ✅ | VTable caching, function caching, loaders addressed |
+
+---
 
 ## Estimated Effort
 
-- Guard vtable caching: 30 minutes
-- Function pointer caching: 1 hour
-- callPluginFn optimization: 1 hour
-- Loader restructuring: 2 hours
-- Testing: 1 hour
-
-**Total: ~5.5 hours**
-
-## PRD References
-
-- PRD §8: "Deno.dlopen host lib, Runtime class, TypeScript types"
-- PRD §8: "register*Loader() functions (one per loader)" - should be separate packages
-- PRD §10 (JS): "Performance: <10ns (V8 fast call), ~150ns (BigInt/slow path)"
+| Phase | Time |
+|-------|------|
+| Phase 0 (Bugs) | 0h |
+| Phase 1 (Types) | 0.5h |
+| Phase 2 (Guard) | 0.5h |
+| Phase 3 (callPluginFn) | 1.5h |
+| Phase 4 (Loaders) | 2h |
+| Phase 5 (Types) | 0.5h |
+| Phase 6 (Testing) | 1h |
+| **Total** | **~6h** |
