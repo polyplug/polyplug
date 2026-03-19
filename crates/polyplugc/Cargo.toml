@@ -1,5 +1,6 @@
 [package]
 name = "polyplugc"
+description = "CLI code generator for polyplug - generates type-safe bindings for multiple languages"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

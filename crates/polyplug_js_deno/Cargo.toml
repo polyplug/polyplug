@@ -1,5 +1,6 @@
 [package]
 name = "polyplug_js_deno"
+description = "Deno loader for polyplug - loads JavaScript plugins via Deno"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

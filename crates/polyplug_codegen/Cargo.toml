@@ -1,5 +1,6 @@
 [package]
 name = "polyplug_codegen"
+description = "Code generation library for polyplug host-side contract callers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -53,7 +53,9 @@ fn write_ext_bundle_toml(path: &Path) {
         "name = \"test_ext_bundle\"\n",
         "version = \"0.1.0\"\n",
         "runtime = \"native\"\n",
-        "file = \"libtest.so\"\n",
+        "\n",
+        "[bundle.file]\n",
+        "linux.x86_64 = \"libtest.so\"\n",
         "\n",
         "[[plugin]]\n",
         "name = \"test_ext_plugin\"\n",
@@ -216,23 +218,7 @@ fn codegen_js_quickjs_emits_ext_trace_id() {
     );
 }
 
-#[test]
-fn codegen_js_deno_emits_ext_trace_id() {
-    let tmp: PathBuf = std::env::temp_dir().join("polyplug_ext_test_js_deno");
-    std::fs::create_dir_all(&tmp).expect("create temp dir");
-    let bundle_path: PathBuf = tmp.join("bundle.toml");
-    write_ext_bundle_toml(&bundle_path);
-    let out_dir: PathBuf = tmp.join("out");
-    let output: Output = run_polyplugc_bundle(&bundle_path, "js-deno", &out_dir);
-    assert!(
-        output.status.success(),
-        "polyplugc js-deno failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let init_content: String =
-        std::fs::read_to_string(out_dir.join("guest/init.ts")).expect("guest/init.ts not found");
-    assert!(
-        init_content.contains("EXT_TRACE_ID"),
-        "js-deno init.ts must contain EXT_TRACE_ID; got:\n{init_content}"
-    );
-}
+// NOTE: js-deno guest generation is intentionally NOT supported.
+// V8 cannot be loaded as a shared library (.so) on Linux due to TLS requirements.
+// The js-deno generator returns GuestGenerationNotSupported error for guest code.
+// Use js-quickjs for JavaScript guest plugins instead.

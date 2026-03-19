@@ -1,5 +1,6 @@
 [package]
 name = "polyplug_native"
+description = "Native loader for polyplug - loads C ABI plugins (.so/.dll)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

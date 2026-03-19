@@ -1,5 +1,6 @@
 [package]
 name = "polyplug_dotnet"
+description = ".NET loader for polyplug - loads .NET plugins via netcorehost"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

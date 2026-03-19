@@ -8,14 +8,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug_abi::ABI_ERROR_PANIC;
 use polyplug_abi::AbiError;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 // ─── Registrar callback that stores the vtable pointer ───────────────────────
 
@@ -78,8 +78,10 @@ fn test_panic_returns_abi_error_panic() {
          name = \"panic_plugin\"\n\
          version = \"1.0.0\"\n\
          runtime = \"native\"\n\
-         file = \"libpanic.so\"\n\
          api = \"{}\"\n\
+         \n\
+         [bundle.file]\n\
+         linux.x86_64 = \"libpanic_plugin.so\"\n\
          \n\
          [[plugin]]\n\
          name = \"panic_plugin\"\n\
@@ -151,8 +153,8 @@ fn test_panic_returns_abi_error_panic() {
         "use polyplug_guest::PluginVTable;\n",
         "use polyplug_guest::StringView;\n",
         "use polyplug_guest::ABI_ERROR_GENERIC;\n",
-        "use guest::vtables::TEST_PANIC_IMPL;\n",
-        "use guest::vtables::TEST_PANIC_VTABLE;\n",
+        "use guest::vtables::PANIC_PLUGIN_IMPL;\n",
+        "use guest::vtables::PANIC_PLUGIN_VTABLE;\n",
         "use guest::contracts::TestPanicPlugin;\n",
         "\n",
         "struct PanicPlugin;\n",
@@ -169,7 +171,7 @@ fn test_panic_returns_abi_error_panic() {
         "/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n",
         "#[unsafe(no_mangle)]\n",
         "pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n",
-        "    TEST_PANIC_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
+        "    PANIC_PLUGIN_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
         "    if registrar.is_null() {\n",
         "        return AbiError {\n",
         "            code: ABI_ERROR_GENERIC,\n",
@@ -196,7 +198,7 @@ fn test_panic_returns_abi_error_panic() {
         "        (reg.register_plugin)(\n",
         "            registrar,\n",
         "            &desc as *const PluginDescriptor,\n",
-        "            &TEST_PANIC_VTABLE as *const PluginVTable,\n",
+        "            &PANIC_PLUGIN_VTABLE as *const PluginVTable,\n",
         "        )\n",
         "    }\n",
         "}\n",

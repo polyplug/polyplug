@@ -1,5 +1,6 @@
 [package]
 name = "polyplug_python"
+description = "Python loader for polyplug - loads Python plugins via PyO3"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
