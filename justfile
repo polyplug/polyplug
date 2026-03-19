@@ -1,6 +1,9 @@
 # polyplug Justfile
 # Build, test, and manage the polyplug plugin runtime
 
+# Load .env file if it exists
+set dotenv-load
+
 # Default recipe - show available commands
 default:
     @just --list
@@ -776,24 +779,16 @@ _prepare-luarocks-packages:
     @echo "  [luarocks] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/luarocks
     @if command -v luarocks >/dev/null 2>&1; then \
-        echo "  [luarocks] Packing host library..."; \
-        cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/host-libs/lua/ 2>/dev/null || true; \
-        cd {{dist_dir}}/host-libs/lua && \
-            luarocks pack polyplug 2>/dev/null && mv *.rock ../../../publish/luarocks/ 2>/dev/null || true; \
-        echo "  [luarocks] Packing guest library..."; \
-        cp {{guest_libs_dir}}/lua/*.rockspec {{dist_dir}}/guest-libs/lua/ 2>/dev/null || true; \
-        cd {{dist_dir}}/guest-libs/lua && \
-            luarocks pack polyplug-guest 2>/dev/null && mv *.rock ../../../publish/luarocks/ 2>/dev/null || true; \
-        echo "  [luarocks] Packing loaders..."; \
-        for loader in native python lua js js-deno dotnet; do \
-            loader_dir="{{host_libs_dir}}/lua/loaders/polyplug-loaders-$$loader"; \
-            if [ -d "$$loader_dir" ]; then \
-                echo "  [luarocks]   Packing polyplug-loaders-$$loader..."; \
-                cp "$$loader_dir"/*.rockspec {{dist_dir}}/host-libs/lua/loaders/polyplug-loaders-$$loader/ 2>/dev/null || true; \
-                (cd "$$loader_dir" && luarocks pack polyplug-loaders-$$loader 2>/dev/null && mv *.rock ../../../dist/publish/luarocks/ 2>/dev/null) || true; \
-            fi; \
-        done; \
-        echo "  [luarocks] ✓ Packages ready"; \
+        echo "  [luarocks] Copying rockspecs for upload..."; \
+        cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{guest_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-native/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-python/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-js/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-js-deno/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-dotnet/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        echo "  [luarocks] ✓ Rockspecs ready for upload"; \
     else \
         echo "  [luarocks] ⊘ luarocks not installed, skipping"; \
     fi
@@ -825,77 +820,135 @@ _prepare-jsr-packages:
     fi
 
 # ============================================================================
-# Publishing Commands (dry-run by default)
+# Publishing Commands
 # ============================================================================
 
-# Publish to crates.io (dry-run)
+# Publish to crates.io (requires CRATES_IO_TOKEN)
 publish-crates:
-    @echo "=== Publishing to crates.io (dry-run) ==="
-    @echo "Run the following commands to publish:"
-    @echo "  cd crates/polyplug_abi && cargo publish"
-    @echo "  cd crates/polyplug && cargo publish"
-    @echo "  cd guest-libs/rust && cargo publish"
-    @echo "  cd crates/polyplug_codegen && cargo publish"
-    @echo "  cd crates/polyplugc && cargo publish"
-    @echo "  cd crates/polyplug_native && cargo publish"
-    @echo "  cd crates/polyplug_python && cargo publish"
-    @echo "  cd crates/polyplug_lua && cargo publish"
-    @echo "  cd crates/polyplug_js && cargo publish"
-    @echo "  cd crates/polyplug_js_deno && cargo publish"
-    @echo "  cd crates/polyplug_dotnet && cargo publish"
-
-# Publish to crates.io (actual)
-publish-crates-now:
     @echo "=== Publishing to crates.io ==="
-    cargo publish -p polyplug_abi
-    cargo publish -p polyplug
-    cargo publish -p polyplug_guest
-    cargo publish -p polyplug_codegen
-    cargo publish -p polyplugc
-    cargo publish -p polyplug_native
-    cargo publish -p polyplug_python
-    cargo publish -p polyplug_lua
-    cargo publish -p polyplug_js
-    cargo publish -p polyplug_js_deno
-    cargo publish -p polyplug_dotnet
+    @test -n "$CRATES_IO_TOKEN" || { echo "Error: CRATES_IO_TOKEN not set"; exit 1; }
+    @echo "Publishing polyplug_abi..."
+    cargo publish -p polyplug_abi --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug..."
+    cargo publish -p polyplug --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_guest..."
+    cargo publish -p polyplug_guest --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_codegen..."
+    cargo publish -p polyplug_codegen --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplugc..."
+    cargo publish -p polyplugc --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_native..."
+    cargo publish -p polyplug_native --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_python..."
+    cargo publish -p polyplug_python --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_lua..."
+    cargo publish -p polyplug_lua --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_js..."
+    cargo publish -p polyplug_js --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_js_deno..."
+    cargo publish -p polyplug_js_deno --token "$CRATES_IO_TOKEN"
+    @sleep 5
+    @echo "Publishing polyplug_dotnet..."
+    cargo publish -p polyplug_dotnet --token "$CRATES_IO_TOKEN"
+    @echo "=== crates.io publishing complete ==="
 
-# Publish to NuGet (dry-run)
+# Publish to NuGet (requires NUGET_API_KEY)
 publish-nuget:
-    @echo "=== Publishing to NuGet (dry-run) ==="
-    @echo "Run the following commands to publish:"
-    @echo "  dotnet nuget push {{dist_dir}}/publish/nuget/*.nupkg --api-key YOUR_KEY --source https://api.nuget.org/v3/index.json"
+    @echo "=== Publishing to NuGet ==="
+    @test -n "$NUGET_API_KEY" || { echo "Error: NUGET_API_KEY not set"; exit 1; }
+    @test -d {{dist_dir}}/publish/nuget || { echo "Error: Run 'just release' first"; exit 1; }
+    @for pkg in {{dist_dir}}/publish/nuget/*.nupkg; do \
+        if [ -f "$$pkg" ]; then \
+            echo "Publishing $$pkg..."; \
+            dotnet nuget push "$$pkg" \
+                --api-key "$NUGET_API_KEY" \
+                --source https://api.nuget.org/v3/index.json \
+                --skip-duplicate; \
+        fi; \
+    done
+    @echo "=== NuGet publishing complete ==="
 
-# Publish to PyPI (dry-run)
+# Publish to PyPI (requires PYPI_TOKEN)
 publish-pypi:
-    @echo "=== Publishing to PyPI (dry-run) ==="
-    @echo "Run the following commands to publish:"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug-*.tar.gz"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug-*.whl"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_guest-*.tar.gz"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_guest-*.whl"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_loaders_*.tar.gz"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_loaders_*.whl"
+    @echo "=== Publishing to PyPI ==="
+    @test -n "$PYPI_TOKEN" || { echo "Error: PYPI_TOKEN not set"; exit 1; }
+    @test -d {{dist_dir}}/publish/pypi || { echo "Error: Run 'just release' first"; exit 1; }
+    @for pkg in {{dist_dir}}/publish/pypi/*.tar.gz; do \
+        if [ -f "$$pkg" ]; then \
+            echo "Publishing $$pkg..."; \
+            twine upload "$$pkg" --username __token__ --password "$PYPI_TOKEN" --skip-existing; \
+        fi; \
+    done
+    @for pkg in {{dist_dir}}/publish/pypi/*.whl; do \
+        if [ -f "$$pkg" ]; then \
+            echo "Publishing $$pkg..."; \
+            twine upload "$$pkg" --username __token__ --password "$PYPI_TOKEN" --skip-existing; \
+        fi; \
+    done
+    @echo "=== PyPI publishing complete ==="
 
-# Publish to npm (dry-run)
+# Publish to npm (requires NPM_TOKEN)
 publish-npm:
-    @echo "=== Publishing to npm (dry-run) ==="
-    @echo "Run the following commands to publish:"
-    @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-runtime-*.tgz"
-    @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-guest-*.tgz"
-    @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-loaders-*.tgz"
+    @echo "=== Publishing to npm ==="
+    @test -n "$NPM_TOKEN" || { echo "Error: NPM_TOKEN not set"; exit 1; }
+    @test -d {{dist_dir}}/publish/npm || { echo "Error: Run 'just release' first"; exit 1; }
+    npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
+    @for pkg in {{dist_dir}}/publish/npm/*.tgz; do \
+        if [ -f "$$pkg" ]; then \
+            echo "Publishing $$pkg..."; \
+            npm publish "$$pkg" --access public; \
+        fi; \
+    done
+    @echo "=== npm publishing complete ==="
 
-# Publish to jsr.io (dry-run)
+# Publish to jsr.io (requires JSR_TOKEN or logged in via deno)
 publish-jsr:
-    @echo "=== Publishing to jsr.io (dry-run) ==="
-    @echo "Run the following commands to publish:"
-    @echo "  cd host-libs/js && deno publish"
-    @echo "  cd guest-libs/js && deno publish"
-    @echo "  cd host-libs/js/loaders/@polyplug/loaders-native && deno publish"
-    @echo "  cd host-libs/js/loaders/@polyplug/loaders-python && deno publish"
-    @echo "  cd host-libs/js/loaders/@polyplug/loaders-lua && deno publish"
-    @echo "  cd host-libs/js/loaders/@polyplug/loaders-js && deno publish"
-    @echo "  cd host-libs/js/loaders/@polyplug/loaders-js-deno && deno publish"
-    @echo "  cd host-libs/js/loaders/@polyplug/loaders-dotnet && deno publish"
+    @echo "=== Publishing to jsr.io ==="
+    @if [ -n "$JSR_TOKEN" ]; then \
+        export DENO_AUTH_TOKENS="jsr.io:$JSR_TOKEN"; \
+    fi
+    @echo "Publishing host library..."
+    cd host-libs/js && deno publish
+    @echo "Publishing guest library..."
+    cd guest-libs/js && deno publish
+    @for loader in native python lua js js-deno dotnet; do \
+        loader_dir="host-libs/js/loaders/@polyplug/loaders-$$loader"; \
+        if [ -d "$$loader_dir" ]; then \
+            echo "Publishing @polyplug/loaders-$$loader..."; \
+            cd "$$loader_dir" && deno publish; \
+        fi; \
+    done
+    @echo "=== jsr.io publishing complete ==="
+
+# Publish to LuaRocks (requires LUAROCKS_API_KEY)
+publish-luarocks:
+    @echo "=== Publishing to LuaRocks ==="
+    @test -n "$LUAROCKS_API_KEY" || { echo "Error: LUAROCKS_API_KEY not set"; exit 1; }
+    @echo "Publishing host library..."
+    luarocks upload host-libs/lua/polyplug-1.0-1.rockspec --api-key "$LUAROCKS_API_KEY"
+    @echo "Publishing guest library..."
+    luarocks upload guest-libs/lua/polyplug-guest-1.0-1.rockspec --api-key "$LUAROCKS_API_KEY"
+    @for rock in host-libs/lua/loaders/*/*.rockspec; do \
+        if [ -f "$$rock" ]; then \
+            echo "Publishing $$rock..."; \
+            luarocks upload "$$rock" --api-key "$LUAROCKS_API_KEY"; \
+        fi; \
+    done
+    @echo "=== LuaRocks publishing complete ==="
+
+# Publish everything to all registries
+publish-all: publish-crates publish-nuget publish-pypi publish-npm publish-jsr publish-luarocks
+    @echo ""
+    @echo "=== All packages published successfully ==="
 
 # ============================================================================
 # Info
