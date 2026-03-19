@@ -479,6 +479,7 @@ release: clean-dist
     @just _dist-copy-native-libs
     @just _dist-copy-host-libs
     @just _dist-copy-guest-libs
+    @just _dist-cleanup
     @just _prepare-release-packages
     @echo ""
     @echo "=== Release Ready ==="
@@ -490,9 +491,46 @@ _dist-prepare:
     @echo "Creating dist structure..."
     @mkdir -p {{dist_dir}}/lib
     @mkdir -p {{dist_dir}}/bin
-    @mkdir -p {{dist_dir}}/host-libs/{cpp,python,csharp,lua,js}
-    @mkdir -p {{dist_dir}}/guest-libs/{rust,cpp,csharp,python,lua,js}
-    @mkdir -p {{dist_dir}}/publish/{crates.io,nuget,pypi,npm,luarocks}
+    @mkdir -p {{dist_dir}}/host-libs/cpp
+    @mkdir -p {{dist_dir}}/host-libs/python
+    @mkdir -p {{dist_dir}}/host-libs/csharp
+    @mkdir -p {{dist_dir}}/host-libs/lua
+    @mkdir -p {{dist_dir}}/host-libs/js
+    @mkdir -p {{dist_dir}}/guest-libs/rust
+    @mkdir -p {{dist_dir}}/guest-libs/cpp
+    @mkdir -p {{dist_dir}}/guest-libs/csharp
+    @mkdir -p {{dist_dir}}/guest-libs/python
+    @mkdir -p {{dist_dir}}/guest-libs/lua
+    @mkdir -p {{dist_dir}}/guest-libs/js
+    @mkdir -p {{dist_dir}}/publish/crates.io
+    @mkdir -p {{dist_dir}}/publish/nuget
+    @mkdir -p {{dist_dir}}/publish/pypi
+    @mkdir -p {{dist_dir}}/publish/npm
+    @mkdir -p {{dist_dir}}/publish/luarocks
+
+# Cleanup dist directory - remove any build artifacts that shouldn't be there
+_dist-cleanup:
+    @echo "Cleaning up dist directory..."
+    @# Remove any obj/ directories (C# build artifacts) - but NOT dist/bin/
+    @find {{dist_dir}}/host-libs -type d -name "obj" -exec rm -rf {} + 2>/dev/null || true
+    @find {{dist_dir}}/guest-libs -type d -name "obj" -exec rm -rf {} + 2>/dev/null || true
+    @find {{dist_dir}}/host-libs -type d -name "bin" -exec rm -rf {} + 2>/dev/null || true
+    @find {{dist_dir}}/guest-libs -type d -name "bin" -exec rm -rf {} + 2>/dev/null || true
+    @# Remove any __pycache__ directories (Python bytecode)
+    @find {{dist_dir}} -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    @# Remove any .pyc files
+    @find {{dist_dir}} -name "*.pyc" -delete 2>/dev/null || true
+    @# Remove any .gch files (C++ precompiled headers)
+    @find {{dist_dir}} -name "*.gch" -delete 2>/dev/null || true
+    @# Remove any CMakeLists.txt files
+    @find {{dist_dir}} -name "CMakeLists.txt" -delete 2>/dev/null || true
+    @# Remove native .so/.dylib files from host-libs and guest-libs (they belong in dist/lib/)
+    @# Note: C# .dll assemblies are kept - only native libraries are removed
+    @find {{dist_dir}}/host-libs -name "lib*.so" -delete 2>/dev/null || true
+    @find {{dist_dir}}/guest-libs -name "lib*.so" -delete 2>/dev/null || true
+    @find {{dist_dir}}/host-libs -name "lib*.dylib" -delete 2>/dev/null || true
+    @find {{dist_dir}}/guest-libs -name "lib*.dylib" -delete 2>/dev/null || true
+    @echo "  ✓ Cleanup complete"
 
 # Copy native libraries to dist
 _dist-copy-native-libs:
@@ -502,78 +540,104 @@ _dist-copy-native-libs:
         cp {{target_dir}}/polyplug.dll {{dist_dir}}/lib/ 2>/dev/null || true
     @cp {{target_dir}}/polyplugc {{dist_dir}}/bin/ 2>/dev/null || \
         cp {{target_dir}}/polyplugc.exe {{dist_dir}}/bin/ 2>/dev/null || true
-    @for lib in polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_js_deno polyplug_dotnet; do \
-        cp {{target_dir}}/lib$$lib.so {{dist_dir}}/lib/ 2>/dev/null || true; \
-    done
+    @cp {{target_dir}}/libpolyplug_native.so {{dist_dir}}/lib/ 2>/dev/null || true
+    @cp {{target_dir}}/libpolyplug_python.so {{dist_dir}}/lib/ 2>/dev/null || true
+    @cp {{target_dir}}/libpolyplug_lua.so {{dist_dir}}/lib/ 2>/dev/null || true
+    @cp {{target_dir}}/libpolyplug_js.so {{dist_dir}}/lib/ 2>/dev/null || true
+    @cp {{target_dir}}/libpolyplug_dotnet.so {{dist_dir}}/lib/ 2>/dev/null || true
 
-# Copy host libraries to dist (with native lib for FFI)
+# Copy host libraries to dist (library files ONLY - NO .so files, NO build artifacts)
 _dist-copy-host-libs:
     @echo "Copying host libraries..."
-    @# C++ (header-only)
+    @# C++ (header-only) - ONLY .hpp files, NO CMakeLists.txt, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/cpp/polyplug
-    @cp -r {{host_libs_dir}}/cpp/polyplug/*.hpp {{dist_dir}}/host-libs/cpp/polyplug/
-    @cp -r {{host_libs_dir}}/cpp/loaders {{dist_dir}}/host-libs/cpp/
+    @cp {{host_libs_dir}}/cpp/polyplug/*.hpp {{dist_dir}}/host-libs/cpp/polyplug/
     @cp {{host_libs_dir}}/cpp/polyplug.hpp {{dist_dir}}/host-libs/cpp/
-    @cp {{dist_dir}}/lib/libpolyplug.so {{dist_dir}}/host-libs/cpp/
-    @# Python (pure Python)
+    @# C++ loaders - ONLY .hpp files, NO CMakeLists.txt
+    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/native
+    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/python
+    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/lua
+    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/js
+    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/js_deno
+    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/dotnet
+    @cp {{host_libs_dir}}/cpp/loaders/native/*.hpp {{dist_dir}}/host-libs/cpp/loaders/native/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/cpp/loaders/python/*.hpp {{dist_dir}}/host-libs/cpp/loaders/python/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/cpp/loaders/lua/*.hpp {{dist_dir}}/host-libs/cpp/loaders/lua/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/cpp/loaders/js/*.hpp {{dist_dir}}/host-libs/cpp/loaders/js/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/cpp/loaders/js_deno/*.hpp {{dist_dir}}/host-libs/cpp/loaders/js_deno/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/cpp/loaders/dotnet/*.hpp {{dist_dir}}/host-libs/cpp/loaders/dotnet/ 2>/dev/null || true
+    @# Python (pure Python) - ONLY .py files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/python/polyplug
-    @cp -r {{host_libs_dir}}/python/polyplug/*.py {{dist_dir}}/host-libs/python/polyplug/
-    @cp -r {{host_libs_dir}}/python/loaders {{dist_dir}}/host-libs/python/
-    @cp {{dist_dir}}/lib/libpolyplug.so {{dist_dir}}/host-libs/python/
-    @# C# (BUILD to DLL - includes Polyplug and all Loaders)
+    @cp {{host_libs_dir}}/python/polyplug/*.py {{dist_dir}}/host-libs/python/polyplug/
+    @cp {{host_libs_dir}}/python/polyplug/*.pyi {{dist_dir}}/host-libs/python/polyplug/ 2>/dev/null || true
+    @# Python loaders - ONLY .py files
+    @mkdir -p {{dist_dir}}/host-libs/python/loaders
+    @cp -r {{host_libs_dir}}/python/loaders/* {{dist_dir}}/host-libs/python/loaders/
+    @find {{dist_dir}}/host-libs/python/loaders -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+    @# C# - Build DLLs in source location, copy ONLY built DLLs to dist
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [dist] Building C# host library and loaders..."; \
+        dotnet build {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{host_libs_dir}}/csharp/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{host_libs_dir}}/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{host_libs_dir}}/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{host_libs_dir}}/csharp/Loaders/JsDeno/Polyplug.Loaders.JsDeno.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{host_libs_dir}}/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release 2>/dev/null || true; \
         mkdir -p {{dist_dir}}/host-libs/csharp; \
-        cp -r {{host_libs_dir}}/csharp/Polyplug {{dist_dir}}/host-libs/csharp/; \
-        cp -r {{host_libs_dir}}/csharp/Loaders {{dist_dir}}/host-libs/csharp/; \
-        cp {{dist_dir}}/lib/libpolyplug.so {{dist_dir}}/host-libs/csharp/; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Polyplug/Polyplug.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Loaders/JsDeno/Polyplug.Loaders.JsDeno.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{dist_dir}}/host-libs/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Polyplug/bin/Release/net10.0/Polyplug.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Loaders/Native/bin/Release/net10.0/Polyplug.Loaders.Native.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Loaders/Python/bin/Release/net10.0/Polyplug.Loaders.Python.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Loaders/Lua/bin/Release/net10.0/Polyplug.Loaders.Lua.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Loaders/Js/bin/Release/net10.0/Polyplug.Loaders.Js.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Loaders/JsDeno/bin/Release/net10.0/Polyplug.Loaders.JsDeno.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/csharp/Loaders/Dotnet/bin/Release/net10.0/Polyplug.Loaders.Dotnet.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
     fi
-    @# Lua (pure Lua)
+    @# Lua (pure Lua) - ONLY .lua files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/lua/polyplug
     @cp {{host_libs_dir}}/lua/polyplug.lua {{dist_dir}}/host-libs/lua/
-    @cp {{host_libs_dir}}/lua/polyplug.d.lua {{dist_dir}}/host-libs/lua/
-    @cp -r {{host_libs_dir}}/lua/polyplug/*.lua {{dist_dir}}/host-libs/lua/polyplug/
-    @cp -r {{host_libs_dir}}/lua/loaders {{dist_dir}}/host-libs/lua/
-    @cp {{dist_dir}}/lib/libpolyplug.so {{dist_dir}}/host-libs/lua/
-    @# JS (pure JS)
+    @cp {{host_libs_dir}}/lua/polyplug.d.lua {{dist_dir}}/host-libs/lua/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/lua/polyplug/*.lua {{dist_dir}}/host-libs/lua/polyplug/
+    @# Lua loaders - ONLY .lua files
+    @mkdir -p {{dist_dir}}/host-libs/lua/loaders
+    @cp -r {{host_libs_dir}}/lua/loaders/* {{dist_dir}}/host-libs/lua/loaders/
+    @find {{dist_dir}}/host-libs/lua/loaders -name "*.rockspec" -delete 2>/dev/null || true
+    @# JS (pure JS) - ONLY .js/.ts files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/js/polyplug
     @cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js/
-    @cp -r {{host_libs_dir}}/js/polyplug/*.js {{dist_dir}}/host-libs/js/polyplug/
-    @cp {{dist_dir}}/lib/libpolyplug.so {{dist_dir}}/host-libs/js/
+    @cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/js/polyplug/*.js {{dist_dir}}/host-libs/js/polyplug/
+    @# JS loaders - ONLY .js/.ts files
+    @mkdir -p {{dist_dir}}/host-libs/js/loaders
+    @cp -r {{host_libs_dir}}/js/loaders/* {{dist_dir}}/host-libs/js/loaders/
 
-# Copy guest libraries to dist
+# Copy guest libraries to dist (library files ONLY - NO build artifacts)
 _dist-copy-guest-libs:
     @echo "Copying guest libraries..."
     @# Rust (source for crates.io)
     @mkdir -p {{dist_dir}}/guest-libs/rust/src
     @cp -r {{guest_libs_dir}}/rust/src/* {{dist_dir}}/guest-libs/rust/src/
     @cp {{guest_libs_dir}}/rust/Cargo.toml {{dist_dir}}/guest-libs/rust/
-    @# C++ (header-only)
+    @cp {{guest_libs_dir}}/rust/README.md {{dist_dir}}/guest-libs/rust/ 2>/dev/null || true
+    @# C++ (header-only) - ONLY .hpp files
     @mkdir -p {{dist_dir}}/guest-libs/cpp/polyplug
-    @cp -r {{guest_libs_dir}}/cpp/polyplug/*.hpp {{dist_dir}}/guest-libs/cpp/polyplug/
+    @cp {{guest_libs_dir}}/cpp/polyplug/*.hpp {{dist_dir}}/guest-libs/cpp/polyplug/
     @cp {{guest_libs_dir}}/cpp/polyplug_guest.hpp {{dist_dir}}/guest-libs/cpp/
-    @# C# (BUILD to DLL)
+    @# C# - Build DLL in source location, copy ONLY built DLL to dist
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [dist] Building C# guest library..."; \
+        dotnet build {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release 2>/dev/null || true; \
         mkdir -p {{dist_dir}}/guest-libs/csharp; \
-        cp -r {{guest_libs_dir}}/csharp/src {{dist_dir}}/guest-libs/csharp/; \
-        cp {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj {{dist_dir}}/guest-libs/csharp/; \
-        dotnet build {{dist_dir}}/guest-libs/csharp/Polyplug.Guest.csproj -c Release 2>/dev/null || true; \
+        cp {{guest_libs_dir}}/csharp/bin/Release/net10.0/Polyplug.Guest.dll {{dist_dir}}/guest-libs/csharp/ 2>/dev/null || true; \
     fi
-    @# Python (pure Python)
+    @# Python (pure Python) - ONLY .py files
     @mkdir -p {{dist_dir}}/guest-libs/python/polyplug_guest
-    @cp -r {{guest_libs_dir}}/python/polyplug_guest/*.py {{dist_dir}}/guest-libs/python/polyplug_guest/
-    @# Lua (pure Lua)
+    @cp {{guest_libs_dir}}/python/polyplug_guest/*.py {{dist_dir}}/guest-libs/python/polyplug_guest/
+    @cp {{guest_libs_dir}}/python/polyplug_guest/*.pyi {{dist_dir}}/guest-libs/python/polyplug_guest/ 2>/dev/null || true
+    @# Lua (pure Lua) - ONLY .lua files
     @mkdir -p {{dist_dir}}/guest-libs/lua
     @cp {{guest_libs_dir}}/lua/polyplug_guest.lua {{dist_dir}}/guest-libs/lua/
-    @# JS (TypeScript/JS)
+    @# JS (TypeScript/JS) - ONLY .js/.d.ts files
     @mkdir -p {{dist_dir}}/guest-libs/js
     @cp {{guest_libs_dir}}/js/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/
     @cp {{guest_libs_dir}}/js/polyplug-guest.js {{dist_dir}}/guest-libs/js/
@@ -614,14 +678,12 @@ _prepare-crate-packages:
     @cp target/package/polyplugc-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @echo "  [crates.io] ✓ Packages ready"
 
-# Prepare NuGet packages for C# libraries
+# Prepare NuGet packages for C# libraries (pack from source location)
 _prepare-nuget-packages:
     @echo "  [nuget] Preparing packages..."
     @if command -v dotnet >/dev/null 2>&1; then \
-        cd {{dist_dir}}/host-libs/csharp/Polyplug && \
-            dotnet pack -c Release -o ../../../publish/nuget 2>/dev/null || true; \
-        cd {{dist_dir}}/guest-libs/csharp && \
-            dotnet pack -c Release -o ../../../publish/nuget 2>/dev/null || true; \
+        dotnet pack {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] ✓ Packages ready"; \
     else \
         echo "  [nuget] ⊘ dotnet not installed, skipping"; \
