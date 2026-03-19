@@ -507,6 +507,7 @@ _dist-prepare:
     @mkdir -p {{dist_dir}}/publish/pypi
     @mkdir -p {{dist_dir}}/publish/npm
     @mkdir -p {{dist_dir}}/publish/luarocks
+    @mkdir -p {{dist_dir}}/publish/jsr
 
 # Cleanup dist directory - remove any build artifacts that shouldn't be there
 _dist-cleanup:
@@ -662,6 +663,7 @@ _prepare-release-packages:
     @just _prepare-pypi-packages
     @just _prepare-npm-packages
     @just _prepare-luarocks-packages
+    @just _prepare-jsr-packages
 
 # Prepare Rust crates for crates.io
 _prepare-crate-packages:
@@ -796,6 +798,32 @@ _prepare-luarocks-packages:
         echo "  [luarocks] ⊘ luarocks not installed, skipping"; \
     fi
 
+# Prepare jsr.io packages for Deno/JavaScript libraries
+_prepare-jsr-packages:
+    @echo "  [jsr.io] Preparing packages..."
+    @mkdir -p {{dist_dir}}/publish/jsr
+    @if command -v deno >/dev/null 2>&1; then \
+        echo "  [jsr.io] Preparing host library..."; \
+        cp {{host_libs_dir}}/js/deno.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
+        (cd {{dist_dir}}/host-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
+        echo "  [jsr.io] Preparing guest library..."; \
+        cp {{guest_libs_dir}}/js/deno.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
+        cp {{guest_libs_dir}}/js/README.md {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
+        (cd {{dist_dir}}/guest-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
+        echo "  [jsr.io] Preparing loaders..."; \
+        for loader in native python lua js js-deno dotnet; do \
+            loader_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
+            if [ -d "$$loader_dir" ]; then \
+                echo "  [jsr.io]   Preparing @polyplug/loaders-$$loader..."; \
+                (cd "$$loader_dir" && deno publish --dry-run 2>&1 | head -10) || true; \
+            fi; \
+        done; \
+        echo "  [jsr.io] ✓ Packages ready (dry-run)"; \
+    else \
+        echo "  [jsr.io] ⊘ deno not installed, skipping"; \
+    fi
+
 # ============================================================================
 # Publishing Commands (dry-run by default)
 # ============================================================================
@@ -855,6 +883,19 @@ publish-npm:
     @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-runtime-*.tgz"
     @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-guest-*.tgz"
     @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-loaders-*.tgz"
+
+# Publish to jsr.io (dry-run)
+publish-jsr:
+    @echo "=== Publishing to jsr.io (dry-run) ==="
+    @echo "Run the following commands to publish:"
+    @echo "  cd host-libs/js && deno publish"
+    @echo "  cd guest-libs/js && deno publish"
+    @echo "  cd host-libs/js/loaders/@polyplug/loaders-native && deno publish"
+    @echo "  cd host-libs/js/loaders/@polyplug/loaders-python && deno publish"
+    @echo "  cd host-libs/js/loaders/@polyplug/loaders-lua && deno publish"
+    @echo "  cd host-libs/js/loaders/@polyplug/loaders-js && deno publish"
+    @echo "  cd host-libs/js/loaders/@polyplug/loaders-js-deno && deno publish"
+    @echo "  cd host-libs/js/loaders/@polyplug/loaders-dotnet && deno publish"
 
 # ============================================================================
 # Info
