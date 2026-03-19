@@ -3,11 +3,29 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "polyplug-workspace"
+name = "polyplug"
 version = "0.1.0"
-description = "Polyplug Python workspace with all loaders"
-requires-python = ">=3.11"
+description = "Python host library for the polyplug plugin runtime"
+requires-python = ">=3.10"
 license = { text = "MIT" }
+keywords = ["polyplug", "plugin", "runtime", "ffi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/polyplug/polyplug"
+Documentation = "https://github.com/polyplug/polyplug#readme"
+Repository = "https://github.com/polyplug/polyplug.git"
+Issues = "https://github.com/polyplug/polyplug/issues"
 
 [project.optional-dependencies]
 native = ["polyplug-loaders-native"]

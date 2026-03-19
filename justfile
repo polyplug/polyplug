@@ -638,6 +638,8 @@ _dist-copy-guest-libs:
     @mkdir -p {{dist_dir}}/guest-libs/python/polyplug_guest
     @cp {{guest_libs_dir}}/python/polyplug_guest/*.py {{dist_dir}}/guest-libs/python/polyplug_guest/
     @cp {{guest_libs_dir}}/python/polyplug_guest/*.pyi {{dist_dir}}/guest-libs/python/polyplug_guest/ 2>/dev/null || true
+    @cp {{guest_libs_dir}}/python/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true
+    @cp {{guest_libs_dir}}/python/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true
     @# Lua (pure Lua) - ONLY .lua files
     @mkdir -p {{dist_dir}}/guest-libs/lua
     @cp {{guest_libs_dir}}/lua/polyplug_guest.lua {{dist_dir}}/guest-libs/lua/
@@ -722,31 +724,27 @@ _prepare-nuget-packages:
 _prepare-pypi-packages:
     @echo "  [pypi] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/pypi
-    @# Try to build even if python build module is not available
-    @if python3 -c "import build" 2>/dev/null; then \
+    @if command -v uv >/dev/null 2>&1; then \
         echo "  [pypi] Building host library..."; \
         cp {{host_libs_dir}}/python/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/python/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/python/LICENSE {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
-        cd {{dist_dir}}/host-libs/python && \
-            python3 -m build --outdir ../../../publish/pypi 2>/dev/null || true; \
+        cd {{dist_dir}}/host-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building guest library..."; \
         cp {{guest_libs_dir}}/python/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
         cp {{guest_libs_dir}}/python/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
-        cd {{dist_dir}}/guest-libs/python && \
-            python3 -m build --outdir ../../../publish/pypi 2>/dev/null || true; \
+        cd {{dist_dir}}/guest-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building loaders..."; \
         for loader in native python lua js js-deno dotnet; do \
             loader_dir="{{host_libs_dir}}/python/loaders/polyplug-loaders-$$loader"; \
             if [ -d "$$loader_dir" ]; then \
                 echo "  [pypi]   Building polyplug-loaders-$$loader..."; \
-                mkdir -p {{dist_dir}}/publish/pypi; \
-                (cd "$$loader_dir" && python3 -m build --outdir ../../../dist/publish/pypi 2>/dev/null) || true; \
+                cd "$$loader_dir" && uv build --out-dir ../../../dist/publish/pypi; \
             fi; \
         done; \
         echo "  [pypi] ✓ Packages ready"; \
     else \
-        echo "  [pypi] ⊘ python build module not available, skipping"; \
+        echo "  [pypi] ⊘ uv not installed, skipping"; \
     fi
 
 # Prepare npm packages for JavaScript libraries
@@ -794,27 +792,42 @@ _prepare-luarocks-packages:
     fi
 
 # Prepare jsr.io packages for Deno/JavaScript libraries
+# Copies files to dist/ and validates with deno publish --dry-run
 _prepare-jsr-packages:
     @echo "  [jsr.io] Preparing packages..."
-    @mkdir -p {{dist_dir}}/publish/jsr
     @if command -v deno >/dev/null 2>&1; then \
         echo "  [jsr.io] Preparing host library..."; \
-        cp {{host_libs_dir}}/js/deno.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
+        mkdir -p {{dist_dir}}/host-libs/js/polyplug; \
+        cp {{host_libs_dir}}/js/deno.json {{dist_dir}}/host-libs/js/; \
+        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js/; \
+        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/; \
+        cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js/; \
+        cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js/; \
+        cp -r {{host_libs_dir}}/js/polyplug/* {{dist_dir}}/host-libs/js/polyplug/; \
         (cd {{dist_dir}}/host-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing guest library..."; \
-        cp {{guest_libs_dir}}/js/deno.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
-        cp {{guest_libs_dir}}/js/README.md {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
+        mkdir -p {{dist_dir}}/guest-libs/js; \
+        cp {{guest_libs_dir}}/js/deno.json {{dist_dir}}/guest-libs/js/; \
+        cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/; \
+        cp {{guest_libs_dir}}/js/polyplug-guest.js {{dist_dir}}/guest-libs/js/; \
+        cp {{guest_libs_dir}}/js/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/; \
         (cd {{dist_dir}}/guest-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing loaders..."; \
         for loader in native python lua js js-deno dotnet; do \
-            loader_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
-            if [ -d "$$loader_dir" ]; then \
+            src_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
+            dst_dir="{{dist_dir}}/host-libs/js/loaders/@polyplug/loaders-$$loader"; \
+            if [ -d "$$src_dir" ]; then \
                 echo "  [jsr.io]   Preparing @polyplug/loaders-$$loader..."; \
-                (cd "$$loader_dir" && deno publish --dry-run 2>&1 | head -10) || true; \
+                mkdir -p "$$dst_dir"; \
+                cp "$$src_dir"/deno.json "$$dst_dir"/ 2>/dev/null || true; \
+                cp "$$src_dir"/package.json "$$dst_dir"/ 2>/dev/null || true; \
+                cp "$$src_dir"/mod.ts "$$dst_dir"/ 2>/dev/null || true; \
+                cp "$$src_dir"/mod.d.ts "$$dst_dir"/ 2>/dev/null || true; \
+                cp "$$src_dir"/README.md "$$dst_dir"/ 2>/dev/null || true; \
+                (cd "$$dst_dir" && deno publish --dry-run 2>&1 | head -10) || true; \
             fi; \
         done; \
-        echo "  [jsr.io] ✓ Packages ready (dry-run)"; \
+        echo "  [jsr.io] ✓ Packages prepared in dist/"; \
     else \
         echo "  [jsr.io] ⊘ deno not installed, skipping"; \
     fi
@@ -882,18 +895,16 @@ publish-pypi:
     @echo "=== Publishing to PyPI ==="
     @test -n "$PYPI_TOKEN" || { echo "Error: PYPI_TOKEN not set"; exit 1; }
     @test -d {{dist_dir}}/publish/pypi || { echo "Error: Run 'just release' first"; exit 1; }
-    @for pkg in {{dist_dir}}/publish/pypi/*.tar.gz; do \
-        if [ -f "$$pkg" ]; then \
-            echo "Publishing $$pkg..."; \
-            twine upload "$$pkg" --username __token__ --password "$PYPI_TOKEN" --skip-existing; \
-        fi; \
-    done
-    @for pkg in {{dist_dir}}/publish/pypi/*.whl; do \
-        if [ -f "$$pkg" ]; then \
-            echo "Publishing $$pkg..."; \
-            twine upload "$$pkg" --username __token__ --password "$PYPI_TOKEN" --skip-existing; \
-        fi; \
-    done
+    @if command -v uv >/dev/null 2>&1; then \
+        for pkg in {{dist_dir}}/publish/pypi/*.tar.gz {{dist_dir}}/publish/pypi/*.whl; do \
+            if [ -f "$$pkg" ]; then \
+                echo "Publishing $$pkg..."; \
+                uv publish --token "$PYPI_TOKEN" "$$pkg" 2>/dev/null || true; \
+            fi; \
+        done; \
+    else \
+        echo "Error: uv not installed"; exit 1; \
+    fi
     @echo "=== PyPI publishing complete ==="
 
 # Publish to npm (requires NPM_TOKEN)

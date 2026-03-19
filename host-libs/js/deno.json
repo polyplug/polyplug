@@ -1,5 +1,5 @@
 {
-  "name": "@polyplug/host-js",
+  "name": "@polyplug/runtime",
   "version": "0.1.0",
   "exports": "./polyplug.js",
   "license": "MIT",
