@@ -20,12 +20,12 @@ members = [
 ]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
-# Internal crates
 polyplug_abi = { path = "crates/polyplug_abi" }
 polyplug = { path = "crates/polyplug" }
 polyplugc = { path = "crates/polyplugc" }
