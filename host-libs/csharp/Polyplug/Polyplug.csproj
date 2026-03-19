@@ -7,5 +7,24 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <IsPackable>true</IsPackable>
+    <!-- NuGet package metadata -->
+    <PackageId>Polyplug</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>polyplug</Authors>
+    <Description>.NET host library for the polyplug plugin runtime</Description>
+    <PackageTags>polyplug;plugin;runtime;ffi</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/polyplug/polyplug</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/polyplug/polyplug.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Embed README in NuGet package -->
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <!-- Embed native library in NuGet package (runtimes folder convention) -->
+    <!-- Consumers should copy libpolyplug.so to their output directory -->
+    <!-- Or use a separate native package for the shared library -->
+  </ItemGroup>
 </Project>

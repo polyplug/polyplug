@@ -6,5 +6,16 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>Polyplug.Guest</AssemblyName>
     <RootNamespace>Polyplug.Guest</RootNamespace>
+    <!-- NuGet package metadata -->
+    <IsPackable>true</IsPackable>
+    <PackageId>Polyplug.Guest</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>polyplug</Authors>
+    <Description>Guest library for writing polyplug plugins in .NET</Description>
+    <PackageTags>polyplug;plugin;guest;abi</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/polyplug/polyplug</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/polyplug/polyplug.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
   </PropertyGroup>
 </Project>

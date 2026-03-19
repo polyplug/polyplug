@@ -641,6 +641,7 @@ _dist-copy-guest-libs:
     @mkdir -p {{dist_dir}}/guest-libs/js
     @cp {{guest_libs_dir}}/js/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/
     @cp {{guest_libs_dir}}/js/polyplug-guest.js {{dist_dir}}/guest-libs/js/
+    @cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true
 
 # Show dist contents
 _show-dist-contents:
@@ -710,14 +711,13 @@ _prepare-pypi-packages:
 _prepare-npm-packages:
     @echo "  [npm] Preparing packages..."
     @if command -v npm >/dev/null 2>&1; then \
+        echo "  [npm] Packing host library..."; \
         cp host-libs/js/package.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
         cp host-libs/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
-        cp host-libs/js/LICENSE {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
-        cd {{dist_dir}}/host-libs/js && \
-            npm pack 2>/dev/null && mv *.tgz ../../../publish/npm/ 2>/dev/null || true; \
+        (cd {{dist_dir}}/host-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
+        echo "  [npm] Packing guest library..."; \
         cp guest-libs/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
-        cd {{dist_dir}}/guest-libs/js && \
-            npm pack 2>/dev/null && mv *.tgz ../../../publish/npm/ 2>/dev/null || true; \
+        (cd {{dist_dir}}/guest-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] ✓ Packages ready"; \
     else \
         echo "  [npm] ⊘ npm not installed, skipping"; \
