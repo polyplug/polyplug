@@ -358,8 +358,16 @@ Runtime::Builder()
 
 ### 2. Track Instances Per Bundle
 
+**Instance tracking is flexible** - use whatever approach fits your application:
+
+- **Map/Dictionary**: `Map<bundle_id, List<Instance>>` - most common, easy cleanup
+- **Per-contract tracking**: Separate maps per contract type for fine-grained control
+- **Weak references**: Let the GC clean up automatically (Python, C#, Lua, JS)
+- **RAII guards**: Let the guard's lifetime manage cleanup (Rust, C++)
+- **No tracking**: If you don't hold instances across reloads, no cleanup needed
+
 ```python
-# Python example
+# Python example - Map-based tracking
 class PluginManager:
     def __init__(self):
         self._instances = {}  # bundle_id -> list of instances
@@ -374,6 +382,21 @@ class PluginManager:
         if phase.is_preparing():
             # Clear all instances for this bundle
             self._instances.pop(phase.bundle_id, None)
+```
+
+```rust
+// Rust example - No explicit tracking needed!
+// PluginVTableGuard uses Arc, so old vtables stay alive until all guards are dropped.
+// Just destroy your contract instances in the Preparing callback.
+static INSTANCES: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>> = ...;
+
+Runtime::builder()
+    .on_reload(|phase| {
+        if let ReloadPhase::Preparing { bundle_id, .. } = phase {
+            INSTANCES.lock().unwrap().remove(&bundle_id);
+        }
+    })
+    .build();
 ```
 
 ### 3. Use Factory Methods for Re-Creation
