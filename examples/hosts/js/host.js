@@ -4,7 +4,7 @@
  * @description Pipeline Host — Deno host demonstrating polyplug usage.
  */
 
-import { openPolyplug, runtimeNew, contractId, bundleId } from "../../../host-libs/js/polyplug.js";
+import { openPolyplug, runtimeNew, contractId, bundleId, onReload } from "../../../host-libs/js/polyplug.js";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/plugins";
@@ -13,6 +13,17 @@ const libPath = Deno.env.get("POLYPLUG_LIB_PATH")
   ?? "/mnt/data/Projects/Utils/polyplug/target/release/deps/libpolyplug.so";
 
 console.error(`loading plugins from: ${pluginPath}\n`);
+
+// Register hot-reload callback before creating runtime
+onReload((phase) => {
+    if (phase.isPreparing()) {
+        console.error(`[HOT-RELOAD] Preparing: ${phase.bundleName} (retry ${phase.retryCount})`);
+    } else if (phase.isReloaded()) {
+        console.error(`[HOT-RELOAD] Reloaded: ${phase.bundleName}`);
+    } else if (phase.isFailed()) {
+        console.error(`[HOT-RELOAD] Failed: ${phase.bundleName} - ${phase.reason}`);
+    }
+});
 
 const lib = openPolyplug(libPath);
 const rt = runtimeNew(lib);

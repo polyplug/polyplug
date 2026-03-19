@@ -28,6 +28,19 @@ end
 local plugin_path = get_plugin_path()
 print('loading plugins from: ' .. plugin_path .. '\n')
 
+-- Register hot-reload callback before creating runtime
+polyplug.on_reload(function(phase)
+    local reload_phase = require('polyplug.reload_phase')
+    if reload_phase.is_preparing(phase) then
+        print(string.format('[HOT-RELOAD] Preparing: %s (retry %d)',
+            phase.bundle_name, phase.retry_count))
+    elseif reload_phase.is_reloaded(phase) then
+        print('[HOT-RELOAD] Reloaded: ' .. phase.bundle_name)
+    elseif reload_phase.is_failed(phase) then
+        print('[HOT-RELOAD] Failed: ' .. phase.bundle_name .. ' - ' .. phase.reason)
+    end
+end)
+
 local rt = polyplug.Runtime.new()
 
 local ok, err = pcall(function()
