@@ -43,13 +43,13 @@ fn make_desc(plugin_name: &'static str, contract_name: &'static str) -> PluginDe
 mod tests {
     use super::make_desc;
     use super::make_static_vtable;
+    use polyplug::error::RegistryError;
+    use polyplug::registry::Registry;
     use polyplug_abi::PluginDescriptor;
     use polyplug_abi::PluginHandle;
     use polyplug_abi::PluginVTable;
     use polyplug_abi::bundle_id;
     use polyplug_abi::contract_id;
-    use polyplug::error::RegistryError;
-    use polyplug::registry::Registry;
 
     // ── Test a ───────────────────────────────────────────────────────────────
 

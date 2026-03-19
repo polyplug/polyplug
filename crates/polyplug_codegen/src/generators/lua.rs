@@ -230,12 +230,12 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
     out.push_str("local ffi = require(\"ffi\")\n\n");
-    
+
     // ABI constants for host
     out.push_str("-- ABI constants\n");
     out.push_str("local ABI_OK = 0\n");
     out.push_str("local ABI_ERROR_GENERIC = 1\n\n");
-    
+
     // Contract ID constants
     out.push_str("-- Contract ID constants\n");
     for contract in &ir.contracts {
@@ -246,19 +246,16 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
         ));
     }
     out.push('\n');
-    
+
     out.push_str("local M = {}\n\n");
-    
+
     // Cached FFI types for hot path performance
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, void*)\")\n\n");
 
     for contract in &ir.contracts {
-        let contract_prefix: String = contract_name_to_prefix(&contract.name);
-        for func in &contract.functions {
-            generate_host_caller_function(&mut out, func, &contract_prefix);
-            out.push('\n');
-        }
+        generate_host_contract_caller(&mut out, contract);
+        out.push('\n');
     }
 
     out.push_str("return M\n");
@@ -276,7 +273,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
         for plugin in &bundle.plugins {
             for contract_impl in &plugin.implements {
                 if let Some(contract) = ir.contracts.iter().find(|c| {
-                    let contract_full = format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
+                    let contract_full =
+                        format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_vtable(&mut out, &plugin.name, contract)?;
@@ -328,6 +326,142 @@ fn generate_lua_user_type(out: &mut String, ty: &ResolvedType) {
     out.push_str(&format!("    }} {};\n", ty.name));
 }
 
+/// Generate the full host caller for a contract with factory pattern.
+/// Creates methods table, metatable, and factory function.
+fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) {
+    let contract_prefix: String = contract_name_to_prefix(&contract.name);
+    let contract_struct: String = contract_name_to_struct(&contract.name);
+    let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+    let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
+
+    // Methods table
+    out.push_str(&format!(
+        "-- Methods for {contract_struct}\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str(&format!(
+        "local {contract_struct}_methods = {{\n",
+        contract_struct = contract_struct
+    ));
+
+    // is_valid method
+    out.push_str("    is_valid = function(self)\n");
+    out.push_str("        return self._guard ~= nil\n");
+    out.push_str("    end,\n\n");
+
+    // reset method
+    out.push_str("    reset = function(self)\n");
+    out.push_str("        self._guard = nil\n");
+    out.push_str("    end,\n\n");
+
+    // Contract function methods
+    for func in &contract.functions {
+        generate_host_caller_method(out, func, &contract_prefix, &contract_struct);
+        out.push_str(",\n\n");
+    }
+
+    out.push_str("}\n\n");
+
+    // Metatable
+    out.push_str(&format!(
+        "-- Metatable for {contract_struct}\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str(&format!(
+        "local {contract_struct}_mt = {{\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str(&format!(
+        "    __index = {contract_struct}_methods\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str("}\n\n");
+
+    // Factory function
+    out.push_str(&format!(
+        "-- Factory function for {contract_struct}\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str(&format!(
+        "function M.{contract_struct}_create(runtime, min_version)\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str("    if min_version == nil then min_version = 0 end\n");
+    out.push_str(&format!(
+        "    local handle = runtime:find_by_contract({contract_id_const}, min_version)\n"
+    ));
+    out.push_str("    if handle == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    out.push_str("    local guard = runtime:resolve_plugin(handle)\n");
+    out.push_str("    if guard == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    out.push_str("    local instance = {\n");
+    out.push_str("        _guard = guard\n");
+    out.push_str("    }\n");
+    out.push_str(&format!(
+        "    setmetatable(instance, {contract_struct}_mt)\n",
+        contract_struct = contract_struct
+    ));
+    out.push_str("    return instance\n");
+    out.push_str("end\n");
+}
+
+/// Generate a single caller method for a contract function.
+fn generate_host_caller_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_prefix: &str,
+    _contract_struct: &str,
+) {
+    let fn_id: u32 = func.function_id;
+    let sig_params: String = build_lua_sig_params(func);
+    out.push_str(&format!("    {} = function(self{sig_params})\n", func.name));
+
+    // Guard validity check
+    out.push_str("        if self._guard == nil then\n");
+    out.push_str("            error(\"invalid caller: guard is nil\", 2)\n");
+    out.push_str("        end\n");
+
+    // Get vtable from guard
+    out.push_str("        local vtable = self._guard:_resolve_vtable()\n");
+    out.push_str("        if vtable == nil then\n");
+    out.push_str("            error(\"failed to resolve vtable\", 2)\n");
+    out.push_str("        end\n");
+
+    // Setup args and out
+    emit_lua_host_args_setup(out, func, contract_prefix);
+    emit_lua_host_out_setup(out, &func.returns);
+
+    // Read function pointer from vtable
+    out.push_str("        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)\n");
+    out.push_str("        local function_count = ffi.cast(\"uint32_t*\", vtable + 12)[0]\n");
+    out.push_str(&format!("        if {fn_id} >= function_count then\n"));
+    out.push_str("            error(\"function not available in vtable\", 2)\n");
+    out.push_str("        end\n");
+    out.push_str("        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)\n");
+    out.push_str("        local functions_ptr = ffi.cast(\"void**\", vtable + 16)[0]\n");
+    out.push_str(&format!(
+        "        local fn_ptr = ffi.cast(\"void*\", functions_ptr[{fn_id}])\n"
+    ));
+    out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
+    out.push_str("        local err = fn(args_ptr, out_ptr)\n");
+    out.push_str("        if err ~= 0 then\n");
+    out.push_str("            error(\"polyplug call failed\", 2)\n");
+    out.push_str("        end\n");
+
+    if has_return_value(&func.returns) {
+        out.push_str("        return out_val\n");
+    } else {
+        out.push_str("        return nil\n");
+    }
+    out.push_str("    end");
+}
+
+/// Legacy function - kept for reference but no longer used.
+/// The new pattern uses generate_host_contract_caller and generate_host_caller_method.
+#[allow(dead_code)]
 fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, prefix: &str) {
     let fn_name: String = format!("{}_{}", prefix, func.name);
     let sig_params: String = build_lua_sig_params(func);
@@ -393,10 +527,15 @@ fn generate_guest_plugin_vtable(
         "{plugin_var}_VTABLE.contract_version = {}\n",
         contract.version.minor_patch_encoded()
     ));
-    out.push_str(&format!("{plugin_var}_VTABLE.function_count = {function_count}\n"));
+    out.push_str(&format!(
+        "{plugin_var}_VTABLE.function_count = {function_count}\n"
+    ));
     out.push_str(&format!("{plugin_var}_VTABLE.functions = nil\n"));
 
-    let set_impl_name: String = format!("set_{}_impl", plugin_name.to_lowercase().replace(['.', '-'], "_"));
+    let set_impl_name: String = format!(
+        "set_{}_impl",
+        plugin_name.to_lowercase().replace(['.', '-'], "_")
+    );
     out.push_str(&format!("\nfunction M.{set_impl_name}("));
     let impl_params: Vec<String> = contract
         .functions
@@ -406,7 +545,9 @@ fn generate_guest_plugin_vtable(
     out.push_str(&impl_params.join(", "));
     out.push_str(")\n");
 
-    out.push_str(&format!("    local functions = ffi.new(\"PluginFunction[{function_count}]\")\n"));
+    out.push_str(&format!(
+        "    local functions = ffi.new(\"PluginFunction[{function_count}]\")\n"
+    ));
     for (idx, func) in contract.functions.iter().enumerate() {
         let fn_name: String = func.name.replace('.', "_");
         out.push_str(&format!(
@@ -435,7 +576,9 @@ fn generate_guest_plugin_vtable(
         contract.version.patch
     ));
 
-    out.push_str(&format!("    local err = polyplug_guest.register_plugin(descriptor, {plugin_var}_VTABLE)\n"));
+    out.push_str(&format!(
+        "    local err = polyplug_guest.register_plugin(descriptor, {plugin_var}_VTABLE)\n"
+    ));
     out.push_str("    if err.code ~= 0 then\n");
     out.push_str("        error(\"plugin registration failed\", 2)\n");
     out.push_str("    end\n");

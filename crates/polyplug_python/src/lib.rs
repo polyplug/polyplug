@@ -24,12 +24,12 @@ use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
 
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::StringView;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
 

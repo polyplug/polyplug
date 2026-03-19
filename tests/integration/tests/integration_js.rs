@@ -5,6 +5,12 @@
 
 #![allow(clippy::expect_used)]
 
+use polyplug::error::LoaderError;
+use polyplug::error::PolyplugError;
+use polyplug::error::RegistryError;
+use polyplug::error::RuntimeError;
+use polyplug::loader::BundleLoader;
+use polyplug::registry::Registry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginDescriptor;
@@ -12,12 +18,6 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::error::RegistryError;
-use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 use polyplug_js_deno::JsDenoConfig;

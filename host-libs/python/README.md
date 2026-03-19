@@ -105,6 +105,84 @@ def bundle_id(name: str) -> int:
     """Compute FNV-1a 64-bit bundle ID."""
 ```
 
+### Hot-Reload Notification API
+
+```python
+from polyplug import on_reload, set_config
+from polyplug.abi import ReloadPhase, ReloadPhaseType
+from polyplug.runtime_config import RuntimeConfig
+
+# Register a callback before creating Runtime instances
+def handle_reload(phase: ReloadPhase):
+    if phase.is_preparing():
+        print(f"Preparing reload: {phase.bundle_name} (attempt {phase.retry_count})")
+    elif phase.is_reloaded():
+        print(f"Successfully reloaded: {phase.bundle_name}")
+    elif phase.is_failed():
+        print(f"Reload failed: {phase.bundle_name} - {phase.reason}")
+
+Runtime.on_reload(handle_reload)
+
+# Configure hot-reload behavior
+config = RuntimeConfig(
+    hot_reload_max_retries=5,
+    hot_reload_retry_interval_ms=100,
+    hot_reload_abort_on_max_retries=False
+)
+Runtime.set_config(config)
+
+# Now create runtime instances - they will use the registered callback and config
+rt = Runtime()
+```
+
+#### ReloadPhase
+
+```python
+class ReloadPhase:
+    """Represents a hot-reload notification phase."""
+    
+    # Attributes
+    type: ReloadPhaseType       # PREPARING, RELOADED, or FAILED
+    bundle_id: int              # FNV-1a hash of bundle name
+    bundle_name: str            # Human-readable bundle name
+    retry_count: int            # Retry attempt count (PREPARING only)
+    reason: str | None          # Failure reason (FAILED only)
+    
+    # Helper methods
+    def is_preparing(self) -> bool: ...
+    def is_reloaded(self) -> bool: ...
+    def is_failed(self) -> bool: ...
+```
+
+#### ReloadPhaseType
+
+```python
+class ReloadPhaseType(IntEnum):
+    PREPARING = 0    # Reload is about to start
+    RELOADED = 1     # Reload completed successfully
+    FAILED = 2       # Reload failed
+```
+
+#### RuntimeConfig
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class RuntimeConfig:
+    """Configuration for hot-reload behavior."""
+    
+    hot_reload_max_retries: int = 3
+        """Maximum retry attempts. Set to 0 for infinite retries."""
+    
+    hot_reload_retry_interval_ms: int = 1000
+        """Milliseconds between retry attempts."""
+    
+    hot_reload_abort_on_max_retries: bool = True
+        """If True: abort after max retries and fire Failed.
+           If False: keep retrying forever."""
+```
+
 ## Error Handling
 
 ```python
@@ -119,6 +197,49 @@ if handle == NULL_HANDLE:
     pass
 else:
     guard = rt.resolve_plugin(handle)
+```
+
+## Hot-Reload Notification Example
+
+Complete example showing callback registration and the notification flow:
+
+```python
+from polyplug import Runtime
+from polyplug.runtime_config import RuntimeConfig
+from polyplug.abi import ReloadPhase, ReloadPhaseType
+
+# Step 1: Define your callback
+def on_bundle_reload(phase: ReloadPhase):
+    """Handle hot-reload notifications."""
+    match phase.type:
+        case ReloadPhaseType.PREPARING:
+            print(f"🔄 Reloading {phase.bundle_name} (attempt {phase.retry_count + 1})")
+        case ReloadPhaseType.RELOADED:
+            print(f"✅ {phase.bundle_name} reloaded successfully")
+            # Update plugin handles here if needed
+        case ReloadPhaseType.FAILED:
+            print(f"❌ {phase.bundle_name} failed: {phase.reason}")
+            # Handle failure (fallback, alert, etc.)
+
+# Step 2: Register callback BEFORE creating Runtime
+Runtime.on_reload(on_bundle_reload)
+
+# Step 3: Configure hot-reload behavior (optional)
+config = RuntimeConfig(
+    hot_reload_max_retries=5,              # Try up to 5 times
+    hot_reload_retry_interval_ms=100,      # Wait 100ms between attempts
+    hot_reload_abort_on_max_retries=False  # Keep retrying forever if max=0
+)
+Runtime.set_config(config)
+
+# Step 4: Create runtime and load bundles
+rt = Runtime()
+rt.load_bundle("/path/to/my_plugin")
+
+# When reload_bundle is called, your callback receives notifications:
+# rt.reload_bundle("/path/to/my_plugin")
+# → PREPARING (retry_count=0)
+# → RELOADED (on success) or FAILED (on error)
 ```
 
 ## Hot-Reload Safety

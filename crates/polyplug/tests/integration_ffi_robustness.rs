@@ -1,6 +1,7 @@
 use core::cell::RefCell;
 use std::sync::Arc;
 
+use polyplug::registry::Registry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
@@ -13,7 +14,6 @@ use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug::registry::Registry;
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 

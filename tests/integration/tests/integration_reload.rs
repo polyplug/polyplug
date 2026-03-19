@@ -2,16 +2,16 @@
 #![allow(clippy::unwrap_used)]
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use polyplug_abi::PluginVTable;
+use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
-use polyplug::ReloadEvent;
+use polyplug_abi::PluginVTable;
 use polyplug_native::NativeLoader;
 
 // Global mutex to serialize tests that share global registry state
@@ -169,10 +169,10 @@ fn test_e_cascade_reload() {
 #[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_f_callback_fires() {
     let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let fired: Arc<Mutex<Option<ReloadEvent>>> = Arc::new(Mutex::new(None));
-    let fired_clone: Arc<Mutex<Option<ReloadEvent>>> = Arc::clone(&fired);
+    let fired: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
+    let fired_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&fired);
     let rt: Runtime = Runtime::builder()
-        .on_reload(move |ev: ReloadEvent| {
+        .on_reload(move |ev: ReloadPhase| {
             *fired_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(ev);
         })
         .build()
@@ -181,15 +181,21 @@ fn test_f_callback_fires() {
         .expect("load v1");
     rt.reload_bundle(&PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"))
         .expect("reload v2");
-    let ev: ReloadEvent = fired
+    let ev: ReloadPhase = fired
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take()
         .expect("on_reload callback must have fired");
+    // Check that the event contains the expected bundle
+    let bundle_name = match &ev {
+        ReloadPhase::Preparing { bundle_name, .. } => bundle_name,
+        ReloadPhase::Reloaded { bundle_name, .. } => bundle_name,
+        ReloadPhase::Failed { bundle_name, .. } => bundle_name,
+    };
     assert!(
-        ev.affected_contract_ids
-            .contains(&polyplug_abi::contract_id("reload.test", 1)),
-        "affected_contract_ids must contain reload.test@1"
+        bundle_name.contains("reload_plugin"),
+        "bundle_name should contain reload_plugin, got: {}",
+        bundle_name
     );
 }
 
@@ -215,7 +221,7 @@ fn test_g_file_watcher() {
     let fired_clone: Arc<AtomicBool> = Arc::clone(&fired);
     let rt: Arc<Runtime> = Arc::new(
         Runtime::builder()
-            .on_reload(move |_ev: ReloadEvent| {
+            .on_reload(move |_ev: ReloadPhase| {
                 fired_clone.store(true, Ordering::Relaxed);
             })
             .build()

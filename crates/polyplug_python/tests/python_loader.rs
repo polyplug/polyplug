@@ -10,14 +10,14 @@ use std::fs;
 use std::sync::Arc;
 use std::thread;
 
+use polyplug::error::LoaderError;
+use polyplug::error::PolyplugError;
+use polyplug::loader::BundleLoader;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use tempfile::TempDir;

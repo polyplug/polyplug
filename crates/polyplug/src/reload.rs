@@ -28,6 +28,25 @@ pub struct ReloadEvent {
     pub affected_contract_ids: Vec<u64>,
 }
 
+/// Phase of a hot-reload operation for notification callbacks.
+#[derive(Debug, Clone)]
+pub enum ReloadPhase {
+    /// Bundle is being prepared for reload (before vtable swap).
+    Preparing {
+        bundle_id: u64,
+        bundle_name: String,
+        retry_count: u32,
+    },
+    /// Bundle has been successfully reloaded.
+    Reloaded { bundle_id: u64, bundle_name: String },
+    /// Bundle reload failed.
+    Failed {
+        bundle_id: u64,
+        bundle_name: String,
+        reason: String,
+    },
+}
+
 thread_local! {
     static RELOAD_CAPTURED_VTABLES: core::cell::RefCell<Vec<*const polyplug_abi::PluginVTable>> =
         const { core::cell::RefCell::new(Vec::new()) };
@@ -180,6 +199,66 @@ pub(crate) fn reload_bundle_impl(
         new_vtable_map.insert(contract_id, vt_ptr);
     }
 
+    // Three-phase hot-reload with retry support:
+    // 1. Fire Preparing notification before vtable swap
+    // 2. Check Arc strong_count on all slots (retry if active instances)
+    // 3. Swap vtables, fire Reloaded notification, wait for quiescence
+    let config: &crate::runtime::RuntimeConfig = runtime.config();
+    let mut retry_count: u32 = 0_u32;
+
+    loop {
+        // Phase 1: Fire Preparing notification before checking/swap
+        if let Some(ref cb) = runtime.on_reload_cb {
+            cb(ReloadPhase::Preparing {
+                bundle_id: bundle_id_val,
+                bundle_name: manifest.bundle_name.clone(),
+                retry_count,
+            });
+        }
+
+        // Check if all slots have no active instances (Arc strong_count == 1)
+        // When we call get_vtable_arc(), it returns an Arc with count incremented by 1,
+        // so we check for count == 2 (registry + our loaded Arc).
+        let mut all_slots_quiescent: bool = true;
+        for &slot_idx in &slot_indices {
+            let arc: Arc<VTableSlot> = match runtime.registry().get_vtable_arc(slot_idx) {
+                Some(a) => a,
+                None => continue,
+            };
+            if Arc::strong_count(&arc) > 2_usize {
+                all_slots_quiescent = false;
+                break;
+            }
+        }
+
+        if all_slots_quiescent {
+            break;
+        }
+
+        // Not all slots are quiescent - check retry limits
+        if retry_count >= config.hot_reload_max_retries && config.hot_reload_abort_on_max_retries {
+            crate::runtime::emit_warning(&format!(
+                "hot-reload: max retries ({}) exceeded for bundle {} with active instances",
+                config.hot_reload_max_retries, manifest.bundle_name
+            ));
+            if let Some(ref cb) = runtime.on_reload_cb {
+                cb(ReloadPhase::Failed {
+                    bundle_id: bundle_id_val,
+                    bundle_name: manifest.bundle_name.clone(),
+                    reason: "max retries exceeded with active instances".to_owned(),
+                });
+            }
+            return Err(PolyplugError::ReloadFailed {
+                bundle: path.display().to_string(),
+                reason: "max retries exceeded with active instances".to_owned(),
+            });
+        }
+        // If abort_on_max_retries is false, keep retrying forever
+
+        std::thread::sleep(config.hot_reload_retry_interval);
+        retry_count = retry_count.saturating_add(1_u32);
+    }
+
     let mut old_arcs: Vec<Arc<VTableSlot>> = Vec::new();
     for &slot_idx in &slot_indices {
         let contract_id: u64 = match runtime.registry().get_slot_contract_id(slot_idx) {
@@ -198,25 +277,11 @@ pub(crate) fn reload_bundle_impl(
         old_arcs.push(old_arc);
     }
 
-    let old_version: String = {
-        let manifests_guard: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = runtime
-            .bundle_manifests
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        manifests_guard
-            .get(&manifest.bundle_name)
-            .map(|m: &ManifestData| m.version.clone())
-            .unwrap_or_default()
-    };
-    let event: ReloadEvent = ReloadEvent {
-        bundle_name: manifest.bundle_name.clone(),
-        bundle_path: bundle_dir_path.display().to_string(),
-        old_version,
-        new_version: manifest.version.clone(),
-        affected_contract_ids: new_vtable_map.keys().copied().collect::<Vec<u64>>(),
-    };
     if let Some(ref cb) = runtime.on_reload_cb {
-        cb(event);
+        cb(ReloadPhase::Reloaded {
+            bundle_id: bundle_id_val,
+            bundle_name: manifest.bundle_name.clone(),
+        });
     }
 
     let quiescence_start: Instant = Instant::now();
@@ -304,5 +369,488 @@ impl Runtime {
         min_version: u32,
     ) -> Result<polyplug_abi::PluginHandle, crate::error::RegistryError> {
         self.registry().find_by_contract(contract_id, min_version)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::RuntimeConfig;
+    use core::time::Duration;
+
+    // ─── ReloadPhase enum tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn reload_phase_preparing_construction_and_field_access() {
+        let bundle_id: u64 = 0xABCD_1234_u64;
+        let bundle_name: String = "test_bundle".to_owned();
+        let retry_count: u32 = 2_u32;
+
+        let phase: ReloadPhase = ReloadPhase::Preparing {
+            bundle_id,
+            bundle_name: bundle_name.clone(),
+            retry_count,
+        };
+
+        match phase {
+            ReloadPhase::Preparing {
+                bundle_id: id,
+                bundle_name: name,
+                retry_count: count,
+            } => {
+                assert_eq!(id, bundle_id);
+                assert_eq!(name, bundle_name);
+                assert_eq!(count, retry_count);
+            }
+            _ => panic!("expected Preparing variant"),
+        }
+    }
+
+    #[test]
+    fn reload_phase_reloaded_construction_and_field_access() {
+        let bundle_id: u64 = 0xDEAD_BEEF_u64;
+        let bundle_name: String = "reloaded_bundle".to_owned();
+
+        let phase: ReloadPhase = ReloadPhase::Reloaded {
+            bundle_id,
+            bundle_name: bundle_name.clone(),
+        };
+
+        match phase {
+            ReloadPhase::Reloaded {
+                bundle_id: id,
+                bundle_name: name,
+            } => {
+                assert_eq!(id, bundle_id);
+                assert_eq!(name, bundle_name);
+            }
+            _ => panic!("expected Reloaded variant"),
+        }
+    }
+
+    #[test]
+    fn reload_phase_failed_construction_and_field_access() {
+        let bundle_id: u64 = 0xCAFE_0001_u64;
+        let bundle_name: String = "failed_bundle".to_owned();
+        let reason: String = "max retries exceeded with active instances".to_owned();
+
+        let phase: ReloadPhase = ReloadPhase::Failed {
+            bundle_id,
+            bundle_name: bundle_name.clone(),
+            reason: reason.clone(),
+        };
+
+        match phase {
+            ReloadPhase::Failed {
+                bundle_id: id,
+                bundle_name: name,
+                reason: r,
+            } => {
+                assert_eq!(id, bundle_id);
+                assert_eq!(name, bundle_name);
+                assert_eq!(r, reason);
+            }
+            _ => panic!("expected Failed variant"),
+        }
+    }
+
+    #[test]
+    fn reload_phase_debug_impl() {
+        let preparing: ReloadPhase = ReloadPhase::Preparing {
+            bundle_id: 1_u64,
+            bundle_name: "test".to_owned(),
+            retry_count: 0_u32,
+        };
+        let debug_str: String = format!("{preparing:?}");
+        assert!(debug_str.contains("Preparing"), "got: {debug_str}");
+
+        let reloaded: ReloadPhase = ReloadPhase::Reloaded {
+            bundle_id: 2_u64,
+            bundle_name: "test".to_owned(),
+        };
+        let debug_str: String = format!("{reloaded:?}");
+        assert!(debug_str.contains("Reloaded"), "got: {debug_str}");
+
+        let failed: ReloadPhase = ReloadPhase::Failed {
+            bundle_id: 3_u64,
+            bundle_name: "test".to_owned(),
+            reason: "error".to_owned(),
+        };
+        let debug_str: String = format!("{failed:?}");
+        assert!(debug_str.contains("Failed"), "got: {debug_str}");
+    }
+
+    #[test]
+    fn reload_phase_clone() {
+        let original: ReloadPhase = ReloadPhase::Preparing {
+            bundle_id: 42_u64,
+            bundle_name: "clone_test".to_owned(),
+            retry_count: 5_u32,
+        };
+        let cloned: ReloadPhase = original.clone();
+
+        match (original, cloned) {
+            (
+                ReloadPhase::Preparing {
+                    bundle_id: id1,
+                    bundle_name: name1,
+                    retry_count: count1,
+                },
+                ReloadPhase::Preparing {
+                    bundle_id: id2,
+                    bundle_name: name2,
+                    retry_count: count2,
+                },
+            ) => {
+                assert_eq!(id1, id2);
+                assert_eq!(name1, name2);
+                assert_eq!(count1, count2);
+            }
+            _ => panic!("both should be Preparing variant"),
+        }
+    }
+
+    // ─── RuntimeConfig tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn runtime_config_default_values() {
+        let config: RuntimeConfig = RuntimeConfig::default();
+
+        assert_eq!(config.hot_reload_max_retries, 3_u32);
+        assert_eq!(config.hot_reload_retry_interval, Duration::from_secs(1));
+        assert!(config.hot_reload_abort_on_max_retries);
+    }
+
+    #[test]
+    fn runtime_config_custom_values() {
+        let config: RuntimeConfig = RuntimeConfig {
+            hot_reload_max_retries: 10_u32,
+            hot_reload_retry_interval: Duration::from_millis(500),
+            hot_reload_abort_on_max_retries: false,
+        };
+
+        assert_eq!(config.hot_reload_max_retries, 10_u32);
+        assert_eq!(config.hot_reload_retry_interval, Duration::from_millis(500));
+        assert!(!config.hot_reload_abort_on_max_retries);
+    }
+
+    #[test]
+    fn runtime_config_clone() {
+        let original: RuntimeConfig = RuntimeConfig {
+            hot_reload_max_retries: 7_u32,
+            hot_reload_retry_interval: Duration::from_millis(250),
+            hot_reload_abort_on_max_retries: true,
+        };
+        let cloned: RuntimeConfig = original.clone();
+
+        assert_eq!(
+            original.hot_reload_max_retries,
+            cloned.hot_reload_max_retries
+        );
+        assert_eq!(
+            original.hot_reload_retry_interval,
+            cloned.hot_reload_retry_interval
+        );
+        assert_eq!(
+            original.hot_reload_abort_on_max_retries,
+            cloned.hot_reload_abort_on_max_retries
+        );
+    }
+
+    #[test]
+    fn runtime_config_debug_impl() {
+        let config: RuntimeConfig = RuntimeConfig::default();
+        let debug_str: String = format!("{config:?}");
+
+        assert!(debug_str.contains("RuntimeConfig"), "got: {debug_str}");
+        assert!(
+            debug_str.contains("hot_reload_max_retries"),
+            "got: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("hot_reload_retry_interval"),
+            "got: {debug_str}"
+        );
+        assert!(
+            debug_str.contains("hot_reload_abort_on_max_retries"),
+            "got: {debug_str}"
+        );
+    }
+
+    // ─── Notification callback tests ────────────────────────────────────────────
+
+    #[test]
+    fn on_reload_callback_receives_preparing_phase() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
+        let captured_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&captured);
+
+        let callback = move |phase: ReloadPhase| {
+            let mut guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
+                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(phase);
+        };
+
+        // Simulate firing Preparing notification
+        callback(ReloadPhase::Preparing {
+            bundle_id: 123_u64,
+            bundle_name: "test_bundle".to_owned(),
+            retry_count: 0_u32,
+        });
+
+        let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
+            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let phase: &Option<ReloadPhase> = &*guard;
+        match phase {
+            Some(ReloadPhase::Preparing {
+                bundle_id,
+                bundle_name,
+                retry_count,
+            }) => {
+                assert_eq!(*bundle_id, 123_u64);
+                assert_eq!(*bundle_name, "test_bundle");
+                assert_eq!(*retry_count, 0_u32);
+            }
+            _ => panic!("expected Preparing phase"),
+        }
+    }
+
+    #[test]
+    fn on_reload_callback_receives_reloaded_phase() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
+        let captured_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&captured);
+
+        let callback = move |phase: ReloadPhase| {
+            let mut guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
+                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(phase);
+        };
+
+        // Simulate firing Reloaded notification
+        callback(ReloadPhase::Reloaded {
+            bundle_id: 456_u64,
+            bundle_name: "success_bundle".to_owned(),
+        });
+
+        let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
+            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let phase: &Option<ReloadPhase> = &*guard;
+        match phase {
+            Some(ReloadPhase::Reloaded {
+                bundle_id,
+                bundle_name,
+            }) => {
+                assert_eq!(*bundle_id, 456_u64);
+                assert_eq!(*bundle_name, "success_bundle");
+            }
+            _ => panic!("expected Reloaded phase"),
+        }
+    }
+
+    #[test]
+    fn on_reload_callback_receives_failed_phase() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
+        let captured_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&captured);
+
+        let callback = move |phase: ReloadPhase| {
+            let mut guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
+                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(phase);
+        };
+
+        // Simulate firing Failed notification
+        callback(ReloadPhase::Failed {
+            bundle_id: 789_u64,
+            bundle_name: "failed_bundle".to_owned(),
+            reason: "max retries exceeded with active instances".to_owned(),
+        });
+
+        let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
+            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let phase: &Option<ReloadPhase> = &*guard;
+        match phase {
+            Some(ReloadPhase::Failed {
+                bundle_id,
+                bundle_name,
+                reason,
+            }) => {
+                assert_eq!(*bundle_id, 789_u64);
+                assert_eq!(*bundle_name, "failed_bundle");
+                assert_eq!(*reason, "max retries exceeded with active instances");
+            }
+            _ => panic!("expected Failed phase"),
+        }
+    }
+
+    #[test]
+    fn notification_sequence_preparing_then_reloaded() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&captured);
+
+        let callback = move |phase: ReloadPhase| {
+            let mut guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
+                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+            guard.push(phase);
+        };
+
+        // Simulate successful reload sequence
+        callback(ReloadPhase::Preparing {
+            bundle_id: 100_u64,
+            bundle_name: "seq_bundle".to_owned(),
+            retry_count: 0_u32,
+        });
+        callback(ReloadPhase::Reloaded {
+            bundle_id: 100_u64,
+            bundle_name: "seq_bundle".to_owned(),
+        });
+
+        let guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
+            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let phases: &Vec<ReloadPhase> = &*guard;
+
+        assert_eq!(phases.len(), 2);
+        match &phases[0] {
+            ReloadPhase::Preparing { .. } => {}
+            _ => panic!("expected first phase to be Preparing"),
+        }
+        match &phases[1] {
+            ReloadPhase::Reloaded { .. } => {}
+            _ => panic!("expected second phase to be Reloaded"),
+        }
+    }
+
+    #[test]
+    fn notification_sequence_preparing_then_failed() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&captured);
+
+        let callback = move |phase: ReloadPhase| {
+            let mut guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
+                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+            guard.push(phase);
+        };
+
+        // Simulate failed reload sequence
+        callback(ReloadPhase::Preparing {
+            bundle_id: 200_u64,
+            bundle_name: "fail_bundle".to_owned(),
+            retry_count: 3_u32,
+        });
+        callback(ReloadPhase::Failed {
+            bundle_id: 200_u64,
+            bundle_name: "fail_bundle".to_owned(),
+            reason: "max retries exceeded with active instances".to_owned(),
+        });
+
+        let guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
+            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let phases: &Vec<ReloadPhase> = &*guard;
+
+        assert_eq!(phases.len(), 2);
+        match &phases[0] {
+            ReloadPhase::Preparing { retry_count, .. } => {
+                assert_eq!(*retry_count, 3_u32);
+            }
+            _ => panic!("expected first phase to be Preparing"),
+        }
+        match &phases[1] {
+            ReloadPhase::Failed { reason, .. } => {
+                assert_eq!(*reason, "max retries exceeded with active instances");
+            }
+            _ => panic!("expected second phase to be Failed"),
+        }
+    }
+
+    #[test]
+    fn retry_count_increments_across_notifications() {
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone: Arc<Mutex<Vec<u32>>> = Arc::clone(&captured);
+
+        let callback = move |phase: ReloadPhase| {
+            if let ReloadPhase::Preparing { retry_count, .. } = phase {
+                let mut guard: std::sync::MutexGuard<'_, Vec<u32>> =
+                    captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                guard.push(retry_count);
+            }
+        };
+
+        // Simulate retry mechanism: Preparing fires with incrementing retry_count
+        for retry in 0_u32..=3_u32 {
+            callback(ReloadPhase::Preparing {
+                bundle_id: 300_u64,
+                bundle_name: "retry_bundle".to_owned(),
+                retry_count: retry,
+            });
+        }
+
+        let guard: std::sync::MutexGuard<'_, Vec<u32>> =
+            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let retry_counts: &Vec<u32> = &*guard;
+
+        assert_eq!(retry_counts, &[0_u32, 1_u32, 2_u32, 3_u32]);
+    }
+
+    // ─── ReloadEvent tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn reload_event_construction_and_field_access() {
+        let event: ReloadEvent = ReloadEvent {
+            bundle_name: "event_bundle".to_owned(),
+            bundle_path: "/path/to/bundle".to_owned(),
+            old_version: "1.0.0".to_owned(),
+            new_version: "2.0.0".to_owned(),
+            affected_contract_ids: vec![0x1111_u64, 0x2222_u64],
+        };
+
+        assert_eq!(event.bundle_name, "event_bundle");
+        assert_eq!(event.bundle_path, "/path/to/bundle");
+        assert_eq!(event.old_version, "1.0.0");
+        assert_eq!(event.new_version, "2.0.0");
+        assert_eq!(event.affected_contract_ids, vec![0x1111_u64, 0x2222_u64]);
+    }
+
+    #[test]
+    fn reload_event_clone() {
+        let original: ReloadEvent = ReloadEvent {
+            bundle_name: "clone_event".to_owned(),
+            bundle_path: "/clone/path".to_owned(),
+            old_version: "0.1.0".to_owned(),
+            new_version: "0.2.0".to_owned(),
+            affected_contract_ids: vec![0xABCD_u64],
+        };
+        let cloned: ReloadEvent = original.clone();
+
+        assert_eq!(original.bundle_name, cloned.bundle_name);
+        assert_eq!(original.bundle_path, cloned.bundle_path);
+        assert_eq!(original.old_version, cloned.old_version);
+        assert_eq!(original.new_version, cloned.new_version);
+        assert_eq!(original.affected_contract_ids, cloned.affected_contract_ids);
+    }
+
+    #[test]
+    fn reload_event_debug_impl() {
+        let event: ReloadEvent = ReloadEvent {
+            bundle_name: "debug_event".to_owned(),
+            bundle_path: "/debug/path".to_owned(),
+            old_version: "1.0".to_owned(),
+            new_version: "2.0".to_owned(),
+            affected_contract_ids: vec![],
+        };
+        let debug_str: String = format!("{event:?}");
+
+        assert!(debug_str.contains("ReloadEvent"), "got: {debug_str}");
+        assert!(debug_str.contains("debug_event"), "got: {debug_str}");
+        assert!(debug_str.contains("/debug/path"), "got: {debug_str}");
     }
 }

@@ -6,6 +6,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
@@ -13,7 +14,6 @@ use polyplug::ffi::polyplug_runtime_find_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
-use polyplug::ffi::OpaqueRuntime;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const RELOAD_PLUGIN_V1_DIR: &str = env!("RELOAD_PLUGIN_V1_DIR");

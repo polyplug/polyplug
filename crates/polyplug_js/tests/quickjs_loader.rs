@@ -10,6 +10,7 @@ use core::cell::RefCell;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::loader::BundleLoader;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
@@ -18,7 +19,6 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug::loader::BundleLoader;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 

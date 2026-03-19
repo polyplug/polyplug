@@ -11,11 +11,11 @@ use petgraph::algo;
 use petgraph::graph::DiGraph;
 use petgraph::graph::NodeIndex;
 
-use polyplug_abi::contract_id as compute_contract_id;
 use crate::error::GraphError;
 use crate::loader::manifest::ManifestData;
 use crate::loader::manifest::ManifestDependency;
 use crate::version::Version;
+use polyplug_abi::contract_id as compute_contract_id;
 
 /// A contract capability (either provided or required).
 #[derive(Debug, Clone)]

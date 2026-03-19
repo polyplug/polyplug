@@ -540,7 +540,29 @@ fn generate_callers_ts(ir: &ValidatedIr) -> String {
          // Runtime: js-quickjs (host-side callers)\n\n",
     );
 
-    out.push_str("import { getVtable } from './types';\n\n");
+    // ABI constants
+    out.push_str("// ABI constants\n");
+    out.push_str("export const ABI_OK = 0;\n");
+    out.push_str("export const ABI_ERROR_GENERIC = 1;\n\n");
+
+    // Contract ID constants
+    out.push_str("// Contract ID constants\n");
+    out.push_str("export const ContractIds = {\n");
+    for contract in &ir.contracts {
+        let upper_name: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        let contract_id: u64 = contract.contract_id;
+        let contract_lo: u32 = (contract_id & 0xFFFFFFFF) as u32;
+        let contract_hi: u32 = (contract_id >> 32) as u32;
+        out.push_str(&format!(
+            "  {}_CONTRACT_LO: 0x{:08X},\n",
+            upper_name, contract_lo
+        ));
+        out.push_str(&format!(
+            "  {}_CONTRACT_HI: 0x{:08X},\n",
+            upper_name, contract_hi
+        ));
+    }
+    out.push_str("} as const;\n\n");
 
     // Module-level function pointer cache to avoid repeated type casting
     out.push_str("// Function pointer cache - avoids repeated type casting overhead\n");
@@ -555,21 +577,47 @@ fn generate_callers_ts(ir: &ValidatedIr) -> String {
 
 fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContract) {
     let class_name: String = contract_to_class_name(&contract.name);
-    let contract_id: u64 = polyplug_abi::contract_id(&contract.name, contract.version.major);
-    let contract_lo: u32 = (contract_id & 0xFFFFFFFF) as u32;
-    let contract_hi: u32 = (contract_id >> 32) as u32;
+    let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+    let contract_lo_const: String = format!("ContractIds.{}_CONTRACT_LO", contract_upper);
+    let contract_hi_const: String = format!("ContractIds.{}_CONTRACT_HI", contract_upper);
 
     out.push_str(&format!(
-        "/** Host caller for contract `{}` */\n",
+        "/** Host caller for contract `{}` with hot-reload support. */\n",
         contract.name
     ));
     out.push_str(&format!("export class {}Contract {{\n", class_name));
-    out.push_str("    private vtable: any;\n\n");
-    out.push_str("    constructor() {\n");
+    out.push_str("    #guard: any;\n\n");
+    out.push_str("    private constructor(guard: any) {\n");
+    out.push_str("        this.#guard = guard;\n");
+    out.push_str("    }\n\n");
+    out.push_str("    /** Factory method - creates instance or null if not found. */\n");
     out.push_str(&format!(
-        "        this.vtable = getVtable(0x{:08X}, 0x{:08X});\n",
-        contract_lo, contract_hi
+        "    static create(rt: any, minVersion: number = 0): {}Contract | null {{\n",
+        class_name
     ));
+    out.push_str(&format!(
+        "        const handle = rt.findByContractLoHi({}, {}, minVersion);\n",
+        contract_lo_const, contract_hi_const
+    ));
+    out.push_str("        if (handle === null || handle === undefined) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str("        const guard = rt.getGuard(handle);\n");
+    out.push_str("        if (!guard) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        return new {}Contract(guard);\n",
+        class_name
+    ));
+    out.push_str("    }\n\n");
+    out.push_str("    /** Check if this caller instance is still valid. */\n");
+    out.push_str("    isValid(): boolean {\n");
+    out.push_str("        return this.#guard !== null && this.#guard !== undefined;\n");
+    out.push_str("    }\n\n");
+    out.push_str("    /** Explicitly release the guard reference. */\n");
+    out.push_str("    reset(): void {\n");
+    out.push_str("        this.#guard = null;\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -586,6 +634,8 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
 
         out.push_str(&format!("    /** Call `{}` */\n", func.name));
         out.push_str(&format!("    {}({}): {} {{\n", func.name, params, ret_type));
+        out.push_str("        const vtable = this.#guard?.vtable?.();\n");
+        out.push_str("        if (!vtable) throw new Error('caller is not valid');\n");
 
         if func.params.is_empty() {
             out.push_str("        const argsPtr = 0;\n");
@@ -602,7 +652,7 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
         }
 
         out.push_str(&format!(
-            "        const fnPtr = this.vtable.functions[{}];\n",
+            "        const fnPtr = vtable.functions[{}];\n",
             func.function_id
         ));
         out.push_str("        if (!fnPtr) throw new Error('function not available');\n");

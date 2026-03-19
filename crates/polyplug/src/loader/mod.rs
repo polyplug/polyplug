@@ -15,16 +15,16 @@ pub mod scanner;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::error::LoaderError;
+use crate::registry::Registry;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiError as AbiErrorType;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use crate::error::LoaderError;
-use crate::registry::Registry;
 use std::sync::Arc;
 
 use crate::error::PolyplugError;
@@ -481,9 +481,10 @@ pub(crate) unsafe extern "C" fn registrar_callback(
 
 #[cfg(test)]
 mod tests {
-    use polyplug_abi::ABI_ERROR_GENERIC;
     use core::ptr;
+    use polyplug_abi::ABI_ERROR_GENERIC;
 
+    use crate::registry::Registry;
     use polyplug_abi::AbiError;
     use polyplug_abi::HostVTable;
     use polyplug_abi::PluginDescriptor;
@@ -491,7 +492,6 @@ mod tests {
     use polyplug_abi::PluginRegistrar;
     use polyplug_abi::PluginVTable;
     use polyplug_abi::StringView;
-    use crate::registry::Registry;
 
     const EMPTY_FNS: [*const (); 0] = [];
 

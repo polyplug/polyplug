@@ -7,11 +7,10 @@
 #![allow(clippy::expect_used)]
 
 use polyplug::ffi::{
-    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
-    polyplug_runtime_find_all_by_contract, polyplug_runtime_find_by_contract,
-    polyplug_runtime_last_error, polyplug_runtime_load_bundle, polyplug_runtime_plugin_release,
-    polyplug_runtime_plugin_vtable, polyplug_runtime_resolve_plugin, OpaquePluginGuard,
-    OpaqueRuntime,
+    OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
+    polyplug_runtime_error_message_len, polyplug_runtime_find_all_by_contract,
+    polyplug_runtime_find_by_contract, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
+    polyplug_runtime_resolve_plugin,
 };
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -51,22 +50,15 @@ fn test_native_loader_ffi_workflow() {
         "Expected valid handle, got NULL_HANDLE"
     );
 
-    // 3. Resolve to guard
-    let guard: *mut OpaquePluginGuard = unsafe { polyplug_runtime_resolve_plugin(rt, handle) };
+    // 3. Resolve to vtable (returns vtable pointer directly, not a guard)
+    let vtable: *const () = unsafe { polyplug_runtime_resolve_plugin(rt, handle) };
     assert!(
-        !guard.is_null(),
-        "polyplug_rt_resolve_plugin returned null: {}",
+        !vtable.is_null(),
+        "polyplug_runtime_resolve_plugin returned null: {}",
         read_last_error()
     );
 
-    // 4. Check vtable non-null
-    let vt: *const () = unsafe { polyplug_runtime_plugin_vtable(guard) };
-    assert!(!vt.is_null(), "polyplug_get_vtable returned null");
-
-    // Cleanup
-    unsafe { polyplug_runtime_plugin_release(guard) };
-
-    // 5. Find all by contract
+    // 4. Find all by contract
     let mut out_buf: [u64; 8] = [0u64; 8];
     let count: usize = unsafe {
         polyplug_runtime_find_all_by_contract(rt, TEST_ADD_CONTRACT_ID, 0, out_buf.as_mut_ptr(), 8)

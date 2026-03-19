@@ -7,6 +7,7 @@
 #include <regex>
 #include <vector>
 #include <cstdint>
+#include <chrono>
 
 namespace fs = std::filesystem;
 
@@ -44,6 +45,33 @@ int main() {
     if (!plugin_path) plugin_path = "examples/plugins";
 
     std::cerr << "loading plugins from: " << plugin_path << "\n\n";
+
+    // Register hot-reload callback before creating runtime
+    polyplug::Runtime::on_reload([](const polyplug::ReloadPhase& phase) {
+        switch (static_cast<polyplug::ReloadPhaseType>(phase.type)) {
+            case polyplug::ReloadPhaseType_Preparing:
+                std::cerr << "[HOT-RELOAD] Preparing: "
+                          << StringView_as_string_view(phase.bundle_name)
+                          << " (retry " << phase.retry_count << ")\n";
+                break;
+            case polyplug::ReloadPhaseType_Reloaded:
+                std::cerr << "[HOT-RELOAD] Reloaded: "
+                          << StringView_as_string_view(phase.bundle_name) << "\n";
+                break;
+            case polyplug::ReloadPhaseType_Failed:
+                std::cerr << "[HOT-RELOAD] Failed: "
+                          << StringView_as_string_view(phase.bundle_name)
+                          << " - " << StringView_as_string_view(phase.reason) << "\n";
+                break;
+        }
+    });
+
+    // Optional: configure hot-reload behavior
+    polyplug::RuntimeConfig config{};
+    config.hot_reload_max_retries = 5;
+    config.hot_reload_retry_interval = std::chrono::milliseconds(100);
+    config.hot_reload_abort_on_max_retries = false;
+    polyplug::Runtime::set_config(config);
 
     auto rt = polyplug::Runtime::builder()
         .plugin_dir(plugin_path)

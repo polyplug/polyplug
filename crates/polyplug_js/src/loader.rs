@@ -22,6 +22,10 @@ use rquickjs::Object;
 use rquickjs::Runtime;
 use rquickjs::Value;
 
+use polyplug::error::LoaderError;
+use polyplug::error::PolyplugError;
+use polyplug::loader::BundleLoader;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
@@ -29,10 +33,6 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 
 use crate::config::JsConfig;
 

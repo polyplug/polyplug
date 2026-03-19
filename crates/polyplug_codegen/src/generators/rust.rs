@@ -124,6 +124,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::ABI_ERROR_STALE_HANDLE;\n");
         callers_out.push_str("use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;\n");
         callers_out.push_str("use polyplug_abi::PluginHandle;\n");
+        callers_out.push_str("use polyplug::registry::PluginVTableGuard;\n");
         callers_out.push_str("use polyplug::runtime::Runtime;\n");
         callers_out.push_str("use super::types::*;\n\n");
         callers_out.push_str("/// Host-side error type for contract calls.\n");
@@ -1068,16 +1069,23 @@ fn generate_host_contract_caller(
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("pub struct {struct_name} {{\n"));
-    out.push_str("    handle: PluginHandle,\n");
-    out.push_str("    runtime: &'static Runtime,\n");
+    out.push_str("    guard: PluginVTableGuard,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {struct_name} {{\n"));
-    out.push_str(&format!(
-        "    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> {struct_name} {{\n"
-    ));
-    out.push_str(&format!("        {struct_name} {{ handle, runtime }}\n"));
+    out.push_str("    /// Factory method - creates instance or None if not found.\n");
+    out.push_str(
+        "    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {\n",
+    );
+    out.push_str(
+        "        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;\n",
+    );
+    out.push_str(&format!("        Some({struct_name} {{ guard }})\n"));
     out.push_str("    }\n\n");
+    out.push_str("    /// Check if instance is valid (always true for Rust - guard holds Arc).\n");
+    out.push_str("    pub fn is_valid(&self) -> bool { true }\n\n");
+    out.push_str("    /// Reset instance (no-op for Rust - guard holds Arc).\n");
+    out.push_str("    pub fn reset(&mut self) { }\n\n");
 
     for func in &contract.functions {
         generate_host_fn_caller(out, func, contract, &struct_name)?;
@@ -1141,20 +1149,7 @@ fn generate_host_fn_caller(
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
-    out.push_str("        let vtable_ptr: *const PluginVTable = match self.runtime.resolve_plugin(self.handle) {\n");
-    out.push_str("            Ok(ptr) => ptr,\n");
-    out.push_str("            Err(err) => {\n");
-    out.push_str("                let code: u32 = match err {\n");
-    out.push_str("                    polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,\n");
-    out.push_str("                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,\n");
-    out.push_str("                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,\n");
-    out.push_str("                };\n");
-    out.push_str("                return Err(ContractError { code, message: String::new() });\n");
-    out.push_str("            }\n");
-    out.push_str("        };\n");
-    out.push_str("        if vtable_ptr.is_null() {\n");
-    out.push_str("            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });\n");
-    out.push_str("        }\n");
+    out.push_str("        let vtable_ptr: *const PluginVTable = self.guard.vtable();\n");
     out.push_str("        // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.\n");
     out.push_str("        let err: AbiError = unsafe {\n");
     out.push_str("            let vtable: &PluginVTable = &*vtable_ptr;\n");

@@ -5,10 +5,21 @@ import os
 import sys
 from pathlib import Path
 
-from polyplug import Runtime
+from polyplug import Runtime, ReloadPhase
 from polyplug.loaders import register_native_loader
 from polyplug import scanner
 from polyplug.helpers import call_plugin_fn, to_str, contract_id, bundle_id
+
+
+def handle_reload(phase: ReloadPhase) -> None:
+    if phase.is_preparing():
+        print(
+            f"[HOT-RELOAD] Preparing: {phase.bundle_name} (retry {phase.retry_count})"
+        )
+    elif phase.is_reloaded():
+        print(f"[HOT-RELOAD] Reloaded: {phase.bundle_name}")
+    elif phase.is_failed():
+        print(f"[HOT-RELOAD] Failed: {phase.bundle_name} - {phase.reason}")
 
 
 def main():
@@ -16,6 +27,8 @@ def main():
         "POLYPLUG_PLUGIN_PATH", str(Path(__file__).parent.parent.parent / "plugins")
     )
     print(f"loading plugins from: {plugin_path}\n")
+
+    Runtime.on_reload(handle_reload)
 
     rt = Runtime()
     try:

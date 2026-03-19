@@ -343,6 +343,195 @@ if (handle == UINT64_MAX) {
 }
 ```
 
+## Hot-Reload Notification
+
+The C++ binding provides a callback mechanism to receive notifications during hot-reload operations. This allows your application to react to plugin reloads, handle stale handles, and manage resources appropriately.
+
+### Registration
+
+Register the callback **before** creating the Runtime instance. The callback is global and applies to all subsequently created runtimes:
+
+```cpp
+#include <polyplug/runtime.hpp>
+
+// Register callback before creating runtime
+polyplug::Runtime::on_reload([](const polyplug::ReloadPhase& phase) {
+    switch (phase.type) {
+        case polyplug::ReloadPhaseType::Preparing:
+            // Reload is starting, includes retry count
+            std::cout << "Preparing to reload bundle " 
+                      << polyplug::StringView_to_string(phase.bundle_name)
+                      << " (attempt " << phase.retry_count << ")" << std::endl;
+            break;
+            
+        case polyplug::ReloadPhaseType::Reloaded:
+            // Successful reload — vtable has been swapped
+            std::cout << "Successfully reloaded bundle " 
+                      << polyplug::StringView_to_string(phase.bundle_name) << std::endl;
+            // Note: PluginGuard instances will re-resolve vtables automatically
+            break;
+            
+        case polyplug::ReloadPhaseType::Failed:
+            // Reload failed — includes reason string
+            std::cerr << "Failed to reload bundle " 
+                      << polyplug::StringView_to_string(phase.bundle_name)
+                      << ": " << polyplug::StringView_to_string(phase.reason) << std::endl;
+            break;
+    }
+});
+
+// Now create runtime — callback will be invoked on reloads
+auto rt = polyplug::Runtime::builder().build();
+```
+
+### ReloadPhase Struct
+
+The `ReloadPhase` struct provides information about the current reload state:
+
+```cpp
+struct ReloadPhase {
+    ReloadPhaseType type;         ///< Which phase (Preparing, Reloaded, or Failed)
+    uint64_t        bundle_id;    ///< Bundle ID (valid for all variants)
+    StringView      bundle_name;  ///< Bundle name (valid for all variants)
+    uint32_t        retry_count;  ///< Retry count (valid only for Preparing)
+    StringView      reason;       ///< Failure reason (valid only for Failed)
+};
+```
+
+**Field validity by phase:**
+
+| Field | Preparing | Reloaded | Failed |
+|-------|-----------|----------|--------|
+| `type` | ✓ | ✓ | ✓ |
+| `bundle_id` | ✓ | ✓ | ✓ |
+| `bundle_name` | ✓ | ✓ | ✓ |
+| `retry_count` | ✓ | — | — |
+| `reason` | — | — | ✓ |
+
+### ReloadPhaseType Enum
+
+```cpp
+enum class ReloadPhaseType : uint32_t {
+    Preparing = 0,  ///< Before vtable swap, includes retry count
+    Reloaded  = 1,  ///< After successful vtable swap
+    Failed    = 2   ///< Reload failed, includes reason string
+};
+```
+
+### Runtime Configuration
+
+Configure hot-reload behavior using `RuntimeConfig`:
+
+```cpp
+#include <polyplug/runtime.hpp>
+#include <chrono>
+
+// Configure hot-reload behavior
+polyplug::RuntimeConfig config;
+config.hot_reload_max_retries = 5;  // Max 5 retry attempts
+config.hot_reload_retry_interval = std::chrono::milliseconds(100);  // 100ms between retries
+config.hot_reload_abort_on_max_retries = false;  // Keep retrying forever
+
+// Apply configuration before creating runtime
+polyplug::Runtime::set_config(config);
+
+// Now create runtime with the configured settings
+auto rt = polyplug::Runtime::builder().build();
+```
+
+**Configuration fields:**
+
+```cpp
+struct RuntimeConfig {
+    uint32_t hot_reload_max_retries{3U};           ///< Max retry attempts (0 = infinite)
+    std::chrono::milliseconds hot_reload_retry_interval{1000};  ///< Interval between retries
+    bool hot_reload_abort_on_max_retries{true};    ///< Abort when max retries exhausted
+};
+```
+
+### Complete Hot-Reload Example
+
+```cpp
+#include <polyplug.hpp>
+#include <polyplug/runtime.hpp>
+#include <iostream>
+#include <chrono>
+
+int main() {
+    // 1. Configure hot-reload behavior
+    polyplug::RuntimeConfig config;
+    config.hot_reload_max_retries = 3;
+    config.hot_reload_retry_interval = std::chrono::milliseconds(500);
+    config.hot_reload_abort_on_max_retries = true;
+    polyplug::Runtime::set_config(config);
+
+    // 2. Register reload notification callback
+    polyplug::Runtime::on_reload([](const polyplug::ReloadPhase& phase) {
+        std::string name = polyplug::StringView_to_string(phase.bundle_name);
+        
+        if (phase.type == polyplug::ReloadPhaseType::Preparing) {
+            std::cout << "[RELOAD] Preparing " << name 
+                      << " (attempt " << phase.retry_count << ")" << std::endl;
+        } else if (phase.type == polyplug::ReloadPhaseType::Reloaded) {
+            std::cout << "[RELOAD] Successfully reloaded " << name << std::endl;
+        } else if (phase.type == polyplug::ReloadPhaseType::Failed) {
+            std::string reason = polyplug::StringView_to_string(phase.reason);
+            std::cerr << "[RELOAD] Failed to reload " << name 
+                      << ": " << reason << std::endl;
+        }
+    });
+
+    try {
+        // 3. Create runtime (callback is now active)
+        auto rt = polyplug::Runtime::builder()
+            .plugin_dir("/path/to/plugins")
+            .build();
+
+        // 4. Load initial bundle
+        rt.load_bundle("/path/to/my_plugin");
+
+        // 5. Resolve plugin and use it
+        uint64_t handle = rt.find(0xCC4232FAB0410D2BULL, 1);
+        if (handle != UINT64_MAX) {
+            auto guard = rt.resolve_plugin(handle);
+            // Use plugin...
+            
+            // 6. Later, reload the bundle (callback will be invoked)
+            rt.reload_bundle("/path/to/my_plugin_updated");
+            
+            // 7. Guard automatically re-resolves vtable on next access
+            // No stale handle issues — PluginGuard handles hot-reload transparently
+        }
+
+    } catch (const std::runtime_error& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
+
+    return 0;
+}
+```
+
+### Memory Safety
+
+**Important:** All string pointers in `ReloadPhase` (`bundle_name`, `reason`) are **borrowed references** from the runtime's internal state. They are valid **only for the duration of the callback invocation**.
+
+```cpp
+// CORRECT — use strings within callback scope
+polyplug::Runtime::on_reload([](const polyplug::ReloadPhase& phase) {
+    std::string name = polyplug::StringView_to_string(phase.bundle_name);  // Copy if needed
+    // Use name safely here...
+});
+
+// FORBIDDEN — storing borrowed pointers
+static std::string_view stored_name;  // DON'T DO THIS
+polyplug::Runtime::on_reload([](const polyplug::ReloadPhase& phase) {
+    stored_name = polyplug::StringView_as_string_view(phase.bundle_name);  // DANGLING!
+});
+```
+
+If you need to persist the strings beyond the callback, copy them to `std::string`.
+
 ## Memory Management
 
 ### RAII Guarantees

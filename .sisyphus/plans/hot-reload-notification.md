@@ -25,28 +25,28 @@ Implement the hot-reload notification system that:
 
 **Blockers: None - can start immediately**
 
-- [ ] Add `ReloadPhase` enum to `crates/polyplug/src/reload.rs`:
-  - `Preparing { bundle_id: u64, bundle_name: String, retry_count: u32 }`
-  - `Reloaded { bundle_id: u64, bundle_name: String }`
-  - `Failed { bundle_id: u64, bundle_name: String, reason: String }`
-  - Export from `crates/polyplug/src/lib.rs`
+- [x] Add `ReloadPhase` enum to `crates/polyplug/src/reload.rs`:
+   - `Preparing { bundle_id: u64, bundle_name: String, retry_count: u32 }`
+   - `Reloaded { bundle_id: u64, bundle_name: String }`
+   - `Failed { bundle_id: u64, bundle_name: String, reason: String }`
+   - Export from `crates/polyplug/src/lib.rs`
 
-- [ ] Add `RuntimeConfig` struct to `crates/polyplug/src/runtime.rs`:
-  - `hot_reload_max_retries: u32` (default: 3)
-  - `hot_reload_retry_interval: Duration` (default: 1 second)
-  - `hot_reload_abort_on_max_retries: bool` (default: true)
-  - Implement `Default` trait
-  - Extensible for future options (log_level, allocator, etc.)
+- [x] Add `RuntimeConfig` struct to `crates/polyplug/src/runtime.rs`:
+   - `hot_reload_max_retries: u32` (default: 3)
+   - `hot_reload_retry_interval: Duration` (default: 1 second)
+   - `hot_reload_abort_on_max_retries: bool` (default: true)
+   - Implement `Default` trait
+   - Extensible for future options (log_level, allocator, etc.)
 
-- [ ] Update `ReloadCallback` type in `crates/polyplug/src/runtime.rs`:
-  - Change from `Fn(ReloadEvent)` to `Fn(ReloadPhase)`
-  - Update `on_reload_cb` field type
+- [x] Update `ReloadCallback` type in `crates/polyplug/src/runtime.rs`:
+   - Change from `Fn(ReloadEvent)` to `Fn(ReloadPhase)`
+   - Update `on_reload_cb` field type
 
-- [ ] Add `config` field to `Runtime` and `RuntimeBuilder`:
-  - Store `RuntimeConfig` in `Runtime`
-  - Add `RuntimeBuilder::config(config: RuntimeConfig)` method
+- [x] Add `config` field to `Runtime` and `RuntimeBuilder`:
+   - Store `RuntimeConfig` in `Runtime`
+   - Add `RuntimeBuilder::config(config: RuntimeConfig)` method
 
-- [ ] Modify `reload_bundle_impl` in `crates/polyplug/src/reload.rs`:
+- [x] Modify `reload_bundle_impl` in `crates/polyplug/src/reload.rs`:
   - Use `RuntimeConfig` values instead of hardcoded constants
   - Fire `Preparing` notification BEFORE vtable swap
   - Add retry loop using `config.hot_reload_retry_interval`
@@ -57,16 +57,16 @@ Implement the hot-reload notification system that:
   - On abort: call `emit_warning()`, fire `Failed`, return error without swap
   - Fire `Reloaded` notification AFTER vtable swap, BEFORE quiescence wait
 
-- [ ] Add `on_reload` method to `RuntimeBuilder` in `crates/polyplug/src/runtime.rs`:
-  - Accept callback: `impl Fn(ReloadPhase) + Send + Sync + 'static`
-  - Store as `Option<ReloadCallback>`
+- [x] Add `on_reload` method to `RuntimeBuilder` in `crates/polyplug/src/runtime.rs`:
+   - Accept callback: `impl Fn(ReloadPhase) + Send + Sync + 'static`
+   - Store as `Option<ReloadCallback>`
 
-- [ ] Update FFI layer in `crates/polyplug/src/ffi.rs`:
+- [x] Update FFI layer in `crates/polyplug/src/ffi.rs`:
   - Add `polyplug_runtime_on_reload` function for C ABI
   - Add `polyplug_runtime_set_config` function for C ABI
   - Expose callback registration and config to host libs
 
-- [ ] Add unit tests for `ReloadPhase` enum and notification flow:
+- [x] Add unit tests for `ReloadPhase` enum and notification flow:
   - Test successful reload with instance cleanup
   - Test retry mechanism (retry_count increments)
   - Test abort after max retries (Failed notification)
@@ -79,19 +79,19 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 1 complete**
 
-- [ ] Update `crates/polyplug_codegen/src/generators/rust.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/rust.rs`:
   - Modify `generate_host_caller_struct` to hide `PluginVTable` and `PluginGuard`
   - Add factory method `new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self>`
   - Store `PluginVTableGuard` internally (not exposed)
   - Make struct methods use hidden guard internally
   - Add `is_valid()` and `reset()` methods
 
-- [ ] Update generated `host_callers.rs` output:
+- [x] Update generated `host_callers.rs` output:
   - Remove `vtable()` method from public API
   - Add `impl Drop` if needed for explicit cleanup logging
   - Ensure move-only semantics (delete copy constructor/assignment)
 
-- [ ] Add integration test for generated Rust host callers with hot-reload
+- [x] Add integration test for generated Rust host callers with hot-reload
 
 ---
 
@@ -100,23 +100,23 @@ Implement the hot-reload notification system that:
 **Blockers: Phase 1 complete**
 **[PARALLEL GROUP: CODEGEN-LANGUAGES]**
 
-- [ ] Update `crates/polyplug_codegen/src/generators/cpp.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/cpp.rs`:
   - Modify `generate_cpp_host_contract` to hide `PluginVTable*`
   - Add factory method `static std::optional<ClassName> create(Runtime& rt, uint32_t min_version = 0)`
   - Store `PluginGuard` internally as private member
   - Remove `vtable()` from public API
   - Add `is_valid()`, `reset()`, and `explicit operator bool()`
 
-- [ ] Update `generate_cpp_host_function`:
+- [x] Update `generate_cpp_host_function`:
   - Use internal `guard_.vtable()` instead of passed vtable pointer
   - Handle error cases with exceptions or error codes
 
-- [ ] Update generated `host_callers.hpp` output:
+- [x] Update generated `host_callers.hpp` output:
   - Include `<optional>` for factory method return type
   - Make class move-only (delete copy constructor/assignment)
   - Add proper RAII semantics
 
-- [ ] Add integration test for generated C++ host callers with hot-reload
+- [x] Add integration test for generated C++ host callers with hot-reload
 
 ---
 
@@ -125,19 +125,19 @@ Implement the hot-reload notification system that:
 **Blockers: Phase 1 complete**
 **[PARALLEL GROUP: CODEGEN-LANGUAGES]**
 
-- [ ] Update `crates/polyplug_codegen/src/generators/python.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/python.rs`:
   - Modify `generate_host_caller_class` to hide vtable
   - Add factory method `@classmethod def create(cls, rt, min_version=0) -> Optional[Self]`
   - Store `PluginGuard` internally as `_guard`
   - Remove `get_vtable()` from public API
   - Add `is_valid()` and `reset()` methods
 
-- [ ] Update generated `host_callers.py` output:
+- [x] Update generated `host_callers.py` output:
   - Use internal `_guard` for vtable access
   - Implement `__bool__` for truthiness checks
   - Add proper `__del__` for cleanup (optional, Python GC handles it)
 
-- [ ] Add integration test for generated Python host callers with hot-reload
+- [x] Add integration test for generated Python host callers with hot-reload
 
 ---
 
@@ -146,19 +146,19 @@ Implement the hot-reload notification system that:
 **Blockers: Phase 1 complete**
 **[PARALLEL GROUP: CODEGEN-LANGUAGES]**
 
-- [ ] Update `crates/polyplug_codegen/src/generators/csharp.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/csharp.rs`:
   - Modify `generate_cs_host_callers` to hide vtable
   - Add factory method `public static ClassName? Create(Runtime rt, uint minVersion = 0)`
   - Store `PluginGuard` internally as private field
   - Remove `GetVTable()` from public API
   - Implement `IDisposable` for explicit cleanup
 
-- [ ] Update generated `HostCallers.cs` output:
+- [x] Update generated `HostCallers.cs` output:
   - Add `IDisposable` interface implementation
   - Make class properly disposable
   - Add `IsValid` property and `Reset()` method
 
-- [ ] Add integration test for generated C# host callers with hot-reload
+- [x] Add integration test for generated C# host callers with hot-reload
 
 ---
 
@@ -167,18 +167,18 @@ Implement the hot-reload notification system that:
 **Blockers: Phase 1 complete**
 **[PARALLEL GROUP: CODEGEN-LANGUAGES]**
 
-- [ ] Update `crates/polyplug_codegen/src/generators/lua.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/lua.rs`:
   - Modify `generate_host_caller_function` to hide vtable
   - Add factory function that returns instance table
   - Store guard internally in instance table
   - Remove vtable access from public API
 
-- [ ] Update generated `host_callers.lua` output:
+- [x] Update generated `host_callers.lua` output:
   - Use internal guard for vtable access
   - Add `is_valid()` and `reset()` methods
   - Proper metatable for OOP-style usage
 
-- [ ] Add integration test for generated Lua host callers with hot-reload
+- [x] Add integration test for generated Lua host callers with hot-reload
 
 ---
 
@@ -187,22 +187,22 @@ Implement the hot-reload notification system that:
 **Blockers: Phase 1 complete**
 **[PARALLEL GROUP: CODEGEN-LANGUAGES]**
 
-- [ ] Update `crates/polyplug_codegen/src/generators/js_deno.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/js_deno.rs`:
   - Modify `generate_host_caller_class_deno` to hide vtable
   - Add factory method `static create(rt, minVersion = 0)`
   - Store guard internally as private field
   - Remove vtable access from public API
 
-- [ ] Update `crates/polyplug_codegen/src/generators/js_quickjs.rs`:
+- [x] Update `crates/polyplug_codegen/src/generators/js_quickjs.rs`:
   - Same changes as Deno generator
   - Adapt for QuickJS-specific patterns
 
-- [ ] Update generated `host_callers.js` output:
+- [x] Update generated `host_callers.js` output:
   - Use internal guard for vtable access
   - Add `isValid()` and `reset()` methods
   - Proper class structure with private fields
 
-- [ ] Add integration test for generated JavaScript host callers with hot-reload
+- [x] Add integration test for generated JavaScript host callers with hot-reload
 
 ---
 
@@ -210,30 +210,30 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 3 complete**
 
-- [ ] Update `host-libs/cpp/polyplug/runtime.hpp`:
+- [x] Update `host-libs/cpp/polyplug/runtime.hpp`:
   - Add `on_reload` method to `Runtime` class
   - Accept callback: `std::function<void(const ReloadPhase&)>`
   - Store callback internally
   - Add `set_config` method
 
-- [ ] Add `host-libs/cpp/polyplug/runtime_config.hpp` (create new file):
+- [x] Add `host-libs/cpp/polyplug/runtime_config.hpp` (create new file):
   - Add `RuntimeConfig` struct with hot-reload options
   - Extensible for future options
 
-- [ ] Update `host-libs/cpp/polyplug/abi.hpp`:
+- [x] Update `host-libs/cpp/polyplug/abi.hpp`:
   - Add `ReloadPhase` struct with `type` field and `Type` enum
   - Simple struct: `type`, `bundle_id`, `bundle_name`, `retry_count`, `reason`
 
-- [ ] Update `host-libs/cpp/polyplug/error.hpp`:
+- [x] Update `host-libs/cpp/polyplug/error.hpp`:
   - Add `ABI_ERROR_RELOADING` constant if not present
 
-- [ ] Update `host-libs/cpp/polyplug/handle.hpp`:
+- [x] Update `host-libs/cpp/polyplug/handle.hpp`:
   - Ensure `PluginGuard` is move-only
   - Add `reset()` method
 
-- [ ] Update CMakeLists.txt if needed for new files
+- [x] Update CMakeLists.txt if needed for new files
 
-- [ ] Add unit tests for C++ host lib with reload notification:
+- [x] Add unit tests for C++ host lib with reload notification:
   - Test `Preparing` handling with instance cleanup
   - Test `Reloaded` handling
   - Test `Failed` handling (reload aborted)
@@ -245,24 +245,24 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 4 complete**
 
-- [ ] Update `host-libs/python/polyplug/runtime.py`:
+- [x] Update `host-libs/python/polyplug/runtime.py`:
   - Add `on_reload` method to `Runtime` class
   - Accept callback: `Callable[[ReloadPhase], None]`
   - Store callback internally
   - Add `set_config` method
 
-- [ ] Add `host-libs/python/polyplug/runtime_config.py` (create new file):
+- [x] Add `host-libs/python/polyplug/runtime_config.py` (create new file):
   - Add `RuntimeConfig` dataclass with hot-reload options
   - Extensible for future options
 
-- [ ] Update `host-libs/python/polyplug/abi.py` (or create if needed):
+- [x] Update `host-libs/python/polyplug/abi.py` (or create if needed):
   - Add `ReloadPhase` class with `type` attribute and `TYPE_` constants
   - Simple class: `type`, `bundle_id`, `bundle_name`, `retry_count`, `reason`
 
-- [ ] Update `host-libs/python/polyplug/__init__.py`:
+- [x] Update `host-libs/python/polyplug/__init__.py`:
   - Export `ReloadPhase`, `RuntimeConfig`
 
-- [ ] Add unit tests for Python host lib with reload notification:
+- [x] Add unit tests for Python host lib with reload notification:
   - Test `Preparing` handling with instance cleanup
   - Test `Reloaded` handling
   - Test `Failed` handling (reload aborted)
@@ -274,25 +274,25 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 5 complete**
 
-- [ ] Update `host-libs/csharp/Polyplug/src/Runtime.cs`:
+- [x] Update `host-libs/csharp/Polyplug/src/Runtime.cs`:
   - Add `OnReload` method
   - Accept callback: `Action<ReloadPhase>`
   - Store callback internally
   - Add `SetConfig` method
 
-- [ ] Add `host-libs/csharp/Polyplug/src/RuntimeConfig.cs` (create new file):
+- [x] Add `host-libs/csharp/Polyplug/src/RuntimeConfig.cs` (create new file):
   - Add `RuntimeConfig` class with hot-reload options
   - Extensible for future options
 
-- [ ] Add `host-libs/csharp/Polyplug/src/ReloadPhase.cs` (create new file):
+- [x] Add `host-libs/csharp/Polyplug/src/ReloadPhase.cs` (create new file):
   - Add `ReloadPhase` class with `Type` property and `ReloadPhaseType` enum
   - Simple class: `Type`, `BundleId`, `BundleName`, `RetryCount`, `Reason`
 
-- [ ] Update `host-libs/csharp/Polyplug/src/PluginGuard.cs`:
+- [x] Update `host-libs/csharp/Polyplug/src/PluginGuard.cs`:
   - Ensure proper `IDisposable` implementation
   - Add `Reset()` method
 
-- [ ] Add unit tests for C# host lib with reload notification:
+- [x] Add unit tests for C# host lib with reload notification:
   - Test `Preparing` handling with instance cleanup
   - Test `Reloaded` handling
   - Test `Failed` handling (reload aborted)
@@ -304,25 +304,25 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 6 complete**
 
-- [ ] Update `host-libs/lua/polyplug/runtime.lua`:
-  - Add `on_reload` method to Runtime table
-  - Accept callback function
-  - Store callback internally
-  - Add `set_config` method
+- [x] Update `host-libs/lua/polyplug/runtime.lua`:
+   - Add `on_reload` method to Runtime table
+   - Accept callback function
+   - Store callback internally
+   - Add `set_config` method
 
-- [ ] Add `host-libs/lua/polyplug/runtime_config.lua` (create new file):
-  - Add `RuntimeConfig` table with hot-reload options
-  - Extensible for future options
+- [x] Add `host-libs/lua/polyplug/runtime_config.lua` (create new file):
+   - Add `RuntimeConfig` table with hot-reload options
+   - Extensible for future options
 
-- [ ] Add `host-libs/lua/polyplug/reload_phase.lua` (create new file):
-  - Add `ReloadPhase` table with `type` field and `TYPE_` constants
-  - Simple table: `type`, `bundle_id`, `bundle_name`, `retry_count`, `reason`
+- [x] Add `host-libs/lua/polyplug/reload_phase.lua` (create new file):
+   - Add `ReloadPhase` table with `type` field and `TYPE_` constants
+   - Simple table: `type`, `bundle_id`, `bundle_name`, `retry_count`, `reason`
 
-- [ ] Add unit tests for Lua host lib with reload notification:
-  - Test `Preparing` handling with instance cleanup
-  - Test `Reloaded` handling
-  - Test `Failed` handling (reload aborted)
-  - Test custom `RuntimeConfig`
+- [x] Add unit tests for Lua host lib with reload notification:
+   - Test `Preparing` handling with instance cleanup
+   - Test `Reloaded` handling
+   - Test `Failed` handling (reload aborted)
+   - Test custom `RuntimeConfig`
 
 ---
 
@@ -330,21 +330,21 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 7 complete**
 
-- [ ] Update `host-libs/js/polyplug/runtime.js`:
-  - Add `onReload` method to Runtime class
-  - Accept callback function
-  - Store callback internally
-  - Add `setConfig` method
+- [x] Update `host-libs/js/polyplug/runtime.js`:
+   - Add `onReload` method to Runtime class
+   - Accept callback function
+   - Store callback internally
+   - Add `setConfig` method
 
-- [ ] Add `host-libs/js/polyplug/runtime_config.js` (create new file):
-  - Add `RuntimeConfig` class with hot-reload options
-  - Extensible for future options
+- [x] Add `host-libs/js/polyplug/runtime_config.js` (create new file):
+   - Add `RuntimeConfig` class with hot-reload options
+   - Extensible for future options
 
-- [ ] Add `host-libs/js/polyplug/reload_phase.js` (create new file):
-  - Add `ReloadPhase` class with `type` property and `TYPE_` constants
-  - Simple class: `type`, `bundleId`, `bundleName`, `retryCount`, `reason`
+- [x] Add `host-libs/js/polyplug/reload_phase.js` (create new file):
+   - Add `ReloadPhase` class with `type` property and `TYPE_` constants
+   - Simple class: `type`, `bundleId`, `bundleName`, `retryCount`, `reason`
 
-- [ ] Add unit tests for JavaScript host lib with reload notification:
+- [x] Add unit tests for JavaScript host lib with reload notification:
   - Test `Preparing` handling with instance cleanup
   - Test `Reloaded` handling
   - Test `Failed` handling (reload aborted)
@@ -357,17 +357,17 @@ Implement the hot-reload notification system that:
 **Blockers: None - can run in parallel with Phase 2-7**
 **[PARALLEL GROUP: GUEST-VERIFICATION]**
 
-- [ ] Verify `guest-libs/rust/` - no changes needed, vtable is static in plugin
+- [x] Verify `guest-libs/rust/` - no changes needed, vtable is static in plugin
 
-- [ ] Verify `guest-libs/cpp/` - no changes needed, vtable is static in plugin
+- [x] Verify `guest-libs/cpp/` - no changes needed, vtable is static in plugin
 
-- [ ] Verify `guest-libs/csharp/` - no changes needed, vtable is static in plugin
+- [x] Verify `guest-libs/csharp/` - no changes needed, vtable is static in plugin
 
-- [ ] Verify `guest-libs/python/` - no changes needed, vtable is static in plugin
+- [x] Verify `guest-libs/python/` - no changes needed, vtable is static in plugin
 
-- [ ] Verify `guest-libs/lua/` - no changes needed, vtable is static in plugin
+- [x] Verify `guest-libs/lua/` - no changes needed, vtable is static in plugin
 
-- [ ] Verify `guest-libs/js/` - no changes needed, vtable is static in plugin
+- [x] Verify `guest-libs/js/` - no changes needed, vtable is static in plugin
 
 ---
 
@@ -375,34 +375,34 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 1-12 complete**
 
-- [ ] Create `tests/integration/hot_reload_test.rs`:
-  - Test notification flow with mock host
-  - Test retry mechanism (retry_count increments)
-  - Test abort after max retries (Failed notification)
-  - Test instance cleanup via Arc count
-  - Test that old vtable is kept on abort
+- [x] Create `tests/integration/hot_reload_test.rs`:
+   - Test notification flow with mock host
+   - Test retry mechanism (retry_count increments)
+   - Test abort after max retries (Failed notification)
+   - Test instance cleanup via Arc count
+   - Test that old vtable is kept on abort
 
-- [ ] Create `tests/integration/cpp/hot_reload_test.cpp`:
-  - Test C++ host with reload notification
-  - Test instance creation/destruction
-  - Test retry handling
-  - Test Failed notification handling
+- [x] Create `tests/integration/cpp/hot_reload_test.cpp`:
+   - Test C++ host with reload notification
+   - Test instance creation/destruction
+   - Test retry handling
+   - Test Failed notification handling
 
-- [ ] Create `tests/integration/python/test_hot_reload.py`:
-  - Test Python host with reload notification
-  - Test instance creation/destruction
-  - Test Failed notification handling
+- [x] Create `tests/integration/python/test_hot_reload.py`:
+   - Test Python host with reload notification
+   - Test instance creation/destruction
+   - Test Failed notification handling
 
-- [ ] Create `tests/integration/csharp/HotReloadTest.cs`:
-  - Test C# host with reload notification
-  - Test instance creation/destruction
-  - Test Failed notification handling
+- [x] Create `tests/integration/csharp/HotReloadTest.cs`:
+   - Test C# host with reload notification
+   - Test instance creation/destruction
+   - Test Failed notification handling
 
-- [ ] Update `examples/hosts/` to use new API:
-  - Update `examples/hosts/rust/src/main.rs`
-  - Update `examples/hosts/cpp/main.cpp`
-  - Update `examples/hosts/python/host.py`
-  - Update `examples/hosts/csharp/Program.cs`
+- [x] Update `examples/hosts/` to use new API:
+   - Update `examples/hosts/rust/src/main.rs`
+   - Update `examples/hosts/cpp/main.cpp`
+   - Update `examples/hosts/python/host.py`
+   - Update `examples/hosts/csharp/Program.cs`
 
 ---
 
@@ -410,17 +410,17 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 1-14 complete**
 
-- [ ] Update `docs/HOT_RELOAD_DESIGN.md` with final implementation details
+- [x] Update `docs/HOT_RELOAD_DESIGN.md` with final implementation details
 
-- [ ] Update `host-libs/cpp/README.md` with new API usage
+- [x] Update `host-libs/cpp/README.md` with new API usage
 
-- [ ] Update `host-libs/python/README.md` with new API usage
+- [x] Update `host-libs/python/README.md` with new API usage
 
-- [ ] Update `host-libs/csharp/README.md` with new API usage
+- [x] Update `host-libs/csharp/README.md` with new API usage
 
-- [ ] Update `crates/polyplug_codegen/README.md` with codegen changes
+- [x] Update `crates/polyplug_codegen/README.md` with codegen changes
 
-- [ ] Update `AGENTS.md` if any conventions changed
+- [x] Update `AGENTS.md` if any conventions changed
 
 ---
 
@@ -428,17 +428,17 @@ Implement the hot-reload notification system that:
 
 **Blockers: Phase 1-15 complete**
 
-- [ ] Run `cargo test --workspace` - all tests pass
+- [x] Run `cargo test --workspace` - all tests pass
 
-- [ ] Run `cargo clippy -- -D warnings` - zero warnings
+- [x] Run `cargo clippy -- -D warnings` - zero warnings
 
-- [ ] Run `cargo fmt --check` - formatting clean
+- [x] Run `cargo fmt --check` - formatting clean
 
-- [ ] Build all example hosts and guests
+- [x] Build all example hosts and guests
 
-- [ ] Run integration tests for all languages
+- [x] Run integration tests for all languages
 
-- [ ] Manual verification: hot-reload with notification in example app
+- [x] Manual verification: hot-reload with notification in example app
 
 ---
 

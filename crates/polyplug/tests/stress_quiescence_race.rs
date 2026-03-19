@@ -7,14 +7,14 @@ use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 use polyplug::error::RegistryError;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
 const VERSION_V1: u32 = 1_u32 << 16;

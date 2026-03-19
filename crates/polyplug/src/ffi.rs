@@ -7,15 +7,190 @@
 
 use core::cell::Ref;
 use core::cell::RefCell;
+use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::Ordering;
+use std::sync::OnceLock;
 
 use crate::loader::BundleLoader;
+use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
+use crate::runtime::RuntimeConfig;
 use polyplug_abi::PluginHandle;
 
 pub struct OpaqueRuntime(pub Runtime);
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+// ─── C-compatible types for hot-reload notification ───────────────────────────
+
+/// Type tag for `ReloadPhaseC` variants.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReloadPhaseType {
+    /// `Preparing` variant.
+    Preparing = 0,
+    /// `Reloaded` variant.
+    Reloaded = 1,
+    /// `Failed` variant.
+    Failed = 2,
+}
+
+/// C-compatible string view for passing strings across the FFI boundary.
+///
+/// The pointer must remain valid for the duration of the callback call.
+/// This is a borrowed view — the callback must NOT free the memory.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct StringViewC {
+    /// Pointer to UTF-8 bytes.
+    pub ptr: *const u8,
+    /// Length in bytes.
+    pub len: usize,
+}
+
+impl StringViewC {
+    /// Create a `StringViewC` from a Rust string slice.
+    fn from_str(s: &str) -> StringViewC {
+        StringViewC {
+            ptr: s.as_ptr(),
+            len: s.len(),
+        }
+    }
+}
+
+/// C-compatible representation of `ReloadPhase`.
+///
+/// This is a tagged union style struct. The `phase_type` field indicates
+/// which variant is active, and the corresponding fields are populated.
+///
+/// # Memory Safety
+///
+/// All string pointers (`bundle_name`, `reason`) are borrowed from the
+/// runtime's internal state and are valid only for the duration of the
+/// callback invocation. The callback must NOT store these pointers or
+/// free the memory.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ReloadPhaseC {
+    /// The phase type (Preparing, Reloaded, or Failed).
+    pub phase_type: u32,
+    /// Bundle ID (valid for all variants).
+    pub bundle_id: u64,
+    /// Bundle name (valid for all variants).
+    pub bundle_name: StringViewC,
+    /// Retry count (valid only for `Preparing` variant).
+    pub retry_count: u32,
+    /// Failure reason (valid only for `Failed` variant).
+    pub reason: StringViewC,
+}
+
+impl ReloadPhaseC {
+    /// Convert a Rust `ReloadPhase` to the C-compatible representation.
+    fn from_reload_phase(phase: &ReloadPhase) -> ReloadPhaseC {
+        match phase {
+            ReloadPhase::Preparing {
+                bundle_id,
+                bundle_name,
+                retry_count,
+            } => ReloadPhaseC {
+                phase_type: ReloadPhaseType::Preparing as u32,
+                bundle_id: *bundle_id,
+                bundle_name: StringViewC::from_str(bundle_name.as_str()),
+                retry_count: *retry_count,
+                reason: StringViewC {
+                    ptr: core::ptr::null(),
+                    len: 0,
+                },
+            },
+            ReloadPhase::Reloaded {
+                bundle_id,
+                bundle_name,
+            } => ReloadPhaseC {
+                phase_type: ReloadPhaseType::Reloaded as u32,
+                bundle_id: *bundle_id,
+                bundle_name: StringViewC::from_str(bundle_name.as_str()),
+                retry_count: 0,
+                reason: StringViewC {
+                    ptr: core::ptr::null(),
+                    len: 0,
+                },
+            },
+            ReloadPhase::Failed {
+                bundle_id,
+                bundle_name,
+                reason,
+            } => ReloadPhaseC {
+                phase_type: ReloadPhaseType::Failed as u32,
+                bundle_id: *bundle_id,
+                bundle_name: StringViewC::from_str(bundle_name.as_str()),
+                retry_count: 0,
+                reason: StringViewC::from_str(reason.as_str()),
+            },
+        }
+    }
+}
+
+/// C-compatible configuration for hot-reload behavior.
+///
+/// This struct is passed to `polyplug_runtime_set_config` to configure
+/// the runtime before creation.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeConfigC {
+    /// Maximum number of retry attempts for hot-reload operations.
+    pub hot_reload_max_retries: u32,
+    /// Interval between hot-reload retry attempts, in milliseconds.
+    pub hot_reload_retry_interval_ms: u64,
+    /// Whether to abort the runtime when max retries are exhausted.
+    /// 0 = false (continue retrying), non-zero = true (abort).
+    pub hot_reload_abort_on_max_retries: u8,
+}
+
+impl RuntimeConfigC {
+    /// Convert to the Rust `RuntimeConfig` type.
+    fn into_runtime_config(self) -> RuntimeConfig {
+        RuntimeConfig {
+            hot_reload_max_retries: self.hot_reload_max_retries,
+            hot_reload_retry_interval: core::time::Duration::from_millis(
+                self.hot_reload_retry_interval_ms,
+            ),
+            hot_reload_abort_on_max_retries: self.hot_reload_abort_on_max_retries != 0,
+        }
+    }
+}
+
+// ─── Global storage for pre-build configuration ───────────────────────────────
+
+/// Type alias for the C reload callback function pointer.
+type ReloadCallbackC = extern "C" fn(ReloadPhaseC);
+
+/// Global storage for the reload callback set via `polyplug_runtime_on_reload`.
+///
+/// Uses `AtomicPtr` to store the function pointer. A null pointer indicates
+/// no callback has been registered.
+static GLOBAL_RELOAD_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Global storage for the runtime config set via `polyplug_runtime_set_config`.
+static GLOBAL_CONFIG: OnceLock<RuntimeConfig> = OnceLock::new();
+
+/// Wrapper that converts the C callback to a Rust callback.
+///
+/// This function is called by the runtime when a reload phase changes.
+/// It reads the stored C callback and invokes it with the C-compatible struct.
+fn invoke_reload_callback(phase: ReloadPhase) {
+    let cb_ptr: *mut () = GLOBAL_RELOAD_CB.load(Ordering::Relaxed);
+    if cb_ptr.is_null() {
+        return;
+    }
+    // SAFETY: cb_ptr was stored by polyplug_runtime_on_reload from a valid
+    // extern "C" function pointer. The pointer remains valid for the process
+    // lifetime (function pointers are 'static). The transmute is safe because
+    // we only store function pointers of the correct type.
+    let cb: ReloadCallbackC = unsafe { core::mem::transmute(cb_ptr) };
+    let phase_c: ReloadPhaseC = ReloadPhaseC::from_reload_phase(&phase);
+    cb(phase_c);
 }
 
 pub fn set_last_error_pub(msg: &str) {
@@ -47,13 +222,27 @@ fn unpack_handle(packed: u64) -> PluginHandle {
 
 /// Creates a new runtime instance.
 ///
+/// Applies any configuration set via `polyplug_runtime_set_config` and any
+/// reload callback registered via `polyplug_runtime_on_reload`.
+///
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
 /// Returns null on allocation failure or panic.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create() -> *mut OpaqueRuntime {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        match Runtime::builder().build() {
+        let mut builder = Runtime::builder();
+
+        if let Some(config) = GLOBAL_CONFIG.get() {
+            builder = builder.config(config.clone());
+        }
+
+        let cb_ptr: *mut () = GLOBAL_RELOAD_CB.load(Ordering::Relaxed);
+        if !cb_ptr.is_null() {
+            builder = builder.on_reload(invoke_reload_callback);
+        }
+
+        match builder.build() {
             Ok(rt) => Box::into_raw(Box::new(OpaqueRuntime(rt))),
             Err(e) => {
                 set_last_error(e.to_string());
@@ -64,6 +253,67 @@ pub unsafe extern "C" fn polyplug_runtime_create() -> *mut OpaqueRuntime {
     .unwrap_or_else(|_| {
         set_last_error("panic in polyplug_runtime_create");
         core::ptr::null_mut()
+    })
+}
+
+/// Register a callback to be invoked during hot-reload operations.
+///
+/// The callback is invoked at each phase of a hot-reload:
+/// - `Preparing`: Before vtable swap, includes retry count
+/// - `Reloaded`: After successful vtable swap
+/// - `Failed`: When reload fails, includes reason string
+///
+/// The callback is applied to all subsequently created runtimes.
+/// Call before `polyplug_runtime_create`.
+///
+/// # Safety
+/// `callback` must be a valid function pointer with C calling convention.
+/// The callback must not panic. The callback receives borrowed string
+/// pointers that are valid only for the duration of the call.
+///
+/// # Returns
+/// 0 on success, non-zero on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_on_reload(callback: extern "C" fn(ReloadPhaseC)) -> u32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let ptr: *mut () = callback as *mut ();
+        GLOBAL_RELOAD_CB.store(ptr, Ordering::Relaxed);
+        0u32
+    }))
+    .unwrap_or_else(|_| {
+        set_last_error("panic in polyplug_runtime_on_reload");
+        1u32
+    })
+}
+
+/// Set runtime configuration for subsequently created runtimes.
+///
+/// Must be called before `polyplug_runtime_create`. The configuration
+/// is applied to all subsequently created runtimes.
+///
+/// # Safety
+/// `config` must be a valid pointer to a `RuntimeConfigC` struct.
+///
+/// # Returns
+/// 0 on success, non-zero on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_set_config(config: *const RuntimeConfigC) -> u32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if config.is_null() {
+            set_last_error("null config pointer in polyplug_runtime_set_config");
+            return 1u32;
+        }
+        // SAFETY: config is non-null and points to a valid RuntimeConfigC per ABI contract.
+        let config_c: RuntimeConfigC = unsafe { *config };
+        let runtime_config: RuntimeConfig = config_c.into_runtime_config();
+        // OnceLock::set returns Err when already set — we allow overwriting by ignoring the result.
+        // This matches the pattern used for GLOBAL_WARNING_CB in runtime.rs.
+        let _: Result<(), RuntimeConfig> = GLOBAL_CONFIG.set(runtime_config);
+        0u32
+    }))
+    .unwrap_or_else(|_| {
+        set_last_error("panic in polyplug_runtime_set_config");
+        1u32
     })
 }
 

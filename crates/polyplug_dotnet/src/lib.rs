@@ -11,10 +11,10 @@ use std::path::Path;
 
 use netcorehost::pdcstring::PdCString;
 
-use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
+use polyplug_abi::PluginRegistrar;
 
 use crate::context::CLR_CONTEXT;
 use crate::context::InitFn;

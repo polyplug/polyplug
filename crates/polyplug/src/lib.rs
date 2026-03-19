@@ -2,12 +2,14 @@
 
 pub mod error;
 pub mod extensions;
+pub mod ffi;
 pub mod graph;
 pub mod loader;
 pub mod registry;
 pub mod reload;
 pub mod runtime;
-pub mod ffi;
 pub mod version;
 
 pub use reload::ReloadEvent;
+pub use reload::ReloadPhase;
+pub use runtime::RuntimeConfig;

@@ -3,13 +3,13 @@
 use std::path::Path;
 
 use crate::config::NativeConfig;
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
 use polyplug::runtime::global_registry;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginRegistrar;
 use std::sync::Arc;
 
 pub struct NativeLoader {

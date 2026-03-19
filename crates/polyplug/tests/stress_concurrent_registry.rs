@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::sync::Barrier;
 use std::time::Instant;
 
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 use polyplug::error::RegistryError;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 
 const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;

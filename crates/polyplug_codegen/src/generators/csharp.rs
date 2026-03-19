@@ -690,6 +690,7 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug;\n");
+    out.push_str("using System;\n");
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
     out.push_str("namespace Polyplug.Generated;\n\n");
@@ -699,7 +700,6 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         let caller_name: String = format!("{class_name}Caller");
         let fn_count: usize = contract.functions.len();
 
-        // Contract ID constant
         let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
         out.push_str(&format!("public static class {class_name}Constants {{\n"));
         out.push_str(&format!(
@@ -711,14 +711,36 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         ));
         out.push_str("}\n\n");
 
-        // Caller class - stores PluginGuard (cached vtable)
-        out.push_str(&format!("public sealed class {caller_name} {{\n"));
-        out.push_str("    private readonly PluginGuard _guard;\n\n");
         out.push_str(&format!(
-            "    public {caller_name}(PluginGuard guard) {{ _guard = guard; }}\n\n"
+            "/// <summary>\n/// Host caller for contract `{}` (id=0x{:016X})\n/// </summary>\n",
+            contract.name, contract.contract_id
         ));
+        out.push_str(&format!(
+            "public sealed class {caller_name} : IDisposable {{\n"
+        ));
+        out.push_str("    private PluginGuard _guard;\n\n");
+        out.push_str(&format!(
+            "    private {caller_name}(PluginGuard guard) {{ _guard = guard; }}\n\n"
+        ));
+        out.push_str("    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>\n");
+        out.push_str(&format!(
+            "    public static {caller_name}? Create(Runtime rt, uint minVersion = 0) {{\n"
+        ));
+        out.push_str(&format!(
+            "        var handle = rt.FindByContract({class_name}Constants.{contract_upper}_CONTRACT_ID, minVersion);\n"
+        ));
+        out.push_str("        if (handle == ulong.MaxValue) { return null; }\n");
+        out.push_str("        var guard = rt.ResolvePlugin(handle);\n");
+        out.push_str("        if (guard.IsNull()) { return null; }\n");
+        out.push_str(&format!("        return new {caller_name}(guard);\n"));
+        out.push_str("    }\n\n");
+        out.push_str("    /// <summary>Check if this caller instance is still valid.</summary>\n");
+        out.push_str("    public bool IsValid => !_guard.IsNull();\n\n");
+        out.push_str("    /// <summary>Explicitly release the guard reference.</summary>\n");
+        out.push_str("    public void Reset() { _guard = default; }\n\n");
+        out.push_str("    /// <summary>Dispose pattern for explicit cleanup.</summary>\n");
+        out.push_str("    public void Dispose() { Reset(); }\n\n");
 
-        // Generate each function caller
         for func in &contract.functions {
             generate_host_fn_caller(&mut out, func, contract, &class_name);
         }
@@ -740,15 +762,12 @@ fn generate_host_fn_caller(
     let ret: String = cs_return_type(func);
     let has_return: bool = func.returns.is_some();
 
-    // Build parameter list
     let params_sig: String = if func.params.is_empty() {
         String::new()
     } else if needs_arg_pack(&func.params) {
-        // Multiple params: arg-pack struct by ref
         let args_struct: String = format!("{}{}Args", _contract_struct, method_name);
         format!("ref {args_struct} args")
     } else {
-        // Single param: by value for primitives, by ref for structs
         let p: &ResolvedParam = &func.params[0];
         let cs_ty: String = cs_type_name(&p.ty);
         match &p.ty {
@@ -763,13 +782,11 @@ fn generate_host_fn_caller(
         "    public {ret} {method_name}({params_sig}) {{\n"
     ));
 
-    // Get vtable pointer from guard (already cached, no P/Invoke)
-    out.push_str("        nint vtablePtr = _guard.VTable;\n");
+    out.push_str("        nint vtablePtr = _guard.GetVTable();\n");
     out.push_str("        if (vtablePtr == nint.Zero) {\n");
-    out.push_str("            throw new System.ObjectDisposedException(nameof(PluginGuard));\n");
+    out.push_str("            throw new ObjectDisposedException(nameof(PluginGuard));\n");
     out.push_str("        }\n\n");
 
-    // Read function pointer from vtable
     out.push_str("        unsafe {\n");
     out.push_str(&format!(
         "            nint funcsArray = *(nint*)(vtablePtr + {offset});\n",
@@ -780,13 +797,11 @@ fn generate_host_fn_caller(
     ));
     out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint, uint>)funcPtr;\n");
 
-    // Setup args pointer
     if func.params.is_empty() {
         out.push_str("            nint argsPtr = nint.Zero;\n");
     } else if needs_arg_pack(&func.params) {
         out.push_str("            nint argsPtr = (nint)(&args);\n");
     } else {
-        // Single param
         let p: &ResolvedParam = &func.params[0];
         match &p.ty {
             ResolvedTypeRef::UserDefined(_) => {
@@ -796,7 +811,6 @@ fn generate_host_fn_caller(
                 ));
             }
             _ => {
-                // Primitive - need to copy to local for pointer
                 out.push_str(&format!(
                     "            {ty} {name}_arg = {name};\n",
                     ty = cs_type_name(&p.ty),
@@ -810,7 +824,6 @@ fn generate_host_fn_caller(
         }
     }
 
-    // Setup out pointer
     if has_return {
         out.push_str(&format!("            {ret} result = default;\n"));
         out.push_str("            nint outPtr = (nint)(&result);\n");
@@ -818,10 +831,9 @@ fn generate_host_fn_caller(
         out.push_str("            nint outPtr = nint.Zero;\n");
     }
 
-    // The call
     out.push_str("            uint err = dispatch(argsPtr, outPtr);\n");
     out.push_str("            if (err != 0u) {\n");
-    out.push_str("                throw new System.InvalidOperationException($\"plugin call failed: code={err}\");\n");
+    out.push_str("                throw new InvalidOperationException($\"plugin call failed: code={err}\");\n");
     out.push_str("            }\n");
     if has_return {
         out.push_str("            return result;\n");

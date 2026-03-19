@@ -1,13 +1,13 @@
 //! Integration tests: null pointer safety of all C facade FFI functions.
 //! Every function that takes a pointer must handle null without panicking.
 
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
-use polyplug::ffi::OpaqueRuntime;
 
 #[test]
 fn test_runtime_free_null() {

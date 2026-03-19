@@ -1,11 +1,11 @@
 //! Integration tests: version negotiation, compatibility modes, and warning callbacks.
 
-use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::version::Compatibility;
+use polyplug_abi::PluginRegistrar;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;

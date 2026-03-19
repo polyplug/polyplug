@@ -1,7 +1,7 @@
 //! Trace extension — TraceVTable and TraceExtension for host-side tracing.
 
-use polyplug_abi::StringView;
 use crate::extensions::Extension;
+use polyplug_abi::StringView;
 
 /// FNV-1a 32-bit hash of b"trace". Verified by unit test.
 pub const EXT_TRACE_ID: u32 = 0xC4EB9AEE_u32;

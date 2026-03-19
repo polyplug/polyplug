@@ -9,19 +9,19 @@
 //! find_all_by_contract(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice.
 
+use core::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
-use core::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
 use arc_swap::ArcSwap;
 
+use crate::error::RegistryError;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
-use crate::error::RegistryError;
 
 /// A `Send + Sync` wrapper around a raw vtable pointer.
 /// The pointer is guaranteed to point to `'static` data that is never mutated after registration.
@@ -228,7 +228,10 @@ impl Registry {
         slot.vtable = Some(ArcSwap::new(Arc::new(VTableSlot(vtable_ptr))));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
-        data.contract_index.entry(contract_id).or_default().push(slot_idx);
+        data.contract_index
+            .entry(contract_id)
+            .or_default()
+            .push(slot_idx);
 
         // Update bundle_index: record first slot for this bundle_id
         data.bundle_index.entry(bundle_id).or_insert(slot_idx);
@@ -438,7 +441,8 @@ impl Registry {
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
                     // Pack handle directly: (generation << 32) | index
-                    out[write_count] = (slot.generation.load(Ordering::Acquire) as u64) << 32 | slot_idx as u64;
+                    out[write_count] =
+                        (slot.generation.load(Ordering::Acquire) as u64) << 32 | slot_idx as u64;
                     write_count += 1usize;
                 }
             }
@@ -572,6 +576,16 @@ impl Registry {
         let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
         // SAFETY: VTableSlot.0 is a valid 'static PluginVTable written at registration.
         Some(unsafe { (*guard.0).contract_id })
+    }
+
+    /// Get a clone of the Arc<VTableSlot> for `slot_index` to check strong_count.
+    /// Returns None if the slot is empty or has no vtable.
+    pub(crate) fn get_vtable_arc(&self, slot_index: u32) -> Option<Arc<VTableSlot>> {
+        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+            self.data.read().unwrap_or_else(|e| e.into_inner());
+        let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
+        let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
+        Some(arc_swap.load_full())
     }
 }
 
@@ -827,7 +841,9 @@ mod tests {
         // Verify generation was bumped
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             registry.data.read().unwrap_or_else(|e| e.into_inner());
-        let new_gen: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
+        let new_gen: u32 = data.slots[handle.index as usize]
+            .generation
+            .load(Ordering::Acquire);
         assert_eq!(new_gen, gen_before.wrapping_add(1_u32));
     }
 
@@ -868,19 +884,32 @@ mod tests {
     #[test]
     fn concurrent_generation_reads() {
         let registry: Registry = Registry::new();
-        let descriptor: PluginDescriptor = make_descriptor("concurrent_test", "concurrent.contract");
+        let descriptor: PluginDescriptor =
+            make_descriptor("concurrent_test", "concurrent.contract");
         // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry.register(descriptor, &MOCK_VTABLE, "concurrent.contract".to_owned(), 999u64)
+            registry.register(
+                descriptor,
+                &MOCK_VTABLE,
+                "concurrent.contract".to_owned(),
+                999u64,
+            )
         }
         .expect("registration should succeed");
 
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             registry.data.read().unwrap_or_else(|e| e.into_inner());
-        let gen1: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
-        let gen2: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
+        let gen1: u32 = data.slots[handle.index as usize]
+            .generation
+            .load(Ordering::Acquire);
+        let gen2: u32 = data.slots[handle.index as usize]
+            .generation
+            .load(Ordering::Acquire);
         assert_eq!(gen1, gen2, "consecutive loads should return same value");
-        assert_eq!(gen1, handle.generation, "loaded generation should match handle");
+        assert_eq!(
+            gen1, handle.generation,
+            "loaded generation should match handle"
+        );
     }
 
     #[test]
@@ -889,7 +918,12 @@ mod tests {
         let descriptor: PluginDescriptor = make_descriptor("swap_test", "swap.test.contract");
         // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry.register(descriptor, &MOCK_VTABLE, "swap.test.contract".to_owned(), 888u64)
+            registry.register(
+                descriptor,
+                &MOCK_VTABLE,
+                "swap.test.contract".to_owned(),
+                888u64,
+            )
         }
         .expect("registration should succeed");
 
@@ -914,7 +948,13 @@ mod tests {
 
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             registry.data.read().unwrap_or_else(|e| e.into_inner());
-        let new_gen: u32 = data.slots[handle.index as usize].generation.load(Ordering::Acquire);
-        assert_eq!(new_gen, original_gen.wrapping_add(1_u32), "generation should increment by 1");
+        let new_gen: u32 = data.slots[handle.index as usize]
+            .generation
+            .load(Ordering::Acquire);
+        assert_eq!(
+            new_gen,
+            original_gen.wrapping_add(1_u32),
+            "generation should increment by 1"
+        );
     }
 }

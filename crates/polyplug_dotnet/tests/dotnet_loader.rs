@@ -9,18 +9,18 @@ use std::path::PathBuf;
 
 use tempfile::NamedTempFile;
 
+use polyplug::error::LoaderError;
+use polyplug::error::PolyplugError;
+use polyplug::loader::BundleLoader;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
-use polyplug_dotnet::version::read_target_framework;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
+use polyplug_dotnet::version::read_target_framework;
 
 // SAFETY: noop_register is a valid function used only in test PluginRegistrar stubs.
 // It is never actually called — tests fail before load() reaches the register step.

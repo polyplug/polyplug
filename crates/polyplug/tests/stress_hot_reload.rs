@@ -14,12 +14,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use polyplug::ReloadEvent;
-use polyplug_abi::PluginVTable;
+use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
+use polyplug_abi::PluginVTable;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -392,11 +392,11 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
 fn stress_reload_callback_fires_on_every_cycle() {
     const CYCLES: u32 = 100_u32;
 
-    let events: Arc<Mutex<Vec<ReloadEvent>>> = Arc::new(Mutex::new(Vec::new()));
-    let events_clone: Arc<Mutex<Vec<ReloadEvent>>> = Arc::clone(&events);
+    let events: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
+    let events_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&events);
 
     let rt: Runtime = Runtime::builder()
-        .on_reload(move |ev: ReloadEvent| {
+        .on_reload(move |ev: ReloadPhase| {
             events_clone
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -407,8 +407,6 @@ fn stress_reload_callback_fires_on_every_cycle() {
 
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
-
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
 
     for i in 0_u32..CYCLES {
         let so_path: PathBuf = if i % 2_u32 == 0_u32 {
@@ -423,29 +421,28 @@ fn stress_reload_callback_fires_on_every_cycle() {
             });
     }
 
-    let recorded_events: std::sync::MutexGuard<'_, Vec<ReloadEvent>> =
+    let recorded_events: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
         events.lock().unwrap_or_else(|e| e.into_inner());
 
+    // Count only Reloaded events (Preparing fires before each attempt)
+    let reloaded_count: usize = recorded_events
+        .iter()
+        .filter(|ev| matches!(ev, ReloadPhase::Reloaded { .. }))
+        .count();
+
     assert_eq!(
-        recorded_events.len() as u32,
-        CYCLES,
-        "expected {CYCLES} callback invocations, got {}",
-        recorded_events.len()
+        reloaded_count as u32, CYCLES,
+        "expected {CYCLES} Reloaded callbacks, got {}",
+        reloaded_count
     );
 
     for (idx, ev) in recorded_events.iter().enumerate() {
-        assert!(
-            ev.affected_contract_ids.contains(&contract_id),
-            "event {idx}: affected_contract_ids must contain reload.test contract_id"
-        );
-        assert!(
-            !ev.bundle_name.is_empty(),
-            "event {idx}: bundle_name must not be empty"
-        );
-        assert!(
-            !ev.new_version.is_empty(),
-            "event {idx}: new_version must not be empty"
-        );
+        if let ReloadPhase::Reloaded { bundle_name, .. } = ev {
+            assert!(
+                !bundle_name.is_empty(),
+                "event {idx}: bundle_name must not be empty"
+            );
+        }
     }
 }
 

@@ -12,6 +12,9 @@ use mlua::Table;
 use mlua::Value;
 
 use crate::config::LuaConfig;
+use polyplug::error::LoaderError;
+use polyplug::error::PolyplugError;
+use polyplug::loader::BundleLoader;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginDescriptor;
@@ -19,9 +22,6 @@ use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
 use polyplug_abi::contract_id;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 
 /// The path to the guest-libs/lua/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");

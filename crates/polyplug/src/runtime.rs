@@ -12,18 +12,13 @@
 //!  - find_by_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
+use core::time::Duration;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
 use crate::error::GraphError;
 use crate::error::LoaderError;
 use crate::error::PolyplugError;
@@ -39,11 +34,40 @@ use crate::loader::manifest::ManifestData;
 use crate::registry::Registry;
 use crate::version::Compatibility;
 use crate::version::Version;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 
 #[cfg(feature = "hot-reload")]
 use core::sync::atomic::Ordering;
 #[cfg(feature = "hot-reload")]
 use notify::Watcher;
+
+// ─── Runtime Configuration ───────────────────────────────────────────────────
+
+/// Configuration for the polyplug runtime.
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    /// Maximum number of retry attempts for hot-reload operations.
+    pub hot_reload_max_retries: u32,
+    /// Interval between hot-reload retry attempts.
+    pub hot_reload_retry_interval: Duration,
+    /// Whether to abort the runtime when max retries are exhausted.
+    pub hot_reload_abort_on_max_retries: bool,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            hot_reload_max_retries: 3,
+            hot_reload_retry_interval: Duration::from_secs(1),
+            hot_reload_abort_on_max_retries: true,
+        }
+    }
+}
 
 // ─── Global registry for cross-plugin dispatch ───────────────────────────────
 
@@ -57,7 +81,7 @@ static GLOBAL_EXTENSION_MAP: OnceLock<HashMap<u32, SendPtr>> = OnceLock::new();
 type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Type alias for the reload callback.
-type ReloadCb = std::sync::Arc<dyn Fn(crate::reload::ReloadEvent) + Send + Sync>;
+type ReloadCb = std::sync::Arc<dyn Fn(crate::reload::ReloadPhase) + Send + Sync>;
 
 /// Global warning callback. Set once via `RuntimeBuilder::on_warning()`.
 ///
@@ -125,6 +149,7 @@ pub struct Runtime {
     /// Stop flag sent to watcher thread. Feature-gated.
     #[cfg(feature = "hot-reload")]
     watcher_stop: std::sync::Mutex<Option<std::sync::Arc<core::sync::atomic::AtomicBool>>>,
+    config: RuntimeConfig,
 }
 
 /// Options for `Runtime::load_bundle_with`.
@@ -144,6 +169,7 @@ pub struct RuntimeBuilder {
     compatibility: Compatibility,
     warning_cb: Option<WarningCb>,
     on_reload_cb: Option<ReloadCb>,
+    config: RuntimeConfig,
 }
 
 impl RuntimeBuilder {
@@ -156,6 +182,7 @@ impl RuntimeBuilder {
             compatibility: Compatibility::default(),
             warning_cb: None,
             on_reload_cb: None,
+            config: RuntimeConfig::default(),
         }
     }
 
@@ -204,12 +231,17 @@ impl RuntimeBuilder {
 
     /// Register a callback fired after each successful vtable swap, before dlclose.
     ///
-    /// The callback receives a `ReloadEvent` describing the reloaded bundle.
+    /// The callback receives a `ReloadPhase` describing the reload phase.
     pub fn on_reload(
         mut self,
-        cb: impl Fn(crate::reload::ReloadEvent) + Send + Sync + 'static,
+        cb: impl Fn(crate::reload::ReloadPhase) + Send + Sync + 'static,
     ) -> RuntimeBuilder {
         self.on_reload_cb = Some(std::sync::Arc::new(cb));
+        self
+    }
+
+    pub fn config(mut self, config: RuntimeConfig) -> RuntimeBuilder {
+        self.config = config;
         self
     }
 
@@ -375,6 +407,7 @@ impl RuntimeBuilder {
             watcher_thread: std::sync::Mutex::new(None),
             #[cfg(feature = "hot-reload")]
             watcher_stop: std::sync::Mutex::new(None),
+            config: self.config,
         })
     }
 }
@@ -460,6 +493,12 @@ impl Runtime {
     #[inline(always)]
     pub(crate) fn host_vtable_ref(&self) -> &'static HostVTable {
         self.host_vtable
+    }
+
+    /// Get the runtime configuration.
+    #[inline(always)]
+    pub fn config(&self) -> &RuntimeConfig {
+        &self.config
     }
 
     /// Register an additional bundle loader into this runtime after build.

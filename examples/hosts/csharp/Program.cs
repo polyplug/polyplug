@@ -50,6 +50,23 @@ class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
+        // Register hot-reload callback before creating runtime
+        Runtime.OnReload(phase =>
+        {
+            if (phase.IsPreparing())
+            {
+                Console.Error.WriteLine($"[HOT-RELOAD] Preparing: {phase.BundleName} (retry {phase.RetryCount})");
+            }
+            else if (phase.IsReloaded())
+            {
+                Console.Error.WriteLine($"[HOT-RELOAD] Reloaded: {phase.BundleName}");
+            }
+            else if (phase.IsFailed())
+            {
+                Console.Error.WriteLine($"[HOT-RELOAD] Failed: {phase.BundleName} - {phase.Reason}");
+            }
+        });
+
         var rt = new RuntimeBuilder()
             .PluginDir(pluginPath)
             .Build();

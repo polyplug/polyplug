@@ -6,17 +6,17 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
+use super::types::*;
+use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_ERROR_GENERIC;
 use polyplug_abi::ABI_ERROR_NOT_FOUND;
 use polyplug_abi::ABI_ERROR_STALE_HANDLE;
 use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
-use polyplug::runtime::Runtime;
-use super::types::*;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -30,7 +30,10 @@ pub struct ContractError {
 impl ContractError {
     /// Create a new error with the given code.
     pub fn new(code: u32) -> Self {
-        Self { code, message: String::new() }
+        Self {
+            code,
+            message: String::new(),
+        }
     }
 }
 
@@ -60,31 +63,44 @@ impl PipelineDecoderContract {
                 let code: u32 = match err {
                     polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
                     polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
+                    polyplug::error::RegistryError::ContractIdCollision { .. }
+                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
                 };
-                return Err(ContractError { code, message: String::new() });
+                return Err(ContractError {
+                    code,
+                    message: String::new(),
+                });
             }
         };
         if vtable_ptr.is_null() {
-            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });
+            return Err(ContractError {
+                code: ABI_ERROR_NOT_FOUND,
+                message: String::new(),
+            });
         }
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
-                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                    core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
@@ -113,31 +129,44 @@ impl DataTransformerContract {
                 let code: u32 = match err {
                     polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
                     polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
+                    polyplug::error::RegistryError::ContractIdCollision { .. }
+                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
                 };
-                return Err(ContractError { code, message: String::new() });
+                return Err(ContractError {
+                    code,
+                    message: String::new(),
+                });
             }
         };
         if vtable_ptr.is_null() {
-            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });
+            return Err(ContractError {
+                code: ABI_ERROR_NOT_FOUND,
+                message: String::new(),
+            });
         }
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
-                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                    core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
@@ -166,31 +195,44 @@ impl PipelineEncoderContract {
                 let code: u32 = match err {
                     polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
                     polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
+                    polyplug::error::RegistryError::ContractIdCollision { .. }
+                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
                 };
-                return Err(ContractError { code, message: String::new() });
+                return Err(ContractError {
+                    code,
+                    message: String::new(),
+                });
             }
         };
         if vtable_ptr.is_null() {
-            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });
+            return Err(ContractError {
+                code: ABI_ERROR_NOT_FOUND,
+                message: String::new(),
+            });
         }
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
-                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                    core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `data.Reporter` (id=0x81D41D43E511D297)
@@ -219,31 +261,44 @@ impl DataReporterContract {
                 let code: u32 = match err {
                     polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
                     polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
+                    polyplug::error::RegistryError::ContractIdCollision { .. }
+                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
                 };
-                return Err(ContractError { code, message: String::new() });
+                return Err(ContractError {
+                    code,
+                    message: String::new(),
+                });
             }
         };
         if vtable_ptr.is_null() {
-            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });
+            return Err(ContractError {
+                code: ABI_ERROR_NOT_FOUND,
+                message: String::new(),
+            });
         }
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
-                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                    core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
@@ -272,30 +327,42 @@ impl PipelineValidatorContract {
                 let code: u32 = match err {
                     polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
                     polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. } | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
+                    polyplug::error::RegistryError::ContractIdCollision { .. }
+                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
                 };
-                return Err(ContractError { code, message: String::new() });
+                return Err(ContractError {
+                    code,
+                    message: String::new(),
+                });
             }
         };
         if vtable_ptr.is_null() {
-            return Err(ContractError { code: ABI_ERROR_NOT_FOUND, message: String::new() });
+            return Err(ContractError {
+                code: ABI_ERROR_NOT_FOUND,
+                message: String::new(),
+            });
         }
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 let fn_ptr: *const () = *vtable.functions.add(0_usize);
-                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                    core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
-

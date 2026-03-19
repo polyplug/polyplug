@@ -2,6 +2,7 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
+use polyplug::registry::Registry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
@@ -11,7 +12,6 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug::registry::Registry;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");

@@ -5,15 +5,15 @@
 //! dlclose() would unmap plugin code pages while vtable fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
 
+use polyplug::loader::load_bundle;
+use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::parse_manifest;
+use polyplug::registry::Registry;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::bundle_id;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug::loader::load_bundle;
-use polyplug::loader::manifest::ManifestData;
-use polyplug::loader::parse_manifest;
-use polyplug::registry::Registry;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 

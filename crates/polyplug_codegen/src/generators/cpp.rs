@@ -662,7 +662,9 @@ fn generate_host_callers_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError>
     out.push_str("#pragma once\n");
     out.push_str("#include \"types.hpp\"\n");
     out.push_str("#include \"polyplug/error.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n\n");
+    out.push_str("#include \"polyplug/abi.hpp\"\n");
+    out.push_str("#include \"polyplug/runtime.hpp\"\n");
+    out.push_str("#include <optional>\n\n");
     out.push_str("namespace polyplug_generated {\n\n");
     if let Some(ref bundle) = ir.bundle {
         out.push_str(&format!(
@@ -894,23 +896,74 @@ fn generate_cpp_host_contract(
     contract: &ResolvedContract,
 ) -> Result<(), PolyplugcError> {
     let class_name: String = contract_name_to_class(&contract.name);
+    let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+
     out.push_str(&format!(
         "/// Host caller for contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
+
+    out.push_str("    /// Factory method - creates instance or nullopt if not found.\n");
     out.push_str(&format!(
-        "    explicit {}(const PluginVTable* vtable) noexcept\n",
+        "    static std::optional<{}> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {{\n",
         class_name
     ));
-    out.push_str("        : vtable_(vtable) {}\n\n");
+    out.push_str(&format!(
+        "        uint64_t handle = rt.find({}_CONTRACT_ID, min_version);\n",
+        contract_upper
+    ));
+    out.push_str("        if (handle == UINT64_MAX) {\n");
+    out.push_str("            return std::nullopt;\n");
+    out.push_str("        }\n");
+    out.push_str("        polyplug::PluginGuard guard = rt.resolve_plugin(handle);\n");
+    out.push_str("        if (!guard) {\n");
+    out.push_str("            return std::nullopt;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        return {}(std::move(guard));\n",
+        class_name
+    ));
+    out.push_str("    }\n\n");
+
+    out.push_str("    // Move-only (guard is not copyable)\n");
+    out.push_str(&format!(
+        "    {}({}&&) noexcept = default;\n",
+        class_name, class_name
+    ));
+    out.push_str(&format!(
+        "    {}& operator=({}&&) noexcept = default;\n",
+        class_name, class_name
+    ));
+    out.push_str(&format!(
+        "    {}(const {}&) = delete;\n",
+        class_name, class_name
+    ));
+    out.push_str(&format!(
+        "    {}& operator=(const {}&) = delete;\n\n",
+        class_name, class_name
+    ));
+
+    out.push_str("    /// Check if instance is valid.\n");
+    out.push_str(
+        "    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }\n\n",
+    );
+    out.push_str("    /// Check if instance is valid.\n");
+    out.push_str("    bool is_valid() const noexcept { return static_cast<bool>(guard_); }\n\n");
+    out.push_str("    /// Explicitly destroy instance (optional - destructor does this too).\n");
+    out.push_str("    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }\n\n");
 
     for func in &contract.functions {
         generate_cpp_host_function(out, &class_name, func)?;
     }
 
     out.push_str("private:\n");
-    out.push_str("    const PluginVTable* vtable_;\n");
+    out.push_str(&format!(
+        "    explicit {}(polyplug::PluginGuard guard) noexcept\n",
+        class_name
+    ));
+    out.push_str("        : guard_(std::move(guard)) {}\n\n");
+    out.push_str("    polyplug::PluginGuard guard_;\n");
     out.push_str("};\n\n");
     Ok(())
 }
@@ -952,9 +1005,14 @@ fn generate_cpp_host_function(
         None | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Void))
     );
 
+    out.push_str("        const PluginVTable* vtable = guard_.vtable();\n");
+    out.push_str("        if (!vtable) {\n");
+    out.push_str("            polyplug::check_abi_error(AbiError{4, {nullptr, 0}});\n");
+    out.push_str("        }\n");
+
     if is_void_return {
         out.push_str(&format!(
-            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->functions[{}U]);\n",
+            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->functions[{}U]);\n",
             fn_id
         ));
         out.push_str("        AbiError err = fn_(args_ptr, nullptr);\n");
@@ -963,11 +1021,11 @@ fn generate_cpp_host_function(
         out.push_str(&format!("        {} out{{}};\n", return_type));
         out.push_str("        void* out_ptr = &out;\n");
         out.push_str(&format!(
-            "        if (!vtable_ || {}_u32 >= vtable_->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
+            "        if ({}_u32 >= vtable->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
             fn_id
         ));
         out.push_str(&format!(
-            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->functions[{}U]);\n",
+            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->functions[{}U]);\n",
             fn_id
         ));
         out.push_str("        AbiError err = fn_(args_ptr, out_ptr);\n");
@@ -1142,10 +1200,12 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(files.files.len() >= 1);
         // At least one file contains the AUTO-GENERATED header
-        assert!(files
-            .files
-            .iter()
-            .any(|f| f.content.contains("AUTO-GENERATED")));
+        assert!(
+            files
+                .files
+                .iter()
+                .any(|f| f.content.contains("AUTO-GENERATED"))
+        );
     }
 
     #[test]
@@ -1236,6 +1296,86 @@ mod tests {
         assert!(
             out.contains("static_cast<uint32_t>"),
             "missing static_cast: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cpp_host_contract_has_factory_method() {
+        use crate::ir::PrimitiveType;
+        use crate::ir::ResolvedContract;
+        use crate::ir::ResolvedFunction;
+        use crate::ir::ResolvedParam;
+        use crate::ir::ResolvedTypeRef;
+        use crate::ir::Version;
+
+        let contract = ResolvedContract {
+            name: "test.add".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "add".to_owned(),
+                function_id: 0,
+                params: vec![
+                    ResolvedParam {
+                        name: "a".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::I32),
+                    },
+                    ResolvedParam {
+                        name: "b".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::I32),
+                    },
+                ],
+                returns: Some(ResolvedTypeRef::Primitive(PrimitiveType::I32)),
+            }],
+        };
+
+        let mut out: String = String::new();
+        generate_cpp_host_contract(&mut out, &contract).unwrap();
+
+        assert!(
+            out.contains("static std::optional<TestAddContract> create(polyplug::Runtime& rt, uint32_t min_version = 0)"),
+            "missing factory method: {out}"
+        );
+
+        assert!(
+            out.contains("polyplug::PluginGuard guard_"),
+            "missing guard member: {out}"
+        );
+
+        assert!(
+            out.contains("bool is_valid() const noexcept"),
+            "missing is_valid method: {out}"
+        );
+        assert!(
+            out.contains("explicit operator bool() const noexcept"),
+            "missing operator bool: {out}"
+        );
+        assert!(
+            out.contains("void reset() noexcept"),
+            "missing reset method: {out}"
+        );
+
+        assert!(
+            out.contains("TestAddContract(TestAddContract&&) noexcept = default"),
+            "missing move constructor: {out}"
+        );
+        assert!(
+            out.contains("TestAddContract(const TestAddContract&) = delete"),
+            "missing deleted copy constructor: {out}"
+        );
+
+        assert!(
+            out.contains("explicit TestAddContract(polyplug::PluginGuard guard) noexcept"),
+            "missing private constructor: {out}"
+        );
+
+        assert!(
+            out.contains("guard_.vtable()"),
+            "missing guard_.vtable() call: {out}"
         );
     }
 }

@@ -16,9 +16,9 @@ use netcorehost::pdcstring::PdCString;
 
 use once_cell::sync::OnceCell;
 
-use polyplug_abi::PluginRegistrar;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug_abi::PluginRegistrar;
 
 use crate::config::DotnetConfig;
 use crate::config::HostfxrLocation;

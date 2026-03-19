@@ -254,8 +254,9 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Callable, TypeAlias\n\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, StringView\n\n");
+    out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
+    out.push_str("from polyplug import PluginGuard, Runtime\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, ABI_FUNCTION_NOT_AVAIL, NULL_HANDLE, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -287,16 +288,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     );
 
     for contract in &ir.contracts {
-        let struct_name: String = contract_name_to_struct(&contract.name);
-        let caller_name: String = format!("{struct_name}Caller");
-        out.push_str(&format!("class {caller_name}:\n"));
-        out.push_str("    def __init__(self, dispatch_fn: _DISPATCH_FN_TYPE) -> None:\n");
-        out.push_str("        self._dispatch_fn: _DISPATCH_FN_TYPE = dispatch_fn\n\n");
-
-        for func in &contract.functions {
-            generate_host_caller_method(&mut out, func, &struct_name);
-        }
-        out.push('\n');
+        generate_host_caller_class(&mut out, contract);
     }
 
     out
@@ -307,8 +299,9 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
-    out.push_str("from typing import Callable\n\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, StringView\n\n");
+    out.push_str("from typing import Callable, Optional\n\n");
+    out.push_str("from polyplug import PluginGuard, Runtime\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
@@ -328,17 +321,27 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("_DISPATCH_FN_TYPE = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n");
 
     for contract in &ir.contracts {
-        let struct_name: String = contract_name_to_struct(&contract.name);
-        let caller_name: String = format!("{struct_name}Caller");
-        out.push_str(&format!("class {caller_name}:\n"));
-        out.push_str("    def __init__(self, dispatch_fn: _DISPATCH_FN_TYPE) -> None: ...\n");
-        for func in &contract.functions {
-            generate_host_caller_stub_method(&mut out, func, &struct_name);
-        }
-        out.push('\n');
+        generate_host_caller_class_stub(&mut out, contract);
     }
 
     out
+}
+
+fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract) {
+    let struct_name: String = contract_name_to_struct(&contract.name);
+    let caller_name: String = format!("{struct_name}Caller");
+
+    out.push_str(&format!("class {caller_name}:\n"));
+    out.push_str("    def __init__(self, guard: PluginGuard) -> None: ...\n");
+    out.push_str("    @classmethod\n");
+    out.push_str("    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]: ...\n");
+    out.push_str("    def is_valid(self) -> bool: ...\n");
+    out.push_str("    def reset(self) -> None: ...\n");
+    out.push_str("    def __bool__(self) -> bool: ...\n");
+    for func in &contract.functions {
+        generate_host_caller_stub_method(out, func, &struct_name);
+    }
+    out.push('\n');
 }
 
 fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
@@ -525,7 +528,54 @@ fn emit_python_arg_pack_stub(out: &mut String, contract_struct: &str, func: &Res
     out.push_str("    _fields_: ClassVar[list[tuple[str, type]]]\n");
 }
 
+/// Generate the host caller class for a contract with factory pattern.
+fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
+    let struct_name: String = contract_name_to_struct(&contract.name);
+    let caller_name: String = format!("{struct_name}Caller");
+    let contract_upper: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+    let contract_id_const: String = format!("{}_CONTRACT_ID", contract_upper);
+
+    out.push_str(&format!("class {caller_name}:\n"));
+    out.push_str(&format!(
+        "    \"\"\"Host caller for contract `{}` with hot-reload support.\"\"\"\n\n",
+        contract.name
+    ));
+
+    out.push_str("    def __init__(self, guard: PluginGuard) -> None:\n");
+    out.push_str("        self._guard: PluginGuard = guard\n\n");
+
+    out.push_str("    @classmethod\n");
+    out.push_str("    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:\n");
+    out.push_str(&format!(
+        "        handle: int = rt.find_by_contract({contract_id_const}, min_version)\n"
+    ));
+    out.push_str("        if handle == NULL_HANDLE:\n");
+    out.push_str("            return None\n");
+    out.push_str("        guard: PluginGuard = rt.resolve_plugin(handle)\n");
+    out.push_str("        if guard.is_null():\n");
+    out.push_str("            return None\n");
+    out.push_str("        return cls(guard)\n\n");
+
+    out.push_str("    def is_valid(self) -> bool:\n");
+    out.push_str("        return not self._guard.is_null()\n\n");
+
+    out.push_str("    def reset(self) -> None:\n");
+    out.push_str("        self._guard = PluginGuard.__new__(PluginGuard)\n");
+    out.push_str("        self._guard._backend = None\n");
+    out.push_str("        self._guard._runtime = 0\n");
+    out.push_str("        self._guard._handle = NULL_HANDLE\n\n");
+
+    out.push_str("    def __bool__(self) -> bool:\n");
+    out.push_str("        return self.is_valid()\n\n");
+
+    for func in &contract.functions {
+        generate_host_caller_method(out, func, &struct_name);
+    }
+    out.push('\n');
+}
+
 fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contract_struct: &str) {
+    let fn_id: u32 = func.function_id;
     let sig_params: String = build_python_sig_params(func, contract_struct);
     let ret_type: String = python_return_type(&func.returns);
     out.push_str(&format!(
@@ -534,7 +584,23 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     ));
     emit_python_host_args_setup(out, func, contract_struct);
     emit_python_host_out_setup(out, &func.returns);
-    out.push_str("        err: int = self._dispatch_fn(args_ptr, out_ptr)\n");
+
+    out.push_str("        vtable_ptr: int = self._guard.vtable\n");
+    out.push_str("        if vtable_ptr == 0:\n");
+    out.push_str("            raise RuntimeError(\"invalid caller: guard is null\")\n");
+    out.push_str("        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)\n");
+    out.push_str("        function_count: int = ctypes.cast(vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)).contents.value\n");
+    out.push_str(&format!("        if {fn_id} >= function_count:\n"));
+    out.push_str("            raise RuntimeError(\"function not available in vtable\")\n");
+    out.push_str("        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)\n");
+    out.push_str("        functions_ptr: int = ctypes.cast(vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)).contents.value\n");
+    out.push_str(&format!(
+        "        fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
+    ));
+    out.push_str(
+        "        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
+    );
+    out.push_str("        err: int = dispatch_fn(args_ptr, out_ptr)\n");
     out.push_str("        if err != ABI_OK:\n");
     out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
     if has_return_value(&func.returns) {

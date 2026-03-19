@@ -12,8 +12,8 @@
 
 //! ABI — `#[repr(C)]` types, constants, and FNV-1a hashing for the polyplug ABI boundary.
 
-pub mod tracking;
 pub mod ffi;
+pub mod tracking;
 
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
