@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Pipeline Host — Python host demonstrating polyplug usage."""
+"""Pipeline Host — Python host demonstrating polyplug usage.
+
+This example demonstrates:
+- Hot-reload with custom configuration
+- Instance tracking for proper cleanup during reload
+- Factory method pattern for creating plugin callers
+"""
 
 import os
 import sys
@@ -9,17 +15,34 @@ from polyplug import Runtime, ReloadPhase
 from polyplug.loaders import register_native_loader
 from polyplug import scanner
 from polyplug.helpers import call_plugin_fn, to_str, contract_id, bundle_id
+from polyplug.runtime_config import RuntimeConfig
+
+
+# Instance tracking for hot-reload: bundle_id -> list of plugin instances.
+# Instances are cleared in Preparing phase and re-created in Reloaded phase.
+_instances: dict[int, list] = {}
 
 
 def handle_reload(phase: ReloadPhase) -> None:
     if phase.is_preparing():
         print(
-            f"[HOT-RELOAD] Preparing: {phase.bundle_name} (retry {phase.retry_count})"
+            f"[HOT-RELOAD] Preparing: {phase.bundle_name} "
+            f"(bundle_id=0x{phase.bundle_id:016X}, retry {phase.retry_count})"
         )
+        # Clean up instances for this bundle before reload
+        if phase.bundle_id in _instances:
+            _instances.pop(phase.bundle_id)
+            print(f"[HOT-RELOAD] Cleared instances for bundle {phase.bundle_name}")
     elif phase.is_reloaded():
-        print(f"[HOT-RELOAD] Reloaded: {phase.bundle_name}")
+        print(
+            f"[HOT-RELOAD] Reloaded: {phase.bundle_name} "
+            f"(bundle_id=0x{phase.bundle_id:016X})"
+        )
     elif phase.is_failed():
-        print(f"[HOT-RELOAD] Failed: {phase.bundle_name} - {phase.reason}")
+        print(
+            f"[HOT-RELOAD] Failed: {phase.bundle_name} "
+            f"(bundle_id=0x{phase.bundle_id:016X}) - {phase.reason}"
+        )
 
 
 def main():
@@ -28,6 +51,12 @@ def main():
     )
     print(f"loading plugins from: {plugin_path}\n")
 
+    config = RuntimeConfig(
+        hot_reload_max_retries=5,
+        hot_reload_retry_interval_ms=200,
+        hot_reload_abort_on_max_retries=False,
+    )
+    Runtime.set_config(config)
     Runtime.on_reload(handle_reload)
 
     rt = Runtime()

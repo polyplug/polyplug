@@ -28,16 +28,30 @@ end
 local plugin_path = get_plugin_path()
 print('loading plugins from: ' .. plugin_path .. '\n')
 
--- Register hot-reload callback before creating runtime
+local _instances = {}
+
+local config = {
+    hot_reload_max_retries = 5,
+    hot_reload_retry_interval_ms = 200,
+    hot_reload_abort_on_max_retries = false
+}
+polyplug.set_config(config)
+
 polyplug.on_reload(function(phase)
     local reload_phase = require('polyplug.reload_phase')
     if reload_phase.is_preparing(phase) then
-        print(string.format('[HOT-RELOAD] Preparing: %s (retry %d)',
-            phase.bundle_name, phase.retry_count))
+        print(string.format('[HOT-RELOAD] Preparing: %s (bundle_id=0x%016X, retry %d)',
+            phase.bundle_name, phase.bundle_id, phase.retry_count))
+        if _instances[phase.bundle_id] then
+            _instances[phase.bundle_id] = nil
+            print('[HOT-RELOAD] Cleared instances for bundle ' .. phase.bundle_name)
+        end
     elseif reload_phase.is_reloaded(phase) then
-        print('[HOT-RELOAD] Reloaded: ' .. phase.bundle_name)
+        print(string.format('[HOT-RELOAD] Reloaded: %s (bundle_id=0x%016X)',
+            phase.bundle_name, phase.bundle_id))
     elseif reload_phase.is_failed(phase) then
-        print('[HOT-RELOAD] Failed: ' .. phase.bundle_name .. ' - ' .. phase.reason)
+        print(string.format('[HOT-RELOAD] Failed: %s (bundle_id=0x%016X) - %s',
+            phase.bundle_name, phase.bundle_id, phase.reason))
     end
 end)
 

@@ -4,7 +4,7 @@
  * @description Pipeline Host — Deno host demonstrating polyplug usage.
  */
 
-import { openPolyplug, runtimeNew, contractId, bundleId, onReload } from "../../../host-libs/js/polyplug.js";
+import { openPolyplug, runtimeNew, contractId, bundleId, onReload, setConfig, RuntimeConfig } from "../../../host-libs/js/polyplug.js";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/plugins";
@@ -14,14 +14,25 @@ const libPath = Deno.env.get("POLYPLUG_LIB_PATH")
 
 console.error(`loading plugins from: ${pluginPath}\n`);
 
-// Register hot-reload callback before creating runtime
+const _instances = new Map();
+
+setConfig(new RuntimeConfig({
+    hotReloadMaxRetries: 5,
+    hotReloadRetryIntervalMs: 200,
+    hotReloadAbortOnMaxRetries: false
+}));
+
 onReload((phase) => {
     if (phase.isPreparing()) {
-        console.error(`[HOT-RELOAD] Preparing: ${phase.bundleName} (retry ${phase.retryCount})`);
+        console.error(`[HOT-RELOAD] Preparing: ${phase.bundleName} (bundle_id=0x${phase.bundleId.toString(16).padStart(16, '0')}, retry ${phase.retryCount})`);
+        if (_instances.has(phase.bundleId)) {
+            _instances.delete(phase.bundleId);
+            console.error(`[HOT-RELOAD] Cleared instances for bundle ${phase.bundleName}`);
+        }
     } else if (phase.isReloaded()) {
-        console.error(`[HOT-RELOAD] Reloaded: ${phase.bundleName}`);
+        console.error(`[HOT-RELOAD] Reloaded: ${phase.bundleName} (bundle_id=0x${phase.bundleId.toString(16).padStart(16, '0')})`);
     } else if (phase.isFailed()) {
-        console.error(`[HOT-RELOAD] Failed: ${phase.bundleName} - ${phase.reason}`);
+        console.error(`[HOT-RELOAD] Failed: ${phase.bundleName} (bundle_id=0x${phase.bundleId.toString(16).padStart(16, '0')}) - ${phase.reason}`);
     }
 });
 

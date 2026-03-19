@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -6,6 +7,8 @@ using Polyplug;
 
 class Program
 {
+    private static readonly Dictionary<ulong, List<IDisposable>> _instances = new();
+
     static int Main(string[] args)
     {
         try
@@ -50,20 +53,34 @@ class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
-        // Register hot-reload callback before creating runtime
+        Runtime.SetConfig(new RuntimeConfig
+        {
+            HotReloadMaxRetries = 5,
+            HotReloadRetryIntervalMs = 200,
+            HotReloadAbortOnMaxRetries = false
+        });
+
         Runtime.OnReload(phase =>
         {
             if (phase.IsPreparing())
             {
-                Console.Error.WriteLine($"[HOT-RELOAD] Preparing: {phase.BundleName} (retry {phase.RetryCount})");
+                Console.Error.WriteLine($"[HOT-RELOAD] Preparing: {phase.BundleName} (bundle_id=0x{phase.BundleId:X16}, retry {phase.RetryCount})");
+                if (_instances.Remove(phase.BundleId, out var instances))
+                {
+                    foreach (var instance in instances)
+                    {
+                        instance.Dispose();
+                    }
+                    Console.Error.WriteLine($"[HOT-RELOAD] Cleared instances for bundle {phase.BundleName}");
+                }
             }
             else if (phase.IsReloaded())
             {
-                Console.Error.WriteLine($"[HOT-RELOAD] Reloaded: {phase.BundleName}");
+                Console.Error.WriteLine($"[HOT-RELOAD] Reloaded: {phase.BundleName} (bundle_id=0x{phase.BundleId:X16})");
             }
             else if (phase.IsFailed())
             {
-                Console.Error.WriteLine($"[HOT-RELOAD] Failed: {phase.BundleName} - {phase.Reason}");
+                Console.Error.WriteLine($"[HOT-RELOAD] Failed: {phase.BundleName} (bundle_id=0x{phase.BundleId:X16}) - {phase.Reason}");
             }
         });
 
