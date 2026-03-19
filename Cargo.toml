@@ -17,8 +17,6 @@ members = [
     "examples/guests/rust/transformer",
     "examples/guests/rust/reporter",
     "examples/guests/rust/validator",
-    "examples/real-world/host",
-    "examples/real-world/guest",
 ]
 
 [workspace.package]

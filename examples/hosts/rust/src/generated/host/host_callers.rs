@@ -7,16 +7,17 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
+use polyplug::registry::PluginVTableGuard;
 use polyplug::runtime::Runtime;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug_abi::ABI_ERROR_GENERIC;
 use polyplug_abi::ABI_ERROR_NOT_FOUND;
 use polyplug_abi::ABI_ERROR_STALE_HANDLE;
 use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
 use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -39,14 +40,23 @@ impl ContractError {
 
 /// Host caller for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
 pub struct PipelineDecoderContract {
-    handle: PluginHandle,
-    runtime: &'static Runtime,
+    guard: PluginVTableGuard,
 }
 
 impl PipelineDecoderContract {
-    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> PipelineDecoderContract {
-        PipelineDecoderContract { handle, runtime }
+    /// Factory method - creates instance or None if not found.
+    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        Some(PipelineDecoderContract { guard })
     }
+
+    /// Check if instance is valid (always true for Rust - guard holds Arc).
+    pub fn is_valid(&self) -> bool {
+        true
+    }
+
+    /// Reset instance (no-op for Rust - guard holds Arc).
+    pub fn reset(&mut self) {}
 
     /// Call `decode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -57,27 +67,7 @@ impl PipelineDecoderContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = match self.runtime.resolve_plugin(self.handle) {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                let code: u32 = match err {
-                    polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
-                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. }
-                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
-                };
-                return Err(ContractError {
-                    code,
-                    message: String::new(),
-                });
-            }
-        };
-        if vtable_ptr.is_null() {
-            return Err(ContractError {
-                code: ABI_ERROR_NOT_FOUND,
-                message: String::new(),
-            });
-        }
+        let vtable_ptr: *const PluginVTable = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
@@ -105,14 +95,23 @@ impl PipelineDecoderContract {
 
 /// Host caller for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
 pub struct DataTransformerContract {
-    handle: PluginHandle,
-    runtime: &'static Runtime,
+    guard: PluginVTableGuard,
 }
 
 impl DataTransformerContract {
-    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> DataTransformerContract {
-        DataTransformerContract { handle, runtime }
+    /// Factory method - creates instance or None if not found.
+    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        Some(DataTransformerContract { guard })
     }
+
+    /// Check if instance is valid (always true for Rust - guard holds Arc).
+    pub fn is_valid(&self) -> bool {
+        true
+    }
+
+    /// Reset instance (no-op for Rust - guard holds Arc).
+    pub fn reset(&mut self) {}
 
     /// Call `transform` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -123,27 +122,7 @@ impl DataTransformerContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = match self.runtime.resolve_plugin(self.handle) {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                let code: u32 = match err {
-                    polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
-                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. }
-                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
-                };
-                return Err(ContractError {
-                    code,
-                    message: String::new(),
-                });
-            }
-        };
-        if vtable_ptr.is_null() {
-            return Err(ContractError {
-                code: ABI_ERROR_NOT_FOUND,
-                message: String::new(),
-            });
-        }
+        let vtable_ptr: *const PluginVTable = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
@@ -171,14 +150,23 @@ impl DataTransformerContract {
 
 /// Host caller for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
 pub struct PipelineEncoderContract {
-    handle: PluginHandle,
-    runtime: &'static Runtime,
+    guard: PluginVTableGuard,
 }
 
 impl PipelineEncoderContract {
-    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> PipelineEncoderContract {
-        PipelineEncoderContract { handle, runtime }
+    /// Factory method - creates instance or None if not found.
+    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        Some(PipelineEncoderContract { guard })
     }
+
+    /// Check if instance is valid (always true for Rust - guard holds Arc).
+    pub fn is_valid(&self) -> bool {
+        true
+    }
+
+    /// Reset instance (no-op for Rust - guard holds Arc).
+    pub fn reset(&mut self) {}
 
     /// Call `encode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -189,27 +177,7 @@ impl PipelineEncoderContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = match self.runtime.resolve_plugin(self.handle) {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                let code: u32 = match err {
-                    polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
-                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. }
-                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
-                };
-                return Err(ContractError {
-                    code,
-                    message: String::new(),
-                });
-            }
-        };
-        if vtable_ptr.is_null() {
-            return Err(ContractError {
-                code: ABI_ERROR_NOT_FOUND,
-                message: String::new(),
-            });
-        }
+        let vtable_ptr: *const PluginVTable = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
@@ -237,14 +205,23 @@ impl PipelineEncoderContract {
 
 /// Host caller for contract `data.Reporter` (id=0x81D41D43E511D297)
 pub struct DataReporterContract {
-    handle: PluginHandle,
-    runtime: &'static Runtime,
+    guard: PluginVTableGuard,
 }
 
 impl DataReporterContract {
-    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> DataReporterContract {
-        DataReporterContract { handle, runtime }
+    /// Factory method - creates instance or None if not found.
+    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        Some(DataReporterContract { guard })
     }
+
+    /// Check if instance is valid (always true for Rust - guard holds Arc).
+    pub fn is_valid(&self) -> bool {
+        true
+    }
+
+    /// Reset instance (no-op for Rust - guard holds Arc).
+    pub fn reset(&mut self) {}
 
     /// Call `report` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -255,27 +232,7 @@ impl DataReporterContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = match self.runtime.resolve_plugin(self.handle) {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                let code: u32 = match err {
-                    polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
-                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. }
-                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
-                };
-                return Err(ContractError {
-                    code,
-                    message: String::new(),
-                });
-            }
-        };
-        if vtable_ptr.is_null() {
-            return Err(ContractError {
-                code: ABI_ERROR_NOT_FOUND,
-                message: String::new(),
-            });
-        }
+        let vtable_ptr: *const PluginVTable = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
@@ -303,14 +260,23 @@ impl DataReporterContract {
 
 /// Host caller for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
 pub struct PipelineValidatorContract {
-    handle: PluginHandle,
-    runtime: &'static Runtime,
+    guard: PluginVTableGuard,
 }
 
 impl PipelineValidatorContract {
-    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> PipelineValidatorContract {
-        PipelineValidatorContract { handle, runtime }
+    /// Factory method - creates instance or None if not found.
+    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        Some(PipelineValidatorContract { guard })
     }
+
+    /// Check if instance is valid (always true for Rust - guard holds Arc).
+    pub fn is_valid(&self) -> bool {
+        true
+    }
+
+    /// Reset instance (no-op for Rust - guard holds Arc).
+    pub fn reset(&mut self) {}
 
     /// Call `validate` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -321,27 +287,7 @@ impl PipelineValidatorContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = match self.runtime.resolve_plugin(self.handle) {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                let code: u32 = match err {
-                    polyplug::error::RegistryError::StaleHandle { .. } => ABI_ERROR_STALE_HANDLE,
-                    polyplug::error::RegistryError::PluginNotFound { .. } => ABI_ERROR_NOT_FOUND,
-                    polyplug::error::RegistryError::ContractIdCollision { .. }
-                    | polyplug::error::RegistryError::DuplicateProvider { .. } => ABI_ERROR_GENERIC,
-                };
-                return Err(ContractError {
-                    code,
-                    message: String::new(),
-                });
-            }
-        };
-        if vtable_ptr.is_null() {
-            return Err(ContractError {
-                code: ABI_ERROR_NOT_FOUND,
-                message: String::new(),
-            });
-        }
+        let vtable_ptr: *const PluginVTable = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
             let vtable: &PluginVTable = &*vtable_ptr;
