@@ -667,24 +667,47 @@ _prepare-release-packages:
 _prepare-crate-packages:
     @echo "  [crates.io] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/crates.io
+    @# Core crates
     @cargo package -p polyplug_abi --allow-dirty 2>/dev/null || true
     @cargo package -p polyplug --allow-dirty 2>/dev/null || true
     @cargo package -p polyplug_guest --allow-dirty 2>/dev/null || true
     @cargo package -p polyplug_codegen --allow-dirty 2>/dev/null || true
     @cargo package -p polyplugc --allow-dirty 2>/dev/null || true
+    @# Loader crates
+    @cargo package -p polyplug_native --allow-dirty 2>/dev/null || true
+    @cargo package -p polyplug_python --allow-dirty 2>/dev/null || true
+    @cargo package -p polyplug_lua --allow-dirty 2>/dev/null || true
+    @cargo package -p polyplug_js --allow-dirty 2>/dev/null || true
+    @cargo package -p polyplug_js_deno --allow-dirty 2>/dev/null || true
+    @cargo package -p polyplug_dotnet --allow-dirty 2>/dev/null || true
+    @# Copy all crates to dist
     @cp target/package/polyplug_abi-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplug-0*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplug_guest-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplug_codegen-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplugc-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
+    @cp target/package/polyplug_native-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
+    @cp target/package/polyplug_python-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
+    @cp target/package/polyplug_lua-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
+    @cp target/package/polyplug_js-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
+    @cp target/package/polyplug_js_deno-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
+    @cp target/package/polyplug_dotnet-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @echo "  [crates.io] ✓ Packages ready"
 
 # Prepare NuGet packages for C# libraries (pack from source location)
 _prepare-nuget-packages:
     @echo "  [nuget] Preparing packages..."
     @if command -v dotnet >/dev/null 2>&1; then \
+        echo "  [nuget] Packing core libraries..."; \
         dotnet pack {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        echo "  [nuget] Packing loaders..."; \
+        dotnet pack {{host_libs_dir}}/csharp/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{host_libs_dir}}/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{host_libs_dir}}/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{host_libs_dir}}/csharp/Loaders/JsDeno/Polyplug.Loaders.JsDeno.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{host_libs_dir}}/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] ✓ Packages ready"; \
     else \
         echo "  [nuget] ⊘ dotnet not installed, skipping"; \
@@ -693,15 +716,29 @@ _prepare-nuget-packages:
 # Prepare PyPI packages for Python libraries
 _prepare-pypi-packages:
     @echo "  [pypi] Preparing packages..."
+    @mkdir -p {{dist_dir}}/publish/pypi
+    @# Try to build even if python build module is not available
     @if python3 -c "import build" 2>/dev/null; then \
-        cp host-libs/python/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
-        cp host-libs/python/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
-        cp host-libs/python/LICENSE {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
+        echo "  [pypi] Building host library..."; \
+        cp {{host_libs_dir}}/python/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/python/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/python/LICENSE {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cd {{dist_dir}}/host-libs/python && \
-            python3 -m build --outdir ../../../publish/pypi/host 2>/dev/null || true; \
-        cp guest-libs/python/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
+            python3 -m build --outdir ../../../publish/pypi 2>/dev/null || true; \
+        echo "  [pypi] Building guest library..."; \
+        cp {{guest_libs_dir}}/python/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
+        cp {{guest_libs_dir}}/python/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
         cd {{dist_dir}}/guest-libs/python && \
-            python3 -m build --outdir ../../../publish/pypi/guest 2>/dev/null || true; \
+            python3 -m build --outdir ../../../publish/pypi 2>/dev/null || true; \
+        echo "  [pypi] Building loaders..."; \
+        for loader in native python lua js js-deno dotnet; do \
+            loader_dir="{{host_libs_dir}}/python/loaders/polyplug-loaders-$$loader"; \
+            if [ -d "$$loader_dir" ]; then \
+                echo "  [pypi]   Building polyplug-loaders-$$loader..."; \
+                mkdir -p {{dist_dir}}/publish/pypi; \
+                (cd "$$loader_dir" && python3 -m build --outdir ../../../dist/publish/pypi 2>/dev/null) || true; \
+            fi; \
+        done; \
         echo "  [pypi] ✓ Packages ready"; \
     else \
         echo "  [pypi] ⊘ python build module not available, skipping"; \
@@ -710,14 +747,23 @@ _prepare-pypi-packages:
 # Prepare npm packages for JavaScript libraries
 _prepare-npm-packages:
     @echo "  [npm] Preparing packages..."
+    @mkdir -p {{dist_dir}}/publish/npm
     @if command -v npm >/dev/null 2>&1; then \
         echo "  [npm] Packing host library..."; \
-        cp host-libs/js/package.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
-        cp host-libs/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
         (cd {{dist_dir}}/host-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing guest library..."; \
-        cp guest-libs/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
+        cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
         (cd {{dist_dir}}/guest-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
+        echo "  [npm] Packing loaders..."; \
+        for loader in native python lua js js-deno dotnet; do \
+            loader_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
+            if [ -d "$$loader_dir" ]; then \
+                echo "  [npm]   Packing @polyplug/loaders-$$loader..."; \
+                (cd "$$loader_dir" && npm pack 2>/dev/null && mv *.tgz ../../../../../dist/publish/npm/ 2>/dev/null) || true; \
+            fi; \
+        done; \
         echo "  [npm] ✓ Packages ready"; \
     else \
         echo "  [npm] ⊘ npm not installed, skipping"; \
@@ -726,13 +772,25 @@ _prepare-npm-packages:
 # Prepare LuaRocks packages for Lua libraries
 _prepare-luarocks-packages:
     @echo "  [luarocks] Preparing packages..."
+    @mkdir -p {{dist_dir}}/publish/luarocks
     @if command -v luarocks >/dev/null 2>&1; then \
-        cp host-libs/lua/*.rockspec {{dist_dir}}/host-libs/lua/ 2>/dev/null || true; \
+        echo "  [luarocks] Packing host library..."; \
+        cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/host-libs/lua/ 2>/dev/null || true; \
         cd {{dist_dir}}/host-libs/lua && \
             luarocks pack polyplug 2>/dev/null && mv *.rock ../../../publish/luarocks/ 2>/dev/null || true; \
-        cp guest-libs/lua/*.rockspec {{dist_dir}}/guest-libs/lua/ 2>/dev/null || true; \
+        echo "  [luarocks] Packing guest library..."; \
+        cp {{guest_libs_dir}}/lua/*.rockspec {{dist_dir}}/guest-libs/lua/ 2>/dev/null || true; \
         cd {{dist_dir}}/guest-libs/lua && \
             luarocks pack polyplug-guest 2>/dev/null && mv *.rock ../../../publish/luarocks/ 2>/dev/null || true; \
+        echo "  [luarocks] Packing loaders..."; \
+        for loader in native python lua js js-deno dotnet; do \
+            loader_dir="{{host_libs_dir}}/lua/loaders/polyplug-loaders-$$loader"; \
+            if [ -d "$$loader_dir" ]; then \
+                echo "  [luarocks]   Packing polyplug-loaders-$$loader..."; \
+                cp "$$loader_dir"/*.rockspec {{dist_dir}}/host-libs/lua/loaders/polyplug-loaders-$$loader/ 2>/dev/null || true; \
+                (cd "$$loader_dir" && luarocks pack polyplug-loaders-$$loader 2>/dev/null && mv *.rock ../../../dist/publish/luarocks/ 2>/dev/null) || true; \
+            fi; \
+        done; \
         echo "  [luarocks] ✓ Packages ready"; \
     else \
         echo "  [luarocks] ⊘ luarocks not installed, skipping"; \
@@ -751,6 +809,12 @@ publish-crates:
     @echo "  cd guest-libs/rust && cargo publish"
     @echo "  cd crates/polyplug_codegen && cargo publish"
     @echo "  cd crates/polyplugc && cargo publish"
+    @echo "  cd crates/polyplug_native && cargo publish"
+    @echo "  cd crates/polyplug_python && cargo publish"
+    @echo "  cd crates/polyplug_lua && cargo publish"
+    @echo "  cd crates/polyplug_js && cargo publish"
+    @echo "  cd crates/polyplug_js_deno && cargo publish"
+    @echo "  cd crates/polyplug_dotnet && cargo publish"
 
 # Publish to crates.io (actual)
 publish-crates-now:
@@ -760,6 +824,12 @@ publish-crates-now:
     cargo publish -p polyplug_guest
     cargo publish -p polyplug_codegen
     cargo publish -p polyplugc
+    cargo publish -p polyplug_native
+    cargo publish -p polyplug_python
+    cargo publish -p polyplug_lua
+    cargo publish -p polyplug_js
+    cargo publish -p polyplug_js_deno
+    cargo publish -p polyplug_dotnet
 
 # Publish to NuGet (dry-run)
 publish-nuget:
@@ -771,15 +841,20 @@ publish-nuget:
 publish-pypi:
     @echo "=== Publishing to PyPI (dry-run) ==="
     @echo "Run the following commands to publish:"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/host/*"
-    @echo "  twine upload {{dist_dir}}/publish/pypi/guest/*"
+    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug-*.tar.gz"
+    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug-*.whl"
+    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_guest-*.tar.gz"
+    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_guest-*.whl"
+    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_loaders_*.tar.gz"
+    @echo "  twine upload {{dist_dir}}/publish/pypi/polyplug_loaders_*.whl"
 
 # Publish to npm (dry-run)
 publish-npm:
     @echo "=== Publishing to npm (dry-run) ==="
     @echo "Run the following commands to publish:"
-    @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-*.tgz"
+    @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-runtime-*.tgz"
     @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-guest-*.tgz"
+    @echo "  npm publish {{dist_dir}}/publish/npm/polyplug-loaders-*.tgz"
 
 # ============================================================================
 # Info
