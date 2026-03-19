@@ -2,7 +2,60 @@
 -- LuaJIT FFI host library for polyplug.
 
 local ffi = require('ffi')
+local jit = require('jit')
 local M = {}
+
+local function get_platform_identifier()
+    local os = jit.os
+    local arch = jit.arch
+    local os_map = {
+        ["Linux"] = "linux",
+        ["OSX"] = "darwin",
+        ["Windows"] = "win32"
+    }
+    local arch_map = {
+        ["x64"] = "x64",
+        ["arm64"] = "arm64"
+    }
+    return (os_map[os] or "unknown") .. "-" .. (arch_map[arch] or "unknown")
+end
+
+local function get_script_dir()
+    local source = debug.getinfo(1, "S").source
+    if source:sub(1, 1) == "@" then
+        return source:match("^@(.-)/")
+    end
+    return "."
+end
+
+local function auto_load_native_lib()
+    local platform = get_platform_identifier()
+    local script_dir = get_script_dir()
+    local native_dir = script_dir .. "/_native/" .. platform
+    
+    local os = jit.os
+    local lib_name
+    if os == "Windows" then
+        lib_name = "polyplug.dll"
+    else
+        lib_name = "libpolyplug.so"
+    end
+    
+    local lib_path = native_dir .. "/" .. lib_name
+    
+    local f = io.open(lib_path, "r")
+    if f then
+        f:close()
+        return M.load_lib(lib_path)
+    end
+    
+    local env_lib = os.getenv("POLYPLUG_LIB")
+    if env_lib then
+        return M.load_lib(env_lib)
+    end
+    
+    return M.load_lib(lib_name)
+end
 
 -- Error code constants matching polyplug ABI
 M.PolyplugError = {
@@ -332,5 +385,10 @@ end
 
 M.to_str = to_str
 M.to_string = to_str
+
+M.get_platform_identifier = get_platform_identifier
+M.get_script_dir = get_script_dir
+
+auto_load_native_lib()
 
 return M

@@ -10,6 +10,13 @@
 
 import { ReloadPhase } from "./polyplug/reload_phase.js";
 
+export { 
+  getPlatformIdentifier, 
+  getNativeLibraryFilename, 
+  loadNativeLibrary, 
+  openNativeLibrary 
+} from "./native-loader.ts";
+
 /** @type {bigint} */
 export const NULL_HANDLE = 0xFFFFFFFFFFFFFFFFn;
 

@@ -20,12 +20,13 @@ dependencies = {
    "luajit >= 2.0"
 }
 build = {
-   type = "builtin",
-   modules = {
-      ["polyplug"] = "polyplug.lua",
-      ["polyplug.runtime"] = "polyplug/runtime.lua",
-      ["polyplug.runtime_config"] = "polyplug/runtime_config.lua",
-      ["polyplug.reload_phase"] = "polyplug/reload_phase.lua",
-      ["polyplug.scanner"] = "scanner.lua"
-   }
+    type = "builtin",
+    modules = {
+       ["polyplug"] = "polyplug.lua",
+       ["polyplug.runtime"] = "polyplug/runtime.lua",
+       ["polyplug.runtime_config"] = "polyplug/runtime_config.lua",
+       ["polyplug.reload_phase"] = "polyplug/reload_phase.lua",
+       ["polyplug.scanner"] = "scanner.lua"
+    },
+    copy_directories = { "_native" }
 }

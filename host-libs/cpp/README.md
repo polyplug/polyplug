@@ -8,6 +8,60 @@ Header-only C++17 binding for the polyplug plugin runtime. Provides RAII wrapper
 - **libpolyplug.so** — the core polyplug shared library (compiled separately)
 - A C++ compiler with C++17 support (GCC 8+, Clang 7+, MSVC 2019+)
 
+## Finding the Native Library
+
+The C++ host library requires the native `libpolyplug` shared library at runtime. There are three ways to provide it:
+
+### Option 1: Set POLYPLUG_LIB Environment Variable
+
+Set the `POLYPLUG_LIB` environment variable to the path containing the library:
+
+```bash
+# Linux/macOS
+export POLYPLUG_LIB=/path/to/libpolyplug.so
+
+# Windows (PowerShell)
+$env:POLYPLUG_LIB = "C:\path\to\polyplug.dll"
+```
+
+### Option 2: Download Automatically with CMake
+
+Enable automatic download from GitHub Releases by setting `POLYPLUG_DOWNLOAD`:
+
+```cmake
+# In your CMakeLists.txt before find_package(polyplug)
+set(POLYPLUG_DOWNLOAD ON)
+set(POLYPLUG_VERSION "0.1.0")  # Optional: specify version
+
+find_package(polyplug REQUIRED)
+```
+
+The library will be downloaded to `_native/{platform}-{arch}/` in your project directory.
+
+### Option 3: Manual Download Script
+
+Use the provided download script for CI builds or manual installation:
+
+```bash
+# Download latest version (0.1.0)
+./download-native.sh
+
+# Download specific version
+./download-native.sh 0.1.0
+```
+
+The script detects your platform and downloads the appropriate library to `_native/{platform}-{arch}/`.
+
+**Supported platforms:**
+- `linux-x64` → `libpolyplug.so`
+- `darwin-x64` → `libpolyplug.dylib`
+- `darwin-arm64` → `libpolyplug.dylib`
+- `win32-x64` → `polyplug-windows-x64.dll`
+
+### Option 4: System Installation
+
+Install the library to a system path (`/usr/lib`, `/usr/local/lib`, etc.) and CMake will find it automatically.
+
 ## Quick Start
 
 ```cpp
@@ -660,11 +714,18 @@ int main() {
 ### CMake Example
 
 ```cmake
-cmake_minimum_required(VERSION 3.14)
+cmake_minimum_required(VERSION 3.16)
 project(my_app LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Option 1: Auto-download from GitHub Releases (recommended for CI)
+set(POLYPLUG_DOWNLOAD ON)
+set(POLYPLUG_VERSION "0.1.0")
+
+# Option 2: Or set POLYPLUG_LIB environment variable before running cmake
+# export POLYPLUG_LIB=/path/to/libpolyplug.so
 
 # Find polyplug and loaders
 find_package(polyplug REQUIRED)
@@ -674,19 +735,56 @@ find_package(polyplug_loaders_python REQUIRED)
 # Create executable
 add_executable(my_app main.cpp)
 
-# Link libraries
+# Link libraries (polyplug::polyplug target provided by FindPolyplug.cmake)
 target_link_libraries(my_app
     PRIVATE
         polyplug::polyplug
         polyplug::loaders_native
         polyplug::loaders_python
 )
+```
 
-# Include directories (if not provided by find_package)
-target_include_directories(my_app
-    PRIVATE
-        /path/to/polyplug/host-libs/cpp
-)
+### Using FindPolyplug.cmake Directly
+
+If you're integrating polyplug into an existing CMake project, you can use the `FindPolyplug.cmake` module directly:
+
+```cmake
+# Add the cmake module path
+list(APPEND CMAKE_MODULE_PATH "/path/to/polyplug/host-libs/cpp/cmake")
+
+# Configure download (optional)
+set(POLYPLUG_DOWNLOAD ON)
+set(POLYPLUG_VERSION "0.1.0")
+
+# Find the library
+find_package(Polyplug REQUIRED)
+
+# Use the imported target
+target_link_libraries(your_app PRIVATE Polyplug::polyplug)
+target_include_directories(your_app PRIVATE ${Polyplug_INCLUDE_DIR})
+```
+
+### CMake Configuration Options
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `POLYPLUG_LIB` | Env/Cache | - | Path to libpolyplug (checked first) |
+| `POLYPLUG_DOWNLOAD` | Bool | OFF | Download from GitHub Releases if not found |
+| `POLYPLUG_VERSION` | String | "0.1.0" | Version to download |
+
+### Manual Build Integration
+
+If you prefer not to use CMake, you can manually specify the paths:
+
+```bash
+# Compile
+g++ -std=c++17 -I/path/to/polyplug/host-libs/cpp \
+    -L/path/to/libpolyplug -lpolyplug \
+    -o my_app main.cpp
+
+# Run (ensure library is in LD_LIBRARY_PATH or rpath)
+export LD_LIBRARY_PATH=/path/to/libpolyplug:$LD_LIBRARY_PATH
+./my_app
 ```
 
 ### Compiler Flags

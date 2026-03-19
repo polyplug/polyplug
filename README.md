@@ -1,16 +1,18 @@
 # polyplug
 
-**Universal high-performance zero-overhead cross-language plugin runtime platform**
+**High-performance zero-overhead cross-language cross-platform plugin runtime**
 
 ## Overview
 
-polyplug is a plugin runtime platform that enables seamless cross-language plugin development. Write plugins in Rust, Python, C#, Lua, JavaScript, or C++ — and load them all from a single host application with zero-overhead FFI dispatch.
+polyplug is a plugin runtime that enables seamless cross-language plugin development. Write plugins in Rust, Python, C#, Lua, JavaScript, or C++ — and load them all from a single host application with zero-overhead FFI dispatch.
+
+**Just add polyplug as a dependency and it works on Linux, macOS, and Windows.** No manual downloads, no build-from-source requirements, no obstacles.
 
 ## Features
 
-- **Cross-Language Support** — Write plugins in Rust, Python, C#, Lua, JavaScript/Deno, or C++
-- **Cross-Platform** — Runs on Linux, macOS, and Windows with platform-specific bundle manifests
-- **Hot Reload** — Reload plugins at runtime with a notification system for seamless updates
+- **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript/Deno, or C++
+- **Cross-Platform** — Works on Linux (x64), macOS (x64/ARM64), and Windows (x64) with zero setup
+- **Hot Reload** — Reload plugins at runtime with notification system for seamless updates
 - **Zero-Overhead FFI** — Direct function pointer dispatch with no runtime overhead
 - **Type-Safe Code Generation** — The `polyplugc` CLI generates type-safe bindings for all languages
 - **Factory Method Pattern** — Safe instance management with host-controlled lifecycles
@@ -33,30 +35,35 @@ polyplug_abi = "0.1"
 
 ```bash
 pip install polyplug
+# Native library is bundled - no additional setup needed
 ```
 
 #### C# / .NET
 
 ```bash
 dotnet add package Polyplug
+# Native libraries for all platforms are bundled in the package
 ```
 
-#### Lua
+#### Lua (LuaRocks)
 
-```lua
-local polyplug = require("polyplug")
+```bash
+luarocks install polyplug
+# Native library is bundled
 ```
 
 #### JavaScript / Deno
 
 ```typescript
-import { PluginHost } from "polyplug";
+import { Runtime } from "@polyplug/runtime";
+// Native library auto-detected and loaded
 ```
 
 #### C++
 
 ```cmake
-find_package(polyplug REQUIRED)
+find_package(Polyplug REQUIRED)
+# Downloads native library if not found locally
 ```
 
 ### Basic Usage

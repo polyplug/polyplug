@@ -46,3 +46,6 @@ all = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["polyplug*"]
+
+[tool.setuptools.package-data]
+polyplug = ["_native/*.so", "_native/*.dylib", "_native/*.dll", "_native/README.txt"]

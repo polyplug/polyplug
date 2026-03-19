@@ -1,12 +1,23 @@
 {
   "name": "@polyplug/runtime",
   "version": "0.1.0",
-  "exports": "./polyplug.js",
+  "exports": {
+    ".": "./polyplug.js",
+    "./native-loader": "./native-loader.ts"
+  },
   "license": "MIT",
   "description": "Deno FFI host library for the polyplug plugin runtime",
   "repository": {
     "type": "git",
     "url": "https://github.com/polyplug/polyplug.git",
     "directory": "host-libs/js"
-  }
+  },
+  "include": [
+    "polyplug.js",
+    "polyplug.d.ts",
+    "polyplug/",
+    "native-loader.ts",
+    "download-native.ts",
+    "_native/"
+  ]
 }

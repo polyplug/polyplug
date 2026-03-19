@@ -34,6 +34,47 @@ guest_libs_dir := "guest-libs"
 version := `grep -m1 '^version =' crates/polyplug/Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/'`
 
 # ============================================================================
+# Native Library Download
+# ============================================================================
+
+# Download native libraries from GitHub Releases for all host libraries
+download-native-libs version=version:
+    @echo "=== Downloading Native Libraries v{{version}} ==="
+    @echo "Downloading for C# host library..."
+    @bash {{host_libs_dir}}/csharp/Polyplug/download-native.sh {{version}}
+    @echo "Downloading for Python host library..."
+    @python3 {{host_libs_dir}}/python/download-native.py --version v{{version}} --all-platforms
+    @echo "Downloading for JavaScript host library..."
+    @cd {{host_libs_dir}}/js && deno run --allow-net --allow-write --allow-env download-native.ts
+    @echo "Downloading for Lua host library..."
+    @cd {{host_libs_dir}}/lua && luajit download-native.lua v{{version}}
+    @echo "Downloading for C++ host library..."
+    @bash {{host_libs_dir}}/cpp/download-native.sh {{version}}
+    @echo ""
+    @echo "=== Native Library Download Complete ==="
+
+# Copy locally built native library to all host library _native/ folders
+download-native-local: build-ffi
+    @echo "=== Copying Local Native Library ==="
+    @mkdir -p {{host_libs_dir}}/csharp/Polyplug/runtimes/linux-x64/native
+    @mkdir -p {{host_libs_dir}}/python/polyplug/_native/linux-x64
+    @mkdir -p {{host_libs_dir}}/js/_native/linux-x64
+    @mkdir -p {{host_libs_dir}}/lua/_native/linux-x64
+    @mkdir -p {{host_libs_dir}}/cpp/_native/linux-x64
+    @if [ -f {{target_dir}}/libpolyplug.so ]; then \
+        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/csharp/Polyplug/runtimes/linux-x64/native/ && \
+        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/python/polyplug/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/js/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/lua/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/cpp/_native/linux-x64/ && \
+        echo "✓ Copied libpolyplug.so to all host libraries"; \
+    else \
+        echo "✗ No native library found in {{target_dir}}"; \
+        exit 1; \
+    fi
+    @echo "=== Local Native Library Copy Complete ==="
+
+# ============================================================================
 # Core Rust Build
 # ============================================================================
 
@@ -705,6 +746,8 @@ _prepare-crate-packages:
 _prepare-nuget-packages:
     @echo "  [nuget] Preparing packages..."
     @if command -v dotnet >/dev/null 2>&1; then \
+        echo "  [nuget] Downloading native libraries..."; \
+        bash {{host_libs_dir}}/csharp/Polyplug/download-native.sh {{version}}; \
         echo "  [nuget] Packing core libraries..."; \
         dotnet pack {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
@@ -725,6 +768,8 @@ _prepare-pypi-packages:
     @echo "  [pypi] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/pypi
     @if command -v uv >/dev/null 2>&1; then \
+        echo "  [pypi] Downloading native libraries..."; \
+        python3 {{host_libs_dir}}/python/download-native.py --version v{{version}} --all-platforms; \
         echo "  [pypi] Building host library..."; \
         cp {{host_libs_dir}}/python/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/python/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
@@ -752,6 +797,8 @@ _prepare-npm-packages:
     @echo "  [npm] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/npm
     @if command -v npm >/dev/null 2>&1; then \
+        echo "  [npm] Downloading native libraries..."; \
+        cd {{host_libs_dir}}/js && deno run --allow-net --allow-write --allow-env download-native.ts; \
         echo "  [npm] Packing host library..."; \
         cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
@@ -777,6 +824,8 @@ _prepare-luarocks-packages:
     @echo "  [luarocks] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/luarocks
     @if command -v luarocks >/dev/null 2>&1; then \
+        echo "  [luarocks] Downloading native libraries..."; \
+        cd {{host_libs_dir}}/lua && luajit download-native.lua v{{version}}; \
         echo "  [luarocks] Copying rockspecs for upload..."; \
         cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{guest_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \

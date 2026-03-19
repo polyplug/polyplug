@@ -8,6 +8,9 @@
     "polyplug.js",
     "polyplug.d.ts",
     "polyplug/",
+    "native-loader.ts",
+    "download-native.ts",
+    "_native/",
     "README.md"
   ],
   "scripts": {

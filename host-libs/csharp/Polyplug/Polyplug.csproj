@@ -23,8 +23,17 @@
   <ItemGroup>
     <!-- Embed README in NuGet package -->
     <None Include="..\README.md" Pack="true" PackagePath="\" />
-    <!-- Embed native library in NuGet package (runtimes folder convention) -->
-    <!-- Consumers should copy libpolyplug.so to their output directory -->
-    <!-- Or use a separate native package for the shared library -->
+    <!-- Embed native libraries in NuGet package (runtimes folder convention) -->
+    <!-- .NET automatically loads the correct native library based on RuntimeIdentifier -->
+    <Content Include="runtimes\**\*.*">
+      <Pack>true</Pack>
+      <PackagePath>runtimes</PackagePath>
+    </Content>
   </ItemGroup>
+
+  <!-- Download native libraries from GitHub Releases before packing -->
+  <Target Name="DownloadNativeLibraries" BeforeTargets="Pack">
+    <Exec Command="pwsh -File download-native.ps1 -Version $(Version)" Condition="'$(OS)' == 'Windows_NT'" />
+    <Exec Command="bash download-native.sh $(Version)" Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
 </Project>
