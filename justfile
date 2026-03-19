@@ -762,13 +762,13 @@ _prepare-npm-packages:
         cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
         (cd {{dist_dir}}/guest-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing loaders..."; \
-        for loader in native python lua js js-deno dotnet; do \
-            loader_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
-            if [ -d "$$loader_dir" ]; then \
-                echo "  [npm]   Packing @polyplug/loaders-$$loader..."; \
-                (cd "$$loader_dir" && npm pack 2>/dev/null && mv *.tgz ../../../../../dist/publish/npm/ 2>/dev/null) || true; \
-            fi; \
-        done; \
+        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-native 2>/dev/null || true; \
+        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-python 2>/dev/null || true; \
+        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-lua 2>/dev/null || true; \
+        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-js 2>/dev/null || true; \
+        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-js-deno 2>/dev/null || true; \
+        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-dotnet 2>/dev/null || true; \
+        mv polyplug-loaders-*.tgz {{dist_dir}}/publish/npm/ 2>/dev/null || true; \
         echo "  [npm] ✓ Packages ready"; \
     else \
         echo "  [npm] ⊘ npm not installed, skipping"; \
