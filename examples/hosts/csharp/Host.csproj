@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../host-libs/csharp/Polyplug/Polyplug.csproj" />
+    <ProjectReference Include="../../../guest-libs/csharp/Polyplug.Guest.csproj" />
   </ItemGroup>
 </Project>

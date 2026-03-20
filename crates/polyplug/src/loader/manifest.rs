@@ -180,18 +180,15 @@ pub struct ManifestData {
     /// Defaults to `"native"` when the field is absent from the TOML file.
     #[serde(default = "default_runtime")]
     pub runtime: String,
-    /// Bundle name — used by the loader to compute bundle_id via abi::bundle_id()
+    /// Bundle name — human-readable identifier for this bundle.
     #[serde(default)]
-    pub bundle_name: String,
+    pub name: String,
     /// Raw dependency declarations from [[dependency]] table in manifest.toml
     #[serde(default, rename = "dependency")]
     pub dependencies: Vec<RawManifestDependency>,
-    /// Computed from bundle_name by the loader after parsing; NOT in the TOML
-    #[serde(skip)]
-    pub bundle_id: u64,
-    /// Human-readable name of the plugin bundle
+    /// Bundle ID — computed from name via abi::bundle_id(), or provided in TOML.
     #[serde(default)]
-    pub name: String,
+    pub id: u64,
     /// Version string for this bundle
     #[serde(default)]
     pub version: String,
@@ -231,7 +228,7 @@ impl ManifestData {
     pub fn validate_file(&self) -> Result<(), crate::error::LoaderError> {
         if self.file.trim().is_empty() {
             return Err(crate::error::LoaderError::ManifestMissingFile {
-                bundle: self.bundle_name.clone(),
+                bundle: self.name.clone(),
             });
         }
         Ok(())
@@ -244,13 +241,12 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    fn make_manifest(file: &str, bundle_name: &str) -> ManifestData {
+    fn make_manifest(file: &str, name: &str) -> ManifestData {
         ManifestData {
             runtime: "native".to_owned(),
-            bundle_name: bundle_name.to_owned(),
+            name: name.to_owned(),
             dependencies: Vec::new(),
-            bundle_id: 0,
-            name: String::new(),
+            id: 0,
             version: String::new(),
             file: file.to_owned(),
             provides: Vec::new(),

@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::config::NativeConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
 use polyplug::runtime::global_registry;
@@ -40,9 +41,15 @@ impl BundleLoader for NativeLoader {
         let host_vtable: &'static HostVTable = unsafe { &*registrar.host };
 
         let bundle_dir: &Path = path.parent().unwrap_or(path);
-        let mut manifest: polyplug::loader::manifest::ManifestData =
+        let manifest: ManifestData =
             polyplug::loader::parse_manifest(bundle_dir).map_err(PolyplugError::Loader)?;
-        manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
+
+        if manifest.id == 0 {
+            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.to_string_lossy().into_owned(),
+                error: "manifest.id is required but was 0 or missing".to_owned(),
+            }));
+        }
 
         polyplug::loader::load_bundle(path, &manifest, &registry, host_vtable)
             .map_err(PolyplugError::Loader)

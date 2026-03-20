@@ -322,7 +322,7 @@ impl RuntimeBuilder {
         for (path, manifest) in &discovered {
             let mut stored_manifest: ManifestData = manifest.clone();
             stored_manifest.path = path.clone();
-            manifests_map.insert(stored_manifest.bundle_name.clone(), stored_manifest);
+            manifests_map.insert(stored_manifest.name.clone(), stored_manifest);
         }
         // If nothing discovered, build Runtime with empty bundles (no graph needed)
         if !discovered.is_empty() {
@@ -341,7 +341,7 @@ impl RuntimeBuilder {
             // Phase 4: Build lookup map bundle_name -> (path, manifest)
             let mut bundle_map: HashMap<String, (PathBuf, ManifestData)> = HashMap::new();
             for entry in discovered {
-                bundle_map.insert(entry.1.bundle_name.clone(), entry);
+                bundle_map.insert(entry.1.name.clone(), entry);
             }
 
             // Phase 5: Dispatch each bundle to its loader in topo order
@@ -367,7 +367,7 @@ impl RuntimeBuilder {
                 let (mut registrar, _guard): (PluginRegistrar, BundleInitGuard) =
                     crate::loader::make_registrar_context(
                         &registry,
-                        manifest.bundle_id,
+                        manifest.id,
                         host_vtable,
                     );
 
@@ -553,10 +553,15 @@ impl Runtime {
                 reason: "manifest.toml not found in bundle directory".to_owned(),
             }));
         }
-        // Parse manifest and compute bundle_id
-        let mut manifest: ManifestData = crate::loader::parse_manifest(path)
+        // Parse manifest and validate bundle_id is present
+        let manifest: ManifestData = crate::loader::parse_manifest(path)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
-        manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
+        if manifest.id == 0 {
+            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.display().to_string(),
+                error: "manifest.id is required but was 0 or missing".to_owned(),
+            }));
+        }
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {
             let major_str: &str = match manifest.version.split_once('.') {
@@ -575,7 +580,7 @@ impl Runtime {
                 {
                     let msg: String = format!(
                         "bundle {:?} provides {:?} but has no function_count entry for key {:?}",
-                        manifest.bundle_name, contract, key
+                        manifest.name, contract, key
                     );
                     if opts.compatibility == Compatibility::Strict {
                         return Err(PolyplugError::Loader(LoaderError::FunctionCountMismatch {
@@ -608,7 +613,7 @@ impl Runtime {
         let (mut registrar, _guard): (PluginRegistrar, crate::loader::BundleInitGuard) =
             crate::loader::make_registrar_context(
                 &self.registry,
-                manifest.bundle_id,
+                manifest.id,
                 self.host_vtable,
             );
         let effective_path: PathBuf = if !manifest.file.is_empty() {
@@ -618,7 +623,7 @@ impl Runtime {
         };
         let result: Result<(), PolyplugError> = loader.load(&effective_path, &mut registrar);
         if result.is_ok() {
-            let bundle_name: String = manifest.bundle_name.clone();
+            let bundle_name: String = manifest.name.clone();
             let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = self
                 .bundle_manifests
                 .lock()
@@ -817,14 +822,14 @@ pub(crate) fn validate_bundle_compatibility(
                 None => continue, // graph already validates this
             };
 
-            let required: Version = match Version::parse(dep_min_version_str, &manifest.bundle_name)
+            let required: Version = match Version::parse(dep_min_version_str, &manifest.name)
             {
                 Ok(v) => v,
                 Err(e) => return Err(RuntimeError::Loader(e)),
             };
 
             let provided: Version =
-                parse_manifest_version(&provider.version, &provider.bundle_name)?;
+                parse_manifest_version(&provider.version, &provider.name)?;
 
             if !provided.is_compatible_with(&required) {
                 match compatibility {
@@ -838,7 +843,7 @@ pub(crate) fn validate_bundle_compatibility(
                     Compatibility::Relaxed => {
                         emit_warning(&format!(
                             "version mismatch for contract `{}`: required={}, found={} (bundle `{}`)",
-                            dep_contract, required, provided, provider.bundle_name
+                            dep_contract, required, provided, provider.name
                         ));
                     }
                     Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all version checks
@@ -866,7 +871,7 @@ pub(crate) fn validate_bundle_compatibility(
                     Compatibility::Relaxed => {
                         emit_warning(&format!(
                             "bundle `{}` provides `{}` but has no function_count entry for key `{}`",
-                            manifest.bundle_name, contract, key
+                            manifest.name, contract, key
                         ));
                     }
                     Compatibility::Yolo => {} // intentionally silent — Yolo mode skips all function_count checks

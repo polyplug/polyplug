@@ -9,11 +9,11 @@ use polyplug::loader::load_bundle;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::parse_manifest;
 use polyplug::registry::Registry;
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginHandle;
 use polyplug_abi::bundle_id;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginHandle;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ fn library_handle_outlives_load_call() {
     let plugin_dir: &std::path::Path = std::path::Path::new(env!("TEST_PLUGIN_DIR"));
     let mut manifest: ManifestData =
         parse_manifest(plugin_dir).expect("parse_manifest for test_plugin_dir");
-    manifest.bundle_id = bundle_id(&manifest.bundle_name);
+    manifest.id = bundle_id(&manifest.name);
     let so_path: std::path::PathBuf = plugin_dir.join(&manifest.file);
 
     let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {

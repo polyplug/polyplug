@@ -26,13 +26,27 @@ def register_native_loader(runtime: Runtime) -> None:
     loader_ptr = lib.polyplug_native_loader_create(ctypes.byref(cfg))
     if not loader_ptr:
         raise RuntimeError("polyplug: native loader create failed")
-    polyplug_lib = runtime._lib
-    polyplug_lib.polyplug_runtime_register_loader.restype = ctypes.c_uint32
-    polyplug_lib.polyplug_runtime_register_loader.argtypes = [
-        ctypes.c_void_p,
-        ctypes.c_void_p,
-    ]
-    err = polyplug_lib.polyplug_runtime_register_loader(runtime._runtime, loader_ptr)
+
+    backend = runtime._backend
+    # Check if we're using cffi or ctypes backend
+    if hasattr(backend, "ffi"):
+        # cffi backend - use ffi.cast for the call
+        ffi = backend.ffi
+        err = backend.lib.polyplug_runtime_register_loader(
+            ffi.cast("void*", runtime._runtime), ffi.cast("void*", loader_ptr)
+        )
+    else:
+        # ctypes backend - set up argtypes and restype
+        polyplug_lib = backend.lib
+        polyplug_lib.polyplug_runtime_register_loader.restype = ctypes.c_uint32
+        polyplug_lib.polyplug_runtime_register_loader.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        err = polyplug_lib.polyplug_runtime_register_loader(
+            runtime._runtime, loader_ptr
+        )
+
     if err != 0:
         raise RuntimeError(f"polyplug: native loader register failed: {err}")
 

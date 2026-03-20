@@ -184,13 +184,13 @@ impl CapabilityGraph {
         // Build set of all discovered bundle names for ByBundle validation
         let discovered_bundles: HashSet<String> = manifests
             .iter()
-            .map(|(_path, manifest): &(PathBuf, ManifestData)| manifest.bundle_name.clone())
+            .map(|(_path, manifest): &(PathBuf, ManifestData)| manifest.name.clone())
             .collect::<HashSet<String>>();
 
         // Build provides_map: bundle_name -> Vec<String> (contract names provided)
         let mut provides_map: HashMap<String, Vec<String>> = HashMap::new();
         for (_path, manifest) in manifests {
-            provides_map.insert(manifest.bundle_name.clone(), manifest.provides.clone());
+            provides_map.insert(manifest.name.clone(), manifest.provides.clone());
         }
 
         for (_path, manifest) in manifests {
@@ -230,7 +230,7 @@ impl CapabilityGraph {
                         // Validate bundle is in discovered set
                         if !discovered_bundles.contains(bundle) {
                             return Err(GraphError::UnsatisfiedCapability {
-                                requester: manifest.bundle_name.clone(),
+                                requester: manifest.name.clone(),
                                 capability: format!("{} (from bundle {})", contract, bundle),
                             });
                         }
@@ -241,7 +241,7 @@ impl CapabilityGraph {
                             .unwrap_or(false);
                         if !provides {
                             return Err(GraphError::UnsatisfiedCapability {
-                                requester: manifest.bundle_name.clone(),
+                                requester: manifest.name.clone(),
                                 capability: format!(
                                     "{} not provided by bundle {}",
                                     contract, bundle
@@ -259,7 +259,7 @@ impl CapabilityGraph {
             }
 
             graph.add_bundle(BundleNode {
-                name: manifest.bundle_name.clone(),
+                name: manifest.name.clone(),
                 provides: provides_caps,
                 requires: requires_caps,
             });
@@ -401,10 +401,9 @@ mod tests {
 
         let manifest_a: ManifestData = ManifestData {
             runtime: "native".to_owned(),
-            bundle_name: "bundle_a".to_owned(),
+            name: "bundle_a".to_owned(),
             dependencies: Vec::new(),
-            bundle_id: 0,
-            name: String::new(),
+            id: 0,
             version: String::new(),
             file: String::new(),
             provides: vec!["contract.X".to_owned()],
@@ -415,10 +414,9 @@ mod tests {
 
         let manifest_b: ManifestData = ManifestData {
             runtime: "native".to_owned(),
-            bundle_name: "bundle_b".to_owned(),
+            name: "bundle_b".to_owned(),
             dependencies: vec![dep_b],
-            bundle_id: 0,
-            name: String::new(),
+            id: 0,
             version: String::new(),
             file: String::new(),
             provides: vec!["contract.Y".to_owned()],
@@ -429,10 +427,9 @@ mod tests {
 
         let manifest_c: ManifestData = ManifestData {
             runtime: "native".to_owned(),
-            bundle_name: "bundle_c".to_owned(),
+            name: "bundle_c".to_owned(),
             dependencies: vec![dep_c],
-            bundle_id: 0,
-            name: String::new(),
+            id: 0,
             version: String::new(),
             file: String::new(),
             provides: Vec::new(),
@@ -484,10 +481,9 @@ mod tests {
 
         let manifest_b: ManifestData = ManifestData {
             runtime: "native".to_owned(),
-            bundle_name: "bundle_b".to_owned(),
+            name: "bundle_b".to_owned(),
             dependencies: vec![dep_b],
-            bundle_id: 0,
-            name: String::new(),
+            id: 0,
             version: String::new(),
             file: String::new(),
             provides: Vec::new(),

@@ -6,16 +6,16 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::vtables::REPORTER_CONTRACT_ID;
-use super::vtables::REPORTER_VTABLE;
-use polyplug_guest::ABI_ERROR_GENERIC;
-use polyplug_guest::ABI_OK;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginContext;
+use polyplug_guest::ABI_OK;
+use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginRegistrar;
 use polyplug_guest::PluginVTable;
 use polyplug_guest::StringView;
+use polyplug_guest::PluginContext;
+use super::vtables::REPORTER_CONTRACT_ID;
+use super::vtables::REPORTER_VTABLE;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -32,16 +32,10 @@ pub unsafe extern "C" fn polyplug_init(
     ctx: *const PluginContext,
 ) -> AbiError {
     if registrar.is_null() {
-        return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
-        };
+        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
     }
     if ctx.is_null() {
-        return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
-        };
+        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
     let ctx: &PluginContext = unsafe { &*ctx };
@@ -54,30 +48,18 @@ pub unsafe extern "C" fn polyplug_init(
         fn polyplug_user_init();
     }
     // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe {
-        polyplug_user_init();
-    }
+    unsafe { polyplug_user_init(); }
 
     let desc_REPORTER: PluginDescriptor = PluginDescriptor {
-        name: StringView {
-            ptr: b"reporter".as_ptr(),
-            len: 8_usize,
-        },
-        contract_name: StringView {
-            ptr: b"data.Reporter@1".as_ptr(),
-            len: 15_usize,
-        },
+        name: StringView { ptr: b"reporter".as_ptr(), len: 8_usize },
+        contract_name: StringView { ptr: b"data.Reporter@1".as_ptr(), len: 15_usize },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
     let err_REPORTER: AbiError = unsafe {
-        (reg.register_plugin)(
-            registrar,
-            &desc_REPORTER as *const PluginDescriptor,
-            &REPORTER_VTABLE as *const PluginVTable,
-        )
+        (reg.register_plugin)(registrar, &desc_REPORTER as *const PluginDescriptor, &REPORTER_VTABLE as *const PluginVTable)
     };
     if err_REPORTER.code != ABI_OK {
         return err_REPORTER;

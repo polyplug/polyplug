@@ -385,7 +385,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
 }
 
 /// Reload callback fires on every cycle and records the sequence of events.
-/// Verifies that the affected_contract_ids and bundle metadata are correct for
+/// Verifies that the bundle metadata are correct for
 /// all 100 reload events.
 #[test]
 #[ignore]

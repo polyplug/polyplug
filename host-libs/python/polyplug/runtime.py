@@ -209,6 +209,9 @@ class CFFIBackend:
         void* polyplug_runtime_resolve_plugin(void* rt, uint64_t packed_handle);
         size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
         size_t polyplug_runtime_error_message_len(void);
+        uint32_t polyplug_runtime_register_loader(void* rt, void* loader_ptr);
+        uint32_t polyplug_runtime_set_config(void* config);
+        uint32_t polyplug_runtime_on_reload(void* callback);
     """
 
     def __init__(self, lib_path: str) -> None:
@@ -256,12 +259,10 @@ class CFFIBackend:
         )
 
     def resolve_plugin(self, rt: int, handle: int) -> int:
-        return self.ffi.cast(
-            "uintptr_t",
-            self.lib.polyplug_runtime_resolve_plugin(
-                self.ffi.cast("void*", rt), handle
-            ),
+        result = self.lib.polyplug_runtime_resolve_plugin(
+            self.ffi.cast("void*", rt), handle
         )
+        return int(self.ffi.cast("uintptr_t", result))
 
     def last_error(self, rt: int, buf: Any, buf_len: int) -> int:
         return self.lib.polyplug_runtime_last_error(buf, buf_len)

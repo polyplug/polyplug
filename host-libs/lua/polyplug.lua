@@ -33,9 +33,9 @@ local function auto_load_native_lib()
     local script_dir = get_script_dir()
     local native_dir = script_dir .. "/_native/" .. platform
     
-    local os = jit.os
+    local jit_os = jit.os
     local lib_name
-    if os == "Windows" then
+    if jit_os == "Windows" then
         lib_name = "polyplug.dll"
     else
         lib_name = "libpolyplug.so"
@@ -63,11 +63,6 @@ M.PolyplugError = {
     STALE_HANDLE = 5,
     FUNCTION_NOT_AVAIL = 6
 }
-
--- Module-level FFI type caching for hot path performance
-local VTableType = ffi.typeof("const void**")
-local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")
-local func_cache = {}
 
 local FNV_OFFSET = 0xcbf29ce484222325ULL
 local FNV_PRIME = 0x00000100000001B3ULL
@@ -109,7 +104,26 @@ ffi.cdef([[
 
     typedef struct { uint8_t _reserved; } PolyplugNativeConfig;
     void* polyplug_native_loader_create(const PolyplugNativeConfig* cfg);
+
+    typedef struct { const uint8_t* ptr; size_t len; } StringView;
+
+    typedef struct {
+        uint64_t contract_id;
+        uint32_t contract_version;
+        uint32_t function_count;
+        const void* functions;
+    } PluginVTable;
+
+    typedef struct {
+        uint32_t code;
+        uint32_t _pad;
+        const uint8_t* message_ptr;
+        size_t message_len;
+    } AbiError;
 ]])
+
+local DispatchFnType = ffi.typeof("AbiError (*)(const void*, void*)")
+local func_cache = {}
 
 M.NULL_HANDLE = ffi.cast("uint64_t", "0xFFFFFFFFFFFFFFFF")
 
@@ -258,14 +272,13 @@ function M.Guard:call(func_idx, input)
     end
     
     local lib = self._runtime._lib
-    local vtable = ffi.cast(VTableType, vtable_ptr)
-    local func_count = ffi.cast("size_t*", vtable)[0]
-    local funcs = ffi.cast("void***", vtable + 1)[0]
+    local vtable = ffi.cast("const PluginVTable*", vtable_ptr)
     
-    if func_idx >= func_count then
+    if func_idx >= vtable.function_count then
         error("function index " .. func_idx .. " out of bounds")
     end
     
+    local funcs = ffi.cast("const void* const*", vtable.functions)
     local func_ptr = funcs[func_idx]
     local func = func_cache[func_ptr]
     if func == nil then
@@ -279,14 +292,14 @@ function M.Guard:call(func_idx, input)
     
     local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
     
-    local err_code = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
+    local result = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
     
-    if err_code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
-        local result = ffi.string(output_sv.ptr, output_sv.len)
-        lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
-        return result
+    if result.code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
+        local output_str = ffi.string(output_sv.ptr, output_sv.len)
+        lib.polyplug_host_free(ffi.cast("void*", output_sv.ptr), output_sv.len, 1)
+        return output_str
     else
-        error("plugin returned error code=" .. err_code)
+        error("plugin returned error code=" .. result.code)
     end
 end
 

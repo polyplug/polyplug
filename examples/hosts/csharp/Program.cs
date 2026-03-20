@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
 using Polyplug;
+using Polyplug.Guest;
+using Polyplug.Generated;
 
 class Program
 {
@@ -99,23 +99,10 @@ class Program
 
         Console.Error.WriteLine($"discovered {bundles.Count} bundles\n");
 
-        var bundleInfos = bundles.Select(bundleDir => {
-            rt.LoadBundle(bundleDir);
-            var manifestPath = Path.Combine(bundleDir, "manifest.toml");
-            var manifest = File.ReadAllText(manifestPath);
-            var nameMatch = Regex.Match(manifest, @"bundle_name\s*=\s*""([^""]+)""");
-            var providesMatch = Regex.Match(manifest, @"provides\s*=\s*\[([^\]]+)\]");
-            var name = nameMatch.Success ? nameMatch.Groups[1].Value : "unknown";
-            var provides = providesMatch.Success 
-                ? Regex.Matches(providesMatch.Groups[1].Value, @"""([^""]+)""")
-                    .Cast<Match>().Select(m => m.Groups[1].Value).ToList()
-                : new System.Collections.Generic.List<string>();
-            return new { Dir = bundleDir, Name = name, Provides = provides };
-        }).ToList();
-
-        foreach (var bundle in bundleInfos)
+        foreach (var bundleDir in bundles)
         {
-            Console.Error.WriteLine($"  loaded: {bundle.Name}");
+            rt.LoadBundle(bundleDir);
+            Console.Error.WriteLine($"  loaded: {Path.GetFileName(bundleDir)}");
         }
 
         Console.WriteLine("\n=== Pipeline Host (C#) ===\n");
@@ -123,54 +110,56 @@ class Program
         var inputStr = "name,value,42";
         Console.WriteLine($"Input: \"{inputStr}\"\n");
 
-        foreach (var bundle in bundleInfos)
+        // Use generated contract callers - no manifest parsing needed
+        if (PipelineDecoderContractCaller.Create(rt) is { } decoder)
         {
-            var bid = ContractId.BundleId(bundle.Name);
-
-            foreach (var contract in bundle.Provides)
+            using (decoder)
+            using (var input = new PinnedStringView(inputStr))
             {
-                var parts = contract.Split('@');
-                if (parts.Length != 2) continue;
-                var contractName = parts[0];
-                var versionParts = parts[1].Split('.');
-                var major = uint.Parse(versionParts[0].Split('-')[0]);
+                var result = decoder.Decode(input.View);
+                Console.WriteLine($"[decoder] decode(\"{inputStr}\") = \"{(string)result}\"");
+            }
+        }
 
-                var cid = ContractId.Compute(contractName, major);
-                var handle = rt.FindByBundle(bid, cid, 0);
+        var decoded = $"DECODED:{inputStr.Replace(',', '|')}";
+        if (DataTransformerContractCaller.Create(rt) is { } transformer)
+        {
+            using (transformer)
+            using (var input = new PinnedStringView(decoded))
+            {
+                var result = transformer.Transform(input.View);
+                Console.WriteLine($"[transformer] transform(\"{decoded}\") = \"{(string)result}\"");
+            }
+        }
 
-                if (handle == ulong.MaxValue) continue;
+        var transformed = "TRANSFORMED:NAME|value (transformed)|43";
+        if (PipelineEncoderContractCaller.Create(rt) is { } encoder)
+        {
+            using (encoder)
+            using (var input = new PinnedStringView(transformed))
+            {
+                var result = encoder.Encode(input.View);
+                Console.WriteLine($"[encoder] encode(\"{transformed}\") = \"{(string)result}\"");
+            }
+        }
 
-                using var guard = rt.ResolvePlugin(handle);
+        if (DataReporterContractCaller.Create(rt) is { } reporter)
+        {
+            using (reporter)
+            using (var input = new PinnedStringView(transformed))
+            {
+                var result = reporter.Report(input.View);
+                Console.WriteLine($"[reporter] report(\"{transformed}\") = \"{(string)result}\"");
+            }
+        }
 
-                if (contractName == "pipeline.Decoder")
-                {
-                    var result = guard.CallFunction(0, inputStr);
-                    Console.WriteLine($"[{bundle.Name}] decode(\"{inputStr}\") = \"{result}\"");
-                }
-                else if (contractName == "data.Transformer")
-                {
-                    var decoded = $"DECODED:{inputStr.Replace(',', '|')}";
-                    var result = guard.CallFunction(0, decoded);
-                    Console.WriteLine($"[{bundle.Name}] transform(\"{decoded}\") = \"{result}\"");
-                }
-                else if (contractName == "pipeline.Encoder")
-                {
-                    var transformed = "TRANSFORMED:NAME|value (transformed)|43";
-                    var result = guard.CallFunction(0, transformed);
-                    Console.WriteLine($"[{bundle.Name}] encode(\"{transformed}\") = \"{result}\"");
-                }
-                else if (contractName == "data.Reporter")
-                {
-                    var transformed = "TRANSFORMED:NAME|value (transformed)|43";
-                    var result = guard.CallFunction(0, transformed);
-                    Console.WriteLine($"[{bundle.Name}] report(\"{transformed}\") = \"{result}\"");
-                }
-                else if (contractName == "pipeline.Validator")
-                {
-                    var decoded = $"DECODED:{inputStr.Replace(',', '|')}";
-                    var result = guard.CallFunction(0, decoded);
-                    Console.WriteLine($"[{bundle.Name}] validate(\"{decoded}\") = \"{result}\"");
-                }
+        if (PipelineValidatorContractCaller.Create(rt) is { } validator)
+        {
+            using (validator)
+            using (var input = new PinnedStringView(decoded))
+            {
+                var result = validator.Validate(input.View);
+                Console.WriteLine($"[validator] validate(\"{decoded}\") = \"{(string)result}\"");
             }
         }
 

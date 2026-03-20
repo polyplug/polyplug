@@ -65,13 +65,19 @@ pub fn scan_dir(dir: &Path) -> Vec<(PathBuf, ManifestData)> {
                     continue;
                 }
             };
-            manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
+            if manifest.id == 0 {
+                eprintln!(
+                    "[polyplug] warning: skipping bundle with missing id: {}",
+                    entry_path.display()
+                );
+                continue;
+            }
             results.push((entry_path, manifest));
         }
     }
 
     results.sort_by(|a: &(PathBuf, ManifestData), b: &(PathBuf, ManifestData)| {
-        a.1.bundle_name.cmp(&b.1.bundle_name)
+        a.1.name.cmp(&b.1.name)
     });
 
     results
@@ -131,11 +137,11 @@ mod tests {
         std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
         std::fs::write(bundle_dir.join("myplugin.so"), b"").expect("write stub so");
         let manifest_content: &str =
-            "bundle_name = \"myplugin\"\nruntime = \"native\"\nfile = \"myplugin.so\"\n";
+            "name = \"myplugin\"\nruntime = \"native\"\nfile = \"myplugin.so\"\n";
         std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 1, "expected exactly one bundle");
-        assert_eq!(result[0].1.bundle_name, "myplugin");
+        assert_eq!(result[0].1.name, "myplugin");
     }
 
     #[test]
@@ -148,12 +154,12 @@ mod tests {
         std::fs::write(bundle_dir.join("mybundle.so"), b"").expect("write stub so");
 
         let manifest_content: &str =
-            "bundle_name = \"mybundle\"\nruntime = \"native\"\nfile = \"mybundle.so\"\n";
+            "name = \"mybundle\"\nruntime = \"native\"\nfile = \"mybundle.so\"\n";
         std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
 
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 1, "expected exactly one bundle");
-        assert_eq!(result[0].1.bundle_name, "mybundle");
+        assert_eq!(result[0].1.name, "mybundle");
     }
 
     #[test]
@@ -164,7 +170,7 @@ mod tests {
         std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
         std::fs::write(bundle_dir.join("plugin.so"), b"").expect("write stub so");
         let manifest_content: &str =
-            "bundle_name = \"plugin\"\nruntime = \"native\"\nfile = \"plugin.so\"\n";
+            "name = \"plugin\"\nruntime = \"native\"\nfile = \"plugin.so\"\n";
         std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
         // Scan the same directory twice
         let dirs: Vec<PathBuf> = vec![tmp.path().to_path_buf(), tmp.path().to_path_buf()];
@@ -190,7 +196,7 @@ mod tests {
         std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
         std::fs::write(bundle_dir.join("alpha.so"), b"").expect("write stub so");
         let manifest_content: &str =
-            "bundle_name = \"alpha\"\nruntime = \"native\"\nfile = \"alpha.so\"\n";
+            "name = \"alpha\"\nruntime = \"native\"\nfile = \"alpha.so\"\n";
         std::fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest");
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 1);
@@ -211,12 +217,12 @@ mod tests {
             std::fs::create_dir_all(&d).expect("create bundle dir");
             std::fs::write(d.join(format!("{name}.so")), b"").expect("write stub so");
             let content: String =
-                format!("bundle_name = \"{name}\"\nruntime = \"native\"\nfile = \"{name}.so\"\n");
+                format!("name = \"{name}\"\nruntime = \"native\"\nfile = \"{name}.so\"\n");
             std::fs::write(d.join("manifest.toml"), content).expect("write manifest");
         }
         let result: Vec<(PathBuf, ManifestData)> = scan_dir(tmp.path());
         assert_eq!(result.len(), 3);
-        let names: Vec<&str> = result.iter().map(|(_, m)| m.bundle_name.as_str()).collect();
+        let names: Vec<&str> = result.iter().map(|(_, m)| m.name.as_str()).collect();
         assert_eq!(
             names,
             vec!["apple", "mango", "zebra"],

@@ -99,8 +99,6 @@ def str_as_view_owned(s: str) -> StringView:
 
 # Module-level cached types for hot path performance
 class _VTableStruct(ctypes.Structure):
-    """VTable structure: { contract_id: u64, contract_version: u32, function_count: u32, functions: *const *const () }"""
-
     _fields_ = [
         ("contract_id", ctypes.c_uint64),
         ("contract_version", ctypes.c_uint32),
@@ -109,47 +107,48 @@ class _VTableStruct(ctypes.Structure):
     ]
 
 
-_DISPATCH_FN_TYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
+class _AbiError(ctypes.Structure):
+    _fields_ = [
+        ("code", ctypes.c_uint32),
+        ("_pad", ctypes.c_uint32),
+        ("message_ptr", ctypes.c_void_p),
+        ("message_len", ctypes.c_size_t),
+    ]
+
+
+_AbiErrorFnType = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
 _func_cache: dict[int, ctypes._CFuncPtr] = {}
 
 
 def call_plugin_fn(lib: ctypes.CDLL, vtable_ptr: int, func_idx: int, input: str) -> str:
-    """Call a plugin function by vtable index."""
     from polyplug.abi import StringView, polyplug_host_free
 
-    # Read vtable structure using cached type
     vtable = _VTableStruct.from_address(vtable_ptr)
     if func_idx >= vtable.function_count:
         raise RuntimeError(f"function index {func_idx} out of bounds")
 
-    # Get function pointer array
     funcs = ctypes.cast(vtable.functions, ctypes.POINTER(ctypes.c_void_p))
     func_ptr = funcs[func_idx]
 
-    # Get or create cached function wrapper
     if func_ptr not in _func_cache:
-        _func_cache[func_ptr] = _DISPATCH_FN_TYPE(func_ptr)
+        _func_cache[func_ptr] = _AbiErrorFnType(func_ptr)
     func = _func_cache[func_ptr]
 
-    # Prepare input StringView - keep buffer alive
     input_data = input.encode("utf-8")
     input_buf = ctypes.create_string_buffer(input_data, len(input_data))
     input_sv = StringView()
     input_sv.ptr = ctypes.cast(input_buf, ctypes.c_void_p)
     input_sv.len = len(input_data)
 
-    # Prepare output StringView
     output_sv = StringView()
     output_sv.ptr = 0
     output_sv.len = 0
 
-    # Call function
-    err_code = func(ctypes.byref(input_sv), ctypes.byref(output_sv))
+    result = func(ctypes.byref(input_sv), ctypes.byref(output_sv))
 
-    if err_code == 0 and output_sv.ptr and output_sv.len > 0:
-        result = to_str(output_sv)
-        # Free the output
+    if result.code == 0 and output_sv.ptr and output_sv.len > 0:
+        output_str = to_str(output_sv)
         polyplug_host_free(output_sv.ptr, output_sv.len, 1)
-        return result
+        return output_str
     else:
-        raise RuntimeError(f"plugin returned error code={err_code}")
+        raise RuntimeError(f"plugin returned error code={result.code}")

@@ -53,10 +53,10 @@ const SYMBOLS = {
 
 // Module-level caches for hot path performance
 const _funcCache = new Map();
-const _DISPATCH_FN_TYPE = new Deno.UnsafeFunctionPrototype({
+const _DISPATCH_FN_DEF = {
     parameters: ["pointer", "pointer"],
-    result: "u32"
-});
+    result: { struct: ["u32", "u32", "pointer", "usize"] }
+};
 const _encoder = new TextEncoder();
 const _decoder = new TextDecoder();
 
@@ -173,6 +173,14 @@ export class Runtime {
   }
 
   /**
+   * Get library instance.
+   * @returns {Deno.DynamicLibrary}
+   */
+  lib() {
+    return this.#lib;
+  }
+
+  /**
    * Get last error message.
    * @returns {string}
    */
@@ -286,8 +294,8 @@ export class Guard {
    * @returns {Deno.PointerValue}
    */
   #resolveVtable() {
-    const vtablePtr = this.#runtime.#lib.symbols.polyplug_runtime_resolve_plugin(
-      this.#runtime.#ptr,
+    const vtablePtr = this.#runtime.lib().symbols.polyplug_runtime_resolve_plugin(
+      this.#runtime.ptr(),
       this.#handle
     );
     if (vtablePtr === null) {
@@ -296,54 +304,71 @@ export class Guard {
     return vtablePtr;
   }
 
-  /**
-   * Call a plugin function by index (hot-reload safe).
-   * Re-resolves vtable on each call to detect stale handles.
-   * @param {number} funcIdx - Function index (0-based)
-   * @param {string} input - Input string
-   * @returns {string} Output string from plugin
-   */
+/**
+    * Call a plugin function by index (hot-reload safe).
+    * Re-resolves vtable on each call to detect stale handles.
+    * @param {number} funcIdx - Function index (0-based)
+    * @param {string} input - Input string
+    * @returns {string} Output string from plugin
+    */
   call(funcIdx, input) {
     const vtablePtr = this.#resolveVtable();
     
-    // Read vtable as BigUint64Array for faster access
-    const vtableBuf = new Deno.UnsafePointerView(vtablePtr).getArrayBuffer(16);
-    const vtable = new BigUint64Array(vtableBuf);
-    const funcCount = vtable[0];
-    const funcsPtr = vtable[1];
+    // PluginVTable layout (24 bytes):
+    // - offset 0: contract_id (u64, 8 bytes)
+    // - offset 8: contract_version (u32, 4 bytes)
+    // - offset 12: function_count (u32, 4 bytes)
+    // - offset 16: functions (pointer, 8 bytes)
+    const vtableBuf = new Deno.UnsafePointerView(vtablePtr).getArrayBuffer(24);
+    const vtableView = new DataView(vtableBuf);
+    const funcCount = vtableView.getUint32(12, true);
+    const funcsPtr = vtableView.getBigUint64(16, true);
     
-    if (funcIdx >= Number(funcCount)) {
+    if (funcIdx >= funcCount) {
       throw new Error(`function index ${funcIdx} out of bounds`);
     }
     
     // Read function pointer from funcs array
-    const funcsBuf = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr)).getArrayBuffer(Number(funcCount) * 8);
+    const funcsBuf = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr)).getArrayBuffer(funcCount * 8);
     const funcs = new BigUint64Array(funcsBuf);
-    const funcPtr = funcs[funcIdx];
+    const funcPtrBigInt = funcs[funcIdx];
     
-    let func = _funcCache.get(funcPtr);
+    let func = _funcCache.get(funcPtrBigInt);
     if (!func) {
-      func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_TYPE);
-      _funcCache.set(funcPtr, func);
+      const funcPtr = Deno.UnsafePointer.create(funcPtrBigInt);
+      func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_DEF);
+      _funcCache.set(funcPtrBigInt, func);
     }
     
+    // Prepare input StringView struct (ptr: u64, len: u64) = 16 bytes
     const inputData = _encoder.encode(input);
     const inputPtr = Deno.UnsafePointer.of(inputData);
+    const argsBuf = new Uint8Array(16);
+    const argsView = new DataView(argsBuf.buffer);
+    argsView.setBigUint64(0, Deno.UnsafePointer.value(inputPtr), true);
+    argsView.setBigUint64(8, BigInt(inputData.length), true);
+    const argsPtr = Deno.UnsafePointer.of(argsBuf);
     
-    const outputBuf = new Uint8Array(16);
-    const outputPtr = Deno.UnsafePointer.of(outputBuf);
+    // Prepare output StringView struct (ptr: u64, len: u64) = 16 bytes
+    const outBuf = new Uint8Array(16);
+    const outPtr = Deno.UnsafePointer.of(outBuf);
     
-    const errCode = func.call(inputPtr, outputPtr);
+    const result = func.call(argsPtr, outPtr);
+    
+    // result is AbiError struct: { code: u32, _pad: u32, message_ptr: pointer, message_len: usize }
+    const errCode = result[0];
     
     if (errCode === 0) {
-      const outputView = new Deno.UnsafePointerView(outputPtr);
-      const outPtr = outputView.getBigUint64(0);
-      const outLen = Number(outputView.getBigUint64(8));
+      const outView = new Deno.UnsafePointerView(outPtr);
+      const resultPtr = outView.getBigUint64(0);
+      const resultLen = Number(outView.getBigUint64(8));
       
-      if (outPtr !== 0n && outLen > 0) {
-        const result = new Deno.UnsafePointerView(outPtr).getUtf8String(outLen);
-        this.#runtime.#lib.symbols.polyplug_host_free(outPtr, BigInt(outLen), 1);
-        return result;
+      if (resultPtr !== 0n && resultLen > 0) {
+        const resultPtrObj = Deno.UnsafePointer.create(resultPtr);
+        const resultBuf = new Deno.UnsafePointerView(resultPtrObj).getArrayBuffer(resultLen);
+        const outputStr = _decoder.decode(new Uint8Array(resultBuf));
+        this.#runtime.lib().symbols.polyplug_host_free(resultPtrObj, BigInt(resultLen), 1);
+        return outputStr;
       }
     }
     

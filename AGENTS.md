@@ -18,7 +18,8 @@ If you are unsure whether something violates a rule — it probably does. Ask fi
 
 ## Non-Negotiable Rules
 
-Violating any rule below is grounds for immediate rejection of the change. These are not style suggestions. They are hard requirements.
+- Violating any rule below is grounds for immediate rejection of the change. These are not style suggestions. They are hard requirements.
+- DONT ever timeout tasks! wait for them to complete system will notify you when the background tasks complete! DONT POLL
 
 ---
 

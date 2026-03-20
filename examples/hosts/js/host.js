@@ -4,7 +4,9 @@
  * @description Pipeline Host — Deno host demonstrating polyplug usage.
  */
 
-import { openPolyplug, runtimeNew, contractId, bundleId, onReload, setConfig, RuntimeConfig } from "../../../host-libs/js/polyplug.js";
+import { openPolyplug, runtimeNew, NULL_HANDLE, onReload, setConfig } from "../../../host-libs/js/polyplug.js";
+import { RuntimeConfig } from "../../../host-libs/js/polyplug/runtime_config.js";
+import { ContractIds } from "./generated/host/callers.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/plugins";
@@ -36,62 +38,71 @@ onReload((phase) => {
     }
 });
 
+// Contract IDs are imported from generated code (polyplugc)
+
 const lib = openPolyplug(libPath);
 const rt = runtimeNew(lib);
 
-const bundles = [];
+const bundleNames = [];
 for await (const entry of Deno.readDir(pluginPath)) {
   if (!entry.isDirectory) continue;
-  const manifestPath = `${pluginPath}/${entry.name}/manifest.toml`;
+  const bundlePath = `${pluginPath}/${entry.name}`;
   try {
-    const content = await Deno.readTextFile(manifestPath);
-    const nameMatch = content.match(/bundle_name\s*=\s*"([^"]+)"/);
-    const providesMatch = content.match(/provides\s*=\s*\[([^\]]+)\]/);
-    if (nameMatch) {
-      const provides = providesMatch
-        ? providesMatch[1].match(/"([^"]+)"/g)?.map(s => s.slice(1, -1)) ?? []
-        : [];
-      bundles.push({ name: nameMatch[1], path: `${pluginPath}/${entry.name}`, provides });
-    }
-  } catch {
-    // No manifest
+    rt.loadBundle(bundlePath);
+    bundleNames.push(entry.name);
+    console.error(`  loaded: ${entry.name}`);
+  } catch (e) {
+    console.error(`  failed to load ${entry.name}: ${e.message}`);
   }
 }
 
-if (bundles.length === 0) {
+if (bundleNames.length === 0) {
   console.error(`no plugins found in ${pluginPath}`);
   Deno.exit(1);
 }
 
-console.error(`discovered ${bundles.length} bundles\n`);
-
-for (const bundle of bundles) {
-  rt.loadBundle(bundle.path);
-  console.error(`  loaded: ${bundle.name}`);
-}
+console.error(`\ndiscovered ${bundleNames.length} bundles\n`);
 
 console.log("\n=== Pipeline Host (JavaScript/Deno) ===\n");
 
 const inputStr = "name,value,42";
 console.log(`Input: "${inputStr}"\n`);
 
-for (const bundle of bundles) {
-  const bid = bundleId(bundle.name);
-  
-  for (const contract of bundle.provides) {
-    const parts = contract.split('@');
-    if (parts.length !== 2) continue;
-    const contractName = parts[0];
-    const versionParts = parts[1].split('.');
-    const major = parseInt(versionParts[0]) || 1;
-    
-    const cid = contractId(contractName, major);
-    const handle = rt.findByBundle(bid, cid, 0);
-    
-    if (handle === 0xFFFFFFFFFFFFFFFFn) continue;
-    
-    console.log(`[${bundle.name}] provides ${contract} (handle=${handle.toString(16)})`);
-  }
+const decoderHandle = rt.findByContract(ContractIds.PIPELINE_DECODER_CONTRACT_ID, 0);
+if (decoderHandle !== NULL_HANDLE) {
+  const guard = rt.resolvePlugin(decoderHandle);
+  const result = guard.call(0, inputStr);
+  console.log(`[decoder] decode("${inputStr}") = "${result}"`);
+}
+
+const decoded = `DECODED:${inputStr.replace(/,/g, "|")}`;
+const transformerHandle = rt.findByContract(ContractIds.DATA_TRANSFORMER_CONTRACT_ID, 0);
+if (transformerHandle !== NULL_HANDLE) {
+  const guard = rt.resolvePlugin(transformerHandle);
+  const result = guard.call(0, decoded);
+  console.log(`[transformer] transform("${decoded}") = "${result}"`);
+}
+
+const transformed = "TRANSFORMED:NAME|value (transformed)|43";
+const encoderHandle = rt.findByContract(ContractIds.PIPELINE_ENCODER_CONTRACT_ID, 0);
+if (encoderHandle !== NULL_HANDLE) {
+  const guard = rt.resolvePlugin(encoderHandle);
+  const result = guard.call(0, transformed);
+  console.log(`[encoder] encode("${transformed}") = "${result}"`);
+}
+
+const reporterHandle = rt.findByContract(ContractIds.DATA_REPORTER_CONTRACT_ID, 0);
+if (reporterHandle !== NULL_HANDLE) {
+  const guard = rt.resolvePlugin(reporterHandle);
+  const result = guard.call(0, transformed);
+  console.log(`[reporter] report("${transformed}") = "${result}"`);
+}
+
+const validatorHandle = rt.findByContract(ContractIds.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
+if (validatorHandle !== NULL_HANDLE) {
+  const guard = rt.resolvePlugin(validatorHandle);
+  const result = guard.call(0, decoded);
+  console.log(`[validator] validate("${decoded}") = "${result}"`);
 }
 
 console.log("\ndone.");

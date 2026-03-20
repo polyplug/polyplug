@@ -256,7 +256,7 @@ runtime = "native"
         "expected exactly 1 bundle (bundle_b skipped)"
     );
     assert_eq!(
-        discovered[0].1.bundle_name, "bundle_a",
+        discovered[0].1.name, "bundle_a",
         "only bundle_a should be in results"
     );
 }

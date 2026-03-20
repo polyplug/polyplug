@@ -17,14 +17,14 @@ use std::path::PathBuf;
 
 use crate::error::LoaderError;
 use crate::registry::Registry;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiError as AbiErrorType;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::sync::Arc;
 
 use crate::error::PolyplugError;
@@ -126,9 +126,14 @@ impl BundleLoader for NativeBundleLoader {
 
         // Derive the bundle directory from the .so file path (parent directory).
         let bundle_dir: &Path = path.parent().unwrap_or(path);
-        let mut manifest: ManifestData =
+        let manifest: ManifestData =
             parse_manifest(bundle_dir).map_err(|e: LoaderError| PolyplugError::Loader(e))?;
-        manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
+        if manifest.id == 0 {
+            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.display().to_string(),
+                error: "manifest.id is required but was 0 or missing".to_owned(),
+            }));
+        }
         load_bundle(path, &manifest, &self.registry, self.host_vtable)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))
     }
@@ -192,10 +197,9 @@ pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
 
     let mut manifest: ManifestData = ManifestData {
         runtime: trimmed.to_owned(),
-        bundle_name: data.bundle_name,
-        dependencies: data.dependencies,
-        bundle_id: 0,
         name: data.name,
+        dependencies: data.dependencies,
+        id: data.id,
         version: data.version,
         file: data.file,
         provides: data.provides,
@@ -249,7 +253,7 @@ pub fn load_bundle(
         })
         .collect::<Vec<u64>>();
     registry
-        .declare_deps(manifest.bundle_id, dep_contract_ids)
+        .declare_deps(manifest.id, dep_contract_ids)
         .map_err(|e: crate::error::RegistryError| LoaderError::InitFailed {
             bundle: path_str.clone(),
             error: format!("declare_deps failed: {e}"),
@@ -340,8 +344,8 @@ pub fn load_bundle(
     REGISTRAR_REGISTRY_PTR.with(|c: &core::cell::Cell<*const Registry>| {
         c.set(registry as *const Registry);
     });
-    REGISTRAR_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
-    crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.bundle_id));
+    REGISTRAR_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.id));
+    crate::runtime::INIT_BUNDLE_ID.with(|c: &core::cell::Cell<u64>| c.set(manifest.id));
     // Guard clears all three thread-locals on drop (even on panic)
     let _bundle_guard: BundleInitGuard = BundleInitGuard;
 

@@ -25,7 +25,6 @@ pub struct ReloadEvent {
     pub bundle_path: String,
     pub old_version: String,
     pub new_version: String,
-    pub affected_contract_ids: Vec<u64>,
 }
 
 /// Phase of a hot-reload operation for notification callbacks.
@@ -103,7 +102,12 @@ pub(crate) fn reload_bundle_impl(
 
     let mut manifest: ManifestData = crate::loader::parse_manifest(&bundle_dir_path)
         .map_err(|e: crate::error::LoaderError| PolyplugError::Loader(e))?;
-    manifest.bundle_id = polyplug_abi::bundle_id(&manifest.bundle_name);
+    if manifest.id == 0 {
+        return Err(PolyplugError::ReloadFailed {
+            bundle: path.display().to_string(),
+            reason: "manifest.id is required but was 0 or missing".to_owned(),
+        });
+    }
     manifest.path = bundle_dir_path.clone();
     if manifest.runtime != "native" {
         crate::runtime::emit_warning(&format!(
@@ -117,7 +121,7 @@ pub(crate) fn reload_bundle_impl(
         });
     }
 
-    let bundle_id_val: u64 = manifest.bundle_id;
+    let bundle_id_val: u64 = manifest.id;
     let slot_indices: Vec<u32> = runtime.registry().find_slots_by_bundle(bundle_id_val);
     if slot_indices.is_empty() {
         return Err(PolyplugError::ReloadFailed {
@@ -211,7 +215,7 @@ pub(crate) fn reload_bundle_impl(
         if let Some(ref cb) = runtime.on_reload_cb {
             cb(ReloadPhase::Preparing {
                 bundle_id: bundle_id_val,
-                bundle_name: manifest.bundle_name.clone(),
+                bundle_name: manifest.name.clone(),
                 retry_count,
             });
         }
@@ -239,12 +243,12 @@ pub(crate) fn reload_bundle_impl(
         if retry_count >= config.hot_reload_max_retries && config.hot_reload_abort_on_max_retries {
             crate::runtime::emit_warning(&format!(
                 "hot-reload: max retries ({}) exceeded for bundle {} with active instances",
-                config.hot_reload_max_retries, manifest.bundle_name
+                config.hot_reload_max_retries, manifest.name
             ));
             if let Some(ref cb) = runtime.on_reload_cb {
                 cb(ReloadPhase::Failed {
                     bundle_id: bundle_id_val,
-                    bundle_name: manifest.bundle_name.clone(),
+                    bundle_name: manifest.name.clone(),
                     reason: "max retries exceeded with active instances".to_owned(),
                 });
             }
@@ -280,7 +284,7 @@ pub(crate) fn reload_bundle_impl(
     if let Some(ref cb) = runtime.on_reload_cb {
         cb(ReloadPhase::Reloaded {
             bundle_id: bundle_id_val,
-            bundle_name: manifest.bundle_name.clone(),
+            bundle_name: manifest.name.clone(),
         });
     }
 
@@ -292,7 +296,7 @@ pub(crate) fn reload_bundle_impl(
             }
             if quiescence_start.elapsed() > QUIESCENCE_TIMEOUT {
                 return Err(PolyplugError::QuiescenceTimeout {
-                    bundle: manifest.bundle_name.clone(),
+                    bundle: manifest.name.clone(),
                 });
             }
             std::thread::sleep(Duration::from_millis(1_u64));
@@ -317,14 +321,14 @@ pub(crate) fn reload_bundle_impl(
         .bundle_manifests
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(manifest.bundle_name.clone(), manifest.clone());
+        .insert(manifest.name.clone(), manifest.clone());
 
     let dependents: Vec<(String, PathBuf)> = {
         let manifests_guard: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = runtime
             .bundle_manifests
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        find_cascade_targets(&manifests_guard, &manifest.bundle_name)
+        find_cascade_targets(&manifests_guard, &manifest.name)
     };
     for (_dep_name, dep_path) in dependents {
         reload_bundle_impl(runtime, &dep_path, cascade_depth + 1_usize)?;
@@ -810,14 +814,12 @@ mod tests {
             bundle_path: "/path/to/bundle".to_owned(),
             old_version: "1.0.0".to_owned(),
             new_version: "2.0.0".to_owned(),
-            affected_contract_ids: vec![0x1111_u64, 0x2222_u64],
         };
 
         assert_eq!(event.bundle_name, "event_bundle");
         assert_eq!(event.bundle_path, "/path/to/bundle");
         assert_eq!(event.old_version, "1.0.0");
         assert_eq!(event.new_version, "2.0.0");
-        assert_eq!(event.affected_contract_ids, vec![0x1111_u64, 0x2222_u64]);
     }
 
     #[test]
@@ -827,7 +829,6 @@ mod tests {
             bundle_path: "/clone/path".to_owned(),
             old_version: "0.1.0".to_owned(),
             new_version: "0.2.0".to_owned(),
-            affected_contract_ids: vec![0xABCD_u64],
         };
         let cloned: ReloadEvent = original.clone();
 
@@ -835,7 +836,6 @@ mod tests {
         assert_eq!(original.bundle_path, cloned.bundle_path);
         assert_eq!(original.old_version, cloned.old_version);
         assert_eq!(original.new_version, cloned.new_version);
-        assert_eq!(original.affected_contract_ids, cloned.affected_contract_ids);
     }
 
     #[test]
@@ -845,7 +845,6 @@ mod tests {
             bundle_path: "/debug/path".to_owned(),
             old_version: "1.0".to_owned(),
             new_version: "2.0".to_owned(),
-            affected_contract_ids: vec![],
         };
         let debug_str: String = format!("{event:?}");
 
