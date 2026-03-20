@@ -23,7 +23,7 @@ end
 local function get_script_dir()
     local source = debug.getinfo(1, "S").source
     if source:sub(1, 1) == "@" then
-        return source:match("^@(.-)/")
+        return source:match("^@(.+)/") or "."
     end
     return "."
 end

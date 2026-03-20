@@ -249,6 +249,16 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
 
     out.push_str("local M = {}\n\n");
 
+    // Export contract ID constants
+    for contract in &ir.contracts {
+        let upper_name: String = contract.name.to_uppercase().replace(['.', '-'], "_");
+        out.push_str(&format!(
+            "M.{}_CONTRACT_ID = {}_CONTRACT_ID\n",
+            upper_name, upper_name
+        ));
+    }
+    out.push('\n');
+
     // Cached FFI types for hot path performance
     out.push_str("-- Cached FFI types for hot path performance\n");
     out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, void*)\")\n\n");

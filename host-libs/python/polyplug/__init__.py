@@ -10,10 +10,11 @@ from polyplug._native import load_native_lib as _load_native_lib
 _native_lib = _load_native_lib()
 
 from polyplug.abi import ReloadPhase, ReloadPhaseType
-from polyplug.runtime import Runtime
+from polyplug.runtime import PluginGuard, Runtime
 from polyplug.runtime_config import RuntimeConfig
 
 __all__ = [
+    "PluginGuard",
     "Runtime",
     "RuntimeConfig",
     "ReloadPhase",

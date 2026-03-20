@@ -17,6 +17,7 @@ from typing import ClassVar, Optional
 # ABI constants
 ABI_OK: int = 0
 ABI_ERROR_GENERIC: int = 1
+ABI_FUNCTION_NOT_AVAIL: int = 6
 
 
 class StringView(ctypes.Structure):

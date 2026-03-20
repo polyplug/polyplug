@@ -2,7 +2,11 @@
 
 local ffi = require('ffi')
 local polyplug = require('polyplug')
-polyplug.load_lib(os.getenv('POLYPLUG_LIB_PATH') or 'libpolyplug.so')
+-- Library is auto-loaded by polyplug module, but allow override via POLYPLUG_LIB
+local lib_path = os.getenv('POLYPLUG_LIB')
+if lib_path then
+    polyplug.load_lib(lib_path)
+end
 
 local runtime_mod = require('polyplug.runtime')
 local callers = require('generated.host.callers')
