@@ -6,9 +6,9 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
+use super::types::*;
 use polyplug_guest::PluginError;
 use polyplug_guest::StringView;
-use super::types::*;
 
 /// Guest trait for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
 pub trait PipelineDecoderPlugin: Send + Sync {
@@ -34,4 +34,3 @@ pub trait DataReporterPlugin: Send + Sync {
 pub trait PipelineValidatorPlugin: Send + Sync {
     fn validate(&self, input: StringView) -> Result<StringView, PluginError>;
 }
-

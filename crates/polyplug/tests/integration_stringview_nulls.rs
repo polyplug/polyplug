@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests: StringView with embedded null bytes.
 //! polyplug never treats StringView as null-terminated — embedded \x00 bytes must
 //! be preserved through any polyplug-internal API that processes StringViews.

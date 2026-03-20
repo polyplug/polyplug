@@ -5,12 +5,7 @@ local polyplug = require('polyplug')
 polyplug.load_lib(os.getenv('POLYPLUG_LIB_PATH') or 'libpolyplug.so')
 
 local runtime_mod = require('polyplug.runtime')
-
-local PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EULL
-local DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL
-local PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432ULL
-local DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297ULL
-local PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0ULL
+local callers = require('generated.host.callers')
 
 local function get_plugin_path()
     local path = os.getenv('POLYPLUG_PLUGIN_PATH')
@@ -104,29 +99,29 @@ local function call_contract(rt, contract_id, input)
     return guard:call(0, input)
 end
 
-local result = call_contract(rt, PIPELINE_DECODER_CONTRACT_ID, input_str)
+local result = call_contract(rt, callers.PIPELINE_DECODER_CONTRACT_ID, input_str)
 if result then
     print('[decoder] decode("' .. input_str .. '") = "' .. result .. '"')
 end
 
 local decoded = 'DECODED:' .. input_str:gsub(',', '|')
-local result = call_contract(rt, DATA_TRANSFORMER_CONTRACT_ID, decoded)
+local result = call_contract(rt, callers.DATA_TRANSFORMER_CONTRACT_ID, decoded)
 if result then
     print('[transformer] transform("' .. decoded .. '") = "' .. result .. '"')
 end
 
 local transformed = 'TRANSFORMED:NAME|value (transformed)|43'
-local result = call_contract(rt, PIPELINE_ENCODER_CONTRACT_ID, transformed)
+local result = call_contract(rt, callers.PIPELINE_ENCODER_CONTRACT_ID, transformed)
 if result then
     print('[encoder] encode("' .. transformed .. '") = "' .. result .. '"')
 end
 
-local result = call_contract(rt, DATA_REPORTER_CONTRACT_ID, transformed)
+local result = call_contract(rt, callers.DATA_REPORTER_CONTRACT_ID, transformed)
 if result then
     print('[reporter] report("' .. transformed .. '") = "' .. result .. '"')
 end
 
-local result = call_contract(rt, PIPELINE_VALIDATOR_CONTRACT_ID, decoded)
+local result = call_contract(rt, callers.PIPELINE_VALIDATOR_CONTRACT_ID, decoded)
 if result then
     print('[validator] validate("' .. decoded .. '") = "' .. result .. '"')
 end

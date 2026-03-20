@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests: non-UTF-8 bytes passed to polyplug_runtime_load_bundle / polyplug_runtime_reload_bundle
 //! must produce a non-zero return code and a last_error message, not a panic or UB.
 

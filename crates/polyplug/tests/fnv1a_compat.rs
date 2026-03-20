@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! FNV-1a cross-language compatibility test.
 //!
 //! Verifies that the Rust `contract_id` function produces the expected values

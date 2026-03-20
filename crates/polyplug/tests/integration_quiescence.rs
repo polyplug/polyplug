@@ -4,6 +4,8 @@
 //!
 //! This test takes ~5 seconds. Run with: cargo test -- --ignored
 
+#![allow(clippy::expect_used)]
+
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::runtime::Runtime;

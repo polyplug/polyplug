@@ -1291,6 +1291,7 @@ fn generate_python_enum(out: &mut String, e: &EnumDef) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::ReprType;
 

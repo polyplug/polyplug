@@ -654,8 +654,14 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
     })
 }
 
+// Suppress unused import warning for HashMap (used in future expansion)
+const _: () = {
+    let _ = core::mem::size_of::<HashMap<String, String>>();
+};
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
 
     const SAMPLE_API: &str = "[[contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[contract.functions]]\nname = \"decode\"\n\n[[contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
@@ -819,21 +825,16 @@ mod tests {
         assert_eq!(ir.enums[0].variants[0].name, "Ok");
         assert_eq!(ir.enums[0].variants[1].value, "1");
     }
-}
 
-#[test]
-fn parse_bundle_with_dependency() {
-    let toml: &str = concat!(
-        "[bundle]\nname = \"audio-engine\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n",
-        "[[plugin]]\nname = \"decoder\"\nversion = \"1.0.0\"\nimplements = [\"audio.decode@1.0\"]\n\n",
-        "[[dependency]]\nkind = \"contract\"\ncontract = \"audio-decoder\"\nmin_version = \"1.0\"\n"
-    );
-    let ir: ValidatedIr = parse_bundle_str(toml).expect("parse bundle with dep");
-    let bundle: &ResolvedBundle = ir.bundle.as_ref().expect("bundle");
-    assert_eq!(bundle.name, "audio-engine");
+    #[test]
+    fn parse_bundle_with_dependency() {
+        let toml: &str = concat!(
+            "[bundle]\nname = \"audio-engine\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n",
+            "[[plugin]]\nname = \"decoder\"\nversion = \"1.0.0\"\nimplements = [\"audio.decode@1.0\"]\n\n",
+            "[[dependency]]\nkind = \"contract\"\ncontract = \"audio-decoder\"\nmin_version = \"1.0\"\n"
+        );
+        let ir: ValidatedIr = parse_bundle_str(toml).expect("parse bundle with dep");
+        let bundle: &ResolvedBundle = ir.bundle.as_ref().expect("bundle");
+        assert_eq!(bundle.name, "audio-engine");
+    }
 }
-
-// Suppress unused import warning for HashMap (used in future expansion)
-const _: () = {
-    let _ = core::mem::size_of::<HashMap<String, String>>();
-};

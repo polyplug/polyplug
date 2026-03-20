@@ -12,8 +12,6 @@ use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::PrimitiveType;
-#[cfg(test)]
-use crate::ir::ReprType;
 use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
@@ -1433,7 +1431,10 @@ const _: fn() = || {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
+    use crate::ir::ReprType;
 
     #[test]
     fn contract_name_to_struct_conversion() {

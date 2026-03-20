@@ -366,6 +366,7 @@ pub(crate) fn resolve_type_ref(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use polyplug_abi::bundle_id as runtime_bundle_id;
     use polyplug_abi::contract_id as runtime_contract_id;

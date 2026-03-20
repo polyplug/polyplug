@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Edge case tests for Registry.
 //!
 //! Tests for:

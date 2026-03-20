@@ -5,6 +5,7 @@
 //! the native loader.
 
 #![allow(clippy::expect_used)]
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::ffi::{
     OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,

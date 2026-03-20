@@ -1,8 +1,14 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests: version negotiation, compatibility modes, and warning callbacks.
+
+use std::collections::HashMap;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::manifest::RawManifestDependency;
 use polyplug::runtime::Runtime;
 use polyplug::version::Compatibility;
 use polyplug_abi::PluginRegistrar;
@@ -13,10 +19,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use tempfile::TempDir;
-
-// ────────────────────────────────────────────────────────────────────────────
-// No-op loader: accepts any bundle, does nothing (for validation-only tests)
-// ────────────────────────────────────────────────────────────────────────────
 
 struct NoopLoader;
 
@@ -33,10 +35,6 @@ impl BundleLoader for NoopLoader {
         Ok(())
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Shared warning sink (process-wide, set once via OnceLock)
-// ────────────────────────────────────────────────────────────────────────────
 
 static WARNING_SINK: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
 
@@ -56,73 +54,53 @@ fn ensure_warning_registered() {
     });
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Manifest helper
-// ────────────────────────────────────────────────────────────────────────────
-
 fn write_bundle_manifest(
     dir: &TempDir,
     bundle_name: &str,
     version: &str,
     provides: &[&str],
     function_count_entries: &[(&str, u32)],
-    deps: &[(&str, u64, &str)], // (contract_name, contract_id, min_version)
+    deps: &[(&str, u64, &str)],
 ) -> PathBuf {
     let bundle_dir: PathBuf = dir.path().join(bundle_name);
     std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
-    // Write stub .so inside bundle dir (the no-op loader never calls dlopen)
     let so_name: String = format!("{bundle_name}.so");
     std::fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
 
-    // Build provides array
-    let provides_toml: String = if provides.is_empty() {
-        "[]".to_owned()
-    } else {
-        format!(
-            "[{}]",
-            provides
-                .iter()
-                .map(|s: &&str| format!("\"{}\"", s))
-                .collect::<Vec<String>>()
-                .join(", ")
-        )
+    let function_count: HashMap<String, u32> = function_count_entries
+        .iter()
+        .map(|(k, v)| (k.to_string(), *v))
+        .collect();
+
+    let dependencies: Vec<RawManifestDependency> = deps
+        .iter()
+        .map(|(contract, cid, min_ver)| RawManifestDependency {
+            kind: "contract".to_owned(),
+            contract: contract.to_string(),
+            contract_id: *cid,
+            min_version: min_ver.to_string(),
+            bundle: None,
+            bundle_id: None,
+        })
+        .collect();
+
+    let manifest: ManifestData = ManifestData {
+        id: 1,
+        name: bundle_name.to_owned(),
+        runtime: "test-noop".to_owned(),
+        file: so_name,
+        version: version.to_owned(),
+        provides: provides.iter().map(|s| s.to_string()).collect(),
+        function_count,
+        dependencies,
+        needs_reinit_on_dep_reload: false,
+        path: PathBuf::new(),
     };
 
-    // Build [function_count] section lines
-    let fn_count_lines: String = function_count_entries
-        .iter()
-        .map(|(key, count): &(&str, u32)| format!("\"{}\" = {}", key, count))
-        .collect::<Vec<String>>()
-        .join("\n");
+    fs::write(bundle_dir.join("manifest.toml"), manifest.to_toml()).expect("write manifest.toml");
 
-    // Build dependency entries
-    let dep_lines: String = deps
-        .iter()
-        .map(|(contract, cid, min_ver): &(&str, u64, &str)| {
-            format!(
-                "\n[[dependency]]\nkind = \"contract\"\ncontract = \"{contract}\"\ncontract_id = {cid}\nmin_version = \"{min_ver}\""
-            )
-        })
-        .collect::<Vec<String>>()
-        .join("\n");
-
-    let toml_content: String = format!(
-        "bundle_name = \"{bundle_name}\"\n\
-        version = \"{version}\"\n\
-        runtime = \"test-noop\"\n\
-        file = \"{so_name}\"\n\
-        provides = {provides_toml}\n\
-        needs_reinit_on_dep_reload = false\n\
-        \n\
-        [function_count]\n\
-        {fn_count_lines}\n\
-        {dep_lines}\n"
-    );
-
-    fs::write(bundle_dir.join("manifest.toml"), toml_content).expect("write manifest.toml");
-
-    bundle_dir // Return the DIRECTORY path
+    bundle_dir
 }
 
 // ────────────────────────────────────────────────────────────────────────────

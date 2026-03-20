@@ -365,11 +365,7 @@ impl RuntimeBuilder {
                     })?;
 
                 let (mut registrar, _guard): (PluginRegistrar, BundleInitGuard) =
-                    crate::loader::make_registrar_context(
-                        &registry,
-                        manifest.id,
-                        host_vtable,
-                    );
+                    crate::loader::make_registrar_context(&registry, manifest.id, host_vtable);
 
                 // For directory bundles, resolve the actual file path from manifest.file.
                 // Loaders (Python, Lua, JS, dotnet) expect a direct file path — they
@@ -611,11 +607,7 @@ impl Runtime {
         // and REGISTRAR_BUNDLE_ID thread-locals. This is required for non-native loaders
         // (Python, Lua, JS, dotnet) whose register_plugin callbacks depend on these TLS values.
         let (mut registrar, _guard): (PluginRegistrar, crate::loader::BundleInitGuard) =
-            crate::loader::make_registrar_context(
-                &self.registry,
-                manifest.id,
-                self.host_vtable,
-            );
+            crate::loader::make_registrar_context(&self.registry, manifest.id, self.host_vtable);
         let effective_path: PathBuf = if !manifest.file.is_empty() {
             path.join(&manifest.file)
         } else {
@@ -822,14 +814,12 @@ pub(crate) fn validate_bundle_compatibility(
                 None => continue, // graph already validates this
             };
 
-            let required: Version = match Version::parse(dep_min_version_str, &manifest.name)
-            {
+            let required: Version = match Version::parse(dep_min_version_str, &manifest.name) {
                 Ok(v) => v,
                 Err(e) => return Err(RuntimeError::Loader(e)),
             };
 
-            let provided: Version =
-                parse_manifest_version(&provider.version, &provider.name)?;
+            let provided: Version = parse_manifest_version(&provider.version, &provider.name)?;
 
             if !provided.is_compatible_with(&required) {
                 match compatibility {
@@ -996,6 +986,7 @@ pub(crate) unsafe extern "C" fn host_get_extension(extension_id: u32) -> *const 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use std::sync::OnceLock;
 
@@ -1157,7 +1148,7 @@ mod tests {
             panic!("failed to write dummy so {}: {e}", so_path.display());
         }
         let manifest: String = format!(
-            "bundle_name = \"{}\"\nruntime = \"{}\"\nfile = \"dummy.so\"\n",
+            "id = 12345\nname = \"{}\"\nruntime = \"{}\"\nfile = \"dummy.so\"\n",
             bundle_name, runtime
         );
         let manifest_path: PathBuf = bundle_dir.join("manifest.toml");

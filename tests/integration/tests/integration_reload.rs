@@ -1,12 +1,12 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering;
+use core::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
@@ -31,7 +31,7 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable).functions;
-        std::mem::transmute(*fns)
+        core::mem::transmute(*fns)
     };
     Some(fn_ptr)
 }
@@ -72,7 +72,7 @@ fn test_b_in_flight_safety() {
                 if let Ok(vt) = vt_result {
                     // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
                     let _: u32 = unsafe {
-                        let f: extern "C" fn() -> u32 = std::mem::transmute(*(*vt).functions);
+                        let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).functions);
                         f()
                     };
                 }
@@ -140,7 +140,7 @@ fn test_e_cascade_reload() {
         let vt: *const PluginVTable = rt.resolve_plugin(handle).expect("resolve depender");
         // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
-            let f: extern "C" fn() -> u32 = std::mem::transmute(*(*vt).functions);
+            let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).functions);
             f()
         }
     };
@@ -155,7 +155,7 @@ fn test_e_cascade_reload() {
             .expect("resolve depender after reload");
         // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
-            let f: extern "C" fn() -> u32 = std::mem::transmute(*(*vt).functions);
+            let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).functions);
             f()
         }
     };

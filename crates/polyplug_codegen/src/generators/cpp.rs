@@ -1158,6 +1158,9 @@ const _: fn() = || {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
     use crate::ir::ReprType;
 
@@ -1198,12 +1201,14 @@ mod tests {
             .generate_host(&ir, &mut files)
             .expect("generate_host");
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
-        assert!(files.files.len() >= 1);
+        assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(files
-            .files
-            .iter()
-            .any(|f| f.content.contains("AUTO-GENERATED")));
+        assert!(
+            files
+                .files
+                .iter()
+                .any(|f| f.content.contains("AUTO-GENERATED"))
+        );
     }
 
     #[test]

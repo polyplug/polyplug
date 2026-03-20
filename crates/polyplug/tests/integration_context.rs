@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration test: verify the `PluginContext.bundle_path` round-trip for the Rust fixture plugin.
 //!
 //! Loads the test_plugin shared library, calls `polyplug_init` with a crafted

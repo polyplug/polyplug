@@ -907,8 +907,14 @@ fn generate_lua_enum(out: &mut String, e: &EnumDef) {
     out.push_str("}\n");
 }
 
+// Compile-time assertion that lua_type_name compiles for primitive types.
+const _: fn() = || {
+    let _: String = lua_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
+};
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::ReprType;
 
@@ -979,6 +985,3 @@ mod tests {
         );
     }
 }
-const _: fn() = || {
-    let _: String = lua_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
-};

@@ -77,6 +77,7 @@ pub enum Compatibility {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::{Compatibility, Version};
 
     #[test]

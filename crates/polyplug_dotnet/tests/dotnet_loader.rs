@@ -3,6 +3,9 @@
 //! Tests that require the CLR or a real .NET SDK are marked `#[ignore]`.
 //! Run them with: `cargo test --test dotnet_loader -- --include-ignored`
 
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;

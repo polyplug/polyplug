@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
 // Run with: cargo bench -p polyplug --bench registry_find
 //

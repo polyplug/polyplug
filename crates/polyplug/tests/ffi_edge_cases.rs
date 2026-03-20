@@ -1,9 +1,13 @@
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::undocumented_unsafe_blocks)]
+
 //! Edge case tests for the FFI layer.
 //!
 //! Tests null pointers, stale handles, and buffer boundary conditions
 //! for `polyplug_runtime_resolve_plugin` and `polyplug_runtime_find_all_by_contract`.
 
-use std::io::Write;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use polyplug::ffi::OpaqueRuntime;
@@ -14,12 +18,12 @@ use polyplug::ffi::polyplug_runtime_find_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::loader::manifest::ManifestData;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const RELOAD_PLUGIN_V1_DIR: &str = env!("RELOAD_PLUGIN_V1_DIR");
 const TEST_PLUGIN_CPP_SO: &str = env!("TEST_PLUGIN_CPP_SO");
 
-// test.add@1 contract_id = FNV-1a("test.add@1") = 0xCC4232FAB0410D2B
 const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -201,7 +205,6 @@ fn test_find_all_by_contract_exact_capacity() {
 /// Expected: Returns only what fits in buffer.
 #[test]
 fn test_find_all_by_contract_overflow() {
-    // Skip if C++ plugin not available (g++ not installed)
     if TEST_PLUGIN_CPP_SO.is_empty() {
         eprintln!("Skipping test_find_all_by_contract_overflow: TEST_PLUGIN_CPP_SO not set");
         return;
@@ -234,23 +237,19 @@ fn test_find_all_by_contract_overflow() {
     std::fs::copy(&cpp_so_path, cpp_bundle_dir.join(cpp_so_filename))
         .expect("failed to copy cpp so");
 
-    // Write manifest.toml for the C++ plugin
-    // C++ plugin has 1 function for test.add@1
-    let manifest_content: &str = concat!(
-        "bundle_name = \"cpp_test_adder\"\n",
-        "version     = \"1.0\"\n",
-        "runtime     = \"native\"\n",
-        "file        = \"libtest_plugin_cpp.so\"\n",
-        "provides    = [\"test.add\"]\n",
-        "\n",
-        "[function_count]\n",
-        "\"test.add@1\" = 1\n",
-    );
-    let mut manifest_file: std::fs::File =
-        std::fs::File::create(cpp_bundle_dir.join("manifest.toml"))
-            .expect("failed to create manifest");
-    manifest_file
-        .write_all(manifest_content.as_bytes())
+    let manifest: ManifestData = ManifestData {
+        id: 1,
+        name: "cpp_test_adder".to_owned(),
+        runtime: "native".to_owned(),
+        file: cpp_so_filename.to_owned(),
+        version: "1.0".to_owned(),
+        provides: vec!["test.add".to_owned()],
+        function_count: HashMap::from([("test.add@1".to_owned(), 1)]),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        path: PathBuf::new(),
+    };
+    std::fs::write(cpp_bundle_dir.join("manifest.toml"), manifest.to_toml())
         .expect("failed to write manifest");
 
     // Load the C++ plugin (also provides "test.add@1")
@@ -282,7 +281,6 @@ fn test_find_all_by_contract_overflow() {
             handles.len(),
         )
     };
-    // Should return 1 (buffer capacity), not 2 (actual count)
     assert_eq!(count, 1, "find_all must return only what fits in buffer");
     assert_ne!(handles[0], u64::MAX, "handle must not be null sentinel");
 

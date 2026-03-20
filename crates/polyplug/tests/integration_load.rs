@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration test: load the test_plugin .so, verify ABI version, verify vtable registration.
 //!
 //! This test crate is the crate root for the `integration_load` test binary.

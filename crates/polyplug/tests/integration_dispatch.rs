@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration test: call through vtable, verify function executes and returns ABI_OK.
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.

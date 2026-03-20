@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Stress tests for the hot-reload subsystem.
 //!
 //! These tests are marked `#[ignore]` because they are slow (100+ reload cycles,

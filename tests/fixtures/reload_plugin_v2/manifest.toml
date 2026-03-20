@@ -1,4 +1,5 @@
-bundle_name                = "reload_plugin_v1"
+id                         = 16808897324254478442
+name                       = "reload_plugin_v1"
 version                    = "2.0"
 runtime                    = "native"
 file                       = "libreload_plugin_v2.so"

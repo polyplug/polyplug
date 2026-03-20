@@ -644,6 +644,7 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
 
     #[test]

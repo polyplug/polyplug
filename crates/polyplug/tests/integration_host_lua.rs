@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests for the polyplug C facade (polyplug_ffi_* symbols).
 //!
 //! These tests call the C ABI functions directly from Rust (same process),

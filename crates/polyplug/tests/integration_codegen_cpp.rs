@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration test: run polyplugc to generate C++ bindings, assert all 7 expected
 //! files are present, optionally compile with g++, and dispatch through the pre-built
 //! C++ test plugin vtable when TEST_PLUGIN_CPP_SO is non-empty.

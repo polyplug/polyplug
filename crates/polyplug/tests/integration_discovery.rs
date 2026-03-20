@@ -1,4 +1,8 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests: multi-bundle discovery, graph resolution, load order, error cases.
+
+use std::collections::HashMap;
 
 use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
@@ -6,6 +10,7 @@ use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
 use polyplug::graph::CapabilityGraph;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::manifest::RawManifestDependency;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use std::fs;
@@ -13,83 +18,70 @@ use std::path::Path;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-/// Write a bundle directory: `<dir>/<stem>/manifest.toml` + `<dir>/<stem>/<stem>.so` stub.
-/// The `toml_content` should NOT include `file = "..."` — this helper adds it.
-fn write_bundle_dir(dir: &Path, stem: &str, toml_content: &str) {
-    let bundle_dir: PathBuf = dir.join(stem);
+fn write_bundle_with_manifest(dir: &Path, manifest: &ManifestData) {
+    let bundle_dir: PathBuf = dir.join(&manifest.name);
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    let so_name: String = format!("{stem}.so");
-    fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
-    let manifest_toml: String = format!("file = \"{}\"\n{}", so_name, toml_content);
-    fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest.toml");
-}
-
-/// Write a script bundle (directory with manifest.toml inside).
-#[allow(dead_code)]
-fn write_script_bundle(
-    dir: &Path,
-    bundle_dir_name: &str,
-    manifest_content: &str,
-    script_name: &str,
-) {
-    let bundle_dir: PathBuf = dir.join(bundle_dir_name);
-    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
-    fs::write(bundle_dir.join("manifest.toml"), manifest_content).expect("write manifest.toml");
-    fs::write(bundle_dir.join(script_name), b"").expect("write script file");
+    fs::write(bundle_dir.join(&manifest.file), b"").expect("write stub so");
+    fs::write(bundle_dir.join("manifest.toml"), manifest.to_toml()).expect("write manifest.toml");
 }
 
 #[test]
 fn chain_loads_in_dependency_order() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    // Compute contract IDs to embed in manifests
     let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
     let cid_y: u64 = polyplug_abi::contract_id("contract.Y", 1);
 
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_a",
-        r#"
-bundle_name = "bundle_a"
-runtime = "native"
-provides = ["contract.X"]
-"#,
+        &ManifestData {
+            id: 1,
+            name: "bundle_a".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_a.so".to_owned(),
+            provides: vec!["contract.X".to_owned()],
+            ..empty_manifest()
+        },
     );
 
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_b",
-        &format!(
-            r#"
-bundle_name = "bundle_b"
-runtime = "native"
-provides = ["contract.Y"]
-
-[[dependency]]
-kind = "contract"
-contract = "contract.X"
-contract_id = {cid_x}
-min_version = "1.0"
-"#
-        ),
+        &ManifestData {
+            id: 2,
+            name: "bundle_b".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_b.so".to_owned(),
+            provides: vec!["contract.Y".to_owned()],
+            dependencies: vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "contract.X".to_owned(),
+                contract_id: cid_x,
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                bundle_id: None,
+            }],
+            ..empty_manifest()
+        },
     );
 
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_c",
-        &format!(
-            r#"
-bundle_name = "bundle_c"
-runtime = "native"
-provides = []
-
-[[dependency]]
-kind = "contract"
-contract = "contract.Y"
-contract_id = {cid_y}
-min_version = "1.0"
-"#
-        ),
+        &ManifestData {
+            id: 3,
+            name: "bundle_c".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_c.so".to_owned(),
+            provides: vec![],
+            dependencies: vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "contract.Y".to_owned(),
+                contract_id: cid_y,
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                bundle_id: None,
+            }],
+            ..empty_manifest()
+        },
     );
 
     let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
@@ -117,29 +109,45 @@ min_version = "1.0"
     assert!(pos_b < pos_c, "bundle_b must load before bundle_c");
 }
 
+fn empty_manifest() -> ManifestData {
+    ManifestData {
+        id: 0,
+        name: String::new(),
+        runtime: "native".to_owned(),
+        file: String::new(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        path: PathBuf::new(),
+    }
+}
+
 #[test]
 fn missing_dep_fails_before_load() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
     let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
 
-    // Bundle B requires contract.X, but nothing provides it
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_b",
-        &format!(
-            r#"
-bundle_name = "bundle_b"
-runtime = "native"
-provides = []
-
-[[dependency]]
-kind = "contract"
-contract = "contract.X"
-contract_id = {cid_x}
-min_version = "1.0"
-"#
-        ),
+        &ManifestData {
+            id: 1,
+            name: "bundle_b".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_b.so".to_owned(),
+            provides: vec![],
+            dependencies: vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "contract.X".to_owned(),
+                contract_id: cid_x,
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                bundle_id: None,
+            }],
+            ..empty_manifest()
+        },
     );
 
     let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
@@ -158,40 +166,44 @@ fn cycle_detected_with_clear_error() {
     let cid_a: u64 = polyplug_abi::contract_id("contract.A", 1);
     let cid_b: u64 = polyplug_abi::contract_id("contract.B", 1);
 
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_a",
-        &format!(
-            r#"
-bundle_name = "bundle_a"
-runtime = "native"
-provides = ["contract.A"]
-
-[[dependency]]
-kind = "contract"
-contract = "contract.B"
-contract_id = {cid_b}
-min_version = "1.0"
-"#
-        ),
+        &ManifestData {
+            id: 1,
+            name: "bundle_a".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_a.so".to_owned(),
+            provides: vec!["contract.A".to_owned()],
+            dependencies: vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "contract.B".to_owned(),
+                contract_id: cid_b,
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                bundle_id: None,
+            }],
+            ..empty_manifest()
+        },
     );
 
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_b",
-        &format!(
-            r#"
-bundle_name = "bundle_b"
-runtime = "native"
-provides = ["contract.B"]
-
-[[dependency]]
-kind = "contract"
-contract = "contract.A"
-contract_id = {cid_a}
-min_version = "1.0"
-"#
-        ),
+        &ManifestData {
+            id: 2,
+            name: "bundle_b".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_b.so".to_owned(),
+            provides: vec!["contract.B".to_owned()],
+            dependencies: vec![RawManifestDependency {
+                kind: "contract".to_owned(),
+                contract: "contract.A".to_owned(),
+                contract_id: cid_a,
+                min_version: "1.0".to_owned(),
+                bundle: None,
+                bundle_id: None,
+            }],
+            ..empty_manifest()
+        },
     );
 
     let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
@@ -228,17 +240,17 @@ min_version = "1.0"
 fn malformed_manifest_skips_bundle() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    // Write a valid bundle A
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "bundle_a",
-        r#"
-bundle_name = "bundle_a"
-runtime = "native"
-"#,
+        &ManifestData {
+            id: 1,
+            name: "bundle_a".to_owned(),
+            runtime: "native".to_owned(),
+            file: "bundle_a.so".to_owned(),
+            ..empty_manifest()
+        },
     );
 
-    // Write a malformed manifest for bundle B (invalid TOML) in a directory
     let bundle_b_dir: PathBuf = tmp.path().join("bundle_b");
     fs::create_dir_all(&bundle_b_dir).expect("create bundle_b dir");
     fs::write(
@@ -249,7 +261,6 @@ runtime = "native"
 
     let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
 
-    // Only bundle_a should be discovered; bundle_b was skipped
     assert_eq!(
         discovered.len(),
         1,
@@ -265,13 +276,15 @@ runtime = "native"
 fn unknown_runtime_fails_build() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    write_bundle_dir(
+    write_bundle_with_manifest(
         tmp.path(),
-        "zigzag_plugin",
-        r#"
-bundle_name = "zigzag_plugin"
-runtime = "zigzag_unknown"
-"#,
+        &ManifestData {
+            id: 1,
+            name: "zigzag_plugin".to_owned(),
+            runtime: "zigzag_unknown".to_owned(),
+            file: "zigzag_plugin.so".to_owned(),
+            ..empty_manifest()
+        },
     );
 
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
@@ -296,14 +309,11 @@ runtime = "zigzag_unknown"
 fn explicit_load_bundle_missing_manifest_errors() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    // Create a plain file (not a directory) — load_bundle() should reject it
     let plain_file: PathBuf = tmp.path().join("not_a_dir.so");
     fs::write(&plain_file, b"").expect("write plain file");
 
-    // Build a Runtime with no plugin dirs (no directory scanning)
     let rt: Runtime = Runtime::builder().build().expect("build should succeed");
 
-    // Explicitly load the bundle — should fail with BundleNotADirectory
     let result: Result<(), PolyplugError> = rt.load_bundle(&plain_file);
     assert!(
         matches!(

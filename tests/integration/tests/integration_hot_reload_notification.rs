@@ -1,10 +1,10 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use core::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
@@ -22,7 +22,7 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable).functions;
-        std::mem::transmute(*fns)
+        core::mem::transmute(*fns)
     };
     Some(fn_ptr)
 }

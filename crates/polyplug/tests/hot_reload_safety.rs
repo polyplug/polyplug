@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Hot-reload safety tests.
 //!
 //! Verifies the safety guarantees of the hot-reload mechanism:
@@ -5,8 +7,8 @@
 //! 2. Generation increment makes old handles stale after swap
 //! 3. Old Arc is kept alive until all guards are dropped (quiescence)
 
+use core::time::Duration;
 use std::sync::Arc;
-use std::time::Duration;
 
 use polyplug::registry::{PluginVTableGuard, Registry, VTableSlot};
 use polyplug_abi::{PluginDescriptor, PluginHandle, PluginVTable, StringView};

@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used)]
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;

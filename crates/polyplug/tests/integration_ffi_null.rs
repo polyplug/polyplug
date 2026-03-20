@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests: null pointer safety of all C facade FFI functions.
 //! Every function that takes a pointer must handle null without panicking.
 

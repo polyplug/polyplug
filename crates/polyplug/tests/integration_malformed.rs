@@ -1,6 +1,10 @@
 //! Integration tests: malformed bundle inputs must return clean Err, never panic.
 
+#![allow(clippy::expect_used)]
+
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use polyplug::ffi::OpaqueRuntime;
@@ -8,6 +12,7 @@ use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
+use polyplug::loader::manifest::ManifestData;
 
 fn load_bundle_path(rt: *mut OpaqueRuntime, dir: &str) -> u32 {
     let bytes: &[u8] = dir.as_bytes();
@@ -25,21 +30,32 @@ fn cleanup(dir: &PathBuf) {
     let _ = fs::remove_dir_all(dir);
 }
 
+fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
+    let manifest: ManifestData = ManifestData {
+        id: 1,
+        name: name.to_owned(),
+        runtime: runtime.to_owned(),
+        file: file.to_owned(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+        path: PathBuf::new(),
+    };
+    fs::write(dir.join("manifest.toml"), manifest.to_toml()).expect("write manifest");
+}
+
 #[test]
 fn test_truncated_so() {
     // SAFETY: polyplug_runtime_create() has no preconditions.
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     let dir: PathBuf = make_tmpdir("truncated");
-    // Write a truncated .so: valid ELF magic + 508 zero bytes (truncated body)
     let mut so: Vec<u8> = vec![0x7f_u8, b'E', b'L', b'F'];
     so.extend_from_slice(&[0u8; 508]);
     fs::write(dir.join("libtruncated.so"), &so).expect("write truncated so");
-    fs::write(
-        dir.join("manifest.toml"),
-        b"bundle_name = \"truncated\"\nruntime = \"rust\"\nfile = \"libtruncated.so\"\n",
-    )
-    .expect("write manifest");
+    write_manifest(&dir, "truncated", "native", "libtruncated.so");
     let rc: u32 = load_bundle_path(rt, dir.to_str().expect("valid utf8 path"));
     assert_ne!(rc, 0, "truncated .so must produce non-zero return");
     cleanup(&dir);
@@ -55,11 +71,7 @@ fn test_wrong_magic_bytes() {
     let dir: PathBuf = make_tmpdir("wrong_magic");
     let garbage: Vec<u8> = b"NOTANELF\x00".iter().cycle().take(512).cloned().collect();
     fs::write(dir.join("libwrong.so"), &garbage).expect("write garbage");
-    fs::write(
-        dir.join("manifest.toml"),
-        b"bundle_name = \"wrong_magic\"\nruntime = \"rust\"\nfile = \"libwrong.so\"\n",
-    )
-    .expect("write manifest");
+    write_manifest(&dir, "wrong_magic", "native", "libwrong.so");
     let rc: u32 = load_bundle_path(rt, dir.to_str().expect("valid utf8"));
     assert_ne!(rc, 0, "wrong magic bytes must produce non-zero return");
     cleanup(&dir);
@@ -69,8 +81,6 @@ fn test_wrong_magic_bytes() {
 
 #[test]
 fn test_missing_init_symbol() {
-    // Uses the no_init_plugin fixture built by build.rs.
-    // NO_INIT_PLUGIN_DIR env var is set by build.rs.
     let dir: &str = env!("NO_INIT_PLUGIN_DIR");
     // SAFETY: polyplug_runtime_create() has no preconditions.
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
@@ -80,7 +90,6 @@ fn test_missing_init_symbol() {
         rc, 0,
         "plugin missing polyplug_init must produce non-zero return"
     );
-    // Verify error message mentions the missing symbol
     let mut buf: [u8; 256] = [0u8; 256];
     // SAFETY: buf valid for 256 bytes, polyplug_runtime_last_error writes at most buf_len bytes.
     let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
@@ -94,24 +103,13 @@ fn test_missing_init_symbol() {
     unsafe { polyplug_runtime_destroy(rt) };
 }
 
-// Test d (ABI mismatch) is intentionally omitted.
-// A plugin that exports init() with a wrong signature causes undefined behaviour
-// at the call site. This is documented in polyplug_prd.md section 27 as out-of-scope.
-// There is no safe way to test this in-process.
-
 #[test]
 fn test_so_file_missing_from_bundle() {
     // SAFETY: polyplug_runtime_create() has no preconditions.
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     let dir: PathBuf = make_tmpdir("missing_so");
-    // Write manifest pointing to a nonexistent .so
-    fs::write(
-        dir.join("manifest.toml"),
-        b"bundle_name = \"missing_so\"\nruntime = \"rust\"\nfile = \"nonexistent.so\"\n",
-    )
-    .expect("write manifest");
-    // Do NOT create nonexistent.so
+    write_manifest(&dir, "missing_so", "native", "nonexistent.so");
     let rc: u32 = load_bundle_path(rt, dir.to_str().expect("valid utf8"));
     assert_ne!(rc, 0, "missing .so file must produce non-zero return");
     cleanup(&dir);
@@ -125,13 +123,8 @@ fn test_unknown_runtime() {
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     let dir: PathBuf = make_tmpdir("unknown_runtime");
-    // Create a dummy .so file so the manifest parse succeeds
     fs::write(dir.join("dummy.so"), b"notareal").expect("write dummy");
-    fs::write(
-        dir.join("manifest.toml"),
-        b"bundle_name = \"unknown_runtime\"\nruntime = \"cobol\"\nfile = \"dummy.so\"\n",
-    )
-    .expect("write manifest");
+    write_manifest(&dir, "unknown_runtime", "cobol", "dummy.so");
     let rc: u32 = load_bundle_path(rt, dir.to_str().expect("valid utf8"));
     assert_ne!(rc, 0, "unknown runtime must produce non-zero return");
     cleanup(&dir);

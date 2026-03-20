@@ -279,6 +279,8 @@ impl Default for CapabilityGraph {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     use super::*;
     use crate::error::GraphError;
     use crate::loader::manifest::ManifestData;

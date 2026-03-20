@@ -13,6 +13,7 @@
 //! the same guest is only the label — all share the same load + dispatch logic.
 
 #![allow(clippy::expect_used)]
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::error::RegistryError;
 use polyplug::loader::BundleLoader;
@@ -100,7 +101,7 @@ std::thread_local! {
     static CROSS_REGISTRY: core::cell::RefCell<Registry> =
         core::cell::RefCell::new(Registry::new());
     static CAPTURED_VT: core::cell::Cell<*const PluginVTable> =
-        core::cell::Cell::new(core::ptr::null());
+        const { core::cell::Cell::new(core::ptr::null()) };
 }
 
 // ─── Registrar callbacks ──────────────────────────────────────────────────────

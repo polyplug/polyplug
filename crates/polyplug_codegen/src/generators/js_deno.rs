@@ -665,6 +665,7 @@ fn contract_to_class_name(contract_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::EnumDef;
     use crate::ir::EnumVariant;

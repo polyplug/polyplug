@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration test: multi-contract registration and lookup.
 //!
 //! This test crate is the crate root for the `integration_graph` test binary.

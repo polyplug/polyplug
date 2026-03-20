@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration test: verify the generated catch_unwind ABI wrapper catches a panic
 //! and returns ABI_ERROR_PANIC (= 3) WITHOUT aborting the process.
 //!

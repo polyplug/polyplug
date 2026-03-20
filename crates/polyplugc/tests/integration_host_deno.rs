@@ -43,8 +43,8 @@ fn test_deno_host_lib_integration() {
         .output()
         .expect("failed to spawn deno");
 
-    let stdout: &str = std::str::from_utf8(&output.stdout).unwrap_or("");
-    let stderr: &str = std::str::from_utf8(&output.stderr).unwrap_or("");
+    let stdout: &str = core::str::from_utf8(&output.stdout).unwrap_or("");
+    let stderr: &str = core::str::from_utf8(&output.stderr).unwrap_or("");
 
     assert!(
         output.status.success(),

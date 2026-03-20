@@ -387,6 +387,7 @@ pub fn bundle_id(name: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 

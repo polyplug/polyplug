@@ -143,7 +143,7 @@ fn make_bundle_js(contract_id: u64, vtable_ptr: usize, fn_count: u32) -> String 
     let vtable_lo: u32 = vtable_ptr as u32;
     let vtable_hi: u32 = (vtable_ptr >> 32) as u32;
     format!(
-        "polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, {fn_count});"
+        "polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, {fn_count}, \"test.contract\");"
     )
 }
 
@@ -376,7 +376,9 @@ fn load_bundle_null_vtable_pointer_returns_error() {
     let contract_hi: u32 = (contract_id >> 32) as u32;
 
     // Pass vtable_lo=0, vtable_hi=0 → null pointer.
-    let bundle: String = format!("polyplug.registerVtable({contract_lo}, {contract_hi}, 0, 0, 1);");
+    let bundle: String = format!(
+        "polyplug.registerVtable({contract_lo}, {contract_hi}, 0, 0, 1, \"test.contract\");"
+    );
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let loader: JsLoader = make_loader();
@@ -436,7 +438,7 @@ fn bundle_path_global_is_injected() {
 if (typeof globalThis.bundlePath !== 'string') {{
     throw new Error('bundlePath not injected');
 }}
-polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0);
+polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0, "test.contract");
 "#
     );
     let (_dir, path) = write_temp_bundle(&bundle);
@@ -474,13 +476,13 @@ fn polyplug_object_has_expected_methods() {
     let bundle: String = format!(
         r#"
 var methods = ['findByContract', 'findByBundle', 'findAllByContract',
-               'resolvePlugin', 'getExtension', 'registerVtable', 'alloc', 'free'];
+                'resolvePlugin', 'getExtension', 'registerVtable', 'alloc', 'free'];
 for (var i = 0; i < methods.length; i++) {{
     if (typeof polyplug[methods[i]] !== 'function') {{
         throw new Error('missing method: ' + methods[i]);
     }}
 }}
-polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0);
+polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0, "test.contract");
 "#
     );
     let (_dir, path) = write_temp_bundle(&bundle);
@@ -701,7 +703,7 @@ var ptr = polyplug.alloc(64);
 if (ptr !== 0) {{
     polyplug.free(ptr);
 }}
-polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0);
+polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0, "test.contract");
 "#
     );
     let (_dir, path) = write_temp_bundle(&bundle);

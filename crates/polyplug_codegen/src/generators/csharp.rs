@@ -1060,6 +1060,7 @@ impl CodeGenerator for CSharpGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use crate::ir::*;
 

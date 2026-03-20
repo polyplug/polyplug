@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests: cross-plugin lookup, multi-impl registry, stale handle detection,
 //! and dependency enforcement via the new Epic 9.7 ABI.
 //!

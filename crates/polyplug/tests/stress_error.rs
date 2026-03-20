@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Stress tests for the polyplug error model: error codes, panic propagation, chain dispatch.
 //!
 //! This test crate is the crate root for the `stress_error` test binary.

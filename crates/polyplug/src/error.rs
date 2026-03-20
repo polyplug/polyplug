@@ -232,6 +232,7 @@ pub enum AllocatorError {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::{AllocatorError, GraphError, LoaderError, PolyplugError, RegistryError};
     use crate::version::Version;
 

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Library-lifetime correctness test.
 //!
 //! Regression test for Epic 9.6: NativeBundleLoader must NOT drop the
@@ -9,11 +11,11 @@ use polyplug::loader::load_bundle;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::parse_manifest;
 use polyplug::registry::Registry;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginHandle;
 use polyplug_abi::bundle_id;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginHandle;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 

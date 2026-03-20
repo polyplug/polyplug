@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests for the polyplug extension system.
 //!
 //! This test crate is the crate root for the `integration_extension` test binary.

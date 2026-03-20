@@ -26,7 +26,7 @@ class StringView(ctypes.Structure):
         ("ptr", ctypes.c_char_p),  # *const u8
         ("len", ctypes.c_size_t),  # usize
     ]
-    
+
     # Keep reference to encoded bytes to prevent GC
     _refs: ClassVar = {}
 
@@ -39,7 +39,7 @@ class StringView(ctypes.Structure):
     def from_string(s: str) -> StringView:
         """Create a StringView from a Python string.
         The encoded bytes are kept alive internally."""
-        encoded = s.encode('utf-8')
+        encoded = s.encode("utf-8")
         # Create ctypes c_char_p from bytes
         c_str = ctypes.c_char_p(encoded)
         sv = StringView(ptr=c_str, len=len(encoded))
@@ -128,9 +128,12 @@ class PluginRegistrar(ctypes.Structure):
     ]
 
 
-# Type alias for the dispatch function signature
+# Type alias for the register_plugin function signature.
+# On x86_64 System V ABI, AbiError (24 bytes) is returned via sret pointer.
+# The caller allocates space and passes a hidden first argument.
 REGISTER_FN_TYPE = ctypes.CFUNCTYPE(
-    ctypes.c_uint32,  # return: AbiError.code
+    None,  # void return - result written via sret pointer
+    ctypes.POINTER(AbiError),  # sret: hidden pointer where caller expects AbiError
     ctypes.POINTER(PluginRegistrar),  # registrar
     ctypes.POINTER(PluginDescriptor),  # descriptor
     ctypes.POINTER(PluginVTable),  # vtable

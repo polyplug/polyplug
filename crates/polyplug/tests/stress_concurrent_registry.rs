@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;

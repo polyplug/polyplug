@@ -84,10 +84,10 @@ def _py_reset(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> AbiError:
 # callbacks cannot return ctypes.Structure directly, so we declare three
 # void* args (sret, args, out) and write the struct into sret manually.
 _DISPATCH_FN_TYPE = ctypes.CFUNCTYPE(
-    None,              # void return — result written via sret pointer
-    ctypes.c_void_p,   # sret: hidden pointer where caller expects AbiError
-    ctypes.c_void_p,   # args_ptr
-    ctypes.c_void_p,   # out_ptr
+    None,  # void return — result written via sret pointer
+    ctypes.c_void_p,  # sret: hidden pointer where caller expects AbiError
+    ctypes.c_void_p,  # args_ptr
+    ctypes.c_void_p,  # out_ptr
 )
 
 _ABI_ERROR_SIZE: int = ctypes.sizeof(AbiError)
@@ -95,17 +95,21 @@ _ABI_ERROR_SIZE: int = ctypes.sizeof(AbiError)
 
 def _wrap_sret(impl: object) -> object:
     """Wrap a two-arg impl fn with the three-arg sret calling convention."""
-    def _sret_wrapper(sret_ptr: ctypes.c_void_p, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> None:
+
+    def _sret_wrapper(
+        sret_ptr: ctypes.c_void_p, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p
+    ) -> None:
         err: AbiError = impl(args_ptr, out_ptr)  # type: ignore[operator]
         ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_ERROR_SIZE)
+
     return _sret_wrapper
 
 
 # Module-level function object cache (MUST be module-level — not per-call)
-_FN_ADD      = _DISPATCH_FN_TYPE(_wrap_sret(_py_add))
+_FN_ADD = _DISPATCH_FN_TYPE(_wrap_sret(_py_add))
 _FN_ADD_PRIM = _DISPATCH_FN_TYPE(_wrap_sret(_py_add_primitive))
-_FN_VERSION  = _DISPATCH_FN_TYPE(_wrap_sret(_py_version))
-_FN_RESET    = _DISPATCH_FN_TYPE(_wrap_sret(_py_reset))
+_FN_VERSION = _DISPATCH_FN_TYPE(_wrap_sret(_py_version))
+_FN_RESET = _DISPATCH_FN_TYPE(_wrap_sret(_py_reset))
 
 _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
     ctypes.cast(_FN_ADD, ctypes.c_void_p),
@@ -143,7 +147,12 @@ def polyplug_abi_version() -> int:
 def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
     """Called by PythonLoader with the PluginRegistrar address as an integer."""
     registrar = PluginRegistrar.from_address(registrar_addr)
-    err: AbiError = registrar.register_plugin(
+    # Cast the register_plugin function pointer to the correct type (sret convention)
+    register_fn = ctypes.cast(registrar.register_plugin, REGISTER_FN_TYPE)
+    # Allocate space for the return value (AbiError struct)
+    err = AbiError()
+    register_fn(
+        ctypes.byref(err),  # sret pointer
         ctypes.byref(registrar),
         ctypes.byref(_DESCRIPTOR),
         ctypes.byref(_VTABLE),

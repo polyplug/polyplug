@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use core::hint::spin_loop;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering;

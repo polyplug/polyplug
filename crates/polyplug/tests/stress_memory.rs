@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Stress tests for the polyplug memory model: Buffer, StringView, allocator.
 //!
 //! This test crate is the crate root for the `stress_memory` test binary.

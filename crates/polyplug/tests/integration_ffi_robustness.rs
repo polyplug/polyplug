@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use core::cell::RefCell;
 use std::sync::Arc;
 

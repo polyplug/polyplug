@@ -378,6 +378,7 @@ impl Runtime {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
     use crate::runtime::RuntimeConfig;
     use core::time::Duration;
@@ -605,7 +606,7 @@ mod tests {
 
         let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
             captured.lock().unwrap_or_else(|e| e.into_inner());
-        let phase: &Option<ReloadPhase> = &*guard;
+        let phase: &Option<ReloadPhase> = &guard;
         match phase {
             Some(ReloadPhase::Preparing {
                 bundle_id,
@@ -641,7 +642,7 @@ mod tests {
 
         let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
             captured.lock().unwrap_or_else(|e| e.into_inner());
-        let phase: &Option<ReloadPhase> = &*guard;
+        let phase: &Option<ReloadPhase> = &guard;
         match phase {
             Some(ReloadPhase::Reloaded {
                 bundle_id,
@@ -676,7 +677,7 @@ mod tests {
 
         let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
             captured.lock().unwrap_or_else(|e| e.into_inner());
-        let phase: &Option<ReloadPhase> = &*guard;
+        let phase: &Option<ReloadPhase> = &guard;
         match phase {
             Some(ReloadPhase::Failed {
                 bundle_id,
@@ -717,7 +718,7 @@ mod tests {
 
         let guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
             captured.lock().unwrap_or_else(|e| e.into_inner());
-        let phases: &Vec<ReloadPhase> = &*guard;
+        let phases: &Vec<ReloadPhase> = &guard;
 
         assert_eq!(phases.len(), 2);
         match &phases[0] {
@@ -757,7 +758,7 @@ mod tests {
 
         let guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
             captured.lock().unwrap_or_else(|e| e.into_inner());
-        let phases: &Vec<ReloadPhase> = &*guard;
+        let phases: &Vec<ReloadPhase> = &guard;
 
         assert_eq!(phases.len(), 2);
         match &phases[0] {
@@ -800,7 +801,7 @@ mod tests {
 
         let guard: std::sync::MutexGuard<'_, Vec<u32>> =
             captured.lock().unwrap_or_else(|e| e.into_inner());
-        let retry_counts: &Vec<u32> = &*guard;
+        let retry_counts: &Vec<u32> = &guard;
 
         assert_eq!(retry_counts, &[0_u32, 1_u32, 2_u32, 3_u32]);
     }

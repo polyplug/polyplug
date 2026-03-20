@@ -6,6 +6,7 @@
 //! Note: js-deno tests are separate from the main cross_language matrix (user decision).
 
 #![allow(clippy::expect_used)]
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;

@@ -7,16 +7,83 @@
 // Build scripts have no caller to propagate errors to — .expect() is the only
 // option because a missing env var or failed compilation must abort the build.
 #![allow(clippy::expect_used)]
-//! The path to the compiled `.so` is emitted as the `TEST_PLUGIN_SO` cargo
-//! environment variable, accessible in tests via `env!('TEST_PLUGIN_SO")`.
-//!
-//! Build scripts are permitted to use `.expect()` and `panic!()` freely —
-//! a build failure is the appropriate response to environment configuration errors.
 
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+
+struct ManifestBuilder {
+    id: u64,
+    name: String,
+    version: String,
+    runtime: String,
+    file: String,
+    provides: Vec<String>,
+    function_count: Vec<(String, u32)>,
+    needs_reinit_on_dep_reload: bool,
+    dependencies: Vec<DependencyEntry>,
+}
+
+struct DependencyEntry {
+    kind: String,
+    contract: String,
+    min_version: String,
+    bundle: Option<String>,
+    contract_id: u64,
+    bundle_id: Option<u64>,
+}
+
+impl ManifestBuilder {
+    fn to_toml(&self) -> String {
+        let mut out: String = String::new();
+
+        out.push_str(&format!("id = {}\n", self.id));
+        out.push_str(&format!("name = \"{}\"\n", self.name));
+        out.push_str(&format!("version = \"{}\"\n", self.version));
+        out.push_str(&format!("runtime = \"{}\"\n", self.runtime));
+        out.push_str(&format!("file = \"{}\"\n", self.file));
+
+        if !self.provides.is_empty() {
+            let provides: String = self
+                .provides
+                .iter()
+                .map(|s| format!("\"{}\"", s))
+                .collect::<Vec<String>>()
+                .join(", ");
+            out.push_str(&format!("provides = [{}]\n", provides));
+        }
+
+        if self.needs_reinit_on_dep_reload {
+            out.push_str("needs_reinit_on_dep_reload = true\n");
+        }
+
+        if !self.function_count.is_empty() {
+            out.push_str("\n[function_count]\n");
+            for (contract, count) in &self.function_count {
+                out.push_str(&format!("\"{}\" = {}\n", contract, count));
+            }
+        }
+
+        for dep in &self.dependencies {
+            out.push_str("\n[[dependency]]\n");
+            out.push_str(&format!("kind = \"{}\"\n", dep.kind));
+            out.push_str(&format!("contract = \"{}\"\n", dep.contract));
+            out.push_str(&format!("min_version = \"{}\"\n", dep.min_version));
+            if let Some(bundle) = &dep.bundle {
+                out.push_str(&format!("bundle = \"{}\"\n", bundle));
+            }
+            if dep.contract_id != 0 {
+                out.push_str(&format!("contract_id = {}\n", dep.contract_id));
+            }
+            if let Some(bundle_id) = dep.bundle_id {
+                out.push_str(&format!("bundle_id = {}\n", bundle_id));
+            }
+        }
+
+        out
+    }
+}
 
 fn main() {
     // Emit -export-dynamic linker flag so that polyplug_host_alloc and
@@ -122,19 +189,20 @@ fn main() {
     fs::copy(&dest_so, test_plugin_dir.join(lib_filename)).unwrap_or_else(|e: std::io::Error| {
         panic!("failed to copy test_plugin .so to bundle dir: {}", e)
     });
+    let test_plugin_manifest: ManifestBuilder = ManifestBuilder {
+        id: 9569986636177360922,
+        name: "test_plugin".to_owned(),
+        version: "1.0".to_owned(),
+        runtime: "native".to_owned(),
+        file: lib_filename.to_owned(),
+        provides: vec!["test.add".to_owned()],
+        function_count: vec![("test.add@1".to_owned(), 4)],
+        needs_reinit_on_dep_reload: false,
+        dependencies: Vec::new(),
+    };
     fs::write(
         test_plugin_dir.join("manifest.toml"),
-        concat!(
-            "bundle_name                = \"test_plugin\"\n",
-            "version                    = \"1.0\"\n",
-            "runtime                    = \"native\"\n",
-            "file                       = \"libtest_plugin.so\"\n",
-            "provides                   = [\"test.add\"]\n",
-            "needs_reinit_on_dep_reload = false\n",
-            "\n",
-            "[function_count]\n",
-            "\"test.add@1\" = 4\n",
-        ),
+        test_plugin_manifest.to_toml(),
     )
     .unwrap_or_else(|e: std::io::Error| panic!("failed to write test_plugin manifest.toml: {}", e));
     println!(
@@ -287,7 +355,8 @@ fn main() {
     fs::write(
         reload_v1_dir.join("manifest.toml"),
         concat!(
-            "bundle_name                = \"reload_plugin_v1\"\n",
+            "id                         = 16808897324254478442\n",
+            "name                       = \"reload_plugin_v1\"\n",
             "version                    = \"1.0\"\n",
             "runtime                    = \"native\"\n",
             "file                       = \"libreload_plugin_v1.so\"\n",
@@ -364,7 +433,8 @@ fn main() {
     fs::write(
         reload_v2_dir.join("manifest.toml"),
         concat!(
-            "bundle_name                = \"reload_plugin_v1\"\n",
+            "id                         = 16808897324254478442\n",
+            "name                       = \"reload_plugin_v1\"\n",
             "version                    = \"2.0\"\n",
             "runtime                    = \"native\"\n",
             "file                       = \"libreload_plugin_v2.so\"\n",

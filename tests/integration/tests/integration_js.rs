@@ -4,6 +4,7 @@
 //! Tests requiring pre-built bundle fixtures are marked #[ignore].
 
 #![allow(clippy::expect_used)]
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;

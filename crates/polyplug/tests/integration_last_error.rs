@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Integration tests for LAST_ERROR thread-local: isolation, clearing, truncation,
 //! null termination behaviour, and large message handling via the C facade.
 //!
