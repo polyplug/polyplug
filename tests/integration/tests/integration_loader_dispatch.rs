@@ -43,8 +43,8 @@ impl BundleLoader for StubLoader {
 #[test]
 fn manifest_defaults_to_native_when_field_absent() {
     let toml_src: &str = "";
-    let data: ManifestData =
-        toml::from_str(toml_src).expect("empty TOML should parse to ManifestData with defaults");
+    let data: ManifestData = ManifestData::parse_from_str(toml_src)
+        .expect("empty TOML should parse to ManifestData with defaults");
     assert_eq!(
         data.runtime, "native",
         "absent runtime field must default to \"native\""
@@ -54,16 +54,16 @@ fn manifest_defaults_to_native_when_field_absent() {
 #[test]
 fn manifest_reads_runtime_field() {
     let toml_src: &str = r#"runtime = "lua""#;
-    let data: ManifestData =
-        toml::from_str(toml_src).expect("TOML with runtime = \"lua\" should parse successfully");
+    let data: ManifestData = ManifestData::parse_from_str(toml_src)
+        .expect("TOML with runtime = \"lua\" should parse successfully");
     assert_eq!(data.runtime, "lua");
 }
 
 #[test]
 fn manifest_reads_dotnet_runtime_field() {
     let toml_src: &str = r#"runtime = "dotnet""#;
-    let data: ManifestData =
-        toml::from_str(toml_src).expect("TOML with runtime = \"dotnet\" should parse successfully");
+    let data: ManifestData = ManifestData::parse_from_str(toml_src)
+        .expect("TOML with runtime = \"dotnet\" should parse successfully");
     assert_eq!(data.runtime, "dotnet");
 }
 

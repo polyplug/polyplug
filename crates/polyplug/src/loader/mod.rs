@@ -17,14 +17,14 @@ use std::path::PathBuf;
 
 use crate::error::LoaderError;
 use crate::registry::Registry;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiError as AbiErrorType;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::sync::Arc;
 
 use crate::error::PolyplugError;
@@ -181,10 +181,13 @@ pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
             }
         })?;
 
-    let data: ManifestData =
-        toml::from_str(&contents).map_err(|e: toml::de::Error| LoaderError::ManifestParse {
+    let mut data: ManifestData =
+        ManifestData::parse_from_str(&contents).map_err(|e| LoaderError::ManifestParse {
             path: manifest_path.to_string_lossy().into_owned(),
-            reason: e.to_string(),
+            reason: match e {
+                LoaderError::ManifestParse { reason, .. } => reason,
+                _ => e.to_string(),
+            },
         })?;
 
     let trimmed: &str = data.runtime.trim();
@@ -194,22 +197,10 @@ pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
             reason: "runtime field cannot be empty".to_owned(),
         });
     }
-
-    let mut manifest: ManifestData = ManifestData {
-        runtime: trimmed.to_owned(),
-        name: data.name,
-        dependencies: data.dependencies,
-        id: data.id,
-        version: data.version,
-        file: data.file,
-        provides: data.provides,
-        function_count: data.function_count,
-        needs_reinit_on_dep_reload: data.needs_reinit_on_dep_reload,
-        path: PathBuf::new(),
-    };
-    manifest.validate_file()?;
-    manifest.path = bundle_dir.to_path_buf();
-    Ok(manifest)
+    data.runtime = trimmed.to_owned();
+    data.validate_file()?;
+    data.path = bundle_dir.to_path_buf();
+    Ok(data)
 }
 
 /// Load a single native bundle.
@@ -485,6 +476,7 @@ pub(crate) unsafe extern "C" fn registrar_callback(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use core::ptr;
     use polyplug_abi::ABI_ERROR_GENERIC;
 
