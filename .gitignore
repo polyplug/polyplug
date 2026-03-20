@@ -461,3 +461,18 @@ target
 
 /.build-markers
 /dist
+
+# Test fixture binaries (rebuilt during cargo test)
+tests/fixtures/*.so
+tests/fixtures/*.dylib
+tests/fixtures/*.dll
+
+# Local dev native library copies
+**/_native/
+
+# NuGet runtime folders (local dev embedding)
+**/runtimes/
+
+# Python build artifacts
+*.egg-info/
+*.egg
