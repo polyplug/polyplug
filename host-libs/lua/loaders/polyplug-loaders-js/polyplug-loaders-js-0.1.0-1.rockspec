@@ -1,13 +1,14 @@
 package = "polyplug-loaders-js"
-version = "1.0-1"
+version = "0.1.0-1"
 source = {
-   url = "git+https://github.com/user/polyplug.git",
+   url = "git+https://github.com/polyplug/polyplug.git",
    branch = "main",
    dir = "host-libs/lua/loaders/polyplug-loaders-js"
 }
 description = {
-   summary = "JavaScript loader for polyplug plugin runtime",
-   license = "MIT"
+   summary = "JavaScript loader for polyplug plugin runtime - loads QuickJS plugins",
+   license = "MIT",
+   homepage = "https://github.com/polyplug/polyplug"
 }
 dependencies = {
    "lua >= 5.1",
@@ -17,5 +18,6 @@ build = {
    type = "builtin",
    modules = {
       ["polyplug.loaders.js"] = "polyplug/loaders/js.lua"
-   }
+   },
+   copy_directories = { "_native" }
 }

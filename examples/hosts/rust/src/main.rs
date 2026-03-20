@@ -1,8 +1,8 @@
+use polyplug::ReloadPhase;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
-use polyplug::ReloadPhase;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
 use polyplug_native::{NativeConfig, NativeLoader};
@@ -21,6 +21,7 @@ use generated::host::types::*;
 
 /// Instance tracking for hot-reload: bundle_id -> list of contract instances.
 /// Instances are cleared in Preparing phase and re-created in Reloaded phase.
+#[allow(clippy::type_complexity)]
 static INSTANCES: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 

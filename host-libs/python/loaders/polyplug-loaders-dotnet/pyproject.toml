@@ -5,11 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "polyplug-loaders-dotnet"
 version = "0.1.0"
-description = ".NET loader for polyplug"
+description = ".NET loader for polyplug - loads .NET plugins"
 requires-python = ">=3.8"
 dependencies = [
     "polyplug",
 ]
 
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["polyplug_loaders_dotnet*"]
+
+[tool.setuptools.package-data]
+polyplug_loaders_dotnet = ["_native/**/*"]

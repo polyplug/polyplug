@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "polyplug-loaders-js"
 version = "0.1.0"
-description = "JS (QuickJS) loader for polyplug"
+description = "JS (QuickJS) loader for polyplug - loads QuickJS plugins"
 requires-python = ">=3.8"
 dependencies = [
     "polyplug",
@@ -14,3 +14,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["polyplug_loaders_js*"]
+
+[tool.setuptools.package-data]
+polyplug_loaders_js = ["_native/**/*"]

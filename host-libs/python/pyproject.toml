@@ -48,4 +48,5 @@ where = ["."]
 include = ["polyplug*"]
 
 [tool.setuptools.package-data]
-polyplug = ["_native/*.so", "_native/*.dylib", "_native/*.dll", "_native/README.txt"]
+# Include native libraries for all platforms (CI populates these)
+polyplug = ["_native/**/*"]

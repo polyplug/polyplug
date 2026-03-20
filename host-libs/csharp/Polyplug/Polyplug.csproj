@@ -11,8 +11,8 @@
     <PackageId>Polyplug</PackageId>
     <Version>0.1.0</Version>
     <Authors>polyplug</Authors>
-    <Description>.NET host library for the polyplug plugin runtime</Description>
-    <PackageTags>polyplug;plugin;runtime;ffi</PackageTags>
+    <Description>.NET host library for the polyplug plugin runtime. Native libraries for Linux, macOS, and Windows are embedded in the package.</Description>
+    <PackageTags>polyplug;plugin;runtime;ffi;cross-platform</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/polyplug/polyplug</PackageProjectUrl>
@@ -25,15 +25,10 @@
     <None Include="..\README.md" Pack="true" PackagePath="\" />
     <!-- Embed native libraries in NuGet package (runtimes folder convention) -->
     <!-- .NET automatically loads the correct native library based on RuntimeIdentifier -->
+    <!-- CI populates runtimes/ with native libraries for all platforms before packing -->
     <Content Include="runtimes\**\*.*">
       <Pack>true</Pack>
       <PackagePath>runtimes</PackagePath>
     </Content>
   </ItemGroup>
-
-  <!-- Download native libraries from GitHub Releases before packing -->
-  <Target Name="DownloadNativeLibraries" BeforeTargets="Pack">
-    <Exec Command="pwsh -File download-native.ps1 -Version $(Version)" Condition="'$(OS)' == 'Windows_NT'" />
-    <Exec Command="bash download-native.sh $(Version)" Condition="'$(OS)' != 'Windows_NT'" />
-  </Target>
 </Project>

@@ -1,12 +1,13 @@
 {
   "name": "@polyplug/loaders-native",
   "version": "0.1.0",
-  "description": "Native loader for polyplug - loads native C ABI plugins",
+  "description": "Native loader for polyplug - loads native C ABI plugins. Native libraries for Linux, macOS, and Windows are embedded.",
   "main": "mod.ts",
   "types": "mod.d.ts",
   "files": [
     "mod.ts",
-    "mod.d.ts"
+    "mod.d.ts",
+    "_native/"
   ],
   "scripts": {
     "test": "deno test --allow-ffi --allow-env mod.test.ts"

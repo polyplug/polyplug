@@ -34,26 +34,11 @@ guest_libs_dir := "guest-libs"
 version := `grep -m1 '^version =' crates/polyplug/Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/'`
 
 # ============================================================================
-# Native Library Download
+# Native Library (Local Development Only)
 # ============================================================================
 
-# Download native libraries from GitHub Releases for all host libraries
-download-native-libs version=version:
-    @echo "=== Downloading Native Libraries v{{version}} ==="
-    @echo "Downloading for C# host library..."
-    @bash {{host_libs_dir}}/csharp/Polyplug/download-native.sh {{version}}
-    @echo "Downloading for Python host library..."
-    @python3 {{host_libs_dir}}/python/download-native.py --version v{{version}} --all-platforms
-    @echo "Downloading for JavaScript host library..."
-    @cd {{host_libs_dir}}/js && deno run --allow-net --allow-write --allow-env download-native.ts
-    @echo "Downloading for Lua host library..."
-    @cd {{host_libs_dir}}/lua && luajit download-native.lua v{{version}}
-    @echo "Downloading for C++ host library..."
-    @bash {{host_libs_dir}}/cpp/download-native.sh {{version}}
-    @echo ""
-    @echo "=== Native Library Download Complete ==="
-
 # Copy locally built native library to all host library _native/ folders
+# Use this for local development. CI embeds natives automatically during release.
 download-native-local: build-ffi
     @echo "=== Copying Local Native Library ==="
     @mkdir -p {{host_libs_dir}}/csharp/Polyplug/runtimes/linux-x64/native
@@ -512,6 +497,46 @@ bench:
     cargo bench
 
 # ============================================================================
+# Local CI Testing (using nektos/act)
+# ============================================================================
+
+# Test CI workflows locally using 'act' (requires nektos/act installed)
+# Usage: just ci-test [workflow] [event]
+# Examples:
+#   just ci-test                    # Run all workflows on push event
+#   just ci-test ci.yml             # Run specific workflow
+#   just ci-test release.yml push   # Run release workflow with push event
+ci-test workflow="" event="push":
+    @echo "=== Testing CI Workflows Locally ==="
+    @if ! command -v act >/dev/null 2>&1; then \
+        echo "Error: 'act' is not installed."; \
+        echo "Install it from: https://github.com/nektos/act"; \
+        exit 1; \
+    fi
+    @if [ -n "{{workflow}}" ]; then \
+        echo "Running workflow: {{workflow}}"; \
+        act {{event}} -W .github/workflows/{{workflow}}; \
+    else \
+        echo "Running all workflows..."; \
+        act {{event}}; \
+    fi
+
+# Test release workflow locally (dry-run mode)
+ci-test-release:
+    @echo "=== Testing Release Workflow (Dry Run) ==="
+    @if ! command -v act >/dev/null 2>&1; then \
+        echo "Error: 'act' is not installed."; \
+        echo "Install it from: https://github.com/nektos/act"; \
+        exit 1; \
+    fi
+    act workflow_dispatch -W .github/workflows/release.yml --input dry-run=true
+
+# List available CI workflows
+ci-list:
+    @echo "=== Available CI Workflows ==="
+    @ls -1 .github/workflows/*.yml | xargs -n1 basename
+
+# ============================================================================
 # Release & Publishing (uses dist/)
 # ============================================================================
 
@@ -743,11 +768,11 @@ _prepare-crate-packages:
     @echo "  [crates.io] ✓ Packages ready"
 
 # Prepare NuGet packages for C# libraries (pack from source location)
+# NOTE: Native libraries must be in runtimes/ before running this
+# Use 'just download-native-local' for local development
 _prepare-nuget-packages:
     @echo "  [nuget] Preparing packages..."
     @if command -v dotnet >/dev/null 2>&1; then \
-        echo "  [nuget] Downloading native libraries..."; \
-        bash {{host_libs_dir}}/csharp/Polyplug/download-native.sh {{version}}; \
         echo "  [nuget] Packing core libraries..."; \
         dotnet pack {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
@@ -764,12 +789,12 @@ _prepare-nuget-packages:
     fi
 
 # Prepare PyPI packages for Python libraries
+# NOTE: Native libraries must be in _native/ before running this
+# Use 'just download-native-local' for local development
 _prepare-pypi-packages:
     @echo "  [pypi] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/pypi
     @if command -v uv >/dev/null 2>&1; then \
-        echo "  [pypi] Downloading native libraries..."; \
-        python3 {{host_libs_dir}}/python/download-native.py --version v{{version}} --all-platforms; \
         echo "  [pypi] Building host library..."; \
         cp {{host_libs_dir}}/python/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/python/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
@@ -793,12 +818,12 @@ _prepare-pypi-packages:
     fi
 
 # Prepare npm packages for JavaScript libraries
+# NOTE: Native libraries must be in _native/ before running this
+# Use 'just download-native-local' for local development
 _prepare-npm-packages:
     @echo "  [npm] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/npm
     @if command -v npm >/dev/null 2>&1; then \
-        echo "  [npm] Downloading native libraries..."; \
-        cd {{host_libs_dir}}/js && deno run --allow-net --allow-write --allow-env download-native.ts; \
         echo "  [npm] Packing host library..."; \
         cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
@@ -820,12 +845,12 @@ _prepare-npm-packages:
     fi
 
 # Prepare LuaRocks packages for Lua libraries
+# NOTE: Native libraries must be in _native/ before running this
+# Use 'just download-native-local' for local development
 _prepare-luarocks-packages:
     @echo "  [luarocks] Preparing packages..."
     @mkdir -p {{dist_dir}}/publish/luarocks
     @if command -v luarocks >/dev/null 2>&1; then \
-        echo "  [luarocks] Downloading native libraries..."; \
-        cd {{host_libs_dir}}/lua && luajit download-native.lua v{{version}}; \
         echo "  [luarocks] Copying rockspecs for upload..."; \
         cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{guest_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
@@ -880,135 +905,6 @@ _prepare-jsr-packages:
     else \
         echo "  [jsr.io] ⊘ deno not installed, skipping"; \
     fi
-
-# ============================================================================
-# Publishing Commands
-# ============================================================================
-
-# Publish to crates.io (requires CRATES_IO_TOKEN)
-publish-crates:
-    @echo "=== Publishing to crates.io ==="
-    @test -n "$CRATES_IO_TOKEN" || { echo "Error: CRATES_IO_TOKEN not set"; exit 1; }
-    @echo "Publishing polyplug_abi..."
-    cargo publish -p polyplug_abi --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug..."
-    cargo publish -p polyplug --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_guest..."
-    cargo publish -p polyplug_guest --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_codegen..."
-    cargo publish -p polyplug_codegen --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplugc..."
-    cargo publish -p polyplugc --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_native..."
-    cargo publish -p polyplug_native --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_python..."
-    cargo publish -p polyplug_python --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_lua..."
-    cargo publish -p polyplug_lua --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_js..."
-    cargo publish -p polyplug_js --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_js_deno..."
-    cargo publish -p polyplug_js_deno --token "$CRATES_IO_TOKEN"
-    @sleep 5
-    @echo "Publishing polyplug_dotnet..."
-    cargo publish -p polyplug_dotnet --token "$CRATES_IO_TOKEN"
-    @echo "=== crates.io publishing complete ==="
-
-# Publish to NuGet (requires NUGET_API_KEY)
-publish-nuget:
-    @echo "=== Publishing to NuGet ==="
-    @test -n "$NUGET_API_KEY" || { echo "Error: NUGET_API_KEY not set"; exit 1; }
-    @test -d {{dist_dir}}/publish/nuget || { echo "Error: Run 'just release' first"; exit 1; }
-    @for pkg in {{dist_dir}}/publish/nuget/*.nupkg; do \
-        if [ -f "$$pkg" ]; then \
-            echo "Publishing $$pkg..."; \
-            dotnet nuget push "$$pkg" \
-                --api-key "$NUGET_API_KEY" \
-                --source https://api.nuget.org/v3/index.json \
-                --skip-duplicate; \
-        fi; \
-    done
-    @echo "=== NuGet publishing complete ==="
-
-# Publish to PyPI (requires PYPI_TOKEN)
-publish-pypi:
-    @echo "=== Publishing to PyPI ==="
-    @test -n "$PYPI_TOKEN" || { echo "Error: PYPI_TOKEN not set"; exit 1; }
-    @test -d {{dist_dir}}/publish/pypi || { echo "Error: Run 'just release' first"; exit 1; }
-    @if command -v uv >/dev/null 2>&1; then \
-        for pkg in {{dist_dir}}/publish/pypi/*.tar.gz {{dist_dir}}/publish/pypi/*.whl; do \
-            if [ -f "$$pkg" ]; then \
-                echo "Publishing $$pkg..."; \
-                uv publish --token "$PYPI_TOKEN" "$$pkg" 2>/dev/null || true; \
-            fi; \
-        done; \
-    else \
-        echo "Error: uv not installed"; exit 1; \
-    fi
-    @echo "=== PyPI publishing complete ==="
-
-# Publish to npm (requires NPM_TOKEN)
-publish-npm:
-    @echo "=== Publishing to npm ==="
-    @test -n "$NPM_TOKEN" || { echo "Error: NPM_TOKEN not set"; exit 1; }
-    @test -d {{dist_dir}}/publish/npm || { echo "Error: Run 'just release' first"; exit 1; }
-    npm config set //registry.npmjs.org/:_authToken "$NPM_TOKEN"
-    @for pkg in {{dist_dir}}/publish/npm/*.tgz; do \
-        if [ -f "$$pkg" ]; then \
-            echo "Publishing $$pkg..."; \
-            npm publish "$$pkg" --access public; \
-        fi; \
-    done
-    @echo "=== npm publishing complete ==="
-
-# Publish to jsr.io (requires JSR_TOKEN or logged in via deno)
-publish-jsr:
-    @echo "=== Publishing to jsr.io ==="
-    @if [ -n "$JSR_TOKEN" ]; then \
-        export DENO_AUTH_TOKENS="jsr.io:$JSR_TOKEN"; \
-    fi
-    @echo "Publishing host library..."
-    cd host-libs/js && deno publish
-    @echo "Publishing guest library..."
-    cd guest-libs/js && deno publish
-    @for loader in native python lua js js-deno dotnet; do \
-        loader_dir="host-libs/js/loaders/@polyplug/loaders-$$loader"; \
-        if [ -d "$$loader_dir" ]; then \
-            echo "Publishing @polyplug/loaders-$$loader..."; \
-            cd "$$loader_dir" && deno publish; \
-        fi; \
-    done
-    @echo "=== jsr.io publishing complete ==="
-
-# Publish to LuaRocks (requires LUAROCKS_API_KEY)
-publish-luarocks:
-    @echo "=== Publishing to LuaRocks ==="
-    @test -n "$LUAROCKS_API_KEY" || { echo "Error: LUAROCKS_API_KEY not set"; exit 1; }
-    @echo "Publishing host library..."
-    luarocks upload host-libs/lua/polyplug-1.0-1.rockspec --api-key "$LUAROCKS_API_KEY"
-    @echo "Publishing guest library..."
-    luarocks upload guest-libs/lua/polyplug-guest-1.0-1.rockspec --api-key "$LUAROCKS_API_KEY"
-    @for rock in host-libs/lua/loaders/*/*.rockspec; do \
-        if [ -f "$$rock" ]; then \
-            echo "Publishing $$rock..."; \
-            luarocks upload "$$rock" --api-key "$LUAROCKS_API_KEY"; \
-        fi; \
-    done
-    @echo "=== LuaRocks publishing complete ==="
-
-# Publish everything to all registries
-publish-all: publish-crates publish-nuget publish-pypi publish-npm publish-jsr publish-luarocks
-    @echo ""
-    @echo "=== All packages published successfully ==="
 
 # ============================================================================
 # Info

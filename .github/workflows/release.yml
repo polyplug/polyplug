@@ -1,0 +1,718 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Dry run (build but do not publish)"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-native:
+    name: Build native (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            ext: .so
+            exe: ""
+          - platform: macos-x64
+            os: macos-13
+            target: x86_64-apple-darwin
+            ext: .dylib
+            exe: ""
+          - platform: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            ext: .dylib
+            exe: ""
+          - platform: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: .dll
+            exe: .exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-dev liblua5.4-dev
+
+      - name: Install build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install python@3.12 lua
+
+      - name: Install build dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Python is typically pre-installed on Windows runners
+          echo "Python should be available"
+
+      - name: Build all native libraries
+        run: |
+          cargo build --release -p polyplug --target ${{ matrix.target }}
+          cargo build --release -p polyplug_native --target ${{ matrix.target }}
+          cargo build --release -p polyplug_python --target ${{ matrix.target }}
+          cargo build --release -p polyplug_lua --target ${{ matrix.target }}
+          cargo build --release -p polyplug_js --target ${{ matrix.target }}
+          cargo build --release -p polyplug_dotnet --target ${{ matrix.target }}
+
+      - name: Build CLI tool
+        run: cargo build --release -p polyplugc --target ${{ matrix.target }}
+
+      - name: Strip debug symbols (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          strip target/${{ matrix.target }}/release/libpolyplug${{ matrix.ext }}
+          strip target/${{ matrix.target }}/release/libpolyplug_native${{ matrix.ext }} || true
+          strip target/${{ matrix.target }}/release/libpolyplug_python${{ matrix.ext }} || true
+          strip target/${{ matrix.target }}/release/libpolyplug_lua${{ matrix.ext }} || true
+          strip target/${{ matrix.target }}/release/libpolyplug_js${{ matrix.ext }} || true
+          strip target/${{ matrix.target }}/release/libpolyplug_dotnet${{ matrix.ext }} || true
+          strip target/${{ matrix.target }}/release/polyplugc || true
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          TARGET_DIR="target/${{ matrix.target }}/release"
+          EXT="${{ matrix.ext }}"
+          EXE="${{ matrix.exe }}"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$TARGET_DIR/polyplug$EXT" artifacts/
+            cp "$TARGET_DIR/polyplug_native$EXT" artifacts/ || true
+            cp "$TARGET_DIR/polyplug_python$EXT" artifacts/ || true
+            cp "$TARGET_DIR/polyplug_lua$EXT" artifacts/ || true
+            cp "$TARGET_DIR/polyplug_js$EXT" artifacts/ || true
+            cp "$TARGET_DIR/polyplug_dotnet$EXT" artifacts/ || true
+            cp "$TARGET_DIR/polyplugc$EXE" artifacts/
+          else
+            cp "$TARGET_DIR/libpolyplug$EXT" artifacts/
+            cp "$TARGET_DIR/libpolyplug_native$EXT" artifacts/ || true
+            cp "$TARGET_DIR/libpolyplug_python$EXT" artifacts/ || true
+            cp "$TARGET_DIR/libpolyplug_lua$EXT" artifacts/ || true
+            cp "$TARGET_DIR/libpolyplug_js$EXT" artifacts/ || true
+            cp "$TARGET_DIR/libpolyplug_dotnet$EXT" artifacts/ || true
+            cp "$TARGET_DIR/polyplugc" artifacts/
+          fi
+
+          ls -la artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: artifacts/
+          retention-days: 1
+
+  test-native:
+    name: Test native (${{ matrix.platform }})
+    needs: build-native
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-latest
+            ext: .so
+          - platform: macos-x64
+            os: macos-13
+            ext: .dylib
+          - platform: macos-arm64
+            os: macos-14
+            ext: .dylib
+          - platform: windows-x64
+            os: windows-latest
+            ext: .dll
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}
+          path: native
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Test Python native loading
+        shell: bash
+        run: |
+          mkdir -p host-libs/python/polyplug/_native/${{ matrix.platform }}
+          cp native/*${{ matrix.ext }} host-libs/python/polyplug/_native/${{ matrix.platform }}/ 2>/dev/null || true
+          cd host-libs/python
+          python3 -c "from polyplug._native import load_native_lib; lib = load_native_lib(); print(f'Python: OK - {lib._name}')"
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Test Deno native loading
+        shell: bash
+        run: |
+          mkdir -p host-libs/js/_native/${{ matrix.platform }}
+          cp native/*${{ matrix.ext }} host-libs/js/_native/${{ matrix.platform }}/ 2>/dev/null || true
+          cd host-libs/js
+          deno run --allow-ffi --allow-env --allow-read -e "
+            import { NativeLibLoader } from './native-loader.ts';
+            const loader = new NativeLibLoader();
+            const lib = loader.load();
+            console.log('Deno: OK');
+          "
+
+      - name: Set up LuaJIT (Unix only)
+        if: runner.os != 'Windows'
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: "luajit-2.1.0-beta3"
+
+      - name: Test Lua native loading (Unix only)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p host-libs/lua/_native/${{ matrix.platform }}
+          cp native/*${{ matrix.ext }} host-libs/lua/_native/${{ matrix.platform }}/ 2>/dev/null || true
+          cd host-libs/lua
+          luajit -e "local p = require('polyplug'); print('Lua: OK')"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Test C# native loading
+        shell: bash
+        run: |
+          mkdir -p host-libs/csharp/Polyplug/runtimes/${{ matrix.platform }}/native
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp native/polyplug.dll host-libs/csharp/Polyplug/runtimes/win-x64/native/
+          elif [ "${{ matrix.platform }}" = "macos-x64" ]; then
+            cp native/libpolyplug.dylib host-libs/csharp/Polyplug/runtimes/osx-x64/native/
+          elif [ "${{ matrix.platform }}" = "macos-arm64" ]; then
+            cp native/libpolyplug.dylib host-libs/csharp/Polyplug/runtimes/osx-arm64/native/
+          else
+            cp native/libpolyplug.so host-libs/csharp/Polyplug/runtimes/linux-x64/native/
+          fi
+          cd host-libs/csharp/Polyplug
+          dotnet build -c Release
+          echo "C#: OK"
+
+  publish:
+    name: Build & Publish Packages
+    needs: [build-native, test-native]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.dry-run == 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: native-artifacts
+          merge-multiple: false
+
+      - name: Organize native libraries
+        run: |
+          mkdir -p dist/native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          mkdir -p dist/cli/{linux-x64,macos-x64,macos-arm64,windows-x64}
+
+          cp native-artifacts/native-linux-x64/libpolyplug.so dist/native/linux-x64/
+          cp native-artifacts/native-linux-x64/libpolyplug_*.so dist/native/linux-x64/ 2>/dev/null || true
+          cp native-artifacts/native-linux-x64/polyplugc dist/cli/linux-x64/
+
+          cp native-artifacts/native-macos-x64/libpolyplug.dylib dist/native/macos-x64/
+          cp native-artifacts/native-macos-x64/libpolyplug_*.dylib dist/native/macos-x64/ 2>/dev/null || true
+          cp native-artifacts/native-macos-x64/polyplugc dist/cli/macos-x64/
+
+          cp native-artifacts/native-macos-arm64/libpolyplug.dylib dist/native/macos-arm64/
+          cp native-artifacts/native-macos-arm64/libpolyplug_*.dylib dist/native/macos-arm64/ 2>/dev/null || true
+          cp native-artifacts/native-macos-arm64/polyplugc dist/cli/macos-arm64/
+
+          cp native-artifacts/native-windows-x64/polyplug.dll dist/native/windows-x64/
+          cp native-artifacts/native-windows-x64/polyplug_*.dll dist/native/windows-x64/ 2>/dev/null || true
+          cp native-artifacts/native-windows-x64/polyplugc.exe dist/cli/windows-x64/
+
+          echo "=== Native libraries ==="
+          find dist/native -type f \( -name "*.so" -o -name "*.dylib" -o -name "*.dll" \) | sort
+
+          echo "=== CLI binaries ==="
+          find dist/cli -type f | sort
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io (dry-run)
+        if: inputs.dry-run == 'true'
+        run: |
+          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_js_deno polyplug_dotnet; do
+            echo "Dry-run: $crate"
+            cargo publish -p $crate --dry-run
+          done
+
+      - name: Publish to crates.io
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # Publish all crates - cargo handles dependency resolution locally
+          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_js_deno polyplug_dotnet; do
+            echo "Publishing $crate..."
+            cargo publish -p $crate
+          done
+
+          echo "All crates published successfully"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build Python host package with embedded natives
+        run: |
+          cd host-libs/python
+
+          mkdir -p polyplug/_native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          cp ../../dist/native/linux-x64/libpolyplug.so polyplug/_native/linux-x64/
+          cp ../../dist/native/macos-x64/libpolyplug.dylib polyplug/_native/macos-x64/
+          cp ../../dist/native/macos-arm64/libpolyplug.dylib polyplug/_native/macos-arm64/
+          cp ../../dist/native/windows-x64/polyplug.dll polyplug/_native/windows-x64/
+
+          uv build
+
+      - name: Build Python guest package
+        run: |
+          cd guest-libs/python
+          uv build --out-dir ../../dist/pypi
+
+      - name: Build Python loader packages with embedded natives
+        run: |
+          for loader in native python lua js js-deno dotnet; do
+            loader_dir="host-libs/python/loaders/polyplug-loaders-$loader"
+            if [ -d "$loader_dir" ]; then
+              echo "Building polyplug-loaders-$loader..."
+
+              if [ "$loader" = "native" ]; then
+                lib_name="libpolyplug_native"
+              elif [ "$loader" = "js-deno" ]; then
+                lib_name="libpolyplug_js"
+              else
+                lib_name="libpolyplug_$loader"
+              fi
+
+              mkdir -p "$loader_dir/polyplug_loaders_${loader//-/_}/_native/{linux-x64,macos-x64,macos-arm64,windows-x64}"
+              cp dist/native/linux-x64/${lib_name}.so "$loader_dir/polyplug_loaders_${loader//-/_}/_native/linux-x64/" 2>/dev/null || true
+              cp dist/native/macos-x64/${lib_name}.dylib "$loader_dir/polyplug_loaders_${loader//-/_}/_native/macos-x64/" 2>/dev/null || true
+              cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/polyplug_loaders_${loader//-/_}/_native/macos-arm64/" 2>/dev/null || true
+              cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/polyplug_loaders_${loader//-/_}/_native/windows-x64/" 2>/dev/null || true
+
+              cd "$loader_dir"
+              uv build --out-dir ../../../dist/pypi
+              cd -
+            fi
+          done
+
+      - name: Validate Python packages
+        run: |
+          echo "=== Validating Python packages ==="
+          for whl in host-libs/python/dist/*.whl dist/pypi/*.whl; do
+            if [ -f "$whl" ]; then
+              echo "Checking $whl..."
+              unzip -l "$whl" | grep -E "_native|polyplug_guest" || echo "  Warning: No _native or guest in $whl"
+            fi
+          done
+
+      - name: Publish to PyPI (dry-run)
+        if: inputs.dry-run == 'true'
+        run: |
+          cd host-libs/python
+          uv publish --dry-run
+
+      - name: Publish to PyPI
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd host-libs/python
+          uv publish --token ${{ secrets.PYPI_API_TOKEN }}
+
+          for whl in dist/pypi/*.whl; do
+            if [ -f "$whl" ]; then
+              uv publish --token ${{ secrets.PYPI_API_TOKEN }} "$whl"
+            fi
+          done
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Build NuGet host package with embedded natives
+        run: |
+          cd host-libs/csharp/Polyplug
+
+          mkdir -p runtimes/linux-x64/native
+          mkdir -p runtimes/osx-x64/native
+          mkdir -p runtimes/osx-arm64/native
+          mkdir -p runtimes/win-x64/native
+
+          cp ../../../dist/native/linux-x64/libpolyplug.so runtimes/linux-x64/native/
+          cp ../../../dist/native/macos-x64/libpolyplug.dylib runtimes/osx-x64/native/
+          cp ../../../dist/native/macos-arm64/libpolyplug.dylib runtimes/osx-arm64/native/
+          cp ../../../dist/native/windows-x64/polyplug.dll runtimes/win-x64/native/
+
+          dotnet pack -c Release -o ../../../dist/nuget
+
+      - name: Build NuGet guest package
+        run: |
+          cd guest-libs/csharp
+          dotnet pack -c Release -o ../../dist/nuget
+
+      - name: Build NuGet loader packages with embedded natives
+        run: |
+          for loader in Native Python Lua Js JsDeno Dotnet; do
+            loader_dir="host-libs/csharp/Loaders/$loader"
+            if [ -d "$loader_dir" ]; then
+              echo "Building Polyplug.Loaders.$loader..."
+
+              loader_lower=$(echo "$loader" | tr '[:upper:]' '[:lower:]')
+              if [ "$loader_lower" = "jsdeno" ]; then
+                lib_name="libpolyplug_js"
+              else
+                lib_name="libpolyplug_$loader_lower"
+              fi
+
+              mkdir -p "$loader_dir/runtimes/linux-x64/native"
+              mkdir -p "$loader_dir/runtimes/osx-x64/native"
+              mkdir -p "$loader_dir/runtimes/osx-arm64/native"
+              mkdir -p "$loader_dir/runtimes/win-x64/native"
+
+              cp dist/native/linux-x64/${lib_name}.so "$loader_dir/runtimes/linux-x64/native/" 2>/dev/null || true
+              cp dist/native/macos-x64/${lib_name}.dylib "$loader_dir/runtimes/osx-x64/native/" 2>/dev/null || true
+              cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/runtimes/osx-arm64/native/" 2>/dev/null || true
+              cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/runtimes/win-x64/native/" 2>/dev/null || true
+
+              dotnet pack "$loader_dir" -c Release -o ../../../dist/nuget
+            fi
+          done
+
+      - name: Validate NuGet packages
+        run: |
+          echo "=== Validating NuGet packages ==="
+          for nupkg in dist/nuget/*.nupkg; do
+            if [ -f "$nupkg" ]; then
+              echo "Checking $nupkg..."
+              unzip -l "$nupkg" | grep -E "runtimes|Polyplug.Guest" || echo "  Warning: No runtimes or guest in $nupkg"
+            fi
+          done
+
+      - name: Publish to NuGet (dry-run)
+        if: inputs.dry-run == 'true'
+        run: |
+          for pkg in dist/nuget/*.nupkg; do
+            echo "Would publish: $pkg"
+          done
+
+      - name: Publish to NuGet
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          for pkg in dist/nuget/*.nupkg; do
+            dotnet nuget push "$pkg" --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+          done
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build npm host package with embedded natives
+        run: |
+          cd host-libs/js
+
+          mkdir -p _native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          cp ../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
+          cp ../../dist/native/macos-x64/libpolyplug.dylib _native/macos-x64/
+          cp ../../dist/native/macos-arm64/libpolyplug.dylib _native/macos-arm64/
+          cp ../../dist/native/windows-x64/polyplug.dll _native/windows-x64/
+
+          npm pack
+
+      - name: Build npm guest package
+        run: |
+          cd guest-libs/js
+          npm pack
+          mv *.tgz ../../dist/npm/ 2>/dev/null || true
+
+      - name: Build npm loader packages with embedded natives
+        run: |
+          for loader in native python lua js js-deno dotnet; do
+            loader_dir="host-libs/js/loaders/@polyplug/loaders-$loader"
+            if [ -d "$loader_dir" ]; then
+              echo "Building @polyplug/loaders-$loader..."
+
+              if [ "$loader" = "js-deno" ]; then
+                lib_name="libpolyplug_js"
+              else
+                lib_name="libpolyplug_$loader"
+              fi
+
+              mkdir -p "$loader_dir/_native/linux-x64" "$loader_dir/_native/macos-x64" "$loader_dir/_native/macos-arm64" "$loader_dir/_native/windows-x64"
+              cp dist/native/linux-x64/${lib_name}.so "$loader_dir/_native/linux-x64/" 2>/dev/null || true
+              cp dist/native/macos-x64/${lib_name}.dylib "$loader_dir/_native/macos-x64/" 2>/dev/null || true
+              cp dist/native/macos-arm64/${lib_name}.dylib "$loader_dir/_native/macos-arm64/" 2>/dev/null || true
+              cp dist/native/windows-x64/${lib_name}.dll "$loader_dir/_native/windows-x64/" 2>/dev/null || true
+
+              cd "$loader_dir"
+              npm pack
+              mv *.tgz ../../../../../dist/npm/ 2>/dev/null || true
+              cd -
+            fi
+          done
+
+      - name: Publish to npm (dry-run)
+        if: inputs.dry-run == 'true'
+        run: |
+          cd host-libs/js
+          npm publish --dry-run
+
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd host-libs/js
+          npm publish --access public
+
+          for tgz in ../../dist/npm/*.tgz; do
+            if [ -f "$tgz" ]; then
+              npm publish "$tgz" --access public
+            fi
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Publish to jsr.io (dry-run)
+        if: inputs.dry-run == 'true'
+        run: |
+          cd host-libs/js
+          deno publish --dry-run
+
+          cd ../../guest-libs/js
+          deno publish --dry-run
+
+          for loader in native python lua js js-deno dotnet; do
+            cd host-libs/js/loaders/@polyplug/loaders-$loader
+            deno publish --dry-run
+            cd -
+          done
+
+      - name: Publish to jsr.io
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd host-libs/js
+          deno publish
+
+          cd ../../guest-libs/js
+          deno publish
+
+          for loader in native python lua js js-deno dotnet; do
+            cd host-libs/js/loaders/@polyplug/loaders-$loader
+            deno publish
+            cd -
+          done
+        env:
+          JSR_TOKEN: ${{ secrets.JSR_TOKEN }}
+
+      - name: Install LuaRocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luarocks
+
+      - name: Build LuaRocks host package with embedded natives
+        run: |
+          cd host-libs/lua
+
+          mkdir -p _native/{linux-x64,macos-x64,macos-arm64,windows-x64}
+          cp ../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
+          cp ../../dist/native/macos-x64/libpolyplug.dylib _native/macos-x64/
+          cp ../../dist/native/macos-arm64/libpolyplug.dylib _native/macos-arm64/
+          cp ../../dist/native/windows-x64/polyplug.dll _native/windows-x64/
+
+      - name: Publish to LuaRocks (dry-run)
+        if: inputs.dry-run == 'true'
+        run: |
+          cd host-libs/lua
+          ROCKSPEC=$(ls *.rockspec | head -1)
+          luarocks pack "$ROCKSPEC"
+          echo "Would upload: $ROCKSPEC"
+
+      - name: Publish to LuaRocks
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cd host-libs/lua
+          ROCKSPEC=$(ls *.rockspec | head -1)
+          luarocks upload "$ROCKSPEC" --api-key ${{ secrets.LUAROCKS_API_KEY }}
+
+          cd ../../guest-libs/lua
+          ROCKSPEC=$(ls *.rockspec | head -1)
+          luarocks upload "$ROCKSPEC" --api-key ${{ secrets.LUAROCKS_API_KEY }}
+
+          for rock in host-libs/lua/loaders/*/*.rockspec; do
+            if [ -f "$rock" ]; then
+              luarocks upload "$rock" --api-key ${{ secrets.LUAROCKS_API_KEY }}
+            fi
+          done
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          for platform in linux-x64 macos-x64 macos-arm64 windows-x64; do
+            for lib in dist/native/$platform/*; do
+              if [ -f "$lib" ]; then
+                name=$(basename "$lib")
+                ext="${name##*.}"
+                base="${name%.*}"
+                cp "$lib" "release-assets/${base}-$platform.${ext}"
+              fi
+            done
+
+            if [ -f "dist/cli/$platform/polyplugc" ]; then
+              cp "dist/cli/$platform/polyplugc" "release-assets/polyplugc-$platform"
+            elif [ -f "dist/cli/$platform/polyplugc.exe" ]; then
+              cp "dist/cli/$platform/polyplugc.exe" "release-assets/polyplugc-$platform.exe"
+            fi
+          done
+
+          cp host-libs/python/dist/*.whl release-assets/ 2>/dev/null || true
+          cp dist/nuget/*.nupkg release-assets/ 2>/dev/null || true
+          cp host-libs/js/*.tgz release-assets/ 2>/dev/null || true
+          cp dist/npm/*.tgz release-assets/ 2>/dev/null || true
+
+          ls -la release-assets/
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Python
+            ```bash
+            pip install polyplug
+            pip install polyplug-guest
+            # Loaders
+            pip install polyplug-loaders-native polyplug-loaders-python polyplug-loaders-lua polyplug-loaders-js polyplug-loaders-js-deno polyplug-loaders-dotnet
+            ```
+
+            ### C#/.NET
+            ```bash
+            dotnet add package Polyplug
+            dotnet add package Polyplug.Guest
+            # Loaders
+            dotnet add package Polyplug.Loaders.Native
+            dotnet add package Polyplug.Loaders.Python
+            dotnet add package Polyplug.Loaders.Lua
+            dotnet add package Polyplug.Loaders.Js
+            dotnet add package Polyplug.Loaders.JsDeno
+            dotnet add package Polyplug.Loaders.Dotnet
+            ```
+
+            ### Node.js/Deno
+            ```bash
+            # Core runtime
+            npm install @polyplug/runtime
+            npm install @polyplug/guest
+            # Loaders
+            npm install @polyplug/loaders-native @polyplug/loaders-python @polyplug/loaders-lua @polyplug/loaders-js @polyplug/loaders-js-deno @polyplug/loaders-dotnet
+            ```
+
+            ### Lua
+            ```bash
+            luarocks install polyplug
+            luarocks install polyplug-guest
+            # Loaders available in luarocks
+            ```
+
+            ### Rust
+            ```toml
+            [dependencies]
+            polyplug = "${{ steps.version.outputs.version }}"
+            polyplug_guest = "${{ steps.version.outputs.version }}"
+            polyplug_codegen = "${{ steps.version.outputs.version }}"
+            # Loaders
+            polyplug_native = "${{ steps.version.outputs.version }}"
+            polyplug_python = "${{ steps.version.outputs.version }}"
+            polyplug_lua = "${{ steps.version.outputs.version }}"
+            polyplug_js = "${{ steps.version.outputs.version }}"
+            polyplug_js_deno = "${{ steps.version.outputs.version }}"
+            polyplug_dotnet = "${{ steps.version.outputs.version }}"
+            ```
+
+            ### CLI Tool (polyplugc)
+            ```bash
+            # Quick install (Linux/macOS)
+            curl -fsSL https://polyplug.github.io/install.sh | bash
+
+            # Quick install (Windows)
+            powershell -c "irm https://polyplug.github.io/install.ps1 | iex"
+
+            # Or via cargo
+            cargo install polyplugc
+            ```
+
+            ## Native Libraries
+            All native libraries (core + 5 loaders) are embedded in the packages. No manual installation required.

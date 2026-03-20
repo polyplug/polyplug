@@ -8,6 +8,14 @@
  * @module polyplug
  */
 
+if (typeof Deno === "undefined") {
+  throw new Error(
+    "@polyplug/runtime currently only supports Deno. " +
+    "Node.js and Bun support is planned for future releases. " +
+    "See https://github.com/polyplug/polyplug for updates."
+  );
+}
+
 import { ReloadPhase } from "./polyplug/reload_phase.js";
 
 export { 

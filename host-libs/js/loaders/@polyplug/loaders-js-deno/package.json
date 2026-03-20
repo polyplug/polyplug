@@ -1,12 +1,13 @@
 {
   "name": "@polyplug/loaders-js-deno",
   "version": "0.1.0",
-  "description": "Deno loader for polyplug - loads Deno/TypeScript plugins",
+  "description": "Deno loader for polyplug - loads Deno/TypeScript plugins. Native libraries for Linux, macOS, and Windows are embedded.",
   "main": "mod.ts",
   "types": "mod.d.ts",
   "files": [
     "mod.ts",
-    "mod.d.ts"
+    "mod.d.ts",
+    "_native/"
   ],
   "scripts": {
     "test": "deno test --allow-ffi --allow-env mod.test.ts"

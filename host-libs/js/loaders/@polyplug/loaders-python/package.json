@@ -1,12 +1,13 @@
 {
   "name": "@polyplug/loaders-python",
   "version": "0.1.0",
-  "description": "Python loader for polyplug - loads Python plugins via PyO3",
+  "description": "Python loader for polyplug - loads Python plugins via PyO3. Native libraries for Linux, macOS, and Windows are embedded.",
   "main": "mod.ts",
   "types": "mod.d.ts",
   "files": [
     "mod.ts",
-    "mod.d.ts"
+    "mod.d.ts",
+    "_native/"
   ],
   "scripts": {
     "test": "deno test --allow-ffi --allow-env mod.test.ts"

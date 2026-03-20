@@ -1,12 +1,13 @@
 {
   "name": "@polyplug/loaders-js",
   "version": "0.1.0",
-  "description": "QuickJS loader for polyplug - loads QuickJS plugins",
+  "description": "QuickJS loader for polyplug - loads QuickJS plugins. Native libraries for Linux, macOS, and Windows are embedded.",
   "main": "mod.ts",
   "types": "mod.d.ts",
   "files": [
     "mod.ts",
-    "mod.d.ts"
+    "mod.d.ts",
+    "_native/"
   ],
   "scripts": {
     "test": "deno test --allow-ffi --allow-env mod.test.ts"

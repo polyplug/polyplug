@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "polyplug-loaders-python"
 version = "0.1.0"
-description = "Python loader for polyplug"
+description = "Python loader for polyplug - loads Python-based plugins"
 requires-python = ">=3.11"
 dependencies = [
     "polyplug",
@@ -14,3 +14,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["polyplug_loaders_python*"]
+
+[tool.setuptools.package-data]
+polyplug_loaders_python = ["_native/**/*"]

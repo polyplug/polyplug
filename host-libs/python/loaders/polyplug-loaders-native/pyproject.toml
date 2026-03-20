@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "polyplug-loaders-native"
 version = "0.1.0"
-description = "Native loader for polyplug"
+description = "Native loader for polyplug - loads native C ABI plugins (.so/.dll)"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -13,3 +13,6 @@ license = { text = "MIT" }
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["polyplug_loaders_native*"]
+
+[tool.setuptools.package-data]
+polyplug_loaders_native = ["_native/**/*"]

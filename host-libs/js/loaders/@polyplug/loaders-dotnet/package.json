@@ -1,12 +1,13 @@
 {
   "name": "@polyplug/loaders-dotnet",
   "version": "0.1.0",
-  "description": ".NET loader for polyplug - loads .NET/Core plugins via nethost",
+  "description": ".NET loader for polyplug - loads .NET/Core plugins via nethost. Native libraries for Linux, macOS, and Windows are embedded.",
   "main": "mod.ts",
   "types": "mod.d.ts",
   "files": [
     "mod.ts",
-    "mod.d.ts"
+    "mod.d.ts",
+    "_native/"
   ],
   "scripts": {
     "test": "deno test --allow-ffi --allow-env mod.test.ts"

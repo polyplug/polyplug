@@ -1,6 +1,6 @@
 -- rockspec file
 package = "polyplug-guest"
-version = "1.0-1"
+version = "0.1.0-1"
 source = {
    url = "git+https://github.com/polyplug/polyplug.git",
    branch = "main",

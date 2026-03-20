@@ -1,12 +1,13 @@
 {
   "name": "@polyplug/loaders-lua",
   "version": "0.1.0",
-  "description": "Lua loader for polyplug - loads LuaJIT plugins",
+  "description": "Lua loader for polyplug - loads LuaJIT plugins. Native libraries for Linux, macOS, and Windows are embedded.",
   "main": "mod.ts",
   "types": "mod.d.ts",
   "files": [
     "mod.ts",
-    "mod.d.ts"
+    "mod.d.ts",
+    "_native/"
   ],
   "scripts": {
     "test": "deno test --allow-ffi --allow-env mod.test.ts"
