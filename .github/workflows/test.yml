@@ -47,6 +47,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Build test fixtures
+        run: cargo build --workspace --tests
       - name: Generate coverage (fast tests only on PRs)
         run: |
           cargo llvm-cov \
@@ -75,10 +77,10 @@ jobs:
           save-if: true
       - name: Build test fixtures
         run: cargo build --workspace --tests
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run all tests including stress (ignored)
         run: cargo test --workspace -- --include-ignored
-      - name: Generate full coverage including stress tests
-        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate stress coverage report
         run: |
           cargo llvm-cov \
