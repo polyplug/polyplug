@@ -222,7 +222,7 @@ impl core::error::Error for PluginError {}
 ///
 /// # Example
 /// ```rust
-/// use polyplug_abi::{StringView, to_str};
+/// use polyplug_guest::{StringView, to_str};
 ///
 /// let sv = StringView { ptr: b"hello".as_ptr(), len: 5 };
 /// let s: &str = to_str(sv);
@@ -247,7 +247,7 @@ pub fn to_str(sv: StringView) -> &'static str {
 ///
 /// # Example
 /// ```rust
-/// use polyplug_abi::{alloc_string, StringView};
+/// use polyplug_guest::{alloc_string, StringView};
 ///
 /// let sv: StringView = alloc_string("hello").unwrap();
 /// // sv.ptr points to host-allocated memory
