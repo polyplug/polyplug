@@ -15,32 +15,12 @@ use tempfile::NamedTempFile;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
+use polyplug::runtime::Runtime;
+use polyplug::runtime::RuntimeBuilder;
+use polyplug_dotnet::version::read_target_framework;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
-use polyplug_dotnet::version::read_target_framework;
-
-// SAFETY: noop_register is a valid function used only in test PluginRegistrar stubs.
-// It is never actually called — tests fail before load() reaches the register step.
-unsafe extern "C" fn noop_register(
-    _registrar: *mut PluginRegistrar,
-    _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginVTable,
-) -> AbiError {
-    AbiError::ok()
-}
-
-fn stub_registrar() -> PluginRegistrar {
-    PluginRegistrar {
-        register_plugin: noop_register,
-        host: core::ptr::null::<HostVTable>(),
-    }
-}
 
 fn temp_file_with_bytes(bytes: &[u8]) -> NamedTempFile {
     let mut f: NamedTempFile = NamedTempFile::new().expect("tempfile creation failed");
@@ -62,6 +42,12 @@ fn polyplug_dll_path() -> PathBuf {
                 .join("Polyplug.dll")
         })
         .expect("CARGO_MANIFEST_DIR resolution failed")
+}
+
+fn test_runtime() -> Runtime {
+    RuntimeBuilder::new()
+        .build()
+        .expect("failed to build test runtime")
 }
 
 // ---------------------------------------------------------------------------
@@ -205,9 +191,9 @@ fn dotnet_loader_runtime_name_is_dotnet() {
 #[test]
 fn load_nonexistent_assembly_returns_assembly_not_found() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let mut registrar: PluginRegistrar = stub_registrar();
+    let runtime: Runtime = test_runtime();
     let result: Result<(), PolyplugError> =
-        loader.load(Path::new("/does/not/exist/Plugin.dll"), &mut registrar);
+        loader.load(Path::new("/does/not/exist/Plugin.dll"), &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound, got {other:?}"),
@@ -218,8 +204,8 @@ fn load_nonexistent_assembly_returns_assembly_not_found() {
 fn load_invalid_pe_file_returns_assembly_not_found() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"not a valid PE binary at all");
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let mut registrar: PluginRegistrar = stub_registrar();
-    let result: Result<(), PolyplugError> = loader.load(tmp.path(), &mut registrar);
+    let runtime: Runtime = test_runtime();
+    let result: Result<(), PolyplugError> = loader.load(tmp.path(), &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound for invalid PE, got {other:?}"),
@@ -234,9 +220,8 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
         hostfxr: HostfxrLocation::Path(PathBuf::from("/nonexistent/libhostfxr.so")),
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
-    let mut registrar: PluginRegistrar = stub_registrar();
-    let result: Result<(), PolyplugError> =
-        loader.load(Path::new("/no/such/Plugin.dll"), &mut registrar);
+    let runtime: Runtime = test_runtime();
+    let result: Result<(), PolyplugError> = loader.load(Path::new("/no/such/Plugin.dll"), &runtime);
     assert!(
         matches!(
             result,
@@ -263,8 +248,8 @@ fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
         hostfxr: HostfxrLocation::Auto,
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
-    let mut registrar: PluginRegistrar = stub_registrar();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &mut registrar);
+    let runtime: Runtime = test_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
             assert_eq!(required, "net6.0");
@@ -286,8 +271,8 @@ fn load_dll_with_matching_version_passes_tfm_check() {
         "Polyplug.dll not found — build host-libs/csharp first"
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let mut registrar: PluginRegistrar = stub_registrar();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &mut registrar);
+    let runtime: Runtime = test_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
     assert!(
         !matches!(
             result,
@@ -316,8 +301,8 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
         hostfxr: HostfxrLocation::Path(PathBuf::from("/nonexistent/libhostfxr.so")),
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
-    let mut registrar: PluginRegistrar = stub_registrar();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &mut registrar);
+    let runtime: Runtime = test_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::ClrInitFailed { path, .. }))
         | Err(PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle: path })) => {
@@ -345,8 +330,8 @@ fn full_clr_init_reaches_init_symbol_check() {
         "Polyplug.dll not found — build host-libs/csharp first"
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
-    let mut registrar: PluginRegistrar = stub_registrar();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &mut registrar);
+    let runtime: Runtime = test_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
     assert!(
         !matches!(
             result,

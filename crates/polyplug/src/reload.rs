@@ -14,10 +14,24 @@ use std::time::Instant;
 use crate::error::PolyplugError;
 use crate::loader::manifest::ManifestData;
 use crate::registry::VTableSlot;
+use crate::runtime::HostContext;
 use crate::runtime::Runtime;
 
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
 const MAX_CASCADE_DEPTH: usize = 16_usize;
+
+/// A raw pointer wrapper for PluginVTable that implements Send and Sync.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VTablePtr(pub *const polyplug_abi::PluginVTable);
+
+// SAFETY: VTablePtr wraps a raw pointer to a PluginVTable from a loaded library.
+// The vtable remains valid for the lifetime of the loaded library, which is managed
+// by the Runtime. During hot-reload, the old library is kept alive until quiescence
+// is achieved, ensuring the vtable pointers remain valid.
+unsafe impl Send for VTablePtr {}
+// SAFETY: Same reasoning as Send — concurrent reads of a vtable pointer are safe
+// because vtables are read-only after initialization.
+unsafe impl Sync for VTablePtr {}
 
 #[derive(Debug, Clone)]
 pub struct ReloadEvent {
@@ -46,28 +60,29 @@ pub enum ReloadPhase {
     },
 }
 
-thread_local! {
-    static RELOAD_CAPTURED_VTABLES: core::cell::RefCell<Vec<*const polyplug_abi::PluginVTable>> =
-        const { core::cell::RefCell::new(Vec::new()) };
-}
-
 /// Registrar callback used during reload to capture new vtable pointers.
 ///
 /// # Safety
-/// `vtable` must be a valid `PluginVTable` pointer from the reloaded library's init.
-pub(crate) unsafe extern "C" fn reload_registrar_callback(
-    _registrar: *mut polyplug_abi::PluginRegistrar,
+/// - `rt_ctx` must be a valid pointer to a HostContext
+/// - `vtable` must be a valid `PluginVTable` pointer from the reloaded library's init.
+pub(crate) unsafe extern "C" fn reload_register_callback(
+    rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const polyplug_abi::PluginDescriptor,
     vtable: *const polyplug_abi::PluginVTable,
 ) -> polyplug_abi::AbiError {
-    // SAFETY: vtable ptr comes from plugin init. Null check required before capture.
-    if !vtable.is_null() {
-        RELOAD_CAPTURED_VTABLES.with(
-            |v: &core::cell::RefCell<Vec<*const polyplug_abi::PluginVTable>>| {
-                v.borrow_mut().push(vtable);
-            },
-        );
+    if rt_ctx.is_null() || vtable.is_null() {
+        return polyplug_abi::AbiError::ok();
     }
+    // SAFETY: rt_ctx is a valid *mut HostContext passed by the reload code.
+    let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
+    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
+    // during the reload operation.
+    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let mut guard: std::sync::MutexGuard<'_, Vec<VTablePtr>> = runtime
+        .reload_captured_vtables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    guard.push(VTablePtr(vtable));
     polyplug_abi::AbiError::ok()
 }
 
@@ -110,7 +125,7 @@ pub(crate) fn reload_bundle_impl(
     }
     manifest.path = bundle_dir_path.clone();
     if manifest.runtime != "native" {
-        crate::runtime::emit_warning(&format!(
+        runtime.emit_warning(&format!(
             "reload_bundle only supports native bundles; runtime={} path={}",
             manifest.runtime,
             path.display()
@@ -162,12 +177,18 @@ pub(crate) fn reload_bundle_impl(
         });
     }
     let init_fn_ptr: unsafe extern "C" fn(
-        *mut polyplug_abi::PluginRegistrar,
+        *mut core::ffi::c_void,
+        *const polyplug_abi::HostVTable,
+        *const polyplug_abi::PluginContext,
     ) -> polyplug_abi::AbiError = {
         // SAFETY: Symbol lookup returns a valid function pointer on success.
         let init_sym: libloading::Symbol<
             '_,
-            unsafe extern "C" fn(*mut polyplug_abi::PluginRegistrar) -> polyplug_abi::AbiError,
+            unsafe extern "C" fn(
+                *mut core::ffi::c_void,
+                *const polyplug_abi::HostVTable,
+                *const polyplug_abi::PluginContext,
+            ) -> polyplug_abi::AbiError,
         > = unsafe {
             new_library
                 .get(b"polyplug_init\0")
@@ -179,28 +200,81 @@ pub(crate) fn reload_bundle_impl(
         *init_sym
     };
 
-    RELOAD_CAPTURED_VTABLES.with(|v| v.borrow_mut().clear());
-    let mut reload_registrar: polyplug_abi::PluginRegistrar = polyplug_abi::PluginRegistrar {
-        register_plugin: reload_registrar_callback,
-        host: runtime.host_vtable_ref() as *const polyplug_abi::HostVTable,
+    runtime
+        .reload_captured_vtables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+
+    // Create PluginContext with bundle_id
+    let bundle_path_sv: polyplug_abi::StringView = polyplug_abi::StringView {
+        ptr: bundle_dir_path.as_os_str().as_encoded_bytes().as_ptr(),
+        len: bundle_dir_path.as_os_str().as_encoded_bytes().len(),
     };
+    let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+        bundle_path: bundle_path_sv,
+        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: manifest.id,
+    };
+
+    // Create HostContext on the stack for dependency enforcement
+    let expected_bundle_id: u64 = manifest.id;
+    let host_ctx: HostContext = HostContext {
+        runtime: runtime as *const Runtime as *mut Runtime,
+        bundle_id: expected_bundle_id,
+    };
+
+    // Build a temporary HostVTable with our capture callback
+    let reload_host_vtable: polyplug_abi::HostVTable = polyplug_abi::HostVTable {
+        register_plugin: reload_register_callback,
+        alloc: crate::runtime::host_alloc,
+        free: crate::runtime::host_free,
+        find_by_contract: crate::runtime::host_find_by_contract,
+        find_by_bundle: crate::runtime::host_find_by_bundle,
+        find_all_by_contract: crate::runtime::host_find_all_by_contract,
+        resolve_plugin: crate::runtime::host_resolve_plugin,
+        get_extension: crate::runtime::host_get_extension,
+    };
+
+    let rt_ctx: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
     // SAFETY: init_fn_ptr is resolved from new_library which remains alive for this call.
-    let init_result: polyplug_abi::AbiError =
-        unsafe { init_fn_ptr(&mut reload_registrar as *mut polyplug_abi::PluginRegistrar) };
+    // rt_ctx is a valid HostContext pointer, and reload_host_vtable is a valid HostVTable.
+    let init_result: polyplug_abi::AbiError = unsafe {
+        init_fn_ptr(
+            rt_ctx,
+            &reload_host_vtable as *const polyplug_abi::HostVTable,
+            &ctx,
+        )
+    };
+
+    // Verify bundle_id wasn't tampered with during init
+    if host_ctx.bundle_id != expected_bundle_id {
+        return Err(PolyplugError::Loader(
+            crate::error::LoaderError::BundleTampered {
+                bundle: path_str.clone(),
+                expected: expected_bundle_id,
+                found: host_ctx.bundle_id,
+            },
+        ));
+    }
+
     if init_result.code != polyplug_abi::ABI_OK {
         return Err(PolyplugError::ReloadFailed {
             bundle: path_str.clone(),
             reason: format!("init failed with code {}", init_result.code),
         });
     }
-    let captured_vtables: Vec<*const polyplug_abi::PluginVTable> =
-        RELOAD_CAPTURED_VTABLES.with(|v| v.borrow().clone());
+    let captured_vtables: Vec<VTablePtr> = runtime
+        .reload_captured_vtables
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
 
     let mut new_vtable_map: HashMap<u64, *const polyplug_abi::PluginVTable> = HashMap::new();
-    for &vt_ptr in &captured_vtables {
-        // SAFETY: vt_ptr returned by init() is valid while new_library is alive.
-        let contract_id: u64 = unsafe { (*vt_ptr).contract_id };
-        new_vtable_map.insert(contract_id, vt_ptr);
+    for vt_ptr in &captured_vtables {
+        // SAFETY: vt_ptr.0 returned by init() is valid while new_library is alive.
+        let contract_id: u64 = unsafe { (*vt_ptr.0).contract_id };
+        new_vtable_map.insert(contract_id, vt_ptr.0);
     }
 
     // Three-phase hot-reload with retry support:
@@ -241,7 +315,7 @@ pub(crate) fn reload_bundle_impl(
 
         // Not all slots are quiescent - check retry limits
         if retry_count >= config.hot_reload_max_retries && config.hot_reload_abort_on_max_retries {
-            crate::runtime::emit_warning(&format!(
+            runtime.emit_warning(&format!(
                 "hot-reload: max retries ({}) exceeded for bundle {} with active instances",
                 config.hot_reload_max_retries, manifest.name
             ));

@@ -10,29 +10,31 @@
 //! - Stale handles are detected after replacement
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::contract_id;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::contract_id;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
-// ─── Shared registration helper ──────────────────────────────────────────────
+// ─── Host functions for integration tests ─────────────────────────────────────
 
-/// A minimal registrar callback that stores vtable entries into a Registry
+/// A register_plugin callback that stores vtable entries into a Registry
 /// via thread-local state (avoids threading through the opaque host pointer).
 ///
 /// # Safety
-/// `descriptor` and `vtable` must be valid non-null pointers for the call duration.
+/// `rt_ctx`, `descriptor`, and `vtable` must be valid non-null pointers for the call duration.
 unsafe extern "C" fn graph_register_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -74,6 +76,72 @@ unsafe extern "C" fn graph_register_callback(
     }
 }
 
+/// No-op alloc callback.
+unsafe extern "C" fn noop_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_host_alloc(size, align)
+}
+
+/// No-op free callback.
+unsafe extern "C" fn noop_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
+    unsafe { polyplug_host_free(ptr, size, align) }
+}
+
+/// No-op find_by_contract callback.
+unsafe extern "C" fn noop_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle::null()
+}
+
+/// No-op find_by_bundle callback.
+unsafe extern "C" fn noop_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle::null()
+}
+
+/// No-op find_all_by_contract callback.
+unsafe extern "C" fn noop_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// No-op resolve_plugin callback.
+unsafe extern "C" fn noop_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _handle: PluginHandle,
+) -> *const PluginVTable {
+    core::ptr::null()
+}
+
+/// No-op get_extension callback.
+unsafe extern "C" fn noop_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
+}
+
 std::thread_local! {
     static GRAPH_REGISTRY: core::cell::RefCell<Registry> =
         core::cell::RefCell::new(Registry::new());
@@ -87,30 +155,41 @@ fn load_and_init_plugin() -> libloading::Library {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
     };
 
-    // SAFETY: polyplug_init signature is `extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError`.
+    // SAFETY: polyplug_init signature is `extern "C" fn(*mut c_void, *const HostVTable, *const PluginContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: graph_register_callback,
-        host: core::ptr::null(),
+        alloc: noop_alloc,
+        free: noop_free,
+        find_by_contract: noop_find_by_contract,
+        find_by_bundle: noop_find_by_bundle,
+        find_all_by_contract: noop_find_all_by_contract,
+        resolve_plugin: noop_resolve_plugin,
+        get_extension: noop_get_extension,
     };
 
-    // SAFETY: init_fn is valid; registrar is valid for the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };

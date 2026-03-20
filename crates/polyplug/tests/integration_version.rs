@@ -6,12 +6,11 @@ use std::collections::HashMap;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::manifest::RawManifestDependency;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::version::Compatibility;
-use polyplug_abi::PluginRegistrar;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -27,11 +26,7 @@ impl BundleLoader for NoopLoader {
         "test-noop"
     }
 
-    fn load(
-        &self,
-        _path: &Path,
-        _registrar: &mut PluginRegistrar,
-    ) -> Result<(), polyplug::error::PolyplugError> {
+    fn load(&self, _path: &Path, _runtime: &Runtime) -> Result<(), polyplug::error::PolyplugError> {
         Ok(())
     }
 }
@@ -263,7 +258,8 @@ fn too_old_strict_returns_version_mismatch() {
 
 #[test]
 fn too_old_relaxed_warns_and_loads() {
-    ensure_warning_registered();
+    let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
+    sink.lock().expect("lock").clear();
     let tmp: TempDir = TempDir::new().expect("tmp");
     let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 1.2
@@ -283,15 +279,18 @@ fn too_old_relaxed_warns_and_loads() {
         &[],
         &[("test.contract", cid, "1.2")],
     );
+    let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
+        .on_warning(move |msg: &str| {
+            sink_clone.lock().expect("lock").push(msg.to_owned());
+        })
         .build();
     assert!(result.is_ok(), "expected Ok");
     assert!(
-        shared_warning_sink()
-            .lock()
+        sink.lock()
             .expect("lock")
             .iter()
             .any(|w: &String| w.to_lowercase().contains("version mismatch")),
@@ -368,7 +367,8 @@ fn major_mismatch_strict_returns_version_mismatch() {
 
 #[test]
 fn major_mismatch_relaxed_warns_and_loads() {
-    ensure_warning_registered();
+    let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
+    sink.lock().expect("lock").clear();
     let tmp: TempDir = TempDir::new().expect("tmp");
     let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider at 1.0, consumer requires 2.0
@@ -388,15 +388,18 @@ fn major_mismatch_relaxed_warns_and_loads() {
         &[],
         &[("test.contract", cid, "2.0")],
     );
+    let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
+        .on_warning(move |msg: &str| {
+            sink_clone.lock().expect("lock").push(msg.to_owned());
+        })
         .build();
     assert!(result.is_ok(), "expected Ok");
     assert!(
-        shared_warning_sink()
-            .lock()
+        sink.lock()
             .expect("lock")
             .iter()
             .any(|w: &String| w.to_lowercase().contains("version mismatch")),
@@ -476,7 +479,8 @@ fn function_count_mismatch_strict_returns_error() {
 
 #[test]
 fn function_count_mismatch_relaxed_warns_and_loads() {
-    ensure_warning_registered();
+    let sink: Arc<Mutex<Vec<String>>> = shared_warning_sink();
+    sink.lock().expect("lock").clear();
     let tmp: TempDir = TempDir::new().expect("tmp");
     let cid: u64 = polyplug_abi::contract_id("test.contract", 1);
     // Provider: NO function_count entry (empty {})
@@ -496,14 +500,18 @@ fn function_count_mismatch_relaxed_warns_and_loads() {
         &[],
         &[("test.contract", cid, "1.0")],
     );
+    let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
         .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
+        .on_warning(move |msg: &str| {
+            sink_clone.lock().expect("lock").push(msg.to_owned());
+        })
         .build();
     assert!(result.is_ok(), "expected Ok");
     assert!(
-        !shared_warning_sink().lock().expect("lock").is_empty(),
+        !sink.lock().expect("lock").is_empty(),
         "expected at least one warning in sink for function count mismatch"
     );
 }

@@ -29,7 +29,7 @@ echo ""
 # Run Python host
 echo "=== Python Host ==="
 if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    if PYTHONPATH="$WORKSPACE_DIR/host-libs/python" python3 hosts/python/host.py 2>&1; then
+    if PYTHONPATH="$WORKSPACE_DIR/host-libs/python:$WORKSPACE_DIR/host-libs/python/loaders/polyplug-loaders-native" python3 hosts/python/host.py 2>&1; then
         echo "✓ python host passed"
     else
         echo "✗ python host failed"
@@ -43,7 +43,7 @@ echo ""
 # Run Lua host
 echo "=== Lua Host ==="
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    if LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1; then
+    if LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;$PWD/hosts/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1; then
         echo "✓ lua host passed"
     else
         echo "✗ lua host failed"

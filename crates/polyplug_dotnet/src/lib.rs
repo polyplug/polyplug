@@ -13,12 +13,16 @@ use netcorehost::pdcstring::PdCString;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::parse_manifest;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::PluginRegistrar;
+use polyplug::runtime::HostContext;
+use polyplug::runtime::Runtime;
+use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-use crate::context::CLR_CONTEXT;
-use crate::context::InitFn;
 use crate::context::init_context;
+use crate::context::InitFn;
+use crate::context::CLR_CONTEXT;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
@@ -94,7 +98,7 @@ impl BundleLoader for DotnetLoader {
         "dotnet"
     }
 
-    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
         let tfm: String = crate::version::read_target_framework(path)?;
         check_version_compatibility(&tfm, &self.config.min_framework)?;
 
@@ -110,6 +114,17 @@ impl BundleLoader for DotnetLoader {
                     path: path.to_string_lossy().into_owned(),
                 })
             })?;
+
+        let manifest: polyplug::loader::manifest::ManifestData =
+            parse_manifest(&bundle_dir).map_err(|e: LoaderError| PolyplugError::Loader(e))?;
+        if manifest.id == 0 {
+            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.display().to_string(),
+                error: "manifest.id is required but was 0 or missing".to_owned(),
+            }));
+        }
+        let bundle_id: u64 = manifest.id;
+
         let context: std::sync::Arc<crate::context::DotnetContext> = std::sync::Arc::clone(
             CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, &bundle_dir))?,
         );
@@ -146,15 +161,21 @@ impl BundleLoader for DotnetLoader {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+            host_abi_version: POLYPLUG_ABI_VERSION,
+            bundle_id,
         };
-        // SAFETY: managed_init is a valid fn ptr from CLR. registrar and ctx are non-null and valid.
-        let result: u32 = unsafe {
-            (*managed_init)(
-                registrar as *mut PluginRegistrar,
-                &ctx as *const polyplug_abi::PluginContext,
-            )
+
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id,
         };
+        let rt_ctx: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        let host_vtable: &'static HostVTable = runtime.host_vtable();
+
+        // SAFETY: managed_init is a valid fn ptr from CLR. rt_ctx, host_vtable, and ctx are non-null and valid.
+        let result: u32 =
+            unsafe { (*managed_init)(rt_ctx, host_vtable as *const HostVTable, &ctx) };
         if result != 0 {
             return Err(PolyplugError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,

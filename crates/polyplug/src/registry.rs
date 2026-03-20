@@ -587,6 +587,22 @@ impl Registry {
         let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
         Some(arc_swap.load_full())
     }
+
+    /// Clear all registrations for testing.
+    /// This is only available in test builds to allow test isolation.
+    #[cfg(test)]
+    pub fn clear_for_test(&self) {
+        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+            self.data.write().unwrap_or_else(|e| e.into_inner());
+        data.slots.clear();
+        data.contract_index.clear();
+        data.bundle_index.clear();
+        data.declared_deps.clear();
+        self.loaded_libraries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
 }
 
 impl Default for Registry {

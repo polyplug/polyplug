@@ -3,16 +3,13 @@
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::error::RegistryError;
 use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use std::io::Write;
@@ -50,74 +47,27 @@ struct AddArgs {
     b: u32,
 }
 
-unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
-    descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
-) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
-        return AbiError {
-            code: 1,
-            message: StringView::null(),
-        };
-    }
-    // SAFETY: descriptor and vtable are valid for this call (ABI contract).
-    let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
-    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
-    let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
-    };
-    // SAFETY: vtable pointer is 'static — extracted from a loaded module that outlives registry.
-    let result: Result<PluginHandle, RegistryError> = PYTHON_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
-    });
-    match result {
-        Ok(_) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(_) => AbiError {
-            code: 1,
-            message: StringView::null(),
-        },
-    }
-}
-
-std::thread_local! {
-    static PYTHON_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
-}
-
 fn make_loader() -> PythonLoader {
     PythonLoader::new(PythonConfig::default())
 }
 
-fn load_fixture() -> Result<(), PolyplugError> {
-    let loader: PythonLoader = make_loader();
-    PYTHON_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    loader.load(std::path::Path::new(PYTHON_PLUGIN), &mut registrar)
+fn create_runtime() -> Runtime {
+    Runtime::builder()
+        .loader(make_loader())
+        .build()
+        .expect("failed to build runtime")
 }
 
-fn get_vtable() -> *const PluginVTable {
+fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
+    rt.load_bundle(std::path::Path::new(PYTHON_PLUGIN))
+}
+
+fn get_vtable(rt: &Runtime) -> *const PluginVTable {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = PYTHON_REGISTRY.with(|cell| {
-        cell.borrow()
-            .find(contract_id, 0)
-            .expect("test.add must be registered after load_fixture()")
-    });
-    PYTHON_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"))
+    let handle: PluginHandle = rt
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load_fixture()");
+    rt.resolve_plugin(handle).expect("handle must be valid")
 }
 
 #[test]
@@ -129,7 +79,8 @@ fn integration_python_runtime_name() {
 #[test]
 fn integration_python_bundle_loads() {
     skip_if_no_python!();
-    let result: Result<(), PolyplugError> = load_fixture();
+    let rt: Runtime = create_runtime();
+    let result: Result<(), PolyplugError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
         "PythonLoader::load() must succeed for fixture: {:?}",
@@ -140,8 +91,9 @@ fn integration_python_bundle_loads() {
 #[test]
 fn integration_python_add() {
     skip_if_no_python!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded for process lifetime.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -169,8 +121,9 @@ fn integration_python_add() {
 #[test]
 fn integration_python_add_primitive() {
     skip_if_no_python!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -198,8 +151,9 @@ fn integration_python_add_primitive() {
 #[test]
 fn integration_python_version_string() {
     skip_if_no_python!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -237,13 +191,9 @@ def polyplug_init(registrar_addr):
 "#;
     tmp.write_all(contents.as_bytes())
         .expect("tempfile write must succeed");
-    let loader: PythonLoader = make_loader();
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
+    let rt: Runtime = create_runtime();
     let path: &std::path::Path = tmp.path();
-    let result: Result<(), PolyplugError> = loader.load(path, &mut registrar);
+    let result: Result<(), PolyplugError> = rt.load_bundle(path);
     match result {
         Err(PolyplugError::Loader(LoaderError::PythonInitRaisedException { .. })) => {}
         other => panic!("expected PythonInitRaisedException, got: {other:?}"),
@@ -253,8 +203,9 @@ def polyplug_init(registrar_addr):
 #[test]
 fn integration_python_utf8_roundtrip() {
     skip_if_no_python!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -288,15 +239,13 @@ fn integration_python_utf8_roundtrip() {
 
 #[test]
 fn integration_python_version_too_old() {
-    let loader: PythonLoader = PythonLoader::new(PythonConfig {
-        min_version: (99, 0),
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new("dummy.py"), &mut registrar);
+    let rt: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig {
+            min_version: (99, 0),
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new("dummy.py"));
     match result {
         Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch for Python 99.0, got: {other:?}"),

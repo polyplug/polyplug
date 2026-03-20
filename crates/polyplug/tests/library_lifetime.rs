@@ -7,27 +7,68 @@
 //! dlclose() would unmap plugin code pages while vtable fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
 
-use polyplug::loader::load_bundle;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::parse_manifest;
 use polyplug::registry::Registry;
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginHandle;
+use polyplug::runtime::HostContext;
+use polyplug::runtime::Runtime;
 use polyplug_abi::bundle_id;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_find_by_contract(_contract_id: u64, _min_version: u32) -> PluginHandle {
+unsafe extern "C" fn stub_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_host_alloc(size, align)
+}
+
+/// # Safety
+/// Stub callback — not called during this test.
+unsafe extern "C" fn stub_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
+    unsafe { polyplug_host_free(ptr, size, align) }
+}
+
+/// # Safety
+/// Stub callback — not called during this test.
+unsafe extern "C" fn stub_register_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _descriptor: *const PluginDescriptor,
+    _vtable: *const PluginVTable,
+) -> AbiError {
+    AbiError::ok()
+}
+
+/// # Safety
+/// Stub callback — not called during this test.
+unsafe extern "C" fn stub_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
     PluginHandle::null()
 }
 
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
     _bundle_id: u64,
     _contract_id: u64,
     _min_version: u32,
@@ -38,6 +79,7 @@ unsafe extern "C" fn stub_find_by_bundle(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -49,6 +91,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
 ) -> *const polyplug_abi::PluginVTable {
     core::ptr::null()
@@ -56,7 +99,10 @@ unsafe extern "C" fn stub_resolve_plugin(
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_get_extension(_extension_id: u32) -> *const () {
+unsafe extern "C" fn stub_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
     core::ptr::null()
 }
 
@@ -89,8 +135,9 @@ fn library_handle_outlives_load_call() {
     let so_path: std::path::PathBuf = plugin_dir.join(&manifest.file);
 
     let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
-        alloc: polyplug_host_alloc,
-        free: polyplug_host_free,
+        register_plugin: stub_register_plugin,
+        alloc: stub_alloc,
+        free: stub_free,
         find_by_contract: stub_find_by_contract,
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
@@ -99,13 +146,22 @@ fn library_handle_outlives_load_call() {
     }));
 
     let registry: Registry = Registry::new();
+    let runtime: Runtime = Runtime::builder()
+        .build()
+        .expect("runtime build should succeed");
+
+    // Create HostContext for the load_bundle call
+    let _host_ctx: HostContext = HostContext {
+        runtime: &runtime as *const Runtime as *mut Runtime,
+        bundle_id: manifest.id,
+    };
 
     // load_bundle() must push the Library into registry.loaded_libraries BEFORE
     // calling init. If the Library were dropped inside load_bundle() (the bug this
     // epic fixes), dlclose() would fire while init is executing plugin code, which
     // could SIGBUS or corrupt state. Returning Ok(()) here proves the Library was
     // alive through the entire load sequence.
-    load_bundle(&so_path, &manifest, &registry, host_vtable)
+    polyplug::loader::load_bundle(&so_path, &manifest, &registry, host_vtable, &runtime)
         .expect("load_bundle must succeed for test_plugin");
 
     // NOTE: registry.find() is NOT called here because registrar_callback is a stub

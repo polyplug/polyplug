@@ -6,16 +6,17 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::vtables::ENCODER_CONTRACT_ID;
-use super::vtables::ENCODER_VTABLE;
-use polyplug_guest::ABI_ERROR_GENERIC;
-use polyplug_guest::ABI_OK;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginContext;
+use polyplug_guest::ABI_OK;
+use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::PluginDescriptor;
-use polyplug_guest::PluginRegistrar;
+use polyplug_guest::HostVTable;
 use polyplug_guest::PluginVTable;
 use polyplug_guest::StringView;
+use polyplug_guest::PluginContext;
+use core::ffi::c_void;
+use super::vtables::ENCODER_CONTRACT_ID;
+use super::vtables::ENCODER_VTABLE;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -25,59 +26,45 @@ use polyplug_guest::StringView;
 /// Register all plugin vtables with the host.
 ///
 /// # Safety
-/// `registrar` must be a valid non-null pointer to a PluginRegistrar.
+/// `rt_ctx` and `host` must be valid non-null pointers provided by the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    registrar: *mut PluginRegistrar,
+    rt_ctx: *mut c_void,
+    host: *const HostVTable,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if registrar.is_null() {
-        return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
-        };
+    if rt_ctx.is_null() {
+        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+    }
+    if host.is_null() {
+        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
     }
     if ctx.is_null() {
-        return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
-        };
+        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
     let ctx: &PluginContext = unsafe { &*ctx };
     let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated
-    // SAFETY: registrar is non-null and valid per ABI contract.
-    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
+    // SAFETY: host is non-null and valid per ABI contract.
+    let host: &HostVTable = unsafe { &*host };
 
     // Call user initialization to register plugin implementations
     unsafe extern "C" {
         fn polyplug_user_init();
     }
     // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe {
-        polyplug_user_init();
-    }
+    unsafe { polyplug_user_init(); }
 
     let desc_ENCODER: PluginDescriptor = PluginDescriptor {
-        name: StringView {
-            ptr: b"encoder".as_ptr(),
-            len: 7_usize,
-        },
-        contract_name: StringView {
-            ptr: b"pipeline.Encoder@1".as_ptr(),
-            len: 18_usize,
-        },
+        name: StringView { ptr: b"encoder".as_ptr(), len: 7_usize },
+        contract_name: StringView { ptr: b"pipeline.Encoder@1".as_ptr(), len: 18_usize },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
     let err_ENCODER: AbiError = unsafe {
-        (reg.register_plugin)(
-            registrar,
-            &desc_ENCODER as *const PluginDescriptor,
-            &ENCODER_VTABLE as *const PluginVTable,
-        )
+        (host.register_plugin)(rt_ctx, &desc_ENCODER as *const PluginDescriptor, &ENCODER_VTABLE as *const PluginVTable)
     };
     if err_ENCODER.code != ABI_OK {
         return err_ENCODER;

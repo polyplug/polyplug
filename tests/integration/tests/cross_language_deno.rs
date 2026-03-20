@@ -10,14 +10,15 @@
 
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_js_deno::JsDenoConfig;
 use polyplug_js_deno::JsDenoLoader;
 
@@ -44,7 +45,7 @@ std::thread_local! {
 }
 
 unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -121,27 +122,39 @@ fn test_jsdeno_host_rust_guest() {
     // SAFETY: polyplug_init matches the expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: registry_register_callback,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
 
-    // SAFETY: init_fn is valid; registrar lives for the call duration.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -169,6 +182,8 @@ fn test_jsdeno_host_rust_guest() {
     };
     assert_eq!(result.code, ABI_OK, "add dispatch must return ABI_OK");
     assert_eq!(out, 30_u32, "add(10, 20) must equal 30");
+    // SAFETY: keep library alive until after last call.
+    core::mem::forget(library);
 }
 
 /// Load the js-deno plugin via JsDenoLoader and dispatch test.add.
@@ -184,21 +199,24 @@ fn test_rust_host_jsdeno_guest() {
 
     reset_registry();
 
-    let loader: JsDenoLoader = JsDenoLoader::new(JsDenoConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
+    let rt: Runtime = Runtime::builder()
+        .loader(JsDenoLoader::new(JsDenoConfig {}))
+        .build()
+        .expect("failed to build runtime");
 
     let result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(std::path::Path::new(TEST_JS_PLUGIN), &mut registrar);
+        rt.load_bundle(std::path::Path::new(TEST_JS_PLUGIN));
     assert!(
         result.is_ok(),
         "JsDenoLoader::load() failed: {:?}",
         result.err()
     );
 
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let handle: PluginHandle = rt
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load");
+    let vtable_ptr: *const PluginVTable = rt.resolve_plugin(handle).expect("handle must be valid");
     // SAFETY: vtable_ptr is valid — deno runtime keeps the plugin alive for the test duration.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert_eq!(
@@ -219,4 +237,77 @@ fn test_rust_host_jsdeno_guest() {
         )
     };
     assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+}
+
+// ─── HostVTable stub functions for native .so tests ─────────────────────────────
+
+/// Stub alloc callback using the global allocator.
+unsafe extern "C" fn stub_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_abi::ffi::polyplug_host_alloc(size, align)
+}
+
+/// Stub free callback using the global allocator.
+unsafe extern "C" fn stub_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
+}
+
+/// Stub find_by_contract — returns a null handle.
+unsafe extern "C" fn stub_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
+}
+
+/// Stub find_by_bundle — returns a null handle.
+unsafe extern "C" fn stub_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
+}
+
+/// Stub find_all_by_contract — returns 0.
+unsafe extern "C" fn stub_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// Stub resolve_plugin — returns null.
+unsafe extern "C" fn stub_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _handle: PluginHandle,
+) -> *const PluginVTable {
+    core::ptr::null()
+}
+
+/// Stub get_extension — returns null.
+unsafe extern "C" fn stub_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }

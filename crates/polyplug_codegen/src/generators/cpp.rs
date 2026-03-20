@@ -527,14 +527,14 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {\n");
-    out.push_str("    if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};\n\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(void* rt_ctx, const HostVTable* host, const PluginContext* ctx) {\n");
+    out.push_str(
+        "    if (!rt_ctx || !host || !ctx) return AbiError{1U, StringView{nullptr, 0}};\n\n",
+    );
     if has_trace {
         out.push_str("    static constexpr uint32_t EXT_TRACE_ID = 0xC4EB9AEEu;\n");
         out.push_str("    // Optional: trace extension — query via host vtable at init time\n");
-        out.push_str(
-            "    const void* trace_vtable_ptr = registrar->host->get_extension(EXT_TRACE_ID);\n",
-        );
+        out.push_str("    const void* trace_vtable_ptr = host->get_extension(EXT_TRACE_ID);\n");
         out.push_str(
             "    // trace_vtable_ptr is null if the host does not provide the trace extension.\n",
         );
@@ -583,7 +583,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             out.push_str("    };\n");
 
             out.push_str(&format!(
-                "    AbiError err_{upper} = registrar->register_plugin(registrar, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+                "    AbiError err_{upper} = host->register_plugin(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
                 upper = plugin_upper
             ));
             out.push_str(&format!(
@@ -642,7 +642,7 @@ fn generate_init_hpp_register_contract(
     out.push_str("    };\n");
 
     out.push_str(&format!(
-        "    AbiError err_{upper} = registrar->register_plugin(registrar, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+        "    AbiError err_{upper} = host->register_plugin(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
         upper = upper
     ));
     out.push_str(&format!(
@@ -1203,12 +1203,10 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(
-            files
-                .files
-                .iter()
-                .any(|f| f.content.contains("AUTO-GENERATED"))
-        );
+        assert!(files
+            .files
+            .iter()
+            .any(|f| f.content.contains("AUTO-GENERATED")));
     }
 
     #[test]

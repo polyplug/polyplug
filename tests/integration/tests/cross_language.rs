@@ -15,17 +15,16 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
-use polyplug::error::RegistryError;
 use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -95,64 +94,14 @@ struct AddArgs {
 
 static CROSS_LANG_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-// ─── Thread-local registry for loader-based guests ───────────────────────────
+// ─── Thread-local for native .so tests ────────────────────────────────────────
 
 std::thread_local! {
-    static CROSS_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
     static CAPTURED_VT: core::cell::Cell<*const PluginVTable> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
-// ─── Registrar callbacks ──────────────────────────────────────────────────────
-
-/// Registration callback for loader-based guests (C#, Python, Lua, JS).
-/// Stores the vtable into the thread-local registry.
-///
-/// # Safety
-/// `_registrar`, `descriptor`, and `vtable` must be valid for the call duration.
-unsafe extern "C" fn registry_register_cb(
-    _registrar: *mut PluginRegistrar,
-    descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
-) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
-        return AbiError {
-            code: 1_u32,
-            message: StringView::null(),
-        };
-    }
-    // SAFETY: descriptor and vtable are valid for the duration of this call (ABI contract).
-    let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for the duration of this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
-    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
-    let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
-    };
-    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, RegistryError> = CROSS_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
-    });
-    match result {
-        Ok(_) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(RegistryError::DuplicateProvider { .. }) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(_) => AbiError {
-            code: 1_u32,
-            message: StringView::null(),
-        },
-    }
-}
+// ─── HostVTable callbacks ──────────────────────────────────────────────────────
 
 /// Registration callback for native .so guests (Rust, C++) via libloading.
 /// Captures the vtable pointer into a thread-local cell for later dispatch.
@@ -161,7 +110,7 @@ unsafe extern "C" fn registry_register_cb(
 /// `vtable` must be valid for the call duration and remain valid as long as the
 /// loaded library is live (caller must use `core::mem::forget` on the Library).
 unsafe extern "C" fn capture_vtable_cb(
-    _r: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     _desc: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -172,24 +121,112 @@ unsafe extern "C" fn capture_vtable_cb(
     }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── HostVTable stub functions for native .so tests ─────────────────────────────
 
-/// Reset the thread-local registry to a fresh state.
-fn reset_registry() {
-    CROSS_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
+/// Stub alloc callback using the global allocator.
+unsafe extern "C" fn stub_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
-/// Retrieve vtable for `test.add@1` from the thread-local registry.
-fn get_vtable_from_registry() -> *const PluginVTable {
+/// Stub free callback using the global allocator.
+unsafe extern "C" fn stub_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
+}
+
+/// Stub find_by_contract — returns a null handle.
+unsafe extern "C" fn stub_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
+}
+
+/// Stub find_by_bundle — returns a null handle.
+unsafe extern "C" fn stub_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
+}
+
+/// Stub find_all_by_contract — returns 0.
+unsafe extern "C" fn stub_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// Stub resolve_plugin — returns null.
+unsafe extern "C" fn stub_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _handle: PluginHandle,
+) -> *const PluginVTable {
+    core::ptr::null()
+}
+
+/// Stub get_extension — returns null.
+unsafe extern "C" fn stub_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Retrieve vtable for `test.add@1` from a Runtime instance.
+fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginVTable {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = CROSS_REGISTRY.with(|cell| {
-        cell.borrow()
-            .find(contract_id, 0_u32)
-            .expect("test.add must be registered after load")
-    });
-    CROSS_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"))
+    let handle: PluginHandle = runtime
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load");
+    runtime
+        .resolve_plugin(handle)
+        .expect("handle must be valid")
+}
+
+/// Dispatch add(3, 5) and verify the result equals 8.
+fn dispatch_add_and_verify(vtable_ptr: *const PluginVTable) {
+    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
+    let mut out: u32 = 0_u32;
+    // SAFETY: vtable_ptr is valid for the call.
+    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    // SAFETY: functions[0] is the add wrapper.
+    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+        unsafe { core::mem::transmute(fn_ptr) };
+    // SAFETY: args valid AddArgs; out valid u32 location.
+    let result: AbiError = unsafe {
+        dispatch_fn(
+            &args as *const AddArgs as *const (),
+            &mut out as *mut u32 as *mut (),
+        )
+    };
+    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -215,25 +252,36 @@ fn test_rust_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -283,25 +331,36 @@ fn test_cpp_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -351,25 +410,36 @@ fn test_csharp_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -419,25 +489,36 @@ fn test_python_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -487,25 +568,36 @@ fn test_lua_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -555,25 +647,36 @@ fn test_js_host_rust_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -629,25 +732,36 @@ fn test_rust_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -697,25 +811,36 @@ fn test_cpp_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -765,25 +890,36 @@ fn test_csharp_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -833,25 +969,36 @@ fn test_python_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -901,25 +1048,36 @@ fn test_lua_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -969,25 +1127,36 @@ fn test_js_host_cpp_guest() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_cb,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
-    // SAFETY: init_fn is valid; registrar lives for the duration of this call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -1021,7 +1190,7 @@ fn test_js_host_cpp_guest() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // C# GUEST (all 6 host labels)
-// Skip if DOTNET_NOT_AVAILABLE. Use DotnetLoader.
+// Skip if DOTNET_NOT_AVAILABLE. Use DotnetLoader with Runtime.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1030,41 +1199,25 @@ fn test_rust_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    reset_registry();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net10.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
-    let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_CSHARP_PLUGIN_DLL), &mut registrar);
+    let runtime: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+        Path::new(TEST_CSHARP_PLUGIN_DLL)
+            .parent()
+            .unwrap_or(Path::new(".")),
+    );
     assert!(
         load_result.is_ok(),
-        "DotnetLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper with generic dispatch signature.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1073,41 +1226,25 @@ fn test_cpp_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    reset_registry();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net10.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
-    let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_CSHARP_PLUGIN_DLL), &mut registrar);
+    let runtime: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+        Path::new(TEST_CSHARP_PLUGIN_DLL)
+            .parent()
+            .unwrap_or(Path::new(".")),
+    );
     assert!(
         load_result.is_ok(),
-        "DotnetLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1116,23 +1253,31 @@ fn test_csharp_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    reset_registry();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net10.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
-    let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_CSHARP_PLUGIN_DLL), &mut registrar);
+    let runtime: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+        Path::new(TEST_CSHARP_PLUGIN_DLL)
+            .parent()
+            .unwrap_or(Path::new(".")),
+    );
     assert!(
         load_result.is_ok(),
-        "DotnetLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let handle: PluginHandle = runtime
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load");
+    let vtable_ptr: *const PluginVTable = runtime
+        .resolve_plugin(handle)
+        .expect("handle must be valid");
+    assert!(!vtable_ptr.is_null(), "vtable must be non-null");
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
@@ -1159,41 +1304,25 @@ fn test_python_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    reset_registry();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net10.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
-    let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_CSHARP_PLUGIN_DLL), &mut registrar);
+    let runtime: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+        Path::new(TEST_CSHARP_PLUGIN_DLL)
+            .parent()
+            .unwrap_or(Path::new(".")),
+    );
     assert!(
         load_result.is_ok(),
-        "DotnetLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1202,41 +1331,25 @@ fn test_lua_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    reset_registry();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net10.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
-    let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_CSHARP_PLUGIN_DLL), &mut registrar);
+    let runtime: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+        Path::new(TEST_CSHARP_PLUGIN_DLL)
+            .parent()
+            .unwrap_or(Path::new(".")),
+    );
     assert!(
         load_result.is_ok(),
-        "DotnetLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1245,46 +1358,30 @@ fn test_js_host_csharp_guest() {
         println!("skipping: dotnet not available");
         return;
     }
-    reset_registry();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net10.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
-    let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_CSHARP_PLUGIN_DLL), &mut registrar);
+    let runtime: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net10.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+        Path::new(TEST_CSHARP_PLUGIN_DLL)
+            .parent()
+            .unwrap_or(Path::new(".")),
+    );
     assert!(
         load_result.is_ok(),
-        "DotnetLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PYTHON GUEST (all 6 host labels)
-// Skip if PYTHON_NOT_AVAILABLE. Use PythonLoader.
+// Skip if PYTHON_NOT_AVAILABLE. Use PythonLoader with Runtime.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1293,38 +1390,19 @@ fn test_rust_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    reset_registry();
-    let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_PYTHON_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "PythonLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Python module stays loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1333,38 +1411,19 @@ fn test_cpp_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    reset_registry();
-    let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_PYTHON_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "PythonLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Python module stays loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1373,38 +1432,19 @@ fn test_csharp_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    reset_registry();
-    let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_PYTHON_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "PythonLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Python module stays loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1413,38 +1453,19 @@ fn test_python_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    reset_registry();
-    let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_PYTHON_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "PythonLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Python module stays loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1453,38 +1474,19 @@ fn test_lua_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    reset_registry();
-    let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_PYTHON_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "PythonLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Python module stays loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
@@ -1493,496 +1495,255 @@ fn test_js_host_python_guest() {
         println!("skipping: python not available");
         return;
     }
-    reset_registry();
-    let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(PythonLoader::new(PythonConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_PYTHON_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "PythonLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Python module stays loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LUA GUEST (all 6 host labels)
-// Use LuaLoader + process mutex (single-VM global state).
+// Use LuaLoader with Runtime + process mutex (single-VM global state).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_rust_host_lua_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_LUA_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "LuaLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_cpp_host_lua_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_LUA_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "LuaLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_csharp_host_lua_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_LUA_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "LuaLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_python_host_lua_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_LUA_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "LuaLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_lua_host_lua_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_LUA_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "LuaLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_js_host_lua_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_LUA_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "LuaLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
-    assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // JS GUEST (all 6 host labels)
-// Use JsLoader (js-quickjs). Protect with process mutex (single-threaded JS VM).
+// Use JsLoader with Runtime + process mutex (single-threaded JS VM).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_rust_host_js_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_JS_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "JsLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; JS VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_cpp_host_js_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_JS_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "JsLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; JS VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_csharp_host_js_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_JS_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "JsLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; JS VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_python_host_js_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_JS_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "JsLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; JS VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_lua_host_js_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_JS_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "JsLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; JS VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }
 
 #[test]
 fn test_js_host_js_guest() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_cb,
-        host: core::ptr::null(),
-    };
+    let runtime: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
     let load_result: Result<(), polyplug::error::PolyplugError> =
-        loader.load(Path::new(TEST_JS_PLUGIN), &mut registrar);
+        runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
-        "JsLoader::load failed: {:?}",
+        "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_registry();
-    let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
-    let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; JS VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
-    };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    dispatch_add_and_verify(vtable_ptr);
 }

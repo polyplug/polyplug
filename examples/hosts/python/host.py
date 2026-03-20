@@ -7,7 +7,7 @@ from pathlib import Path
 
 from polyplug import Runtime, ReloadPhase
 from polyplug import scanner
-from polyplug.helpers import call_plugin_fn
+from polyplug.abi import StringView
 from polyplug.runtime_config import RuntimeConfig
 
 try:
@@ -16,14 +16,12 @@ except ImportError:
     register_native_loader = None
 
 from generated.host.callers import (
-    PIPELINE_DECODER_CONTRACT_ID,
-    DATA_TRANSFORMER_CONTRACT_ID,
-    PIPELINE_ENCODER_CONTRACT_ID,
-    DATA_REPORTER_CONTRACT_ID,
-    PIPELINE_VALIDATOR_CONTRACT_ID,
+    PipelineDecoderContractCaller,
+    DataTransformerContractCaller,
+    PipelineEncoderContractCaller,
+    DataReporterContractCaller,
+    PipelineValidatorContractCaller,
 )
-
-NULL_HANDLE = (1 << 64) - 1
 
 
 def handle_reload(phase: ReloadPhase) -> None:
@@ -41,17 +39,6 @@ def handle_reload(phase: ReloadPhase) -> None:
             f"[HOT-RELOAD] Failed: {phase.bundle_name} "
             f"(id=0x{phase.bundle_id:016X}) - {phase.reason}"
         )
-
-
-def call_contract(rt: Runtime, contract_id_val: int, input_str: str) -> str | None:
-    handle = rt.find_by_contract(contract_id_val, 0)
-    if handle == NULL_HANDLE:
-        return None
-    guard = rt.resolve_plugin(handle)
-    vtable_ptr = guard.vtable
-    if vtable_ptr == 0:
-        return None
-    return call_plugin_fn(rt._backend.lib, vtable_ptr, 0, input_str)
 
 
 def main():
@@ -92,21 +79,26 @@ def main():
     input_str = "name,value,42"
     print(f'Input: "{input_str}"\n')
 
-    if result := call_contract(rt, PIPELINE_DECODER_CONTRACT_ID, input_str):
+    if decoder := PipelineDecoderContractCaller.create(rt):
+        result = decoder.decode(StringView.from_str(input_str)).to_str()
         print(f'[decoder] decode("{input_str}") = "{result}"')
 
     decoded = f"DECODED:{input_str.replace(',', '|')}"
-    if result := call_contract(rt, DATA_TRANSFORMER_CONTRACT_ID, decoded):
+    if transformer := DataTransformerContractCaller.create(rt):
+        result = transformer.transform(StringView.from_str(decoded)).to_str()
         print(f'[transformer] transform("{decoded}") = "{result}"')
 
     transformed = "TRANSFORMED:NAME|value (transformed)|43"
-    if result := call_contract(rt, PIPELINE_ENCODER_CONTRACT_ID, transformed):
+    if encoder := PipelineEncoderContractCaller.create(rt):
+        result = encoder.encode(StringView.from_str(transformed)).to_str()
         print(f'[encoder] encode("{transformed}") = "{result}"')
 
-    if result := call_contract(rt, DATA_REPORTER_CONTRACT_ID, transformed):
+    if reporter := DataReporterContractCaller.create(rt):
+        result = reporter.report(StringView.from_str(transformed)).to_str()
         print(f'[reporter] report("{transformed}") = "{result}"')
 
-    if result := call_contract(rt, PIPELINE_VALIDATOR_CONTRACT_ID, decoded):
+    if validator := PipelineValidatorContractCaller.create(rt):
+        result = validator.validate(StringView.from_str(decoded)).to_str()
         print(f'[validator] validate("{decoded}") = "{result}"')
 
     print("\ndone.")

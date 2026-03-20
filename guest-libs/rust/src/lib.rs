@@ -26,7 +26,7 @@
 //!     contract_id: MY_CONTRACT_ID,
 //!     contract_version: 1 << 16, // minor=1, patch=0
 //!     function_count: 1,
-//!     functions: MY_FNS.as_ptr(),
+//!     functions: MY_FNS.as_ptr() as *const *const (),
 //! };
 //! static MY_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
 //!     name: StringView { ptr: b"my_plugin".as_ptr(), len: 9 },
@@ -41,15 +41,16 @@
 //! // 5. Export init function — registers vtables with the host
 //! #[unsafe(no_mangle)]
 //! pub unsafe extern "C" fn polyplug_init(
-//!     registrar: *mut PluginRegistrar,
+//!     rt_ctx: *mut core::ffi::c_void,
+//!     host_vtable: *const HostVTable,
 //!     _ctx: *const PluginContext,
 //! ) -> AbiError {
-//!     if registrar.is_null() {
+//!     if host_vtable.is_null() {
 //!         return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
 //!     }
-//!     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
+//!     let host: &HostVTable = unsafe { &*host_vtable };
 //!     unsafe {
-//!         (reg.register_plugin)(registrar, &MY_DESCRIPTOR, &MY_VTABLE)
+//!         (host.register_plugin)(rt_ctx, &MY_DESCRIPTOR, &MY_VTABLE)
 //!     }
 //! }
 //! ```
@@ -124,12 +125,6 @@ pub use polyplug_abi::PluginDescriptor;
 /// Contains `bundle_path` — the absolute path to the bundle directory.
 /// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
 pub use polyplug_abi::PluginContext;
-
-/// Bridge used during `polyplug_init` only — not stored long-term.
-///
-/// OWNERSHIP: stack-allocated by the host, passed by pointer to the plugin.
-/// Never stored by the plugin.
-pub use polyplug_abi::PluginRegistrar;
 
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 

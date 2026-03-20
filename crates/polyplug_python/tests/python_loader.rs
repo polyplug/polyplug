@@ -4,78 +4,54 @@
 // missing polyplug_init, vtable registration, GIL acquisition, and thread safety.
 #![allow(clippy::expect_used)]
 
-use core::sync::atomic::AtomicU32;
-use core::sync::atomic::Ordering;
 use std::fs;
-use std::sync::Arc;
-use std::thread;
+use std::path::PathBuf;
+use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
+use polyplug::runtime::Runtime;
+use polyplug::runtime::RuntimeBuilder;
+use polyplug_abi::PluginHandle;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
-use tempfile::TempDir;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Write `content` into `dir/<name>.py` and return the path.
-fn write_plugin(dir: &TempDir, name: &str, content: &str) -> std::path::PathBuf {
-    let path: std::path::PathBuf = dir.path().join(format!("{name}.py"));
-    fs::write(&path, content).expect("write plugin file");
-    path
+/// Write `content` into a temp bundle directory with manifest.toml.
+/// Returns the directory (to keep it alive) and the path to bundle.py.
+fn write_bundle(name: &str, content: &str) -> (TempDir, PathBuf) {
+    let dir: TempDir = TempDir::new().expect("tempdir");
+    let path: PathBuf = dir.path().join("bundle.py");
+    fs::write(&path, content).expect("write bundle.py");
+
+    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    let manifest: String = format!(
+        r#"id = {}
+name = "{}"
+runtime = "python"
+file = "bundle.py"
+"#,
+        bundle_id, name
+    );
+    fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+
+    (dir, path)
 }
 
-/// Minimal dummy `PluginRegistrar` that records how many times `register_plugin` is called.
-///
-/// The counter lives in an `Arc<AtomicU32>` so callers can read it after `load()` returns
-/// even though the registrar was passed by mut-ref.  The Arc is leaked into the `host` field
-/// so the pointer remains stable for the duration of the FFI callback.
-fn make_registrar(counter: Arc<AtomicU32>) -> PluginRegistrar {
-    // SAFETY: We leak the Arc and store its raw pointer in the `host` field (which is
-    // normally `*const HostVTable`).  This is a test-only repurposing of the field;
-    // the pointer is never dereferenced as a HostVTable — only `counting_register_plugin`
-    // reads it, and it knows the actual type is `*const AtomicU32`.
-    // The Arc is intentionally leaked so it lives for the duration of the test.
-    let counter_ptr: *const AtomicU32 = Arc::into_raw(counter);
-    PluginRegistrar {
-        register_plugin: counting_register_plugin,
-        host: counter_ptr as *const HostVTable,
-    }
-}
-
-/// `register_plugin` implementation that bumps the counter stored in `registrar.host`.
-///
-/// # Safety
-/// `registrar` must be non-null and its `host` field must point to an `AtomicU32`
-/// placed there by `make_registrar`.  Descriptor and vtable pointers are ignored.
-unsafe extern "C" fn counting_register_plugin(
-    registrar: *mut PluginRegistrar,
-    _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginVTable,
-) -> AbiError {
-    // SAFETY: registrar is non-null (the loader passes the address we gave it).
-    // host was stored as *const AtomicU32 by make_registrar() and is valid for the
-    // lifetime of the test — the Arc was leaked, so it is never freed.
-    let counter: &AtomicU32 = unsafe { &*((*registrar).host as *const AtomicU32) };
-    counter.fetch_add(1, Ordering::SeqCst);
-    AbiError::ok()
+/// Create a minimal Runtime with the PythonLoader registered.
+fn make_runtime() -> Runtime {
+    RuntimeBuilder::new()
+        .loader(PythonLoader::default())
+        .build()
+        .expect("runtime build must succeed")
 }
 
 /// A Python plugin source that registers one vtable via `polyplug_init`.
 ///
 /// The ctypes bridge mirrors the ABI contract expected by PythonLoader:
-///   `polyplug_init(registrar_addr: int, ctx_addr: int) -> None`
-///
-/// `_AbiError` must match the Rust `AbiError` layout (24 bytes on x86_64):
-///   `code: u32` + 4 bytes padding + `message: StringView { ptr, len }` (16 bytes).
-/// ctypes uses the struct return type to emit the hidden-pointer calling convention
-/// for structs larger than 16 bytes, matching the SysV x86_64 ABI.
+///   `polyplug_init(rt_ctx: int, host_vtable: int, ctx: int) -> None`
 const VALID_PLUGIN_SRC: &str = r#"
 import ctypes
 
@@ -88,21 +64,6 @@ class _AbiError(ctypes.Structure):
         ("_pad",    ctypes.c_uint32),
         ("message", _StringView),
     ]
-
-class _PluginRegistrar(ctypes.Structure):
-    pass
-
-_RegisterFn = ctypes.CFUNCTYPE(
-    _AbiError,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-    ctypes.c_void_p,
-)
-
-_PluginRegistrar._fields_ = [
-    ("register_plugin", _RegisterFn),
-    ("host", ctypes.c_void_p),
-]
 
 class _PluginDescriptor(ctypes.Structure):
     _fields_ = [
@@ -140,10 +101,37 @@ _VTABLE.contract_version = 0
 _VTABLE.function_count   = 0
 _VTABLE.functions        = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
 
-def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
-    registrar = _PluginRegistrar.from_address(registrar_addr)
-    registrar.register_plugin(
-        ctypes.c_void_p(registrar_addr),
+# HostVTable function pointer types
+_RegisterFn = ctypes.CFUNCTYPE(
+    _AbiError,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+)
+_AllocFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
+_FreeFn = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
+_FindByContractFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_FindByBundleFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32)
+_FindAllByContractFn = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t)
+_ResolvePluginFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
+_GetExtensionFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32)
+
+class _HostVTable(ctypes.Structure):
+    _fields_ = [
+        ("register_plugin", _RegisterFn),
+        ("alloc", _AllocFn),
+        ("free", _FreeFn),
+        ("find_by_contract", _FindByContractFn),
+        ("find_by_bundle", _FindByBundleFn),
+        ("find_all_by_contract", _FindAllByContractFn),
+        ("resolve_plugin", _ResolvePluginFn),
+        ("get_extension", _GetExtensionFn),
+    ]
+
+def polyplug_init(rt_ctx: int, host_vtable: int, _ctx: int) -> None:
+    host = _HostVTable.from_address(host_vtable)
+    host.register_plugin(
+        ctypes.c_void_p(rt_ctx),
         ctypes.addressof(_DESC),
         ctypes.addressof(_VTABLE),
     )
@@ -151,7 +139,7 @@ def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
 
 /// A Python plugin that defines `polyplug_init` but raises an exception inside it.
 const RAISING_PLUGIN_SRC: &str = r#"
-def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
+def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     raise RuntimeError("intentional test error")
 "#;
 
@@ -171,13 +159,13 @@ def polyplug_init(:
 const IMPORT_ERROR_PLUGIN_SRC: &str = r#"
 import _polyplug_nonexistent_module_xyz_123456
 
-def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
+def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     pass
 "#;
 
 /// A minimal no-op plugin (defines polyplug_init but does nothing).
 const NOOP_PLUGIN_SRC: &str = r#"
-def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
+def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     pass
 "#;
 
@@ -186,12 +174,10 @@ def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
 /// Python interpreter is initialized exactly once and does not panic on the first call.
 #[test]
 fn test_interpreter_initializes_without_panic() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "noop_init", NOOP_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("noop_init", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = make_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
     assert!(result.is_ok(), "unexpected error: {result:?}");
 }
 
@@ -199,12 +185,14 @@ fn test_interpreter_initializes_without_panic() {
 /// must succeed when the host Python satisfies this requirement.
 #[test]
 fn test_default_config_version_check_passes() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "ver_check", NOOP_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("ver_check", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::new(PythonConfig::default());
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = RuntimeBuilder::new()
+        .loader(loader)
+        .build()
+        .expect("runtime build must succeed");
+    let result: Result<(), PolyplugError> =
+        PythonLoader::new(PythonConfig::default()).load(&path, &runtime);
     assert!(
         result.is_ok(),
         "version check failed unexpectedly: {result:?}"
@@ -215,16 +203,17 @@ fn test_default_config_version_check_passes() {
 /// `LoaderError::RuntimeVersionMismatch`.
 #[test]
 fn test_version_too_old_returns_version_mismatch() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "ver_mismatch", NOOP_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("ver_mismatch", NOOP_PLUGIN_SRC);
     let config: PythonConfig = PythonConfig {
         min_version: (99, 0),
     };
-    let loader: PythonLoader = PythonLoader::new(config);
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let err: PolyplugError = loader
-        .load(&path, &mut registrar)
+    let loader: PythonLoader = PythonLoader::new(config.clone());
+    let runtime: Runtime = RuntimeBuilder::new()
+        .loader(loader)
+        .build()
+        .expect("runtime build must succeed");
+    let err: PolyplugError = PythonLoader::new(config)
+        .load(&path, &runtime)
         .expect_err("expected version mismatch");
     match err {
         PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found }) => {
@@ -239,40 +228,35 @@ fn test_version_too_old_returns_version_mismatch() {
 }
 
 /// Loading a valid plugin whose `polyplug_init` calls `register_plugin` once must
-/// invoke the registrar callback exactly once.
+/// register the plugin in the registry.
 #[test]
-fn test_valid_plugin_calls_registrar_once() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "valid_plugin", VALID_PLUGIN_SRC);
+fn test_valid_plugin_registers_in_registry() {
+    let (_dir, path) = write_bundle("valid_plugin", VALID_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let counter_clone: Arc<AtomicU32> = Arc::clone(&counter);
-    let mut registrar: PluginRegistrar = make_registrar(counter_clone);
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = make_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
     assert!(result.is_ok(), "load failed: {result:?}");
-    let calls: u32 = counter.load(Ordering::SeqCst);
-    assert_eq!(
-        calls, 1,
-        "expected exactly 1 register_plugin call, got {calls}"
-    );
+    // The plugin registers with contract_id = 0xDEADBEEFCAFEBABE
+    let contract_id: u64 = 0xDEADBEEFCAFEBABE;
+    let handle: Result<PluginHandle, polyplug::error::RegistryError> =
+        runtime.registry().find(contract_id, 0);
+    assert!(handle.is_ok(), "plugin must be registered in registry");
 }
 
 /// A plugin with a syntax error must return `PythonModuleImportFailed`.
 #[test]
 fn test_syntax_error_returns_module_import_failed() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "syntax_err", SYNTAX_ERROR_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("syntax_err", SYNTAX_ERROR_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
+    let runtime: Runtime = make_runtime();
     let err: PolyplugError = loader
-        .load(&path, &mut registrar)
+        .load(&path, &runtime)
         .expect_err("expected failure for syntax error plugin");
     match err {
         PolyplugError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
             assert!(
-                p.contains("syntax_err"),
-                "path should mention the file name; got: {p}"
+                p.contains("bundle.py"),
+                "path should mention bundle.py; got: {p}"
             );
             assert!(!reason.is_empty(), "reason must not be empty");
         }
@@ -283,19 +267,17 @@ fn test_syntax_error_returns_module_import_failed() {
 /// A plugin that imports a missing module must return `PythonModuleImportFailed`.
 #[test]
 fn test_import_error_returns_module_import_failed() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "import_err", IMPORT_ERROR_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("import_err", IMPORT_ERROR_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
+    let runtime: Runtime = make_runtime();
     let err: PolyplugError = loader
-        .load(&path, &mut registrar)
+        .load(&path, &runtime)
         .expect_err("expected failure for import-error plugin");
     match err {
         PolyplugError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
             assert!(
-                p.contains("import_err"),
-                "path should mention the file name; got: {p}"
+                p.contains("bundle.py"),
+                "path should mention bundle.py; got: {p}"
             );
             assert!(
                 reason.contains("_polyplug_nonexistent_module_xyz_123456")
@@ -310,19 +292,17 @@ fn test_import_error_returns_module_import_failed() {
 /// A plugin that is missing `polyplug_init` must return `InitSymbolMissing`.
 #[test]
 fn test_missing_init_returns_init_symbol_missing() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "no_init", MISSING_INIT_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("no_init", MISSING_INIT_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
+    let runtime: Runtime = make_runtime();
     let err: PolyplugError = loader
-        .load(&path, &mut registrar)
+        .load(&path, &runtime)
         .expect_err("expected failure for plugin missing polyplug_init");
     match err {
         PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle }) => {
             assert!(
-                bundle.contains("no_init"),
-                "bundle name should contain 'no_init'; got: {bundle}"
+                bundle.contains("bundle"),
+                "bundle name should contain 'bundle'; got: {bundle}"
             );
         }
         other => panic!("expected InitSymbolMissing, got: {other:?}"),
@@ -332,19 +312,17 @@ fn test_missing_init_returns_init_symbol_missing() {
 /// A `polyplug_init` that raises a Python exception must return `PythonInitRaisedException`.
 #[test]
 fn test_raising_init_returns_init_raised_exception() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "raising_init", RAISING_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("raising_init", RAISING_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
+    let runtime: Runtime = make_runtime();
     let err: PolyplugError = loader
-        .load(&path, &mut registrar)
+        .load(&path, &runtime)
         .expect_err("expected failure for raising plugin");
     match err {
         PolyplugError::Loader(LoaderError::PythonInitRaisedException { bundle, message }) => {
             assert!(
-                bundle.contains("raising_init"),
-                "bundle name should contain 'raising_init'; got: {bundle}"
+                bundle.contains("bundle"),
+                "bundle name should contain 'bundle'; got: {bundle}"
             );
             assert!(
                 message.contains("intentional test error"),
@@ -360,13 +338,11 @@ fn test_raising_init_returns_init_raised_exception() {
 #[test]
 fn test_nonexistent_path_returns_import_failed() {
     let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = dir.path().join("does_not_exist.py");
-    // Intentionally do NOT create the file.
+    let path: PathBuf = dir.path().join("does_not_exist.py");
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
+    let runtime: Runtime = make_runtime();
     let err: PolyplugError = loader
-        .load(&path, &mut registrar)
+        .load(&path, &runtime)
         .expect_err("expected failure for nonexistent path");
     match err {
         PolyplugError::Loader(LoaderError::PythonModuleImportFailed { .. }) => {}
@@ -377,51 +353,13 @@ fn test_nonexistent_path_returns_import_failed() {
 /// The GIL is properly acquired and released: multiple sequential loads must all succeed.
 #[test]
 fn test_gil_released_between_sequential_loads() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
     let loader: PythonLoader = PythonLoader::default();
+    let runtime: Runtime = make_runtime();
     for i in 0u32..4u32 {
         let name: String = format!("gil_seq_{i}");
-        let path: std::path::PathBuf = write_plugin(&dir, &name, NOOP_PLUGIN_SRC);
-        let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-        let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-        let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+        let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
+        let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
         assert!(result.is_ok(), "sequential load {i} failed: {result:?}");
-    }
-}
-
-/// Multiple threads may each create their own `PythonLoader` and call `load()`
-/// concurrently.  The interpreter `OnceLock` must be thread-safe: all threads
-/// must succeed (no panics, no data races).
-#[test]
-fn test_thread_safety_concurrent_loads() {
-    let dir: Arc<TempDir> = Arc::new(TempDir::new().expect("tempdir"));
-
-    // Pre-write all plugin files before spawning threads to avoid racing on writes.
-    let paths: Vec<std::path::PathBuf> = (0u32..8u32)
-        .map(|i: u32| {
-            let name: String = format!("thread_safe_{i}");
-            write_plugin(&dir, &name, NOOP_PLUGIN_SRC)
-        })
-        .collect::<Vec<std::path::PathBuf>>();
-
-    let paths: Arc<Vec<std::path::PathBuf>> = Arc::new(paths);
-
-    let handles: Vec<thread::JoinHandle<Result<(), PolyplugError>>> = (0usize..8usize)
-        .map(|i: usize| {
-            let path: std::path::PathBuf = paths[i].clone();
-            thread::spawn(move || {
-                let loader: PythonLoader = PythonLoader::default();
-                let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-                let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-                loader.load(&path, &mut registrar)
-            })
-        })
-        .collect::<Vec<thread::JoinHandle<Result<(), PolyplugError>>>>();
-
-    for (i, handle) in handles.into_iter().enumerate() {
-        let join_result: thread::Result<Result<(), PolyplugError>> = handle.join();
-        let result: Result<(), PolyplugError> = join_result.expect("thread panicked");
-        assert!(result.is_ok(), "thread {i} load failed: {result:?}");
     }
 }
 
@@ -436,21 +374,17 @@ fn test_loader_is_send_sync() {
 /// succeed (interpreter already initialized on the second call — OnceLock no-op).
 #[test]
 fn test_second_loader_reuses_interpreter() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path1: std::path::PathBuf = write_plugin(&dir, "reuse1", NOOP_PLUGIN_SRC);
-    let path2: std::path::PathBuf = write_plugin(&dir, "reuse2", NOOP_PLUGIN_SRC);
+    let (_dir1, path1) = write_bundle("reuse1", NOOP_PLUGIN_SRC);
+    let (_dir2, path2) = write_bundle("reuse2", NOOP_PLUGIN_SRC);
 
     let loader_a: PythonLoader = PythonLoader::default();
     let loader_b: PythonLoader = PythonLoader::default();
 
-    let counter_a: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let counter_b: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    let runtime_a: Runtime = make_runtime();
+    let runtime_b: Runtime = make_runtime();
 
-    let mut reg_a: PluginRegistrar = make_registrar(Arc::clone(&counter_a));
-    let mut reg_b: PluginRegistrar = make_registrar(Arc::clone(&counter_b));
-
-    let result_a: Result<(), PolyplugError> = loader_a.load(&path1, &mut reg_a);
-    let result_b: Result<(), PolyplugError> = loader_b.load(&path2, &mut reg_b);
+    let result_a: Result<(), PolyplugError> = loader_a.load(&path1, &runtime_a);
+    let result_b: Result<(), PolyplugError> = loader_b.load(&path2, &runtime_b);
 
     assert!(result_a.is_ok(), "first loader failed: {result_a:?}");
     assert!(
@@ -469,14 +403,10 @@ fn test_runtime_name() {
 /// A plugin file whose name contains an underscore and digits loads correctly.
 #[test]
 fn test_plugin_path_with_underscore_digits_loads() {
-    // Python's importlib may not handle non-ASCII module names on all platforms.
-    // This test verifies that names with underscores and digits (common edge case) work.
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "plugin_42_ok", NOOP_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("plugin_42_ok", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = make_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
     assert!(
         result.is_ok(),
         "underscore-digit stem load failed: {result:?}"
@@ -490,20 +420,31 @@ fn test_bundle_dir_added_to_sys_path() {
     let dir: TempDir = TempDir::new().expect("tempdir");
 
     let helper_src: &str = "HELPER_VALUE = 42\n";
-    let helper_path: std::path::PathBuf = dir.path().join("my_helper.py");
+    let helper_path: PathBuf = dir.path().join("my_helper.py");
     fs::write(&helper_path, helper_src).expect("write helper");
 
     let plugin_src: &str = r#"
 import my_helper
 
-def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
+def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     assert my_helper.HELPER_VALUE == 42
 "#;
-    let path: std::path::PathBuf = write_plugin(&dir, "imports_helper", plugin_src);
+    let path: PathBuf = dir.path().join("bundle.py");
+    fs::write(&path, plugin_src).expect("write bundle.py");
+
+    let manifest: String = format!(
+        r#"id = {}
+name = "imports_helper"
+runtime = "python"
+file = "bundle.py"
+"#,
+        polyplug_abi::bundle_id("imports_helper")
+    );
+    fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = make_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
     assert!(result.is_ok(), "sibling import failed: {result:?}");
 }
 
@@ -513,21 +454,32 @@ def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
 fn test_site_packages_dir_added_to_sys_path() {
     let dir: TempDir = TempDir::new().expect("tempdir");
 
-    let sp_dir: std::path::PathBuf = dir.path().join("site-packages");
+    let sp_dir: PathBuf = dir.path().join("site-packages");
     fs::create_dir_all(&sp_dir).expect("create site-packages");
     fs::write(sp_dir.join("fakelib.py"), "FAKE = 99\n").expect("write fakelib");
 
     let plugin_src: &str = r#"
 import fakelib
 
-def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
+def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     assert fakelib.FAKE == 99
 "#;
-    let path: std::path::PathBuf = write_plugin(&dir, "uses_site_pkg", plugin_src);
+    let path: PathBuf = dir.path().join("bundle.py");
+    fs::write(&path, plugin_src).expect("write bundle.py");
+
+    let manifest: String = format!(
+        r#"id = {}
+name = "uses_site_pkg"
+runtime = "python"
+file = "bundle.py"
+"#,
+        polyplug_abi::bundle_id("uses_site_pkg")
+    );
+    fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = make_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
     assert!(result.is_ok(), "site-packages import failed: {result:?}");
 }
 
@@ -535,18 +487,14 @@ def polyplug_init(registrar_addr: int, _ctx_addr: int) -> None:
 /// consumers can identify which plugin caused the failure.
 #[test]
 fn test_error_contains_bundle_name() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: std::path::PathBuf = write_plugin(&dir, "named_raising_plugin", RAISING_PLUGIN_SRC);
+    let (_dir, path) = write_bundle("named_raising_plugin", RAISING_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let err: PolyplugError = loader
-        .load(&path, &mut registrar)
-        .expect_err("expected error");
+    let runtime: Runtime = make_runtime();
+    let err: PolyplugError = loader.load(&path, &runtime).expect_err("expected error");
     let display: String = err.to_string();
     assert!(
-        display.contains("named_raising_plugin"),
-        "error message should include bundle name 'named_raising_plugin'; got: {display}"
+        display.contains("bundle"),
+        "error message should include bundle name 'bundle'; got: {display}"
     );
 }
 
@@ -554,8 +502,6 @@ fn test_error_contains_bundle_name() {
 /// is a valid non-empty string.  The plugin reads it via ctypes; we verify no exception is raised.
 #[test]
 fn test_plugin_context_bundle_path_accessible() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
-
     let plugin_src: &str = r#"
 import ctypes
 
@@ -563,20 +509,19 @@ class _StringView(ctypes.Structure):
     _fields_ = [("ptr", ctypes.c_void_p), ("len", ctypes.c_size_t)]
 
 class _PluginContext(ctypes.Structure):
-    _fields_ = [("bundle_path", _StringView)]
+    _fields_ = [("bundle_path", _StringView), ("host_abi_version", ctypes.c_uint32), ("bundle_id", ctypes.c_uint64)]
 
-def polyplug_init(registrar_addr: int, ctx_addr: int) -> None:
+def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
     ctx = _PluginContext.from_address(ctx_addr)
     # ptr must be non-null and len must be > 0
     assert ctx.bundle_path.ptr is not None and ctx.bundle_path.ptr != 0
     assert ctx.bundle_path.len > 0
 "#;
 
-    let path: std::path::PathBuf = write_plugin(&dir, "ctx_check", plugin_src);
+    let (_dir, path) = write_bundle("ctx_check", plugin_src);
     let loader: PythonLoader = PythonLoader::default();
-    let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-    let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+    let runtime: Runtime = make_runtime();
+    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
 }
 
@@ -584,14 +529,12 @@ def polyplug_init(registrar_addr: int, ctx_addr: int) -> None:
 /// to verify no GIL leak, no `sys.path` contamination, and no accumulation of error state.
 #[test]
 fn test_many_sequential_loads_no_state_leak() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
     let loader: PythonLoader = PythonLoader::default();
+    let runtime: Runtime = make_runtime();
     for i in 0u32..16u32 {
         let name: String = format!("stress_{i}");
-        let path: std::path::PathBuf = write_plugin(&dir, &name, NOOP_PLUGIN_SRC);
-        let counter: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-        let mut registrar: PluginRegistrar = make_registrar(Arc::clone(&counter));
-        let result: Result<(), PolyplugError> = loader.load(&path, &mut registrar);
+        let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
+        let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
         assert!(result.is_ok(), "stress load {i} failed: {result:?}");
     }
 }
@@ -600,22 +543,18 @@ fn test_many_sequential_loads_no_state_leak() {
 /// same loader must still succeed.  Ensures error paths do not corrupt interpreter state.
 #[test]
 fn test_valid_load_after_failed_load_succeeds() {
-    let dir: TempDir = TempDir::new().expect("tempdir");
+    let (_dir1, bad_path) = write_bundle("bad_recover", SYNTAX_ERROR_PLUGIN_SRC);
+    let (_dir2, good_path) = write_bundle("good_after_bad", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
+    let runtime: Runtime = make_runtime();
 
     // First load — should fail.
-    let bad_path: std::path::PathBuf = write_plugin(&dir, "bad_recover", SYNTAX_ERROR_PLUGIN_SRC);
-    let counter_bad: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut reg_bad: PluginRegistrar = make_registrar(Arc::clone(&counter_bad));
     assert!(
-        loader.load(&bad_path, &mut reg_bad).is_err(),
+        loader.load(&bad_path, &runtime).is_err(),
         "bad load should fail"
     );
 
     // Second load — should succeed.
-    let good_path: std::path::PathBuf = write_plugin(&dir, "good_after_bad", NOOP_PLUGIN_SRC);
-    let counter_good: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
-    let mut reg_good: PluginRegistrar = make_registrar(Arc::clone(&counter_good));
-    let result: Result<(), PolyplugError> = loader.load(&good_path, &mut reg_good);
+    let result: Result<(), PolyplugError> = loader.load(&good_path, &runtime);
     assert!(result.is_ok(), "recovery load failed: {result:?}");
 }

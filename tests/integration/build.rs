@@ -85,7 +85,7 @@ fn main() {
         println!("cargo:rustc-env=TEST_CSHARP_PLUGIN_DLL=DOTNET_NOT_AVAILABLE");
     }
 
-    // TEST_PYTHON_PLUGIN — Python plugin script
+    // TEST_PYTHON_PLUGIN — Python plugin bundle directory
     let python_available: bool = Command::new("python3")
         .arg("--version")
         .output()
@@ -94,16 +94,16 @@ fn main() {
     if python_available {
         println!(
             "cargo:rustc-env=TEST_PYTHON_PLUGIN={}",
-            fixtures_dir.join("test_plugin.py").display()
+            fixtures_dir.join("test_plugin_python").display()
         );
     } else {
         println!("cargo:rustc-env=TEST_PYTHON_PLUGIN=PYTHON_NOT_AVAILABLE");
     }
 
-    // TEST_LUA_PLUGIN — Lua plugin script (mlua vendored — always available)
+    // TEST_LUA_PLUGIN — Lua plugin bundle directory (mlua vendored — always available)
     println!(
         "cargo:rustc-env=TEST_LUA_PLUGIN={}",
-        fixtures_dir.join("test_plugin.lua").display()
+        fixtures_dir.join("test_plugin_lua").display()
     );
 
     // TEST_JS_PLUGIN — QuickJS plugin bundle directory

@@ -268,6 +268,28 @@ If you believe an ABI change is necessary, stop and raise it as a discussion. Do
 // Re-generate with: polyplugc generate --bundle bundle.toml --lang rust --out src/generated
 ```
 
+**All code generators MUST produce identical ABI mechanisms. No exceptions.**
+
+Every generator (rust, python, lua, csharp, cpp, js_deno, js_quickjs) must generate code that:
+
+1. **Uses the same `polyplug_init` signature:**
+   ```rust
+   // All generators must produce this signature (language-specific syntax):
+   fn polyplug_init(rt_ctx: *mut c_void, host: *const HostVTable, ctx: *const PluginContext) -> AbiError
+   ```
+
+2. **Uses the same registration mechanism:**
+   ```rust
+   // All generators must call register_plugin via the HostVTable:
+   (host.register_plugin)(rt_ctx, &descriptor, &vtable)
+   ```
+
+3. **Never uses global state or thread-locals in generated code.**
+
+**Why this matters:** Different registration mechanisms (e.g., `PluginRegistrar` vs `HostVTable.register_plugin`) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
+
+**Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity.
+
 ---
 
 ### 11. Dependency Version Management
@@ -311,6 +333,43 @@ serde = { workspace = true, version = "1" }  # FORBIDDEN
 serde = { workspace = true, optional = true }
 ```
 
+---
+
+### 12. Runtime Isolation
+
+**No thread-locals or globals for Runtime. The Runtime must be fully encapsulated and MUST NOT rely on any static, global, or thread-local data.**
+
+This is CRITICAL and MUST NEVER be broken. The design goal is that multiple polyplug runtimes can coexist in the same process, each with its own isolated state.
+
+```rust
+// FORBIDDEN — global or thread-local state for runtime
+static GLOBAL_REGISTRY: OnceLock<Registry> = OnceLock::new();
+thread_local! {
+    static CURRENT_RUNTIME: RefCell<Option<*mut Runtime>> = RefCell::new(None);
+}
+
+// CORRECT — all state owned by the Runtime instance
+pub struct Runtime {
+    registry: Registry,
+    bundles: HashMap<u64, LoadedBundle>,
+    config: RuntimeConfig,
+    // ... all state is instance-owned, no globals
+}
+```
+
+**Why this matters:**
+- Multiple runtimes in the same process must be fully isolated
+- Each runtime owns its own Registry, loaded bundles, and configuration
+- No shared state between runtime instances
+- Enables use cases like: testing with parallel isolated runtimes, embedding multiple plugin systems, sandboxing
+
+**Verification:** When reviewing code, grep for:
+- `static` declarations that hold runtime state
+- `thread_local!` macros
+- `OnceLock`, `LazyLock`, `Lazy` for runtime data
+- Any pattern that shares state across Runtime instances
+
+---
 
 ## Project Structure
 
@@ -385,6 +444,9 @@ polyplug/
 | `unsafe { ... }` no comment | `// SAFETY: ...` before every unsafe block |
 | modifying ABI structs | new functionality via extensions only |
 | editing generated files | fix the generator, re-run polyplugc |
+| different ABI mechanisms per generator | identical `polyplug_init` + `register_plugin` across all generators |
+| global state / thread-locals in generated code | pass `rt_ctx` through all ABI calls |
+| global state / thread-locals for Runtime | all state owned by Runtime instance |
 | dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
 | `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
 

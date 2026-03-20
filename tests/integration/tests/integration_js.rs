@@ -8,17 +8,13 @@
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::error::RegistryError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 use polyplug_js_deno::JsDenoConfig;
@@ -106,86 +102,26 @@ struct AddArgs {
     b: u32,
 }
 
-std::thread_local! {
-    static JS_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
-}
-
-unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
-    descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
-) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
-        return AbiError {
-            code: 1,
-            message: StringView::null(),
-        };
-    }
-    let desc: &PluginDescriptor = unsafe { &*descriptor };
-    let vt: &PluginVTable = unsafe { &*vtable };
-    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
-    let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
-    };
-    let result: Result<PluginHandle, RegistryError> = JS_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
-    });
-    match result {
-        Ok(_) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(RegistryError::DuplicateProvider { .. }) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(_) => AbiError {
-            code: 1,
-            message: StringView::null(),
-        },
-    }
-}
-
-fn reset_registry() {
-    JS_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-}
-
-fn get_vtable() -> *const PluginVTable {
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = JS_REGISTRY.with(|cell| {
-        cell.borrow()
-            .find(contract_id, 0)
-            .expect("test.add must be registered after load")
-    });
-    JS_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"))
-}
-
 #[test]
 fn js_quickjs_load_bundle_and_call() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         JS_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsLoader = JsLoader::new(JsConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(JS_PLUGIN), &mut registrar);
+    let rt: Runtime = Runtime::builder()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("failed to build runtime");
+    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(JS_PLUGIN));
     assert!(
         result.is_ok(),
         "JsLoader::load() failed: {:?}",
         result.err()
     );
 
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let handle: PluginHandle = rt
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load");
+    let vtable_ptr: *const PluginVTable = rt.resolve_plugin(handle).expect("handle must be valid");
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.function_count, 4,
@@ -210,21 +146,22 @@ fn js_quickjs_load_bundle_and_call() {
 fn js_deno_load_bundle_and_call() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         JS_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    reset_registry();
-    let loader: JsDenoLoader = JsDenoLoader::new(JsDenoConfig {});
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(JS_PLUGIN), &mut registrar);
+    let rt: Runtime = Runtime::builder()
+        .loader(JsDenoLoader::new(JsDenoConfig {}))
+        .build()
+        .expect("failed to build runtime");
+    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(JS_PLUGIN));
     assert!(
         result.is_ok(),
         "JsDenoLoader::load() failed: {:?}",
         result.err()
     );
 
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let handle: PluginHandle = rt
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load");
+    let vtable_ptr: *const PluginVTable = rt.resolve_plugin(handle).expect("handle must be valid");
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.function_count, 4,

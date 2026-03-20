@@ -13,7 +13,6 @@
 // allow expect_used in test code per AGENTS.md §4
 #![allow(clippy::expect_used)]
 
-use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -22,14 +21,12 @@ use std::sync::MutexGuard;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
+use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -40,90 +37,35 @@ use polyplug_lua::LuaLoader;
 // `_G.polyplug_init` / `_G._polyplug_handlers` globals.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
-// ── Thread-local registry ────────────────────────────────────────────────────
-
-std::thread_local! {
-    static TEST_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
-}
-
-// ── ABI registration callback ────────────────────────────────────────────────
-
-/// `register_plugin` callback installed in the test's `PluginRegistrar`.
-///
-/// Stores each vtable in the thread-local `TEST_REGISTRY` so tests can
-/// inspect it without depending on the full `Runtime` stack.
-// SAFETY: This is an `extern "C"` callback invoked synchronously during
-// `LuaLoader::load`. `descriptor` and `vtable` are valid for the duration of
-// the call (ABI contract). Registry::register is marked unsafe because it
-// dereferences vtable internally — see SAFETY comment on the inner call.
-unsafe extern "C" fn test_register_callback(
-    _registrar: *mut PluginRegistrar,
-    descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
-) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
-        return AbiError {
-            code: 1,
-            message: StringView::null(),
-        };
-    }
-    // SAFETY: descriptor is non-null and points to a valid PluginDescriptor
-    // passed by the Lua loader for the duration of this call.
-    let desc: PluginDescriptor = unsafe { *descriptor };
-    // SAFETY: vtable is non-null and points to a leaked 'static PluginVTable
-    // created by LuaLoader. The vtable outlives the process.
-    let vt: &PluginVTable = unsafe { &*vtable };
-    let contract_name: String = format!("lua_contract_{:#x}", vt.contract_id);
-    // SAFETY: vtable is a valid 'static PluginVTable from the Lua loader.
-    let result: Result<PluginHandle, polyplug::error::RegistryError> = TEST_REGISTRY.with(|cell| {
-        let reg: core::cell::Ref<'_, Registry> = cell.borrow();
-        // SAFETY: vtable pointer is 'static (leaked by LuaLoader). Registry::register
-        // requires the vtable to outlive the registry — guaranteed by the Lua VM's
-        // static function registry.
-        unsafe { reg.register(desc, vtable, contract_name, vt.contract_id) }
-    });
-    match result {
-        Ok(_) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(polyplug::error::RegistryError::DuplicateProvider { .. }) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(_) => AbiError {
-            code: 1,
-            message: StringView::null(),
-        },
-    }
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Build a `PluginRegistrar` wired to the test callback.
-fn test_registrar() -> PluginRegistrar {
-    PluginRegistrar {
-        register_plugin: test_register_callback,
-        host: core::ptr::null(),
-    }
+/// Create a minimal Runtime with the LuaLoader registered.
+fn make_runtime() -> Runtime {
+    RuntimeBuilder::new()
+        .loader(LuaLoader::new(LuaConfig::default()))
+        .build()
+        .expect("runtime build must succeed")
 }
 
-/// Reset the thread-local registry so each test starts with a fresh slate.
-fn reset_registry() {
-    TEST_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-}
+/// Write `content` to a temp bundle directory with manifest.toml.
+/// Returns the directory (to keep it alive) and the path to bundle.lua.
+fn write_temp_bundle(name: &str, content: &[u8]) -> (tempfile::TempDir, PathBuf) {
+    let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let path: PathBuf = dir.path().join("bundle.lua");
+    std::fs::write(&path, content).expect("write bundle.lua");
 
-/// Write `content` to a named temp file in the system temp directory.
-/// Returns the path so the caller can keep the file alive until it is no
-/// longer needed.
-fn write_temp_lua(name: &str, content: &[u8]) -> PathBuf {
-    let path: PathBuf = std::env::temp_dir().join(name);
-    let mut f: std::fs::File = std::fs::File::create(&path).expect("create temp lua file");
-    f.write_all(content).expect("write temp lua content");
-    path
+    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    let manifest: String = format!(
+        r#"id = {}
+name = "{}"
+runtime = "lua"
+file = "bundle.lua"
+"#,
+        bundle_id, name
+    );
+    std::fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+
+    (dir, path)
 }
 
 /// A minimal valid Lua plugin script that implements the `test.loader@1`
@@ -164,9 +106,8 @@ end
 /// Load the supplied Lua source via `LuaLoader::load` and return the result.
 fn load_script(path: &Path) -> Result<(), PolyplugError> {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    reset_registry();
-    let mut registrar: PluginRegistrar = test_registrar();
-    loader.load(path, &mut registrar)
+    let runtime: Runtime = make_runtime();
+    loader.load(path, &runtime)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -186,7 +127,7 @@ fn lua_loader_runtime_name_is_lua() {
 #[test]
 fn lua_state_initializes_on_first_load() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_init_test.lua", valid_plugin_script());
+    let (_dir, path) = write_temp_bundle("lua_loader_init_test", valid_plugin_script());
     let result: Result<(), PolyplugError> = load_script(&path);
     assert!(
         result.is_ok(),
@@ -200,7 +141,7 @@ fn lua_state_initializes_on_first_load() {
 #[test]
 fn lua_state_init_is_idempotent() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_idempotent.lua", valid_plugin_script());
+    let (_dir, path) = write_temp_bundle("lua_loader_idempotent", valid_plugin_script());
     load_script(&path).expect("first load must succeed");
     // Second load of the same file: VM is already initialized — must not panic.
     let result: Result<(), PolyplugError> = load_script(&path);
@@ -216,7 +157,7 @@ fn lua_state_init_is_idempotent() {
 #[test]
 fn load_valid_bundle_succeeds() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_valid.lua", valid_plugin_script());
+    let (_dir, path) = write_temp_bundle("lua_loader_valid", valid_plugin_script());
     let result: Result<(), PolyplugError> = load_script(&path);
     assert!(result.is_ok(), "valid bundle must load: {:?}", result.err());
 }
@@ -227,8 +168,8 @@ fn load_valid_bundle_succeeds() {
 #[test]
 fn load_syntax_error_returns_script_load_failed() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua(
-        "lua_loader_syntax_error.lua",
+    let (_dir, path) = write_temp_bundle(
+        "lua_loader_syntax_error",
         b"function polyplug_init( -- SYNTAX ERROR: unclosed paren\n",
     );
     let result: Result<(), PolyplugError> = load_script(&path);
@@ -251,8 +192,8 @@ fn load_syntax_error_returns_script_load_failed() {
 #[test]
 fn load_runtime_error_in_init_returns_init_raised_error() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua(
-        "lua_loader_runtime_err.lua",
+    let (_dir, path) = write_temp_bundle(
+        "lua_loader_runtime_err",
         b"function polyplug_init(_reg, _ctx)\n  error('deliberate runtime error')\nend\n",
     );
     let result: Result<(), PolyplugError> = load_script(&path);
@@ -275,10 +216,8 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
 #[test]
 fn load_missing_polyplug_init_returns_typed_error() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua(
-        "lua_loader_no_init.lua",
-        b"local x = 1  -- no polyplug_init\n",
-    );
+    let (_dir, path) =
+        write_temp_bundle("lua_loader_no_init", b"local x = 1  -- no polyplug_init\n");
     let result: Result<(), PolyplugError> = load_script(&path);
     assert!(result.is_err(), "missing init must produce Err");
     let err: PolyplugError = result.expect_err("expected Err for missing polyplug_init");
@@ -297,9 +236,8 @@ fn load_missing_polyplug_init_returns_typed_error() {
 #[test]
 fn load_nonexistent_path_returns_script_load_failed() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = std::env::temp_dir().join("this_file_does_not_exist_42.lua");
-    // Ensure the file really does not exist.
-    let _ = std::fs::remove_file(&path);
+    let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
+    let path: PathBuf = dir.path().join("this_file_does_not_exist_42.lua");
     let result: Result<(), PolyplugError> = load_script(&path);
     assert!(result.is_err(), "missing file must produce Err");
     let err: PolyplugError = result.expect_err("expected Err for nonexistent file");
@@ -320,19 +258,23 @@ fn load_nonexistent_path_returns_script_load_failed() {
 #[test]
 fn vtable_is_registered_after_load() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_vtable.lua", valid_plugin_script());
-    load_script(&path).expect("valid bundle must load");
+    let (_dir, path) = write_temp_bundle("lua_loader_vtable", valid_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Runtime = make_runtime();
+    loader
+        .load(&path, &runtime)
+        .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().find(contract_id, 0));
+        runtime.registry().find(contract_id, 0);
     assert!(
         handle.is_ok(),
         "registry must contain test.loader@1 after load"
     );
     let handle: PluginHandle = handle.expect("handle must be Ok");
     let vtable_ptr: Result<*const PluginVTable, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().resolve(handle));
+        runtime.registry().resolve(handle);
     assert!(vtable_ptr.is_ok(), "handle must resolve to a vtable");
     // SAFETY: vtable_ptr is a 'static pointer produced by LuaLoader; the Lua VM
     // and leaked PluginVTable outlive this test.
@@ -347,15 +289,19 @@ fn vtable_is_registered_after_load() {
 #[test]
 fn vtable_function_count_matches_script() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_two_fn.lua", two_function_plugin_script());
-    load_script(&path).expect("two-function bundle must load");
+    let (_dir, path) = write_temp_bundle("lua_loader_two_fn", two_function_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Runtime = make_runtime();
+    loader
+        .load(&path, &runtime)
+        .expect("two-function bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.two", 1);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().find(contract_id, 0));
+        runtime.registry().find(contract_id, 0);
     let handle: PluginHandle = handle.expect("test.two@1 must be registered");
     let vtable_ptr: Result<*const PluginVTable, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().resolve(handle));
+        runtime.registry().resolve(handle);
     // SAFETY: see vtable_is_registered_after_load.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr.expect("vtable must resolve") };
     assert_eq!(
@@ -369,15 +315,19 @@ fn vtable_function_count_matches_script() {
 #[test]
 fn vtable_contract_id_matches_computed_hash() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_cid.lua", valid_plugin_script());
-    load_script(&path).expect("valid bundle must load");
+    let (_dir, path) = write_temp_bundle("lua_loader_cid", valid_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Runtime = make_runtime();
+    loader
+        .load(&path, &runtime)
+        .expect("valid bundle must load");
 
     let expected_cid: u64 = polyplug_abi::contract_id("test.loader", 1);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().find(expected_cid, 0));
+        runtime.registry().find(expected_cid, 0);
     let handle: PluginHandle = handle.expect("test.loader@1 must be registered");
     let vtable_ptr: Result<*const PluginVTable, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().resolve(handle));
+        runtime.registry().resolve(handle);
     // SAFETY: see vtable_is_registered_after_load.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr.expect("vtable must resolve") };
     assert_eq!(
@@ -393,21 +343,16 @@ fn vtable_contract_id_matches_computed_hash() {
 #[test]
 fn sequential_loads_both_succeed() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path1: PathBuf = write_temp_lua("lua_loader_seq1.lua", valid_plugin_script());
-    let path2: PathBuf = write_temp_lua("lua_loader_seq2.lua", two_function_plugin_script());
+    let (_dir1, path1) = write_temp_bundle("lua_loader_seq1", valid_plugin_script());
+    let (_dir2, path2) = write_temp_bundle("lua_loader_seq2", two_function_plugin_script());
 
-    // Reset registry and load the first bundle.
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-    reset_registry();
-    let mut reg1: PluginRegistrar = test_registrar();
+    let runtime: Runtime = make_runtime();
     loader
-        .load(&path1, &mut reg1)
+        .load(&path1, &runtime)
         .expect("first sequential load must succeed");
-
-    // Load the second bundle with the same loader.
-    let mut reg2: PluginRegistrar = test_registrar();
     loader
-        .load(&path2, &mut reg2)
+        .load(&path2, &runtime)
         .expect("second sequential load must succeed");
 
     // Both contracts must be visible.
@@ -415,11 +360,11 @@ fn sequential_loads_both_succeed() {
     let cid2: u64 = polyplug_abi::contract_id("test.two", 1);
 
     let handle1: Result<PluginHandle, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().find(cid1, 0));
+        runtime.registry().find(cid1, 0);
     assert!(handle1.is_ok(), "test.loader must be registered");
 
     let handle2: Result<PluginHandle, polyplug::error::RegistryError> =
-        TEST_REGISTRY.with(|cell| cell.borrow().find(cid2, 0));
+        runtime.registry().find(cid2, 0);
     assert!(handle2.is_ok(), "test.two must be registered");
 }
 
@@ -438,7 +383,7 @@ fn sequential_loads_both_succeed() {
 fn concurrent_loaders_do_not_race() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
-    let path: PathBuf = write_temp_lua("lua_loader_thread_safety.lua", valid_plugin_script());
+    let (_dir, path) = write_temp_bundle("lua_loader_thread_safety", valid_plugin_script());
 
     // Spawn 4 threads that all call LuaLoader::load on the same path.
     let path_arc: std::sync::Arc<PathBuf> = std::sync::Arc::new(path);
@@ -447,8 +392,11 @@ fn concurrent_loaders_do_not_race() {
             let p: std::sync::Arc<PathBuf> = std::sync::Arc::clone(&path_arc);
             std::thread::spawn(move || {
                 let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
-                let mut reg: PluginRegistrar = test_registrar();
-                loader.load(p.as_ref(), &mut reg)
+                let runtime: Runtime = RuntimeBuilder::new()
+                    .loader(LuaLoader::new(LuaConfig::default()))
+                    .build()
+                    .expect("runtime build must succeed");
+                loader.load(p.as_ref(), &runtime)
             })
         })
         .collect::<Vec<std::thread::JoinHandle<Result<(), PolyplugError>>>>();
@@ -472,15 +420,21 @@ fn concurrent_loaders_do_not_race() {
 #[test]
 fn vtable_function_dispatch_returns_abi_ok() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let path: PathBuf = write_temp_lua("lua_loader_dispatch.lua", valid_plugin_script());
-    load_script(&path).expect("valid bundle must load");
+    let (_dir, path) = write_temp_bundle("lua_loader_dispatch", valid_plugin_script());
+    let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
+    let runtime: Runtime = make_runtime();
+    loader
+        .load(&path, &runtime)
+        .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
-    let handle: PluginHandle = TEST_REGISTRY
-        .with(|cell| cell.borrow().find(contract_id, 0))
+    let handle: PluginHandle = runtime
+        .registry()
+        .find(contract_id, 0)
         .expect("test.loader@1 must be registered");
-    let vtable_ptr: *const PluginVTable = TEST_REGISTRY
-        .with(|cell| cell.borrow().resolve(handle))
+    let vtable_ptr: *const PluginVTable = runtime
+        .registry()
+        .resolve(handle)
         .expect("handle must resolve to vtable");
     // SAFETY: vtable_ptr is a 'static leaked PluginVTable from LuaLoader.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };

@@ -179,6 +179,15 @@ pub enum LoaderError {
 
     #[error("bundle \"{bundle}\" manifest.toml has an empty or missing `file` field")]
     ManifestMissingFile { bundle: String },
+
+    #[error(
+        "bundle \"{bundle}\" tampered with bundle_id: expected={expected:#x}, found={found:#x}"
+    )]
+    BundleTampered {
+        bundle: String,
+        expected: u64,
+        found: u64,
+    },
 }
 
 /// Errors from the plugin registry.
@@ -443,6 +452,26 @@ mod tests {
         let s: String = err.to_string();
         assert!(s.contains("missing") || s.contains("empty"), "got: {s}");
         assert!(s.contains("orphan_bundle"), "got: {s}");
+    }
+
+    #[test]
+    fn loader_error_bundle_tampered_display() {
+        let err: LoaderError = LoaderError::BundleTampered {
+            bundle: "malicious_bundle".to_owned(),
+            expected: 0xDEAD_BEEF_u64,
+            found: 0xCAFE_BABE_u64,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("tampered"), "got: {s}");
+        assert!(s.contains("malicious_bundle"), "got: {s}");
+        assert!(
+            s.to_lowercase().contains("deadbeef") || s.contains("deadbeef"),
+            "got: {s}"
+        );
+        assert!(
+            s.to_lowercase().contains("cafebabe") || s.contains("cafebabe"),
+            "got: {s}"
+        );
     }
 
     // --- RegistryError ---

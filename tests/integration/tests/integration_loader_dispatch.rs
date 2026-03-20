@@ -9,15 +9,9 @@ use std::path::Path;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_lua::LuaLoader;
 use polyplug_python::PythonLoader;
@@ -33,7 +27,7 @@ impl BundleLoader for StubLoader {
         self.name
     }
 
-    fn load(&self, _path: &Path, _registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+    fn load(&self, _path: &std::path::Path, _runtime: &Runtime) -> Result<(), PolyplugError> {
         Ok(())
     }
 }
@@ -135,12 +129,12 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
     });
     assert_eq!(loader.runtime_name(), "dotnet");
 
+    let rt: Runtime = Runtime::builder()
+        .loader(loader)
+        .build()
+        .expect("failed to build runtime");
     let dummy_path: &Path = Path::new("dummy.dll");
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: dummy_registrar_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
+    let result: Result<(), PolyplugError> = rt.load_bundle(dummy_path);
     match result {
         Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         Err(PolyplugError::Loader(LoaderError::ClrInitFailed { .. })) => {}
@@ -153,12 +147,12 @@ fn python_loader_loads_nonexistent_file_errors() {
     let loader: PythonLoader = PythonLoader::new(polyplug_python::PythonConfig::default());
     assert_eq!(loader.runtime_name(), "python");
 
+    let rt: Runtime = Runtime::builder()
+        .loader(loader)
+        .build()
+        .expect("failed to build runtime");
     let dummy_path: &Path = Path::new("dummy.py");
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: dummy_registrar_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
+    let result: Result<(), PolyplugError> = rt.load_bundle(dummy_path);
     match result {
         // Python loader is fully implemented — loading a non-existent file returns
         // PythonModuleImportFailed (path does not exist or is not accessible).
@@ -172,12 +166,12 @@ fn lua_loader_returns_error_for_missing_file() {
     let loader: LuaLoader = LuaLoader::new(polyplug_lua::LuaConfig::default());
     assert_eq!(loader.runtime_name(), "lua");
 
+    let rt: Runtime = Runtime::builder()
+        .loader(loader)
+        .build()
+        .expect("failed to build runtime");
     let dummy_path: &Path = Path::new("dummy.lua");
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: dummy_registrar_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> = loader.load(dummy_path, &mut registrar);
+    let result: Result<(), PolyplugError> = rt.load_bundle(dummy_path);
     match result {
         Err(PolyplugError::Loader(LoaderError::LuaScriptLoadFailed { .. })) => {}
         other => panic!("expected LuaScriptLoadFailed for missing file, got: {other:?}"),
@@ -217,22 +211,4 @@ fn duplicate_loader_error_message_contains_runtime_name() {
         msg.contains("lua"),
         "DuplicateLoader error must contain runtime name, got: {msg}"
     );
-}
-
-// ─── Helpers ───────────────────────────────────────────────────────────────────────────────────
-
-/// Minimal registrar callback for constructing a PluginRegistrar in tests.
-///
-/// # Safety
-/// Parameters are valid for the duration of the call. Not actually called
-/// in these tests (stub loaders return Err immediately).
-unsafe extern "C" fn dummy_registrar_callback(
-    _registrar: *mut PluginRegistrar,
-    _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginVTable,
-) -> AbiError {
-    AbiError {
-        code: ABI_OK,
-        message: StringView::null(),
-    }
 }

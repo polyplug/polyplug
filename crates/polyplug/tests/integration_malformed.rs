@@ -7,11 +7,11 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::loader::manifest::ManifestData;
 
 fn load_bundle_path(rt: *mut OpaqueRuntime, dir: &str) -> u32 {
@@ -91,8 +91,10 @@ fn test_missing_init_symbol() {
         "plugin missing polyplug_init must produce non-zero return"
     );
     let mut buf: [u8; 256] = [0u8; 256];
-    // SAFETY: buf valid for 256 bytes, polyplug_runtime_last_error writes at most buf_len bytes.
-    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
+    // SAFETY: buf valid for 256 bytes, polyplug_runtime_last_error writes at most buf_len bytes; rt is valid.
+    let n: usize = unsafe {
+        polyplug_runtime_last_error(rt as *const OpaqueRuntime, buf.as_mut_ptr(), buf.len())
+    };
     let msg: &str = core::str::from_utf8(&buf[..n]).expect("last_error is valid utf8");
     assert!(
         msg.contains("polyplug_init") || msg.contains("symbol") || msg.contains("init"),

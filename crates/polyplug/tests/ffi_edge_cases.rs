@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
@@ -18,6 +17,7 @@ use polyplug::ffi::polyplug_runtime_find_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::loader::manifest::ManifestData;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -31,7 +31,7 @@ const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Test `resolve_plugin` with null runtime pointer.
-/// Expected: Returns null, sets last_error.
+/// Expected: Returns null, last_error returns a known error message.
 #[test]
 fn test_resolve_plugin_null_runtime() {
     // SAFETY: Passing null runtime is explicitly testing the null-safety contract.
@@ -39,18 +39,14 @@ fn test_resolve_plugin_null_runtime() {
         unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0x1234_5678_u64) };
     assert!(vtable.is_null(), "resolve_plugin(null rt) must return null");
 
-    // Verify last_error was set
+    // Verify last_error returns 0 for null runtime (no runtime to have an error)
     let mut buf: [u8; 256] = [0_u8; 256];
-    // SAFETY: buf is a valid stack-allocated buffer.
-    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
-    assert!(n > 0, "last_error must be set after null runtime resolve");
-
-    // SAFETY: buf contains valid UTF-8 error message from last_error.
-    let error_msg: &str = core::str::from_utf8(&buf[..n]).expect("error message should be UTF-8");
+    // SAFETY: buf is a valid stack-allocated buffer; null rt is valid for this call.
+    let n: usize =
+        unsafe { polyplug_runtime_last_error(core::ptr::null(), buf.as_mut_ptr(), buf.len()) };
     assert!(
-        error_msg.contains("null runtime"),
-        "error message should mention null runtime, got: {}",
-        error_msg
+        n == 0,
+        "last_error must return 0 for null runtime (no runtime to have an error)"
     );
 }
 
@@ -72,8 +68,10 @@ fn test_resolve_plugin_null_handle() {
 
     // Verify no last_error was set (null handle is a valid sentinel, not an error)
     let mut buf: [u8; 256] = [0_u8; 256];
-    // SAFETY: buf is a valid stack-allocated buffer.
-    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
+    // SAFETY: buf is a valid stack-allocated buffer; rt is valid.
+    let n: usize = unsafe {
+        polyplug_runtime_last_error(rt as *const OpaqueRuntime, buf.as_mut_ptr(), buf.len())
+    };
     assert_eq!(n, 0, "last_error must be empty after NULL_HANDLE resolve");
 
     // SAFETY: rt is valid and was allocated by polyplug_runtime_create.
@@ -119,8 +117,10 @@ fn test_resolve_plugin_stale_handle() {
 
     // Verify last_error was set
     let mut buf: [u8; 256] = [0_u8; 256];
-    // SAFETY: buf is a valid stack-allocated buffer.
-    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
+    // SAFETY: buf is a valid stack-allocated buffer; rt is valid.
+    let n: usize = unsafe {
+        polyplug_runtime_last_error(rt as *const OpaqueRuntime, buf.as_mut_ptr(), buf.len())
+    };
     assert!(n > 0, "last_error must be set after stale handle resolve");
 
     // SAFETY: buf contains valid UTF-8 error message from last_error.
@@ -260,8 +260,14 @@ fn test_find_all_by_contract_overflow() {
         unsafe { polyplug_runtime_load_bundle(rt, cpp_path_bytes.as_ptr(), cpp_path_bytes.len()) };
     if rc_cpp != 0 {
         let mut err_buf: [u8; 512] = [0_u8; 512];
-        let err_len: usize =
-            unsafe { polyplug_runtime_last_error(err_buf.as_mut_ptr(), err_buf.len()) };
+        // SAFETY: err_buf is a valid stack-allocated buffer; rt is valid.
+        let err_len: usize = unsafe {
+            polyplug_runtime_last_error(
+                rt as *const OpaqueRuntime,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+            )
+        };
         let err_msg: &str = core::str::from_utf8(&err_buf[..err_len]).unwrap_or("invalid UTF-8");
         panic!(
             "cpp_test_plugin load failed: {} (path: {})",

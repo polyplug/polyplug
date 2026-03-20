@@ -522,8 +522,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
-    out.push_str("    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {\n");
-    out.push_str("        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n");
+    out.push_str(
+        "    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n",
+    );
+    out.push_str("        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");
@@ -598,12 +600,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
                     out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
                     out.push_str("                };\n");
-                    out.push_str(
-                        "                var registrar = (PluginRegistrar*)registrarPtr;\n",
-                    );
-                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;\n");
+                    out.push_str("                var host = (HostVTable*)hostPtr;\n");
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginVTable*, AbiError>)host->RegisterPluginPtr;\n");
                     out.push_str(&format!(
-                        "                var err_{plugin_lower} = registerFn(registrar, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
+                        "                var err_{plugin_lower} = registerFn(rtCtx, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
                     ));
                     out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiConstants.ABI_OK) return err_{plugin_lower}.Code;\n"));
                     out.push_str("            }\n");
@@ -659,10 +659,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
             out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
             out.push_str("                };\n");
-            out.push_str("                var registrar = (PluginRegistrar*)registrarPtr;\n");
-            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<PluginRegistrar*, PluginDescriptor*, PluginVTable*, AbiError>)registrar->RegisterPluginPtr;\n");
+            out.push_str("                var host = (HostVTable*)hostPtr;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginVTable*, AbiError>)host->RegisterPluginPtr;\n");
             out.push_str(&format!(
-                "                var err_{lower} = registerFn(registrar, &desc_{lower}, vtablePtr_{lower});\n"
+                "                var err_{lower} = registerFn(rtCtx, &desc_{lower}, vtablePtr_{lower});\n"
             ));
             out.push_str(&format!("                if (err_{lower}.Code != AbiConstants.ABI_OK) return err_{lower}.Code;\n"));
             out.push_str("            }\n");

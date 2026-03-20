@@ -10,16 +10,18 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-// ─── Registrar callback that stores the vtable pointer ───────────────────────
+// ─── Host functions for integration tests ─────────────────────────────────────
 
 /// Global storage for the vtable pointer captured during `polyplug_init`.
 ///
@@ -28,13 +30,13 @@ use polyplug_abi::StringView;
 /// `polyplug_init`, before the vtable pointer is read in the test.
 static mut CAPTURED_VTABLE_PTR: *const PluginVTable = core::ptr::null();
 
-/// A minimal registrar callback that captures the vtable pointer.
+/// A register_plugin callback that captures the vtable pointer.
 ///
 /// # Safety
-/// `_reg`, `_desc`, and `vtable` must be valid for the duration of the call.
+/// `rt_ctx`, `_descriptor`, and `vtable` must be valid for the duration of the call.
 unsafe extern "C" fn capture_register_callback(
-    _reg: *mut PluginRegistrar,
-    _desc: *const PluginDescriptor,
+    _rt_ctx: *mut core::ffi::c_void,
+    _descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
     // SAFETY: CAPTURED_VTABLE_PTR is only written here, during polyplug_init,
@@ -49,6 +51,72 @@ unsafe extern "C" fn capture_register_callback(
             len: 0,
         },
     }
+}
+
+/// No-op alloc callback.
+unsafe extern "C" fn noop_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_host_alloc(size, align)
+}
+
+/// No-op free callback.
+unsafe extern "C" fn noop_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
+    unsafe { polyplug_host_free(ptr, size, align) }
+}
+
+/// No-op find_by_contract callback.
+unsafe extern "C" fn noop_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> polyplug_abi::PluginHandle {
+    polyplug_abi::PluginHandle::null()
+}
+
+/// No-op find_by_bundle callback.
+unsafe extern "C" fn noop_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> polyplug_abi::PluginHandle {
+    polyplug_abi::PluginHandle::null()
+}
+
+/// No-op find_all_by_contract callback.
+unsafe extern "C" fn noop_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut polyplug_abi::PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// No-op resolve_plugin callback.
+unsafe extern "C" fn noop_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _handle: polyplug_abi::PluginHandle,
+) -> *const PluginVTable {
+    core::ptr::null()
+}
+
+/// No-op get_extension callback.
+unsafe extern "C" fn noop_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 // ─── Test ─────────────────────────────────────────────────────────────────────
@@ -149,12 +217,14 @@ fn test_panic_returns_abi_error_panic() {
         "}\n",
         "\n",
         "use polyplug_guest::AbiError;\n",
+        "use polyplug_guest::HostVTable;\n",
+        "use polyplug_guest::PluginContext;\n",
         "use polyplug_guest::PluginDescriptor;\n",
         "use polyplug_guest::PluginError;\n",
-        "use polyplug_guest::PluginRegistrar;\n",
         "use polyplug_guest::PluginVTable;\n",
         "use polyplug_guest::StringView;\n",
         "use polyplug_guest::ABI_ERROR_GENERIC;\n",
+        "use polyplug_guest::POLYPLUG_ABI_VERSION;\n",
         "use guest::vtables::PANIC_PLUGIN_IMPL;\n",
         "use guest::vtables::PANIC_PLUGIN_VTABLE;\n",
         "use guest::contracts::TestPanicPlugin;\n",
@@ -170,18 +240,22 @@ fn test_panic_returns_abi_error_panic() {
         "/// Register the panic plugin vtable with the host.\n",
         "///\n",
         "/// # Safety\n",
-        "/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n",
+        "/// `rt_ctx` and `host_vtable` must be valid pointers.\n",
         "#[unsafe(no_mangle)]\n",
-        "pub unsafe extern \"C\" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {\n",
+        "pub unsafe extern \"C\" fn polyplug_init(\n",
+        "    _rt_ctx: *mut core::ffi::c_void,\n",
+        "    host_vtable: *const HostVTable,\n",
+        "    ctx: *const PluginContext,\n",
+        ") -> AbiError {\n",
         "    PANIC_PLUGIN_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
-        "    if registrar.is_null() {\n",
+        "    if host_vtable.is_null() || ctx.is_null() {\n",
         "        return AbiError {\n",
         "            code: ABI_ERROR_GENERIC,\n",
         "            message: StringView::null(),\n",
         "        };\n",
         "    }\n",
-        "    // SAFETY: registrar is non-null and valid per ABI contract.\n",
-        "    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };\n",
+        "    // SAFETY: host_vtable is non-null and valid per ABI contract.\n",
+        "    let host: &HostVTable = unsafe { &*host_vtable };\n",
         "    let desc: PluginDescriptor = PluginDescriptor {\n",
         "        name: StringView {\n",
         "            ptr: b\"panic_plugin\".as_ptr(),\n",
@@ -197,8 +271,8 @@ fn test_panic_returns_abi_error_panic() {
         "    };\n",
         "    // SAFETY: desc and vtable are valid for the duration of the call.\n",
         "    unsafe {\n",
-        "        (reg.register_plugin)(\n",
-        "            registrar,\n",
+        "        (host.register_plugin)(\n",
+        "            core::ptr::null_mut(),\n",
         "            &desc as *const PluginDescriptor,\n",
         "            &PANIC_PLUGIN_VTABLE as *const PluginVTable,\n",
         "        )\n",
@@ -242,27 +316,38 @@ fn test_panic_returns_abi_error_panic() {
     // SAFETY: polyplug_init matches the expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_register_callback,
-        host: core::ptr::null(),
+        alloc: noop_alloc,
+        free: noop_free,
+        find_by_contract: noop_find_by_contract,
+        find_by_bundle: noop_find_by_bundle,
+        find_all_by_contract: noop_find_all_by_contract,
+        resolve_plugin: noop_resolve_plugin,
+        get_extension: noop_get_extension,
     };
 
-    // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };

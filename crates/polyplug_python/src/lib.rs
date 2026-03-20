@@ -20,15 +20,18 @@ pub use config::PythonConfig;
 
 use std::path::Path;
 
-use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
+use pyo3::Python;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::runtime::HostContext;
+use polyplug::runtime::Runtime;
+use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
@@ -59,7 +62,7 @@ impl BundleLoader for PythonLoader {
         "python"
     }
 
-    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
         // Step 1: Initialize (or verify already initialized) CPython.
         ensure_python_initialized(&self.config)?;
 
@@ -83,6 +86,28 @@ impl BundleLoader for PythonLoader {
             .unwrap_or(abs_path.as_path())
             .to_path_buf();
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+
+        // Parse manifest to get bundle_id.
+        let manifest: ManifestData =
+            polyplug::loader::parse_manifest(&bundle_dir).map_err(PolyplugError::Loader)?;
+        if manifest.id == 0 {
+            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.display().to_string(),
+                error: "manifest.id is required but was 0 or missing".to_owned(),
+            }));
+        }
+        let bundle_id: u64 = manifest.id;
+
+        // Create HostContext for rt_ctx parameter.
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id,
+        };
+        let rt_ctx: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+
+        // Get host_vtable from runtime.
+        let host_vtable: &'static HostVTable = runtime.host_vtable();
 
         // Step 3: Load the Python module and call polyplug_init.
         Python::attach(|py| {
@@ -173,19 +198,13 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
-            // Step 3c: Locate and call polyplug_init(registrar_ptr).
+            // Step 3c: Locate and call polyplug_init(rt_ctx, host_vtable, ctx).
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
                 module_from_spec.getattr("polyplug_init").map_err(|_| {
                     PolyplugError::Loader(LoaderError::InitSymbolMissing {
                         bundle: bundle_name.clone(),
                     })
                 })?;
-
-            // SAFETY: registrar is a valid non-null mutable reference per BundleLoader contract.
-            // We cast it to a raw pointer integer to pass across the Python/Rust boundary.
-            // The Python plugin will cast it back to the correct ctypes pointer type.
-            // The registrar lifetime extends for the duration of this call.
-            let registrar_addr: usize = registrar as *mut PluginRegistrar as usize;
 
             // NOTE: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =
@@ -196,10 +215,15 @@ impl BundleLoader for PythonLoader {
                     len: bundle_path_static.len(),
                 },
                 host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+                bundle_id,
             };
-            let ctx_addr: usize = &ctx as *const PluginContext as usize;
+
+            // Pass pointers as i64 to preserve full 64-bit precision.
+            let rt_ctx_i64: i64 = rt_ctx as usize as i64;
+            let host_vtable_i64: i64 = host_vtable as *const HostVTable as usize as i64;
+            let ctx_ptr: i64 = &ctx as *const PluginContext as i64;
             init_fn
-                .call((registrar_addr, ctx_addr), None)
+                .call((rt_ctx_i64, host_vtable_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| {
                     PolyplugError::Loader(LoaderError::PythonInitRaisedException {
                         bundle: bundle_name.clone(),

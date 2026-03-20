@@ -644,9 +644,16 @@ struct AbiError { uint32_t code; StringView message; };
 struct PluginHandle { uint32_t index; uint32_t generation; };
 struct PluginVTable { uint64_t contract_id; uint32_t contract_version; uint32_t function_count; void* const* functions; };
 struct PluginDescriptor { StringView name; StringView contract_name; uint32_t version_major; uint32_t version_minor; uint32_t version_patch; };
-struct PluginRegistrar {
-    AbiError (*register_plugin)(PluginRegistrar*, const PluginDescriptor*, const PluginVTable*);
-    const void* host;
+struct PluginContext { StringView bundle_path; uint32_t host_abi_version; uint64_t bundle_id; };
+struct HostVTable {
+    AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginVTable*);
+    void* (*alloc)(void* rt_ctx, size_t size, size_t align);
+    void (*free)(void* rt_ctx, void* ptr, size_t size, size_t align);
+    PluginHandle (*find_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
+    PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
+    const PluginVTable* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
+    const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
 };
 constexpr uint32_t ABI_OK = 0;
 // test.add contract_id = FNV-1a("test.add@1") = 0xCC4232FAB0410D2B
@@ -673,8 +680,9 @@ static PluginDescriptor CPP_TEST_ADD_DESC = {
 };
 
 extern "C" uint32_t polyplug_abi_version() { return 1; }
-extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
-    return registrar->register_plugin(registrar, &CPP_TEST_ADD_DESC, &CPP_TEST_ADD_VTABLE);
+extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, const PluginContext* ctx) {
+    (void)ctx;
+    return host_vtable->register_plugin(rt_ctx, &CPP_TEST_ADD_DESC, &CPP_TEST_ADD_VTABLE);
 }
 "#;
 
@@ -721,9 +729,16 @@ struct AbiError { uint32_t code; StringView message; };
 struct PluginHandle { uint32_t index; uint32_t generation; };
 struct PluginVTable { uint64_t contract_id; uint32_t contract_version; uint32_t function_count; void* const* functions; };
 struct PluginDescriptor { StringView name; StringView contract_name; uint32_t version_major; uint32_t version_minor; uint32_t version_patch; };
-struct PluginRegistrar {
-    AbiError (*register_plugin)(PluginRegistrar*, const PluginDescriptor*, const PluginVTable*);
-    const void* host;
+struct PluginContext { StringView bundle_path; uint32_t host_abi_version; uint64_t bundle_id; };
+struct HostVTable {
+    AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginVTable*);
+    void* (*alloc)(void* rt_ctx, size_t size, size_t align);
+    void (*free)(void* rt_ctx, void* ptr, size_t size, size_t align);
+    PluginHandle (*find_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
+    PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
+    const PluginVTable* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
+    const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
 };
 constexpr uint32_t ABI_OK = 0;
 constexpr uint32_t ABI_ERROR_GENERIC = 1;
@@ -759,8 +774,9 @@ static PluginDescriptor CPP_THROW_DESC = {
     1, 0, 0
 };
 extern "C" uint32_t polyplug_abi_version() { return 1; }
-extern "C" AbiError polyplug_init(PluginRegistrar* registrar) {
-    return registrar->register_plugin(registrar, &CPP_THROW_DESC, &CPP_THROW_VTABLE);
+extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, const PluginContext* ctx) {
+    (void)ctx;
+    return host_vtable->register_plugin(rt_ctx, &CPP_THROW_DESC, &CPP_THROW_VTABLE);
 }
 "#;
 

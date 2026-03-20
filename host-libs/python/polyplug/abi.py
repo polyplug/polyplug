@@ -37,14 +37,22 @@ class StringView(ctypes.Structure):
     # SAFETY: StringView is non-owning. Callers must keep buffer alive during FFI calls.
     # Use inline buffer creation: buf = (ctypes.c_uint8 * len(data))(*data)
 
+    @classmethod
+    def from_str(cls, s: str) -> "StringView":
+        data = s.encode("utf-8")
+        buf = ctypes.create_string_buffer(data, len(data))
+        sv = cls()
+        sv.ptr = ctypes.cast(buf, ctypes.c_void_p)
+        sv.len = len(data)
+        sv._buf = buf
+        return sv
+
     def to_bytes(self) -> bytes:
-        """Convert StringView to bytes."""
         if self.ptr is None or self.ptr == 0 or self.len == 0:
             return b""
         return ctypes.string_at(self.ptr, self.len)
 
     def to_str(self) -> str:
-        """Convert StringView to string (UTF-8)."""
         return self.to_bytes().decode("utf-8", errors="replace")
 
 

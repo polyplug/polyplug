@@ -24,15 +24,17 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::HostContext;
+use polyplug::runtime::Runtime as PolyplugRuntime;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 
 use crate::config::JsConfig;
 
@@ -69,6 +71,16 @@ unsafe impl Send for HostVtablePtr {}
 
 // SAFETY: Same reasoning as Send — concurrent reads of immutable 'static data are safe.
 unsafe impl Sync for HostVtablePtr {}
+
+// ─── Runtime context for JS callbacks ─────────────────────────────────────────
+
+thread_local! {
+    /// Runtime context (rt_ctx) for the current bundle load.
+    /// Set during bundle evaluation; read by JS callbacks.
+    /// This is a pointer to HostContext { runtime, bundle_id }.
+    static RT_CTX: RefCell<Option<*mut core::ffi::c_void>> =
+        const { RefCell::new(None) };
+}
 
 // ─── Function registry for trampolines ───────────────────────────────────────
 
@@ -280,9 +292,18 @@ fn register_host_functions<'js>(
                 Some(p) => p.0,
                 None => return None,
             };
+            let rt_ctx: *mut core::ffi::c_void =
+                RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                    cell.borrow().unwrap_or(core::ptr::null_mut())
+                });
+            if rt_ctx.is_null() {
+                return None;
+            }
             // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
             // The HostVTable is valid for process lifetime (set by RuntimeBuilder).
-            let handle: PluginHandle = unsafe { ((*hvt).find_by_contract)(contract_id, min_ver) };
+            // rt_ctx is a valid HostContext pointer set during bundle evaluation.
+            let handle: PluginHandle =
+                unsafe { ((*hvt).find_by_contract)(rt_ctx, contract_id, min_ver) };
             pack_handle(handle)
         },
     )
@@ -313,9 +334,17 @@ fn register_host_functions<'js>(
                 Some(p) => p.0,
                 None => return None,
             };
+            let rt_ctx: *mut core::ffi::c_void =
+                RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                    cell.borrow().unwrap_or(core::ptr::null_mut())
+                });
+            if rt_ctx.is_null() {
+                return None;
+            }
             // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
+            // rt_ctx is a valid HostContext pointer set during bundle evaluation.
             let handle: PluginHandle =
-                unsafe { ((*hvt).find_by_bundle)(bundle_id, contract_id, min_ver) };
+                unsafe { ((*hvt).find_by_bundle)(rt_ctx, bundle_id, contract_id, min_ver) };
             pack_handle(handle)
         },
     )
@@ -344,10 +373,24 @@ fn register_host_functions<'js>(
                 Some(p) => p.0,
                 None => return 0_u32,
             };
+            let rt_ctx: *mut core::ffi::c_void =
+                RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                    cell.borrow().unwrap_or(core::ptr::null_mut())
+                });
+            if rt_ctx.is_null() {
+                return 0_u32;
+            }
             // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
+            // rt_ctx is a valid HostContext pointer set during bundle evaluation.
             // We pass null out pointer and 0 capacity to get the count only.
             let count: usize = unsafe {
-                ((*hvt).find_all_by_contract)(contract_id, min_ver, core::ptr::null_mut(), 0)
+                ((*hvt).find_all_by_contract)(
+                    rt_ctx,
+                    contract_id,
+                    min_ver,
+                    core::ptr::null_mut(),
+                    0,
+                )
             };
             count as u32
         })
@@ -378,8 +421,17 @@ fn register_host_functions<'js>(
                 Some(p) => p.0,
                 None => return None,
             };
+            let rt_ctx: *mut core::ffi::c_void =
+                RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                    cell.borrow().unwrap_or(core::ptr::null_mut())
+                });
+            if rt_ctx.is_null() {
+                return None;
+            }
             // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
-            let vtable_ptr: *const PluginVTable = unsafe { ((*hvt).resolve_plugin)(handle) };
+            // rt_ctx is a valid HostContext pointer set during bundle evaluation.
+            let vtable_ptr: *const PluginVTable =
+                unsafe { ((*hvt).resolve_plugin)(rt_ctx, handle) };
             if vtable_ptr.is_null() {
                 None
             } else {
@@ -410,8 +462,16 @@ fn register_host_functions<'js>(
                 Some(p) => p.0,
                 None => return None,
             };
+            let rt_ctx: *mut core::ffi::c_void =
+                RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                    cell.borrow().unwrap_or(core::ptr::null_mut())
+                });
+            if rt_ctx.is_null() {
+                return None;
+            }
             // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
-            let ext_ptr: *const () = unsafe { ((*hvt).get_extension)(extension_id) };
+            // rt_ctx is a valid HostContext pointer set during bundle evaluation.
+            let ext_ptr: *const () = unsafe { ((*hvt).get_extension)(rt_ctx, extension_id) };
             if ext_ptr.is_null() {
                 None
             } else {
@@ -474,8 +534,16 @@ fn register_host_functions<'js>(
             Some(p) => p.0,
             None => return 0_u32,
         };
+        let rt_ctx: *mut core::ffi::c_void =
+            RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                cell.borrow().unwrap_or(core::ptr::null_mut())
+            });
+        if rt_ctx.is_null() {
+            return 0_u32;
+        }
         // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
-        let ptr: *mut u8 = unsafe { ((*hvt).alloc)(size as usize, 1) };
+        // rt_ctx is a valid HostContext pointer set during bundle evaluation.
+        let ptr: *mut u8 = unsafe { ((*hvt).alloc)(rt_ctx, size as usize, 1) };
         ptr as usize as u32
     })
     .map_err(|e: rquickjs::Error| {
@@ -501,14 +569,22 @@ fn register_host_functions<'js>(
             Some(p) => p.0,
             None => return,
         };
+        let rt_ctx: *mut core::ffi::c_void =
+            RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+                cell.borrow().unwrap_or(core::ptr::null_mut())
+            });
+        if rt_ctx.is_null() {
+            return;
+        }
         let ptr: *mut u8 = lo as usize as *mut u8;
         if ptr.is_null() {
             return;
         }
         // SAFETY: HOST_VTABLE is set once from a 'static HostVTable pointer.
+        // rt_ctx is a valid HostContext pointer set during bundle evaluation.
         // ptr was allocated by the host allocator (alloc above). Size 0 is a
         // best-effort stub — the host allocator must tolerate this on free.
-        unsafe { ((*hvt).free)(ptr, 0, 1) };
+        unsafe { ((*hvt).free)(rt_ctx, ptr, 0, 1) };
     })
     .map_err(|e: rquickjs::Error| {
         PolyplugError::Loader(LoaderError::JsRuntimePanic {
@@ -552,15 +628,22 @@ impl BundleLoader for JsLoader {
         "js-quickjs"
     }
 
-    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+    fn load(&self, path: &Path, runtime: &PolyplugRuntime) -> Result<(), PolyplugError> {
         // 1. Set HOST_VTABLE once.
-        // SAFETY: registrar.host is a 'static pointer (set by RuntimeBuilder via Box::leak).
-        // We store it in HOST_VTABLE for access from JS callback closures.
-        let _ = HOST_VTABLE.get_or_init(|| HostVtablePtr(registrar.host));
+        let host_vtable: &'static HostVTable = runtime.host_vtable();
+        let _ = HOST_VTABLE.get_or_init(|| HostVtablePtr(host_vtable));
 
-        // 2. Resolve bundle.js path.
-        // When called via the runtime, path is already the resolved file (manifest.file joined to bundle dir).
-        // When called directly (e.g. tests), path may be the bundle directory — fall back to bundle.js inside it.
+        // 2. Resolve bundle directory and parse manifest.
+        let bundle_dir: &Path = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        let manifest: ManifestData = polyplug::loader::parse_manifest(bundle_dir)
+            .map_err(|e: polyplug::error::LoaderError| PolyplugError::Loader(e))?;
+        let bundle_id: u64 = manifest.id;
+
+        // 3. Resolve bundle.js path.
         let bundle_path: PathBuf = if path.is_dir() {
             path.join("bundle.js")
         } else {
@@ -574,8 +657,8 @@ impl BundleLoader for JsLoader {
                 })
             })?;
 
-        // 3. Init/get QuickJS runtime.
-        let runtime: &Runtime = QJS_RUNTIME
+        // 4. Init/get QuickJS runtime.
+        let qjs_runtime: &Runtime = QJS_RUNTIME
             .get_or_init(|| {
                 Runtime::new()
                     .map_err(|e: rquickjs::Error| format!("QuickJS runtime init failed: {e}"))
@@ -587,24 +670,34 @@ impl BundleLoader for JsLoader {
                 })
             })?;
 
-        // 4. Create fresh Context for this bundle.
-        let ctx: Context = Context::full(runtime).map_err(|e: rquickjs::Error| {
+        // 5. Create fresh Context for this bundle.
+        let ctx: Context = Context::full(qjs_runtime).map_err(|e: rquickjs::Error| {
             PolyplugError::Loader(LoaderError::JsRuntimePanic {
                 runtime: "js-quickjs".to_owned(),
                 message: format!("context creation failed: {e}"),
             })
         })?;
 
-        // 5. Clear PENDING_VTABLE before eval.
+        // 6. Clear PENDING_VTABLE before eval.
         PENDING_VTABLE.with(|c: &RefCell<Option<PendingVtable>>| {
             *c.borrow_mut() = None;
         });
 
-        // Extract bundle directory for globalThis.bundlePath injection.
-        let bundle_dir: std::path::PathBuf =
-            bundle_path.parent().unwrap_or(&bundle_path).to_path_buf();
+        // 7. Create HostContext for rt_ctx parameter.
+        let mut host_ctx: HostContext = HostContext {
+            runtime: runtime as *const PolyplugRuntime as *mut PolyplugRuntime,
+            bundle_id,
+        };
+        let rt_ctx: *mut core::ffi::c_void =
+            &mut host_ctx as *mut HostContext as *mut core::ffi::c_void;
+
+        // 8. Set RT_CTX for JS callbacks during bundle evaluation.
+        RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+            *cell.borrow_mut() = Some(rt_ctx);
+        });
+
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
-        // 6. Set up polyplug global and eval bundle.
+        // 9. Set up polyplug global and eval bundle.
         let eval_result: Result<(), PolyplugError> =
             ctx.with(|ctx_ref: Ctx<'_>| -> Result<(), PolyplugError> {
                 let globals: Object<'_> = ctx_ref.globals();
@@ -624,7 +717,7 @@ impl BundleLoader for JsLoader {
                             message: format!("global set failed: {e}"),
                         })
                     })?;
-                // Inject bundlePath global before bundle eval, so init(globalThis.bundlePath) works at top-level.
+                // Inject bundlePath global before bundle eval.
                 let set_bundle: String = format!("globalThis.bundlePath = {:?};", bundle_dir_str);
                 ctx_ref.eval::<Value<'_>, _>(set_bundle.as_str()).map_err(
                     |e: rquickjs::Error| {
@@ -644,9 +737,15 @@ impl BundleLoader for JsLoader {
                 )?;
                 Ok(())
             });
+
+        // 10. Clear RT_CTX after bundle evaluation.
+        RT_CTX.with(|cell: &RefCell<Option<*mut core::ffi::c_void>>| {
+            *cell.borrow_mut() = None;
+        });
+
         eval_result?;
 
-        // 7. Extract registered vtable from PENDING_VTABLE.
+        // 11. Extract registered vtable from PENDING_VTABLE.
         let (contract_id_val, vtable_ptr, fn_count, contract_name_str): (
             u64,
             *const PluginVTable,
@@ -670,7 +769,7 @@ impl BundleLoader for JsLoader {
 
         let contract_version: u32 = 0_u32;
 
-        // 9. Allocate trampoline slots.
+        // 12. Allocate trampoline slots.
         let base_slot: usize = {
             let reg: &Mutex<Vec<Option<()>>> = function_registry();
             let mut guard: MutexGuard<'_, Vec<Option<()>>> =
@@ -686,30 +785,27 @@ impl BundleLoader for JsLoader {
                 }));
             }
             for _ in 0..fn_count {
-                // Push placeholder slots — JS vtable doesn't need per-slot Rust callbacks.
                 guard.push(None);
             }
             slot
         };
 
-        // 10. Build function pointer array using pre-generated trampolines.
+        // 13. Build function pointer array using pre-generated trampolines.
         let mut fn_ptr_vec: Vec<*const ()> = Vec::with_capacity(fn_count);
         for slot_offset in 0..fn_count {
             let slot: usize = base_slot + slot_offset;
             // SAFETY: TRAMPOLINES[slot] is a valid static extern "C" fn pointer.
             // We cast to *const () for storage in PluginVTable.functions.
-            // The trampoline is 'static — it lives for the entire process lifetime.
             let fn_ptr: *const () = TRAMPOLINES[slot] as *const ();
             fn_ptr_vec.push(fn_ptr);
         }
 
         // SAFETY: PluginVTable.functions must point to 'static data.
         // Box::into_raw produces a valid, non-null, properly-aligned pointer.
-        // Box::leak gives 'static lifetime — the pointers outlive the runtime.
         let fn_pointers_box: Box<[*const ()]> = fn_ptr_vec.into_boxed_slice();
         let functions_ptr: *const *const () = Box::into_raw(fn_pointers_box) as *const *const ();
 
-        // 11. Build vtable.
+        // 14. Build vtable.
         let new_vtable: PluginVTable = PluginVTable {
             contract_id: contract_id_val,
             contract_version,
@@ -718,10 +814,9 @@ impl BundleLoader for JsLoader {
         };
 
         // SAFETY: vtable must be 'static — Box::leak ensures it outlives the runtime.
-        // The vtable is valid for the process lifetime (JS plugins are never unloaded).
         let static_vtable: *const PluginVTable = Box::into_raw(Box::new(new_vtable));
 
-        // 12. Build descriptor.
+        // 15. Build descriptor.
         let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-quickjs-plugin"),
@@ -734,17 +829,12 @@ impl BundleLoader for JsLoader {
             version_patch: 0_u32,
         };
 
-        // 13. Register with host.
-        // SAFETY: registrar, descriptor, and static_vtable are all valid for this call.
-        // descriptor is borrowed for the duration of the call only (register_plugin must copy).
+        // 16. Register with host.
+        // SAFETY: rt_ctx, descriptor, and static_vtable are all valid for this call.
+        // descriptor is borrowed for the duration of the call only.
         // static_vtable is a leaked Box — valid for 'static.
-        let abi_result: AbiError = unsafe {
-            (registrar.register_plugin)(
-                registrar as *mut PluginRegistrar,
-                &descriptor as *const PluginDescriptor,
-                static_vtable,
-            )
-        };
+        let abi_result: AbiError =
+            unsafe { (host_vtable.register_plugin)(rt_ctx, &descriptor, static_vtable) };
 
         if abi_result.code != ABI_OK {
             return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {

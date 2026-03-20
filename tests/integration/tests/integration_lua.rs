@@ -5,13 +5,13 @@ use polyplug::error::PolyplugError;
 use polyplug::error::RegistryError;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -39,7 +39,7 @@ std::thread_local! {
 /// Registration callback passed to LuaLoader via PluginRegistrar.
 /// Writes the registered plugin into the thread-local LUA_REGISTRY.
 unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -89,16 +89,18 @@ fn make_loader() -> LuaLoader {
     LuaLoader::new(LuaConfig::default())
 }
 
-fn load_fixture() -> Result<(), PolyplugError> {
-    let loader: LuaLoader = make_loader();
+fn create_runtime() -> Runtime {
+    Runtime::builder()
+        .loader(make_loader())
+        .build()
+        .expect("failed to build runtime")
+}
+
+fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
     LUA_REGISTRY.with(|cell| {
         *cell.borrow_mut() = Registry::new();
     });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    loader.load(std::path::Path::new(LUA_PLUGIN), &mut registrar)
+    rt.load_bundle(std::path::Path::new(LUA_PLUGIN))
 }
 
 fn get_vtable() -> *const PluginVTable {
@@ -121,7 +123,8 @@ fn integration_lua_runtime_name() {
 fn integration_lua_bundle_loads() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    let result: Result<(), PolyplugError> = load_fixture();
+    let rt: Runtime = create_runtime();
+    let result: Result<(), PolyplugError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
         "LuaLoader::load() must succeed for fixture: {:?}",
@@ -133,7 +136,8 @@ fn integration_lua_bundle_loads() {
 fn integration_lua_add() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    load_fixture().expect("fixture must load");
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const PluginVTable = get_vtable();
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
@@ -163,7 +167,8 @@ fn integration_lua_add() {
 fn integration_lua_add_primitive() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    load_fixture().expect("fixture must load");
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const PluginVTable = get_vtable();
     // SAFETY: vtable_ptr is valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
@@ -193,7 +198,8 @@ fn integration_lua_add_primitive() {
 fn integration_lua_version_string() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    load_fixture().expect("fixture must load");
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const PluginVTable = get_vtable();
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
@@ -225,7 +231,8 @@ fn integration_lua_version_string() {
 fn integration_lua_reset() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    load_fixture().expect("fixture must load");
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const PluginVTable = get_vtable();
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
@@ -252,12 +259,8 @@ fn integration_lua_init_function_missing_returns_typed_error() {
     let tmp_path: std::path::PathBuf = std::env::temp_dir().join("noinit_test.lua");
     std::fs::write(&tmp_path, b"local x = 1\n").expect("write temp file");
 
-    let loader: LuaLoader = make_loader();
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> = loader.load(&tmp_path, &mut registrar);
+    let rt: Runtime = create_runtime();
+    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_path);
     assert!(result.is_err());
     let err: PolyplugError = result.expect_err("expected Err(LuaInitFunctionMissing)");
     assert!(
@@ -274,7 +277,8 @@ fn integration_lua_init_function_missing_returns_typed_error() {
 fn integration_lua_utf8_roundtrip() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    load_fixture().expect("fixture must load");
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
     let vtable_ptr: *const PluginVTable = get_vtable();
     // SAFETY: fn_ptr is function 2 (version). vtable.functions is valid (non-null, in-bounds).
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
@@ -309,13 +313,8 @@ fn integration_lua_second_load_does_not_panic() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // Loading the same plugin twice must not panic (ffi.cdef pcall guard).
-    load_fixture().expect("first load");
-    let loader: LuaLoader = make_loader();
-    let mut registrar2: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(LUA_PLUGIN), &mut registrar2);
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("first load");
+    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
     assert!(result.is_ok(), "second load failed: {:?}", result.err());
 }

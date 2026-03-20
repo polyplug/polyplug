@@ -7,7 +7,7 @@
 //!   fn 1 — error_panic: catches an intentional panic and returns ABI_ERROR_PANIC
 //!   fn 2 — error_chain_propagate: calls another plugin via host vtable and propagates its error
 
-// ─── ABI Types (mirrored from polyplug) ──────────────────────────────
+// ─── ABI Types (mirrored from polyplug) ──────────────────────────────────────
 // We cannot depend on polyplug here (cdylib circular dependency).
 // Mirror the ABI types inline. These are frozen per §7 ABI Stability.
 
@@ -71,6 +71,8 @@ unsafe impl Sync for AbiError {}
 #[derive(Debug, Clone, Copy)]
 pub struct PluginContext {
     pub bundle_path: StringView,
+    pub host_abi_version: u32,
+    pub bundle_id: u64,
 }
 
 /// Plugin VTable — mirrors polyplug_abi::PluginVTable.
@@ -79,7 +81,7 @@ pub struct PluginVTable {
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
-    pub functions: *const FnPtr,
+    pub functions: *const *const (),
 }
 
 // SAFETY: PluginVTable points to 'static function arrays. All fields are static pointers.
@@ -112,32 +114,46 @@ pub struct PluginHandle {
 }
 
 /// Host VTable — mirrors polyplug_abi::HostVTable.
+/// All functions take rt_ctx as first parameter.
 #[repr(C)]
 pub struct HostVTable {
-    pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    pub free: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    pub find_by_contract: unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
-    pub find_by_bundle:
-        unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
+    pub register_plugin: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        descriptor: *const PluginDescriptor,
+        vtable: *const PluginVTable,
+    ) -> AbiError,
+    pub alloc:
+        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, size: usize, align: usize) -> *mut u8,
+    pub free: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        ptr: *mut u8,
+        size: usize,
+        align: usize,
+    ),
+    pub find_by_contract: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        contract_id: u64,
+        min_version: u32,
+    ) -> PluginHandle,
+    pub find_by_bundle: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        bundle_id: u64,
+        contract_id: u64,
+        min_version: u32,
+    ) -> PluginHandle,
     pub find_all_by_contract: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
         contract_id: u64,
         min_version: u32,
         out: *mut PluginHandle,
         out_cap: usize,
     ) -> usize,
-    pub resolve_plugin: unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
-    pub get_extension: unsafe extern "C" fn(extension_id: u32) -> *const (),
-}
-
-/// Plugin registrar — mirrors polyplug_abi::PluginRegistrar.
-#[repr(C)]
-pub struct PluginRegistrar {
-    pub register_plugin: unsafe extern "C" fn(
-        registrar: *mut PluginRegistrar,
-        descriptor: *const PluginDescriptor,
-        vtable: *const PluginVTable,
-    ) -> AbiError,
-    pub host: *const HostVTable,
+    pub resolve_plugin: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        handle: PluginHandle,
+    ) -> *const PluginVTable,
+    pub get_extension:
+        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, extension_id: u32) -> *const (),
 }
 
 // ─── Function pointer newtype wrapper ────────────────────────────────────────
@@ -188,6 +204,7 @@ const ERROR_TEST_CONTRACT_ID: u64 = fnv1a_64_const(b"error.test@1");
 /// Arguments for error_chain_propagate (fn 2).
 #[repr(C)]
 pub struct ChainArgs {
+    pub rt_ctx: *mut core::ffi::c_void,
     pub host: *const HostVTable,
     pub target_contract_id: u64,
     pub target_fn_id: u32,
@@ -207,7 +224,7 @@ pub struct ChainArgs {
 extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiError {
     let msg: &[u8] = b"test error from plugin";
     let len: usize = msg.len(); // 22 bytes
-    // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
+                                // SAFETY: polyplug_host_alloc allocates len bytes with align 1; returns null on failure.
     let ptr: *mut u8 = unsafe { polyplug_host_alloc(len, 1) };
     if ptr.is_null() {
         return AbiError {
@@ -265,9 +282,10 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     let host: &HostVTable = unsafe { &*chain_args.host };
     // SAFETY: host.find_by_contract is a valid function pointer set by the host runtime.
     let plugin: PluginHandle =
-        unsafe { (host.find_by_contract)(chain_args.target_contract_id, 0_u32) };
+        unsafe { (host.find_by_contract)(chain_args.rt_ctx, chain_args.target_contract_id, 0_u32) };
     // SAFETY: host.resolve_plugin returns a 'static PluginVTable pointer for the handle.
-    let vtable_ptr: *const PluginVTable = unsafe { (host.resolve_plugin)(plugin) };
+    let vtable_ptr: *const PluginVTable =
+        unsafe { (host.resolve_plugin)(chain_args.rt_ctx, plugin) };
     // Dispatch through the vtable if non-null and fn_id is in range.
     let inner_result: AbiError = if vtable_ptr.is_null() {
         AbiError {
@@ -285,11 +303,11 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
         } else {
             // SAFETY: fn_id < function_count validated above.
             let fn_ptr: *const () =
-                unsafe { (*vtable.functions.add(chain_args.target_fn_id as usize)).0 };
+                unsafe { *vtable.functions.add(chain_args.target_fn_id as usize) };
             // SAFETY: Transmuted to generic dispatch signature; types enforced by generated callers.
             let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                 unsafe { core::mem::transmute(fn_ptr) };
-            // SAFETY: null args/out is valid for fns that don\'t require them.
+            // SAFETY: null args/out is valid for fns that don't require them.
             unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) }
         }
     };
@@ -314,7 +332,7 @@ static ERROR_TEST_VTABLE: PluginVTable = PluginVTable {
     contract_id: ERROR_TEST_CONTRACT_ID,
     contract_version: 1_u32 << 16,
     function_count: 3,
-    functions: ERROR_TEST_FNS.as_ptr(),
+    functions: ERROR_TEST_FNS.as_ptr() as *const *const (),
 };
 
 static ERROR_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
@@ -342,14 +360,16 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// Plugin init — called by the loader to register vtables.
 ///
 /// # Safety
-/// `registrar` must be a valid non-null pointer to a PluginRegistrar from the host.
+/// `rt_ctx` must be a valid opaque pointer to the host runtime context.
+/// `host_vtable` must be a valid non-null pointer to a HostVTable from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    registrar: *mut PluginRegistrar,
+    rt_ctx: *mut core::ffi::c_void,
+    host_vtable: *const HostVTable,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if registrar.is_null() {
+    if host_vtable.is_null() {
         return AbiError {
             code: ABI_ERROR_GENERIC,
             message: StringView::null(),
@@ -362,14 +382,14 @@ pub unsafe extern "C" fn polyplug_init(
         };
     }
 
-    // SAFETY: registrar is non-null and provided by the host runtime per ABI contract.
-    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
+    // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
+    let host: &HostVTable = unsafe { &*host_vtable };
 
     // SAFETY: register_plugin is a valid function pointer set by the host.
     // ERROR_TEST_DESCRIPTOR and ERROR_TEST_VTABLE are 'static.
     unsafe {
-        (reg.register_plugin)(
-            registrar,
+        (host.register_plugin)(
+            rt_ctx,
             &ERROR_TEST_DESCRIPTOR as *const PluginDescriptor,
             &ERROR_TEST_VTABLE as *const PluginVTable,
         )

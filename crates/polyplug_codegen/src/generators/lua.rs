@@ -303,23 +303,67 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
     out.push_str(
         "-- Re-generate with: polyplugc generate --bundle bundle.toml --lang lua --out <dir>\n\n",
     );
+    out.push_str("local ffi = require(\"ffi\")\n");
+    out.push_str("local polyplug_guest = require(\"polyplug_guest\")\n\n");
+
     let has_trace: bool = ir.bundle.as_ref().is_some_and(|b: &ResolvedBundle| {
         b.plugins
             .iter()
             .any(|p: &ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
     });
+
+    out.push_str("-- ABI constants\n");
+    out.push_str("local ABI_OK = 0\n");
+    out.push_str("local ABI_ERROR_GENERIC = 1\n\n");
+
     if has_trace {
         out.push_str("local EXT_TRACE_ID = 0xC4EB9AEE\n");
         out.push_str("-- Optional: trace extension\n");
         out.push_str("local trace_vtable_ptr = polyplug.get_extension(EXT_TRACE_ID)\n");
-        out.push_str("-- trace_vtable_ptr is nil/0 if not available\n");
+        out.push_str("-- trace_vtable_ptr is nil/0 if not available\n\n");
     } else {
-        out.push_str("-- No optional extensions requested.\n");
+        out.push_str("-- No optional extensions requested.\n\n");
     }
-    out.push_str("\nlocal function polyplug_init(registrar_ptr, ctx_ptr)\n");
-    out.push_str("    if registrar_ptr == nil then return end\n");
-    out.push_str("    if ctx_ptr == nil then return end\n");
+
+    out.push_str("--- Register all plugin vtables with the host.\n");
+    out.push_str("--- @param rt_ctx userdata Runtime context pointer from host.\n");
+    out.push_str("--- @param host_ptr userdata HostVTable pointer from host.\n");
+    out.push_str("--- @param ctx_ptr userdata PluginContext pointer from host.\n");
+    out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
+    out.push_str("function polyplug_init(rt_ctx, host_ptr, ctx_ptr)\n");
+    out.push_str("    if rt_ctx == nil then\n");
+    out.push_str("        return ABI_ERROR_GENERIC\n");
+    out.push_str("    end\n");
+    out.push_str("    if host_ptr == nil then\n");
+    out.push_str("        return ABI_ERROR_GENERIC\n");
+    out.push_str("    end\n");
+    out.push_str("    if ctx_ptr == nil then\n");
+    out.push_str("        return ABI_ERROR_GENERIC\n");
+    out.push_str("    end\n");
     out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
+    out.push_str("    local host = ffi.cast(\"HostVTable*\", host_ptr)\n\n");
+
+    if let Some(bundle) = &ir.bundle {
+        for plugin in &bundle.plugins {
+            let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
+            let contract_impl = plugin.implements.first().map(|s| s.as_str()).unwrap_or("");
+            let (contract_name, version_str) = contract_impl
+                .split_once('@')
+                .unwrap_or((contract_impl, "1.0.0"));
+            let (version_major, _version_minor_patch) =
+                version_str.split_once('.').unwrap_or((version_str, "0"));
+            let _contract_name_full = format!("{}@{}", contract_name, version_major);
+
+            out.push_str(&format!(
+                "    local err_{plugin_upper} = host.register_plugin(rt_ctx, {plugin_upper}_DESCRIPTOR, {plugin_upper}_VTABLE)\n"
+            ));
+            out.push_str(&format!("    if err_{plugin_upper}.code ~= ABI_OK then\n"));
+            out.push_str(&format!("        return err_{plugin_upper}.code\n"));
+            out.push_str("    end\n\n");
+        }
+    }
+
+    out.push_str("    return ABI_OK\n");
     out.push_str("end\n");
     out
 }
@@ -540,7 +584,29 @@ fn generate_guest_plugin_vtable(
     out.push_str(&format!(
         "{plugin_var}_VTABLE.function_count = {function_count}\n"
     ));
-    out.push_str(&format!("{plugin_var}_VTABLE.functions = nil\n"));
+    out.push_str(&format!("{plugin_var}_VTABLE.functions = nil\n\n"));
+
+    out.push_str(&format!(
+        "local {plugin_var}_DESCRIPTOR = ffi.new(\"PluginDescriptor\")\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_DESCRIPTOR.name = polyplug_guest.string_view(\"{plugin_name}\")\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_DESCRIPTOR.contract_name = polyplug_guest.string_view(\"{contract_name_full}\")\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_DESCRIPTOR.version_major = {}\n",
+        contract.version.major
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_DESCRIPTOR.version_minor = {}\n",
+        contract.version.minor
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_DESCRIPTOR.version_patch = {}\n\n",
+        contract.version.patch
+    ));
 
     let set_impl_name: String = format!(
         "set_{}_impl",
@@ -565,33 +631,6 @@ fn generate_guest_plugin_vtable(
         ));
     }
     out.push_str(&format!("    {plugin_var}_VTABLE.functions = functions\n"));
-
-    out.push_str("    local descriptor = ffi.new(\"PluginDescriptor\")\n");
-    out.push_str(&format!(
-        "    descriptor.name = polyplug_guest.string_view(\"{plugin_name}\")\n"
-    ));
-    out.push_str(&format!(
-        "    descriptor.contract_name = polyplug_guest.string_view(\"{contract_name_full}\")\n"
-    ));
-    out.push_str(&format!(
-        "    descriptor.version_major = {}\n",
-        contract.version.major
-    ));
-    out.push_str(&format!(
-        "    descriptor.version_minor = {}\n",
-        contract.version.minor
-    ));
-    out.push_str(&format!(
-        "    descriptor.version_patch = {}\n",
-        contract.version.patch
-    ));
-
-    out.push_str(&format!(
-        "    local err = polyplug_guest.register_plugin(descriptor, {plugin_var}_VTABLE)\n"
-    ));
-    out.push_str("    if err.code ~= 0 then\n");
-    out.push_str("        error(\"plugin registration failed\", 2)\n");
-    out.push_str("    end\n");
     out.push_str("end\n");
 
     Ok(())

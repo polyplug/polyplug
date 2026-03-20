@@ -64,6 +64,7 @@ notify = { version = "8.2", default-features = false }
 
 # Testing utilities
 tempfile = { version = "3.27" }
+serial_test = { version = "3.2" }
 
 # .NET hosting
 netcorehost = { version = "0.20" }

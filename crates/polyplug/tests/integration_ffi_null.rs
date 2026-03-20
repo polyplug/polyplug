@@ -3,13 +3,13 @@
 //! Integration tests: null pointer safety of all C facade FFI functions.
 //! Every function that takes a pointer must handle null without panicking.
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::OpaqueRuntime;
 
 #[test]
 fn test_runtime_free_null() {
@@ -97,17 +97,24 @@ fn test_resolve_plugin_null_handle() {
     );
     // Verify no last_error was set
     let mut buf: [u8; 256] = [0_u8; 256];
-    // SAFETY: buf is a valid stack-allocated buffer; buf.len() matches the slice length exactly.
-    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
+    // SAFETY: rt is valid; buf is a valid stack-allocated buffer; buf.len() matches the slice length exactly.
+    let n: usize = unsafe {
+        polyplug_runtime_last_error(rt as *const OpaqueRuntime, buf.as_mut_ptr(), buf.len())
+    };
     assert_eq!(n, 0, "last_error must be empty after NULL_HANDLE resolve");
     // SAFETY: rt is valid and was allocated by polyplug_runtime_create().
     unsafe { polyplug_runtime_destroy(rt) };
 }
 
 #[test]
-fn test_last_error_null_buf() {
-    // polyplug_runtime_last_error(null, 0) must return 0, not crash
-    // SAFETY: passing null buf with len=0 is explicitly part of the null-safety contract being tested.
-    let n: usize = unsafe { polyplug_runtime_last_error(core::ptr::null_mut(), 0) };
-    assert_eq!(n, 0, "last_error(null buf) must return 0");
+fn test_last_error_null_rt() {
+    // polyplug_runtime_last_error(null rt, null buf, 0) returns 0 (no runtime to have an error)
+    // SAFETY: passing null rt and null buf with len=0 is explicitly part of the null-safety contract being tested.
+    let n: usize =
+        unsafe { polyplug_runtime_last_error(core::ptr::null(), core::ptr::null_mut(), 0) };
+    // With null runtime, we return 0 (no runtime to have an error)
+    assert_eq!(
+        n, 0,
+        "last_error(null rt, null buf) must return 0 (no runtime to have an error)"
+    );
 }

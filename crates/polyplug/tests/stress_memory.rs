@@ -12,20 +12,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::Buffer;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
+use polyplug_abi::AbiError;
+use polyplug_abi::Buffer;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 
@@ -36,6 +35,10 @@ const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
 std::thread_local! {
     static STRESS_REGISTRY: RefCell<Registry> = RefCell::new(Registry::new());
+    static TLS_TRACKING_ALLOC: RefCell<unsafe extern "C" fn(usize, usize) -> *mut u8> =
+        RefCell::new(polyplug_host_alloc);
+    static TLS_TRACKING_FREE: RefCell<unsafe extern "C" fn(*mut u8, usize, usize)> =
+        RefCell::new(polyplug_host_free);
 }
 
 // ─── ABI argument/result types (mirror memory_plugin's definitions) ───────────
@@ -50,6 +53,7 @@ struct FillArgs {
 /// Arguments to `memory_alloc_buffer_via_host` (fn 1).
 #[repr(C)]
 struct AllocArgs {
+    rt_ctx: *mut core::ffi::c_void,
     host: *const HostVTable,
     size: u64,
     fill_byte: u8,
@@ -75,7 +79,11 @@ struct ZeroResult {
 ///
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
-unsafe extern "C" fn stub_find_by_contract(_contract_id: u64, _min_version: u32) -> PluginHandle {
+unsafe extern "C" fn stub_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
     PluginHandle {
         index: u32::MAX,
         generation: 0,
@@ -87,6 +95,7 @@ unsafe extern "C" fn stub_find_by_contract(_contract_id: u64, _min_version: u32)
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
 unsafe extern "C" fn stub_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
     _bundle_id: u64,
     _contract_id: u64,
     _min_version: u32,
@@ -102,6 +111,7 @@ unsafe extern "C" fn stub_find_by_bundle(
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
 unsafe extern "C" fn stub_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -115,6 +125,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// # Safety
 /// Always safe to call; returns null pointer.
 unsafe extern "C" fn stub_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
 ) -> *const polyplug_abi::PluginVTable {
     core::ptr::null()
@@ -124,18 +135,41 @@ unsafe extern "C" fn stub_resolve_plugin(
 ///
 /// # Safety
 /// Always safe to call; returns null pointer.
-unsafe extern "C" fn stub_get_extension(_extension_id: u32) -> *const () {
+unsafe extern "C" fn stub_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
     core::ptr::null()
+}
+
+/// Stub alloc callback.
+unsafe extern "C" fn stub_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_host_alloc(size, align)
+}
+
+/// Stub free callback.
+unsafe extern "C" fn stub_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
+    unsafe { polyplug_host_free(ptr, size, align) }
 }
 
 // ─── Registry callback ────────────────────────────────────────────────────────
 
-/// A registrar callback that stores vtable entries into the thread-local Registry.
+/// A register_plugin callback that stores vtable entries into the thread-local Registry.
 ///
 /// # Safety
-/// `_registrar`, `descriptor`, and `vtable` must be valid for the call duration.
+/// `_rt_ctx`, `descriptor`, and `vtable` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -208,27 +242,38 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
     // SAFETY: polyplug_init matches the expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: registry_register_callback,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
 
-    // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -551,11 +596,45 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
 
-    // Set up a tracking allocator and build a HostVTable that uses its fn pointers.
+    // Set up a tracking allocator and build a HostVTable that uses wrapper functions.
     let tracker: TrackingAllocator = TrackingAllocator::new();
+    let alloc_fn: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
+    let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
+
+    // Wrapper functions that take rt_ctx and delegate to tracking functions
+    unsafe extern "C" fn tracking_alloc_wrapper(
+        _rt_ctx: *mut core::ffi::c_void,
+        size: usize,
+        align: usize,
+    ) -> *mut u8 {
+        TLS_TRACKING_ALLOC.with(|cell| {
+            let alloc_fn: unsafe extern "C" fn(usize, usize) -> *mut u8 = *cell.borrow();
+            // SAFETY: alloc_fn is a valid function pointer from TrackingAllocator.
+            unsafe { alloc_fn(size, align) }
+        })
+    }
+
+    unsafe extern "C" fn tracking_free_wrapper(
+        _rt_ctx: *mut core::ffi::c_void,
+        ptr: *mut u8,
+        size: usize,
+        align: usize,
+    ) {
+        TLS_TRACKING_FREE.with(|cell| {
+            let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = *cell.borrow();
+            // SAFETY: free_fn is a valid function pointer from TrackingAllocator.
+            unsafe { free_fn(ptr, size, align) }
+        })
+    }
+
+    // Store the function pointers in thread-local storage
+    TLS_TRACKING_ALLOC.with(|cell| *cell.borrow_mut() = alloc_fn);
+    TLS_TRACKING_FREE.with(|cell| *cell.borrow_mut() = free_fn);
+
     let host_vtable: HostVTable = HostVTable {
-        alloc: tracker.alloc_fn(),
-        free: tracker.free_fn(),
+        register_plugin: registry_register_callback,
+        alloc: tracking_alloc_wrapper,
+        free: tracking_free_wrapper,
         find_by_contract: stub_find_by_contract,
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
@@ -564,6 +643,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     let args: AllocArgs = AllocArgs {
+        rt_ctx: core::ptr::null_mut(),
         host: &host_vtable as *const HostVTable,
         size: 4096_u64,
         fill_byte: 0xCC_u8,
@@ -624,7 +704,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 
     // Free via the tracking free_fn to keep the counters balanced.
     let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
-    // SAFETY: out_buf.ptr was allocated by tracker.alloc_fn() (via host.alloc) with cap=4096, align=1.
+    // SAFETY: out_buf.ptr was allocated by tracking_alloc_wrapper (via host.alloc) with cap=4096, align=1.
     unsafe { free_fn(out_buf.ptr, out_buf.cap, 1) };
 
     assert_eq!(tracker.alloc_count(), 1, "alloc_count must still be 1");

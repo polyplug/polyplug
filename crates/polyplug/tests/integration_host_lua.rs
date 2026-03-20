@@ -8,19 +8,19 @@
 //! Tests requiring native plugin loading are in tests/integration/ffi_native.rs.
 
 use polyplug::ffi::{
-    OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
-    polyplug_runtime_error_message_len, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
+    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
+    polyplug_runtime_last_error, polyplug_runtime_load_bundle, OpaqueRuntime,
 };
 
-fn read_last_error() -> String {
-    // SAFETY: polyplug_runtime_error_message_len has no pointer preconditions.
-    let len: usize = unsafe { polyplug_runtime_error_message_len() };
+fn read_last_error(rt: *const OpaqueRuntime) -> String {
+    // SAFETY: rt is a valid runtime pointer.
+    let len: usize = unsafe { polyplug_runtime_error_message_len(rt) };
     if len == 0 {
         return String::new();
     }
     let mut buf: Vec<u8> = vec![0u8; len];
-    // SAFETY: buf is a valid allocation of `len` bytes.
-    let _written: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), len) };
+    // SAFETY: rt is valid; buf is a valid allocation of `len` bytes.
+    let _written: usize = unsafe { polyplug_runtime_last_error(rt, buf.as_mut_ptr(), len) };
     String::from_utf8_lossy(&buf).into_owned()
 }
 
@@ -43,7 +43,7 @@ fn test_last_error_after_failed_load() {
     let result: u32 =
         unsafe { polyplug_runtime_load_bundle(rt, bad_path.as_ptr(), bad_path.len()) };
     assert_ne!(result, 0, "Expected failure for non-existent path");
-    let err: String = read_last_error();
+    let err: String = read_last_error(rt as *const OpaqueRuntime);
     assert!(
         !err.is_empty(),
         "Expected non-empty error string after failed load"

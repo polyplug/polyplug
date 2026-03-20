@@ -1,11 +1,11 @@
 # THIS FILE IS PART OF THE POLYPLUG TEST FIXTURES
 # DO NOT EDIT BY HAND
-name = "test_bundle"
-id = 419834959575526542
-bundle_name = "test_bundle"
+name = "test_plugin_python"
+id = 11594088137804700436
+bundle_name = "test_plugin_python"
 version = "1.0.0"
-runtime = "js-quickjs"
-file = "bundle.js"
+runtime = "python"
+file = "test_plugin.py"
 provides = ["test.add@1"]
 needs_reinit_on_dep_reload = false
 

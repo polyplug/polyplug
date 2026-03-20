@@ -3,18 +3,18 @@
 //! Integration tests: non-UTF-8 bytes passed to polyplug_runtime_load_bundle / polyplug_runtime_reload_bundle
 //! must produce a non-zero return code and a last_error message, not a panic or UB.
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_reload_bundle;
+use polyplug::ffi::OpaqueRuntime;
 
 /// Helper: read last_error into a String.
-fn read_last_error() -> String {
+fn read_last_error(rt: *const OpaqueRuntime) -> String {
     let mut buf: Vec<u8> = vec![0_u8; 512];
     // SAFETY: buf is valid for 512 bytes.
-    let n: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), buf.len()) };
+    let n: usize = unsafe { polyplug_runtime_last_error(rt, buf.as_mut_ptr(), buf.len()) };
     String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
@@ -31,7 +31,7 @@ fn test_load_bundle_invalid_utf8_path() {
         rc, 0,
         "load_bundle with invalid UTF-8 path must return non-zero"
     );
-    let err: String = read_last_error();
+    let err: String = read_last_error(rt as *const OpaqueRuntime);
     assert!(
         !err.is_empty(),
         "last_error must be set after invalid UTF-8 path"
@@ -52,7 +52,7 @@ fn test_reload_bundle_invalid_utf8_path() {
         rc, 0,
         "reload_bundle with invalid UTF-8 path must return non-zero"
     );
-    let err: String = read_last_error();
+    let err: String = read_last_error(rt as *const OpaqueRuntime);
     assert!(
         !err.is_empty(),
         "last_error must be set after invalid UTF-8 path"
@@ -77,7 +77,7 @@ fn test_runtime_healthy_after_invalid_utf8() {
     // SAFETY: rt non-null, good_path valid for its len bytes.
     let rc2: u32 = unsafe { polyplug_runtime_load_bundle(rt, good_path.as_ptr(), good_path.len()) };
     // We expect a 'path not found' error, not a panic. rc2 != 0 is expected.
-    let err2: String = read_last_error();
+    let err2: String = read_last_error(rt as *const OpaqueRuntime);
     assert!(
         !err2.is_empty(),
         "runtime must be healthy and set last_error on second call"

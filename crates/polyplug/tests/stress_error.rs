@@ -12,20 +12,19 @@ use libloading::os::unix::RTLD_GLOBAL;
 use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_ERROR_PANIC;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
+use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
+use polyplug_abi::PluginContext;
+use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 
@@ -38,6 +37,7 @@ const ERROR_PLUGIN_SO: &str = env!("ERROR_PLUGIN_SO");
 /// Mirrors the definition in tests/fixtures/error_plugin/src/lib.rs.
 #[repr(C)]
 struct ChainArgs {
+    rt_ctx: *mut core::ffi::c_void,
     host: *const HostVTable,
     target_contract_id: u64,
     target_fn_id: u32,
@@ -56,7 +56,11 @@ std::thread_local! {
 ///
 /// # Safety
 /// Must only be called when ERROR_REGISTRY has been populated on this thread.
-unsafe extern "C" fn chain_find_by_contract(contract_id: u64, _min_version: u32) -> PluginHandle {
+unsafe extern "C" fn chain_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, Registry> = cell.borrow();
         match registry.find(contract_id, 0) {
@@ -74,12 +78,13 @@ unsafe extern "C" fn chain_find_by_contract(contract_id: u64, _min_version: u32)
 /// # Safety
 /// Always safe to call; delegates to chain_find_by_contract.
 unsafe extern "C" fn chain_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
     _bundle_id: u64,
     contract_id: u64,
     min_version: u32,
 ) -> PluginHandle {
     // SAFETY: chain_find_by_contract has no pointer preconditions.
-    unsafe { chain_find_by_contract(contract_id, min_version) }
+    unsafe { chain_find_by_contract(core::ptr::null_mut(), contract_id, min_version) }
 }
 
 /// find_all_by_contract stub — returns 0 (not needed for error chain tests).
@@ -87,6 +92,7 @@ unsafe extern "C" fn chain_find_by_bundle(
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
 unsafe extern "C" fn chain_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -99,7 +105,10 @@ unsafe extern "C" fn chain_find_all_by_contract(
 ///
 /// # Safety
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
-unsafe extern "C" fn chain_resolve_plugin(handle: PluginHandle) -> *const PluginVTable {
+unsafe extern "C" fn chain_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    handle: PluginHandle,
+) -> *const PluginVTable {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, Registry> = cell.borrow();
         registry.resolve(handle).unwrap_or(core::ptr::null())
@@ -110,18 +119,87 @@ unsafe extern "C" fn chain_resolve_plugin(handle: PluginHandle) -> *const Plugin
 ///
 /// # Safety
 /// Always safe to call; returns null pointer.
-unsafe extern "C" fn stub_get_extension(_extension_id: u32) -> *const () {
+unsafe extern "C" fn stub_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
+}
+
+/// Stub alloc callback.
+unsafe extern "C" fn stub_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_host_alloc(size, align)
+}
+
+/// Stub free callback.
+unsafe extern "C" fn stub_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
+    unsafe { polyplug_host_free(ptr, size, align) }
+}
+
+/// No-op find_by_contract callback.
+unsafe extern "C" fn noop_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle::null()
+}
+
+/// No-op find_by_bundle callback.
+unsafe extern "C" fn noop_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle::null()
+}
+
+/// No-op find_all_by_contract callback.
+unsafe extern "C" fn noop_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+/// No-op resolve_plugin callback.
+unsafe extern "C" fn noop_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _handle: PluginHandle,
+) -> *const PluginVTable {
+    core::ptr::null()
+}
+
+/// No-op get_extension callback.
+unsafe extern "C" fn noop_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
     core::ptr::null()
 }
 
 // ─── Registry callback ────────────────────────────────────────────────────────
 
-/// A registrar callback that stores vtable entries into the thread-local ERROR_REGISTRY.
+/// A register_plugin callback that stores vtable entries into the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
-/// `_registrar`, `descriptor`, and `vtable` must be valid for the call duration.
+/// `_rt_ctx`, `descriptor`, and `vtable` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -202,27 +280,38 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginVTable {
     // SAFETY: polyplug_init matches the expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: registry_register_callback,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: noop_find_by_contract,
+        find_by_bundle: noop_find_by_bundle,
+        find_all_by_contract: noop_find_all_by_contract,
+        resolve_plugin: noop_resolve_plugin,
+        get_extension: noop_get_extension,
     };
 
-    // SAFETY: init_fn is valid; registrar lives for the call duration.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };
@@ -357,8 +446,9 @@ fn stress_error_chain_b_errors_a_propagates() {
     // Build a HostVTable that routes find_by_contract and resolve_plugin through the
     // thread-local ERROR_REGISTRY that contains error_plugin's vtable.
     let chain_host_vtable: HostVTable = HostVTable {
-        alloc: polyplug_host_alloc,
-        free: polyplug_host_free,
+        register_plugin: registry_register_callback,
+        alloc: stub_alloc,
+        free: stub_free,
         find_by_contract: chain_find_by_contract,
         find_by_bundle: chain_find_by_bundle,
         find_all_by_contract: chain_find_all_by_contract,
@@ -373,6 +463,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // fn 1 returns ABI_ERROR_PANIC via its return value (not via *out),
     // so error_chain_propagate receives it as inner_result and writes it to *out.
     let chain_args: ChainArgs = ChainArgs {
+        rt_ctx: core::ptr::null_mut(),
         host: &chain_host_vtable as *const HostVTable,
         target_contract_id: error_contract_id,
         target_fn_id: 1_u32, // fn 1 = error_panic

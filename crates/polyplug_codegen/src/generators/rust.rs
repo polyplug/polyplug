@@ -831,10 +831,11 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::ABI_OK;\n");
     out.push_str("use polyplug_guest::ABI_ERROR_GENERIC;\n");
     out.push_str("use polyplug_guest::PluginDescriptor;\n");
-    out.push_str("use polyplug_guest::PluginRegistrar;\n");
+    out.push_str("use polyplug_guest::HostVTable;\n");
     out.push_str("use polyplug_guest::PluginVTable;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::PluginContext;\n");
+    out.push_str("use core::ffi::c_void;\n");
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
@@ -862,13 +863,19 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("/// Register all plugin vtables with the host.\n");
     out.push_str("///\n");
     out.push_str("/// # Safety\n");
-    out.push_str("/// `registrar` must be a valid non-null pointer to a PluginRegistrar.\n");
+    out.push_str("/// `rt_ctx` and `host` must be valid non-null pointers provided by the host.\n");
     out.push_str("#[unsafe(no_mangle)]\n");
     out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
-    out.push_str("    registrar: *mut PluginRegistrar,\n");
+    out.push_str("    rt_ctx: *mut c_void,\n");
+    out.push_str("    host: *const HostVTable,\n");
     out.push_str("    ctx: *const PluginContext,\n");
     out.push_str(") -> AbiError {\n");
-    out.push_str("    if registrar.is_null() {\n");
+    out.push_str("    if rt_ctx.is_null() {\n");
+    out.push_str(
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("    if host.is_null() {\n");
     out.push_str(
         "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
     );
@@ -883,8 +890,8 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str(
         "    let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated\n",
     );
-    out.push_str("    // SAFETY: registrar is non-null and valid per ABI contract.\n");
-    out.push_str("    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };\n\n");
+    out.push_str("    // SAFETY: host is non-null and valid per ABI contract.\n");
+    out.push_str("    let host: &HostVTable = unsafe { &*host };\n\n");
     // Call user initialization hook if it exists
     out.push_str("    // Call user initialization to register plugin implementations\n");
     out.push_str("    unsafe extern \"C\" {\n");
@@ -897,8 +904,8 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     if has_trace {
         out.push_str("    // Optional: trace extension\n");
         out.push_str("    const EXT_TRACE_ID: u32 = 0xC4EB9AEE_u32;\n");
-        out.push_str("    // SAFETY: reg.host is a valid HostVTable pointer set by the host.\n");
-        out.push_str("    let trace_vtable_ptr: *const () = unsafe { ((*reg.host).get_extension)(EXT_TRACE_ID) };\n");
+        out.push_str("    // SAFETY: host is a valid HostVTable pointer provided by the host.\n");
+        out.push_str("    let trace_vtable_ptr: *const () = unsafe { (host.get_extension)(EXT_TRACE_ID) };\n");
         out.push_str("    if trace_vtable_ptr.is_null() {\n");
         out.push_str("        // Trace extension not available — continue without tracing.\n");
         out.push_str("    }\n\n");
@@ -938,7 +945,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
             out.push_str(&format!(
-                "        (reg.register_plugin)(registrar, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const PluginVTable)\n"
+                "        (host.register_plugin)(rt_ctx, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const PluginVTable)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != ABI_OK {{\n"));
@@ -972,7 +979,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str("    // SAFETY: desc and vtable are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
-                "        (reg.register_plugin)(registrar, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const PluginVTable)\n"
+                "        (host.register_plugin)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const PluginVTable)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{upper}.code != ABI_OK {{\n"));

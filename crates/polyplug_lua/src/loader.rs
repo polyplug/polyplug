@@ -14,14 +14,16 @@ use mlua::Value;
 use crate::config::LuaConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::HostContext;
+use polyplug::runtime::Runtime;
+use polyplug_abi::contract_id;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::contract_id;
+use polyplug_abi::ABI_OK;
 
 /// The path to the guest-libs/lua/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
@@ -293,7 +295,7 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
-    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
+    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
         let lua: &Lua = ensure_lua_initialized(&self.config)?;
 
         // Clear globals from any previous load to ensure isolation.
@@ -324,6 +326,18 @@ impl BundleLoader for LuaLoader {
         // Extract bundle directory for package.path / package.cpath injection.
         let bundle_dir: std::path::PathBuf = path.parent().unwrap_or(path).to_path_buf();
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+
+        // Parse manifest to get bundle_id.
+        let manifest: ManifestData =
+            polyplug::loader::parse_manifest(&bundle_dir).map_err(PolyplugError::Loader)?;
+        if manifest.id == 0 {
+            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+                bundle: path.display().to_string(),
+                error: "manifest.id is required but was 0 or missing".to_owned(),
+            }));
+        }
+        let bundle_id: u64 = manifest.id;
+
         let bundle_dir_fwd: String = bundle_dir_str.replace('\\', "/");
         let path_code: String = format!(
             "package.path = \"{}/?.lua;{}/?.init.lua;\" .. package.path",
@@ -368,13 +382,19 @@ impl BundleLoader for LuaLoader {
                     })
                 })?;
 
-        // Pass registrar pointer as i64.
-        // PRECISION: LuaJIT lua_Integer is int64_t. Passing as i64 preserves all
-        // 64 address bits. The Lua side reconstructs via ffi.cast("uintptr_t", ...).
-        let registrar_ptr: i64 = registrar as *mut PluginRegistrar as usize as i64;
+        // Create HostContext for rt_ctx parameter.
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id,
+        };
+        let rt_ctx: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+
+        // Get host_vtable from runtime.
+        let host_vtable: &'static polyplug_abi::HostVTable = runtime.host_vtable();
 
         // Call polyplug_init — it populates _G._polyplug_handlers.
-        // Pass registrar pointer as first arg and PluginContext pointer as second arg.
+        // Pass rt_ctx, host_vtable pointer, and PluginContext pointer.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
         let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
@@ -383,10 +403,13 @@ impl BundleLoader for LuaLoader {
                 len: bundle_path_static.len(),
             },
             host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+            bundle_id,
         };
+        let rt_ctx_i64: i64 = rt_ctx as usize as i64;
+        let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::HostVTable as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
-            .call::<()>((registrar_ptr, ctx_ptr))
+            .call::<()>((rt_ctx_i64, host_vtable_i64, ctx_ptr))
             .map_err(|e: mlua::Error| {
                 PolyplugError::Loader(LoaderError::LuaInitRaisedError {
                     bundle: bundle_name.clone(),
@@ -526,14 +549,14 @@ impl BundleLoader for LuaLoader {
             version_patch: 0_u32,
         };
 
-        // Call register_plugin via the registrar.
-        // SAFETY: `registrar` is valid for this call (passed by the integration test or runtime).
+        // Call register_plugin via the HostVTable.
+        // SAFETY: `rt_ctx` is a valid HostContext pointer for this call.
         // `descriptor` is stack-allocated and valid for this call (register_plugin must copy
         // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
         // `vtable_ptr` is a leaked Box — valid for 'static lifetime.
         let reg_result: AbiError = unsafe {
-            (registrar.register_plugin)(
-                registrar as *mut PluginRegistrar,
+            (host_vtable.register_plugin)(
+                rt_ctx,
                 &descriptor as *const PluginDescriptor,
                 vtable_ptr,
             )

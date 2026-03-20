@@ -8,23 +8,23 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::ffi::{
-    OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
-    polyplug_runtime_error_message_len, polyplug_runtime_find_all_by_contract,
-    polyplug_runtime_find_by_contract, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
-    polyplug_runtime_resolve_plugin,
+    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
+    polyplug_runtime_find_all_by_contract, polyplug_runtime_find_by_contract,
+    polyplug_runtime_last_error, polyplug_runtime_load_bundle, polyplug_runtime_resolve_plugin,
+    OpaqueRuntime,
 };
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B;
 const NULL_HANDLE: u64 = u64::MAX;
 
-fn read_last_error() -> String {
-    let len: usize = unsafe { polyplug_runtime_error_message_len() };
+fn read_last_error(rt: *const OpaqueRuntime) -> String {
+    let len: usize = unsafe { polyplug_runtime_error_message_len(rt) };
     if len == 0 {
         return String::new();
     }
     let mut buf: Vec<u8> = vec![0u8; len];
-    let _written: usize = unsafe { polyplug_runtime_last_error(buf.as_mut_ptr(), len) };
+    let _written: usize = unsafe { polyplug_runtime_last_error(rt, buf.as_mut_ptr(), len) };
     String::from_utf8_lossy(&buf).into_owned()
 }
 
@@ -42,7 +42,7 @@ fn test_native_loader_ffi_workflow() {
     let path_bytes: &[u8] = TEST_PLUGIN_DIR.as_bytes();
     let result: u32 =
         unsafe { polyplug_runtime_load_bundle(rt, path_bytes.as_ptr(), path_bytes.len()) };
-    assert_eq!(result, 0, "load_bundle failed: {}", read_last_error());
+    assert_eq!(result, 0, "load_bundle failed: {}", read_last_error(rt));
 
     // 2. Find by contract
     let handle: u64 = unsafe { polyplug_runtime_find_by_contract(rt, TEST_ADD_CONTRACT_ID, 0) };
@@ -56,7 +56,7 @@ fn test_native_loader_ffi_workflow() {
     assert!(
         !vtable.is_null(),
         "polyplug_runtime_resolve_plugin returned null: {}",
-        read_last_error()
+        read_last_error(rt)
     );
 
     // 4. Find all by contract

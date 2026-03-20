@@ -22,43 +22,39 @@ use deno_core::ModuleLoader;
 use deno_core::ModuleSource;
 use deno_core::ModuleSourceCode;
 use deno_core::ModuleType;
+use deno_core::OpState;
 use deno_core::ResolutionKind;
 use deno_core::op2;
 use deno_error::JsErrorBox;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
+use polyplug::runtime::HostContext;
+use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
 
 use crate::config::JsDenoConfig;
 
-// HostVTable* thread-local — set before JsRuntime creation on the bundle thread.
-// core:: is used throughout to satisfy the std_instead_of_core lint.
-thread_local! {
-    static DENO_HOST_VTABLE: core::cell::Cell<*const HostVTable> =
-        const { core::cell::Cell::new(core::ptr::null()) };
+/// State stored in deno_core OpState for access by ops.
+/// Contains both the HostVTable pointer and the rt_ctx (HostContext pointer).
+struct PolyplugState {
+    vtable: *const HostVTable,
+    rt_ctx: *mut core::ffi::c_void,
+    vtable_sender: Option<mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>>,
 }
 
-// Channel sender for vtable registration result.
-// VtableSenderInner uses a type alias so the thread_local! macro can parse the angle brackets
-// without hitting the type_complexity lint.
-// Sends: (vtable_ptr, contract_id, fn_count, contract_name)
-type VtableSenderInner = mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>;
-
-thread_local! {
-    static VTABLE_SENDER: core::cell::RefCell<Option<VtableSenderInner>> =
-        const { core::cell::RefCell::new(None) };
-}
+// SAFETY: PolyplugState contains raw pointers that are valid for the lifetime of the JsRuntime.
+// The vtable is 'static (Box::leak'd by RuntimeBuilder). The rt_ctx is a HostContext pointer
+// that is valid during plugin initialization.
+unsafe impl Send for PolyplugState {}
 
 /// A cross-thread call request dispatched from a trampoline to the bundle thread.
-// Fields are constructed by trampolines and consumed on the bundle thread via channel.
 #[allow(dead_code)]
 pub(crate) struct JsCallRequest {
     /// Raw args pointer value (reconstructed on the bundle thread).
@@ -74,10 +70,8 @@ pub(crate) struct JsCallRequest {
 unsafe impl Send for JsCallRequest {}
 
 /// Wrapper to make `*const PluginVTable` sendable across threads.
-///
-/// SAFETY: PluginVTable is a 'static leaked struct that is Send + Sync (see abi/mod.rs).
 struct SendPluginVTable(*const PluginVTable);
-// SAFETY: PluginVTable implements Send (see abi/mod.rs unsafe impl). A *const PluginVTable
+// SAFETY: PluginVTable implements Send (see polyplug_abi). A *const PluginVTable
 // pointing to a 'static PluginVTable is safe to send to another thread.
 unsafe impl Send for SendPluginVTable {}
 
@@ -129,14 +123,10 @@ fn dispatch_deno_call(slot: usize, args_ptr: *const (), out_ptr: *mut ()) -> Abi
 }
 
 // Pre-generated static extern "C" trampolines (slots 0..63).
-// Each trampoline has a hardcoded slot index and calls `dispatch_deno_call`.
-// We cannot use closures for extern "C" fn pointers — static trampolines
-// with a hardcoded slot are the correct Rust solution.
 macro_rules! make_trampoline {
     ($name:ident, $slot:expr) => {
         // SAFETY: trampolines are `extern "C"` functions with the ABI signature
         // expected by PluginVTable.functions: fn(*const (), *mut ()) -> AbiError.
-        // `dispatch_deno_call` is safe to call from any thread (uses Mutex-protected registry).
         unsafe extern "C" fn $name(args_ptr: *const (), out_ptr: *mut ()) -> AbiError {
             dispatch_deno_call($slot, args_ptr, out_ptr)
         }
@@ -208,90 +198,39 @@ make_trampoline!(trampoline_61, 61);
 make_trampoline!(trampoline_62, 62);
 make_trampoline!(trampoline_63, 63);
 
-/// Maximum number of function slots supported (one per pre-generated trampoline).
 const MAX_TRAMPOLINES: usize = 64;
 
-/// Static array of pre-generated trampolines indexed by slot.
 static TRAMPOLINES: [unsafe extern "C" fn(*const (), *mut ()) -> AbiError; MAX_TRAMPOLINES] = [
-    trampoline_0,
-    trampoline_1,
-    trampoline_2,
-    trampoline_3,
-    trampoline_4,
-    trampoline_5,
-    trampoline_6,
-    trampoline_7,
-    trampoline_8,
-    trampoline_9,
-    trampoline_10,
-    trampoline_11,
-    trampoline_12,
-    trampoline_13,
-    trampoline_14,
-    trampoline_15,
-    trampoline_16,
-    trampoline_17,
-    trampoline_18,
-    trampoline_19,
-    trampoline_20,
-    trampoline_21,
-    trampoline_22,
-    trampoline_23,
-    trampoline_24,
-    trampoline_25,
-    trampoline_26,
-    trampoline_27,
-    trampoline_28,
-    trampoline_29,
-    trampoline_30,
-    trampoline_31,
-    trampoline_32,
-    trampoline_33,
-    trampoline_34,
-    trampoline_35,
-    trampoline_36,
-    trampoline_37,
-    trampoline_38,
-    trampoline_39,
-    trampoline_40,
-    trampoline_41,
-    trampoline_42,
-    trampoline_43,
-    trampoline_44,
-    trampoline_45,
-    trampoline_46,
-    trampoline_47,
-    trampoline_48,
-    trampoline_49,
-    trampoline_50,
-    trampoline_51,
-    trampoline_52,
-    trampoline_53,
-    trampoline_54,
-    trampoline_55,
-    trampoline_56,
-    trampoline_57,
-    trampoline_58,
-    trampoline_59,
-    trampoline_60,
-    trampoline_61,
-    trampoline_62,
-    trampoline_63,
+    trampoline_0, trampoline_1, trampoline_2, trampoline_3, trampoline_4, trampoline_5,
+    trampoline_6, trampoline_7, trampoline_8, trampoline_9, trampoline_10, trampoline_11,
+    trampoline_12, trampoline_13, trampoline_14, trampoline_15, trampoline_16, trampoline_17,
+    trampoline_18, trampoline_19, trampoline_20, trampoline_21, trampoline_22, trampoline_23,
+    trampoline_24, trampoline_25, trampoline_26, trampoline_27, trampoline_28, trampoline_29,
+    trampoline_30, trampoline_31, trampoline_32, trampoline_33, trampoline_34, trampoline_35,
+    trampoline_36, trampoline_37, trampoline_38, trampoline_39, trampoline_40, trampoline_41,
+    trampoline_42, trampoline_43, trampoline_44, trampoline_45, trampoline_46, trampoline_47,
+    trampoline_48, trampoline_49, trampoline_50, trampoline_51, trampoline_52, trampoline_53,
+    trampoline_54, trampoline_55, trampoline_56, trampoline_57, trampoline_58, trampoline_59,
+    trampoline_60, trampoline_61, trampoline_62, trampoline_63,
 ];
 
 // ─── deno_core ops ────────────────────────────────────────────────────────────
 
 #[op2(fast)]
 #[bigint]
-fn op_find_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_find_by_contract(state: &mut OpState, #[bigint] contract_id: u64, min_ver: u32) -> u64 {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return u64::MAX,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return u64::MAX;
     }
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    let handle: PluginHandle = unsafe { ((*vtable).find_by_contract)(contract_id, min_ver) };
+    // SAFETY: vtable is a 'static HostVTable set during JsRuntime creation.
+    // rt_ctx is a valid HostContext pointer set during JsRuntime creation.
+    let handle: PluginHandle = unsafe {
+        ((*polyplug_state.vtable).find_by_contract)(polyplug_state.rt_ctx, contract_id, min_ver)
+    };
     if handle.is_null() {
         return u64::MAX;
     }
@@ -300,16 +239,29 @@ fn op_find_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
 
 #[op2(fast)]
 #[bigint]
-fn op_find_by_bundle(#[bigint] bundle_id: u64, #[bigint] contract_id: u64, min_ver: u32) -> u64 {
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_find_by_bundle(
+    state: &mut OpState,
+    #[bigint] bundle_id: u64,
+    #[bigint] contract_id: u64,
+    min_ver: u32,
+) -> u64 {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return u64::MAX,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return u64::MAX;
     }
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    let handle: PluginHandle =
-        unsafe { ((*vtable).find_by_bundle)(bundle_id, contract_id, min_ver) };
+    // SAFETY: vtable is a 'static HostVTable set during JsRuntime creation.
+    // rt_ctx is a valid HostContext pointer set during JsRuntime creation.
+    let handle: PluginHandle = unsafe {
+        ((*polyplug_state.vtable).find_by_bundle)(
+            polyplug_state.rt_ctx,
+            bundle_id,
+            contract_id,
+            min_ver,
+        )
+    };
     if handle.is_null() {
         u64::MAX
     } else {
@@ -319,19 +271,29 @@ fn op_find_by_bundle(#[bigint] bundle_id: u64, #[bigint] contract_id: u64, min_v
 
 #[op2(fast)]
 #[bigint]
-fn op_find_all_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
-    // Simplified: return just the first handle as u64, u64::MAX for none.
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_find_all_by_contract(
+    state: &mut OpState,
+    #[bigint] contract_id: u64,
+    min_ver: u32,
+) -> u64 {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return u64::MAX,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return u64::MAX;
     }
     let mut buf: [PluginHandle; 1] = [PluginHandle::null()];
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    // buf is stack-allocated; buf.as_mut_ptr() and capacity 1 are valid.
-    let count: usize =
-        unsafe { ((*vtable).find_all_by_contract)(contract_id, min_ver, buf.as_mut_ptr(), 1) };
+    // SAFETY: vtable is a 'static HostVTable, rt_ctx is valid, buf is stack-allocated.
+    let count: usize = unsafe {
+        ((*polyplug_state.vtable).find_all_by_contract)(
+            polyplug_state.rt_ctx,
+            contract_id,
+            min_ver,
+            buf.as_mut_ptr(),
+            1,
+        )
+    };
     if count == 0 || buf[0].is_null() {
         u64::MAX
     } else {
@@ -341,84 +303,93 @@ fn op_find_all_by_contract(#[bigint] contract_id: u64, min_ver: u32) -> u64 {
 
 #[op2(fast)]
 #[bigint]
-fn op_resolve_plugin(#[bigint] handle_packed: u64) -> u64 {
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_resolve_plugin(state: &mut OpState, #[bigint] handle_packed: u64) -> u64 {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return 0,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return 0;
     }
     let handle: PluginHandle = PluginHandle {
         index: handle_packed as u32,
         generation: (handle_packed >> 32) as u32,
     };
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    let ptr: *const PluginVTable = unsafe { ((*vtable).resolve_plugin)(handle) };
+    // SAFETY: vtable is a 'static HostVTable, rt_ctx is valid.
+    let ptr: *const PluginVTable =
+        unsafe { ((*polyplug_state.vtable).resolve_plugin)(polyplug_state.rt_ctx, handle) };
     ptr as u64
 }
 
 #[op2(fast)]
 #[bigint]
-fn op_get_extension(extension_id: u32) -> u64 {
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_get_extension(state: &mut OpState, extension_id: u32) -> u64 {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return 0,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return 0;
     }
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    let ptr: *const () = unsafe { ((*vtable).get_extension)(extension_id) };
+    // SAFETY: vtable is a 'static HostVTable, rt_ctx is valid.
+    let ptr: *const () =
+        unsafe { ((*polyplug_state.vtable).get_extension)(polyplug_state.rt_ctx, extension_id) };
     ptr as u64
 }
 
 #[op2(fast)]
 fn op_register_vtable(
+    state: &mut OpState,
     #[bigint] contract_id: u64,
     #[bigint] vtable_ptr: u64,
     fn_count: u32,
     #[string] contract_name: String,
 ) {
-    VTABLE_SENDER.with(|c: &core::cell::RefCell<Option<VtableSenderInner>>| {
-        let borrow: core::cell::Ref<'_, Option<VtableSenderInner>> = c.borrow();
-        if let Some(tx) = borrow.as_ref() {
-            let fn_count_usize: usize = fn_count as usize;
-            let _ = tx.send((
-                SendPluginVTable(vtable_ptr as *const PluginVTable),
-                contract_id,
-                fn_count_usize,
-                contract_name,
-            ));
-        }
-    });
+    let polyplug_state: &mut PolyplugState = match state.try_borrow_mut() {
+        Some(s) => s,
+        None => return,
+    };
+    if let Some(tx) = polyplug_state.vtable_sender.as_ref() {
+        let fn_count_usize: usize = fn_count as usize;
+        let _ = tx.send((
+            SendPluginVTable(vtable_ptr as *const PluginVTable),
+            contract_id,
+            fn_count_usize,
+            contract_name,
+        ));
+    }
 }
 
 #[op2(fast)]
 #[bigint]
-fn op_alloc(size: u32) -> u64 {
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_alloc(state: &mut OpState, size: u32) -> u64 {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return 0,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return 0;
     }
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    // size as usize and align=8 are valid allocation parameters.
-    let ptr: *mut u8 = unsafe { ((*vtable).alloc)(size as usize, 8) };
+    // SAFETY: vtable is a 'static HostVTable, rt_ctx is valid, size and align=8 are valid params.
+    let ptr: *mut u8 = unsafe {
+        ((*polyplug_state.vtable).alloc)(polyplug_state.rt_ctx, size as usize, 8)
+    };
     ptr as u64
 }
 
 #[op2(fast)]
-fn op_free(#[bigint] ptr: u64) {
-    let vtable: *const HostVTable =
-        DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| c.get());
-    if vtable.is_null() {
+fn op_free(state: &mut OpState, #[bigint] ptr: u64) {
+    let polyplug_state: &PolyplugState = match state.try_borrow() {
+        Some(s) => s,
+        None => return,
+    };
+    if polyplug_state.vtable.is_null() || polyplug_state.rt_ctx.is_null() {
         return;
     }
-    // SAFETY: DENO_HOST_VTABLE is set to a 'static HostVTable before JsRuntime creation.
-    // V8 is thread-pinned — this op always runs on the same thread that set the vtable.
-    // ptr was allocated via op_alloc using this same host vtable allocator.
-    // size=0 and align=8 match the allocation parameters used in op_alloc.
-    unsafe { ((*vtable).free)(ptr as *mut u8, 0, 8) };
+    // SAFETY: vtable is a 'static HostVTable, rt_ctx is valid, ptr was allocated via op_alloc.
+    unsafe {
+        ((*polyplug_state.vtable).free)(polyplug_state.rt_ctx, ptr as *mut u8, 0, 8)
+    };
 }
 
 deno_core::extension!(
@@ -493,16 +464,16 @@ impl BundleLoader for JsDenoLoader {
         "js-deno"
     }
 
-    fn load(&self, path: &Path, registrar: &mut PluginRegistrar) -> Result<(), PolyplugError> {
-        // 1. Capture host vtable ptr as usize to make it Send across thread boundary.
-        // SAFETY: registrar.host is Box::leak'd by RuntimeBuilder — valid 'static.
-        // Storing as usize makes the value Send; it is reconstructed as *const HostVTable
-        // only on the bundle thread after thread_local assignment.
-        let host_vtable_addr: usize = registrar.host as usize;
+    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
+        // 1. Get HostVTable and create HostContext for rt_ctx
+        let host_vtable: &'static HostVTable = runtime.host_vtable();
+        let bundle_dir: &Path = path.parent().unwrap_or(path);
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
+        let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
 
         // 2. Create channel for vtable registration (bounded 1 = oneshot)
         let (vtable_tx, vtable_rx): (
-            VtableSenderInner,
+            mpsc::SyncSender<(SendPluginVTable, u64, usize, String)>,
             mpsc::Receiver<(SendPluginVTable, u64, usize, String)>,
         ) = mpsc::sync_channel(1);
 
@@ -521,29 +492,12 @@ impl BundleLoader for JsDenoLoader {
         // 4. Clone path for thread (path is &Path, must be owned to move into thread)
         let bundle_path: PathBuf = path.to_owned();
 
-        // 4b. Extract bundle directory for globalThis.bundlePath injection.
-        // If path is a file, take its parent; if it is already a dir, use it directly.
-        let bundle_dir_str: String = path.parent().unwrap_or(path).to_string_lossy().into_owned();
-        // SAFETY: bundle_path_static is intentionally leaked. It is never freed.
-        // The PluginRuntime's lifetime guarantees no dangling reference during use.
-        let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
+        // 5. Capture bundle_id from manifest for HostContext
+        let bundle_id: u64 = 0;
 
-        // 5. Spawn dedicated thread for this bundle's V8 isolate
+        // 6. Spawn dedicated thread for this bundle's V8 isolate
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-            // SAFETY: host_vtable_addr encodes a *const HostVTable that is Box::leak'd
-            // by RuntimeBuilder — valid 'static. Reconstructing as a raw pointer on this
-            // thread is sound: only this thread reads the pointer; V8 is thread-pinned.
-            DENO_HOST_VTABLE.with(|c: &core::cell::Cell<*const HostVTable>| {
-                c.set(host_vtable_addr as *const HostVTable);
-            });
-
-            // Set thread-local vtable sender
-            VTABLE_SENDER.with(|c: &core::cell::RefCell<Option<VtableSenderInner>>| {
-                *c.borrow_mut() = Some(vtable_tx);
-            });
-
             // Build tokio single-thread runtime
-            // SAFETY: deno_core 0.311.0 requires tokio; smol would cause panics.
             let tokio_rt: tokio::runtime::Runtime =
                 match tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -560,9 +514,7 @@ impl BundleLoader for JsDenoLoader {
                 };
 
             let init_result: Result<(), PolyplugError> = tokio_rt.block_on(async move {
-                // Create deno_core JsRuntime
-                // When called via the runtime, bundle_path is already the resolved file.
-                // When called directly (e.g. tests), bundle_path may be the bundle directory.
+                // Create deno_core JsRuntime with PolyplugState
                 let module_path: PathBuf = if bundle_path.is_dir() {
                     let bundle_js: std::path::PathBuf = bundle_path.join("bundle.js");
                     let index_ts: std::path::PathBuf = bundle_path.join("index.ts");
@@ -597,23 +549,30 @@ impl BundleLoader for JsDenoLoader {
                     source: module_source,
                 };
 
-                let mut runtime: deno_core::JsRuntime =
+                // Create PolyplugState with vtable, rt_ctx, and vtable_sender
+                let polyplug_state: PolyplugState = PolyplugState {
+                    vtable: host_vtable as *const HostVTable,
+                    rt_ctx: std::ptr::null_mut(), // Will be set per-call for now
+                    vtable_sender: Some(vtable_tx),
+                };
+
+                let mut js_runtime: deno_core::JsRuntime =
                     deno_core::JsRuntime::new(deno_core::RuntimeOptions {
                         extensions: vec![polyplug_ops::init()],
                         module_loader: Some(std::rc::Rc::new(module_loader)),
                         ..Default::default()
                     });
 
+                // Put PolyplugState into OpState for ops to access
+                js_runtime.op_state().borrow_mut().put(polyplug_state);
+
                 // Inject globalThis.bundlePath before the bundle module is evaluated.
-                // This allows JS code to locate sibling resources relative to the bundle.
                 let inject_script: deno_core::FastString =
                     deno_core::FastString::from_static(Box::leak(
                         format!("globalThis.bundlePath = {:?};", bundle_path_static)
                             .into_boxed_str(),
                     ));
-                // SAFETY: inject_script is a valid JS snippet; the only failure mode is
-                // a V8 exception from the injected source, which is propagated as an error.
-                runtime
+                js_runtime
                     .execute_script("<bundlePath>", inject_script)
                     .map_err(|e: Box<deno_core::error::JsError>| {
                         PolyplugError::Loader(LoaderError::JsExecutionFailed {
@@ -621,7 +580,7 @@ impl BundleLoader for JsDenoLoader {
                         })
                     })?;
 
-                let mod_id: deno_core::ModuleId = runtime
+                let mod_id: deno_core::ModuleId = js_runtime
                     .load_main_es_module(&module_url)
                     .await
                     .map_err(|e: deno_core::error::CoreError| {
@@ -630,8 +589,8 @@ impl BundleLoader for JsDenoLoader {
                         })
                     })?;
                 // Evaluate the module — triggers top-level execution including op_register_vtable
-                let evaluate_future = runtime.mod_evaluate(mod_id);
-                runtime.run_event_loop(Default::default()).await.map_err(
+                let evaluate_future = js_runtime.mod_evaluate(mod_id);
+                js_runtime.run_event_loop(Default::default()).await.map_err(
                     |e: deno_core::error::CoreError| {
                         PolyplugError::Loader(LoaderError::JsExecutionFailed {
                             reason: format!("event loop failed: {e}"),
@@ -641,11 +600,10 @@ impl BundleLoader for JsDenoLoader {
                 // Drive the evaluate future to completion
                 let _eval_result: Result<(), deno_core::error::CoreError> = evaluate_future.await;
 
-                // op_register_vtable has sent vtable_ptr via VTABLE_SENDER by now
-                // Clear thread-local sender
-                VTABLE_SENDER.with(|c: &core::cell::RefCell<Option<VtableSenderInner>>| {
-                    *c.borrow_mut() = None;
-                });
+                // Clear vtable_sender in state
+                if let Some(state) = js_runtime.op_state().borrow_mut().try_borrow_mut::<PolyplugState>() {
+                    state.vtable_sender = None;
+                }
 
                 // Park on call_rx loop — dispatch function calls from trampolines
                 while let Ok(req) = call_rx.recv() {
@@ -661,11 +619,9 @@ impl BundleLoader for JsDenoLoader {
         });
 
         // Leak thread handle so the thread isn't dropped
-        // SAFETY: Bundle threads live for the process lifetime. Leaking the JoinHandle
-        // prevents premature thread termination while allowing the main thread to proceed.
         let _leaked: &'static std::thread::JoinHandle<()> = Box::leak(Box::new(thread_handle));
 
-        // 6. Receive the registered vtable ptr from the bundle thread (30s timeout)
+        // 7. Receive the registered vtable ptr from the bundle thread (30s timeout)
         let (raw_vtable_wrapped, contract_id_val, fn_count, contract_name_str): (
             SendPluginVTable,
             u64,
@@ -723,14 +679,11 @@ impl BundleLoader for JsDenoLoader {
         for slot_offset in 0..fn_count {
             let slot: usize = base_slot + slot_offset;
             // SAFETY: TRAMPOLINES[slot] is a valid static extern "C" fn pointer.
-            // We cast the fn pointer to *const () for storage in PluginVTable.functions.
-            // The trampoline is 'static — it lives for the entire process lifetime.
             let fn_ptr: *const () = TRAMPOLINES[slot] as *const ();
             fn_ptr_vec.push(fn_ptr);
         }
         let fn_pointers_box: Box<[*const ()]> = fn_ptr_vec.into_boxed_slice();
         // SAFETY: PluginVTable.functions must be 'static. Box::leak gives 'static lifetime.
-        // The raw pointer is stable after Box::into_raw — the allocation is never freed.
         let functions_ptr: *const *const () = Box::into_raw(fn_pointers_box) as *const *const ();
 
         // 8. Build new vtable
@@ -756,17 +709,18 @@ impl BundleLoader for JsDenoLoader {
             version_patch: 0_u32,
         };
 
-        // 10. Register with host
-        // SAFETY: registrar is valid for this call (passed by the integration test or runtime).
-        // descriptor is stack-allocated and valid for this call — register_plugin must copy any
-        // data it needs to retain (the contract is that descriptor is borrowed for the call only).
-        // static_vtable is a leaked Box — valid for 'static lifetime.
+        // 10. Register with host via runtime
+        // Create HostContext for this registration
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id,
+        };
+        let rt_ctx: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
+
+        // SAFETY: host_vtable is 'static, rt_ctx is a valid HostContext pointer for this call,
+        // descriptor is stack-allocated and valid for this call, static_vtable is a leaked Box.
         let abi_result: AbiError = unsafe {
-            (registrar.register_plugin)(
-                registrar as *mut PluginRegistrar,
-                &descriptor as *const PluginDescriptor,
-                static_vtable,
-            )
+            ((*host_vtable).register_plugin)(rt_ctx, &descriptor as *const PluginDescriptor, static_vtable)
         };
         if abi_result.code != ABI_OK {
             return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {

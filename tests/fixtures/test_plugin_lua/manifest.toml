@@ -1,11 +1,11 @@
 # THIS FILE IS PART OF THE POLYPLUG TEST FIXTURES
 # DO NOT EDIT BY HAND
-name = "test_bundle"
-id = 419834959575526542
-bundle_name = "test_bundle"
+name = "test_plugin_lua"
+id = 5209787328123112756
+bundle_name = "test_plugin_lua"
 version = "1.0.0"
-runtime = "js-quickjs"
-file = "bundle.js"
+runtime = "lua"
+file = "test_plugin.lua"
 provides = ["test.add@1"]
 needs_reinit_on_dep_reload = false
 

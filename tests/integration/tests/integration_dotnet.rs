@@ -6,14 +6,12 @@
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -55,56 +53,6 @@ struct AddArgs {
     b: u32,
 }
 
-// ─── Thread-local Registry for capturing vtable registrations ─────────────────
-
-/// Registrar callback that stores vtable entries into the thread-local Registry.
-///
-/// # Safety
-/// `_registrar`, `descriptor`, and `vtable` must be valid for the call duration.
-unsafe extern "C" fn registry_register_callback(
-    _registrar: *mut PluginRegistrar,
-    descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
-) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
-        return AbiError {
-            code: 1,
-            message: StringView::null(),
-        };
-    }
-    // SAFETY: descriptor and vtable are valid for this call (ABI contract).
-    let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
-    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
-    let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
-    };
-    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, _> = DOTNET_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
-    });
-    match result {
-        Ok(_) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(_) => AbiError {
-            code: 1,
-            message: StringView::null(),
-        },
-    }
-}
-
-std::thread_local! {
-    static DOTNET_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
-}
-
 // ─── Helper: make loader and load fixture DLL ────────────────────────────────
 
 fn make_loader() -> DotnetLoader {
@@ -114,26 +62,23 @@ fn make_loader() -> DotnetLoader {
     })
 }
 
-fn load_fixture() -> Result<(), PolyplugError> {
-    let loader: DotnetLoader = make_loader();
-    DOTNET_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    loader.load(std::path::Path::new(CSHARP_DLL), &mut registrar)
+fn create_runtime() -> Runtime {
+    Runtime::builder()
+        .loader(make_loader())
+        .build()
+        .expect("failed to build runtime")
 }
 
-fn get_vtable() -> *const PluginVTable {
+fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
+    rt.load_bundle(std::path::Path::new(CSHARP_DLL))
+}
+
+fn get_vtable(rt: &Runtime) -> *const PluginVTable {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = DOTNET_REGISTRY.with(|cell| {
-        cell.borrow()
-            .find(contract_id, 0)
-            .expect("test.add must be registered after load_fixture()")
-    });
-    DOTNET_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"))
+    let handle: PluginHandle = rt
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load_fixture()");
+    rt.resolve_plugin(handle).expect("handle must be valid")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -148,7 +93,8 @@ fn integration_dotnet_loader_registration() {
 #[test]
 fn integration_dotnet_bundle_loads() {
     skip_if_no_dotnet!();
-    let result: Result<(), PolyplugError> = load_fixture();
+    let rt: Runtime = create_runtime();
+    let result: Result<(), PolyplugError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
         "DotnetLoader::load() must succeed for fixture DLL: {:?}",
@@ -159,8 +105,9 @@ fn integration_dotnet_bundle_loads() {
 #[test]
 fn integration_dotnet_add() {
     skip_if_no_dotnet!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid (CLR keeps assembly loaded for process lifetime).
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -188,8 +135,9 @@ fn integration_dotnet_add() {
 #[test]
 fn integration_dotnet_add_primitive() {
     skip_if_no_dotnet!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid, CLR keeps assembly loaded.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -218,8 +166,9 @@ fn integration_dotnet_add_primitive() {
 #[test]
 fn integration_dotnet_version_string() {
     skip_if_no_dotnet!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -249,8 +198,9 @@ fn integration_dotnet_version_string() {
 #[test]
 fn integration_dotnet_reset() {
     skip_if_no_dotnet!();
-    load_fixture().expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let rt: Runtime = create_runtime();
+    load_fixture(&rt).expect("fixture must load");
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -277,16 +227,14 @@ fn integration_dotnet_reset() {
 #[test]
 fn integration_dotnet_wrong_major_version_rejected() {
     skip_if_no_dotnet!();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net99.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(CSHARP_DLL), &mut registrar);
+    let rt: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net99.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
         Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch for net99.0, got: {other:?}"),
@@ -298,31 +246,14 @@ fn integration_dotnet_clr_shared_across_loads() {
     skip_if_no_dotnet!();
     // Load the fixture twice using the same DotnetLoader.
     // CLR is a global once-initialized singleton — second load must succeed.
-    let loader: DotnetLoader = make_loader();
-    DOTNET_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-    let mut registrar1: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result1: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(CSHARP_DLL), &mut registrar1);
+    let rt: Runtime = create_runtime();
+    let result1: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result1.is_ok(),
         "first load must succeed: {:?}",
         result1.err()
     );
-    // Reset registry so second load can re-register
-    DOTNET_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-    let mut registrar2: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result2: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(CSHARP_DLL), &mut registrar2);
+    let result2: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result2.is_ok(),
         "second load (CLR shared) must succeed: {:?}",
@@ -347,16 +278,14 @@ fn pelite_reads_target_framework() {
 #[test]
 fn version_mismatch_pelite() {
     skip_if_no_dotnet!();
-    let loader: DotnetLoader = DotnetLoader::new(DotnetConfig {
-        min_framework: String::from("net99.0"),
-        hostfxr: HostfxrLocation::Auto,
-    });
-    let mut registrar: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result: Result<(), PolyplugError> =
-        loader.load(std::path::Path::new(CSHARP_DLL), &mut registrar);
+    let rt: Runtime = Runtime::builder()
+        .loader(DotnetLoader::new(DotnetConfig {
+            min_framework: String::from("net99.0"),
+            hostfxr: HostfxrLocation::Auto,
+        }))
+        .build()
+        .expect("failed to build runtime");
+    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
         Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch, got: {other:?}"),
@@ -367,28 +296,14 @@ fn version_mismatch_pelite() {
 fn delegate_loader_cached_across_loads() {
     skip_if_no_dotnet!();
     // Load the same DLL twice — both must succeed, proving AssemblyDelegateLoader is cached and reused
-    let loader: DotnetLoader = make_loader();
-    DOTNET_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-    let mut r1: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result1: Result<(), PolyplugError> = loader.load(std::path::Path::new(CSHARP_DLL), &mut r1);
+    let rt: Runtime = create_runtime();
+    let result1: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result1.is_ok(),
         "first load must succeed: {:?}",
         result1.err()
     );
-    DOTNET_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-    let mut r2: PluginRegistrar = PluginRegistrar {
-        register_plugin: registry_register_callback,
-        host: core::ptr::null(),
-    };
-    let result2: Result<(), PolyplugError> = loader.load(std::path::Path::new(CSHARP_DLL), &mut r2);
+    let result2: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result2.is_ok(),
         "second load (cached loader) must succeed: {:?}",

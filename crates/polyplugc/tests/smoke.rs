@@ -10,13 +10,14 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
+use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginRegistrar;
+use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -112,8 +113,10 @@ use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::AbiError;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginError;
-use polyplug_guest::PluginRegistrar;
+use polyplug_guest::HostVTable;
+use polyplug_guest::PluginContext;
 use polyplug_guest::StringView;
+use core::ffi::c_void;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
 use guest::vtables::TEST_ADDER_IMPL;
@@ -139,20 +142,22 @@ impl TestAddPlugin for MyPlugin {
     }
 }
 
+static MY_PLUGIN: MyPlugin = MyPlugin;
 
 /// # Safety
-/// `registrar` must be a valid non-null pointer to a `PluginRegistrar`.
+/// `rt_ctx` and `host` must be valid non-null pointers provided by the host.
 #[no_mangle]
-pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
-    // Set the OnceLock impl before any vtable function can be called.
-    TEST_ADDER_IMPL.get_or_init(|| Box::new(MyPlugin));
-
-    if registrar.is_null() {
+pub unsafe extern "C" fn polyplug_init(
+    rt_ctx: *mut c_void,
+    host: *const HostVTable,
+    _ctx: *const PluginContext,
+) -> AbiError {
+    if host.is_null() {
         return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
     }
 
-    // SAFETY: registrar is non-null and valid per ABI contract.
-    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
+    // SAFETY: host is non-null and valid per ABI contract.
+    let host: &HostVTable = unsafe { &*host };
 
     let desc: PluginDescriptor = PluginDescriptor {
         name: StringView { ptr: b"smoke_test_plugin".as_ptr(), len: 17_usize },
@@ -162,10 +167,10 @@ pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiEr
         version_patch: 0_u32,
     };
 
-    // SAFETY: desc and TEST_ADDER_VTABLE are 'static; registrar is valid.
+    // SAFETY: desc and TEST_ADDER_VTABLE are 'static; host is valid.
     unsafe {
-        (reg.register_plugin)(
-            registrar,
+        (host.register_plugin)(
+            rt_ctx,
             &desc as *const PluginDescriptor,
             &TEST_ADDER_VTABLE as *const _,
         )
@@ -176,20 +181,20 @@ pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiEr
     std::fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
 }
 
-// ─── Registrar callback capturing the vtable pointer ─────────────────────────
+// ─── HostVTable callback capturing the vtable pointer ─────────────────────────
 
-// Captured vtable pointer from the registrar callback, stored in a thread-local.
+// Captured vtable pointer from the register_plugin callback, stored in a thread-local.
 std::thread_local! {
     static CAPTURED_VTABLE: core::cell::Cell<*const PluginVTable> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
-/// Registrar callback that captures the vtable pointer into `CAPTURED_VTABLE`.
+/// Register_plugin callback that captures the vtable pointer into `CAPTURED_VTABLE`.
 ///
 /// # Safety
 /// `descriptor` and `vtable` must be valid for the duration of the call.
 unsafe extern "C" fn capture_vtable_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
     vtable: *const PluginVTable,
 ) -> AbiError {
@@ -205,6 +210,72 @@ unsafe extern "C" fn capture_vtable_callback(
 struct AddArgs {
     a: u32,
     b: u32,
+}
+
+// ─── HostVTable stub functions ─────────────────────────────────────────────────
+
+unsafe extern "C" fn stub_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_abi::ffi::polyplug_host_alloc(size, align)
+}
+
+unsafe extern "C" fn stub_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
+}
+
+unsafe extern "C" fn stub_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
+}
+
+unsafe extern "C" fn stub_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
+    _bundle_id: u64,
+    _contract_id: u64,
+    _min_version: u32,
+) -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
+    }
+}
+
+unsafe extern "C" fn stub_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    _contract_id: u64,
+    _min_version: u32,
+    _out: *mut PluginHandle,
+    _out_cap: usize,
+) -> usize {
+    0
+}
+
+unsafe extern "C" fn stub_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    _handle: PluginHandle,
+) -> *const PluginVTable {
+    core::ptr::null()
+}
+
+unsafe extern "C" fn stub_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
+    core::ptr::null()
 }
 
 // ─── Test 1: Rust codegen round-trip ─────────────────────────────────────────
@@ -272,30 +343,42 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
-        unsafe extern "C" fn(*mut PluginRegistrar, *const PluginContext) -> AbiError,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError,
     > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found")
     };
 
-    // ── 8. Build registrar + call polyplug_init ───────────────────────────────
+    // ── 8. Build HostVTable + call polyplug_init ───────────────────────────────
     CAPTURED_VTABLE.with(|cell| cell.set(core::ptr::null()));
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: capture_vtable_callback,
-        host: core::ptr::null(),
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: stub_find_by_contract,
+        find_by_bundle: stub_find_by_bundle,
+        find_all_by_contract: stub_find_all_by_contract,
+        resolve_plugin: stub_resolve_plugin,
+        get_extension: stub_get_extension,
     };
 
-    // SAFETY: init_fn is valid; registrar lives for the duration of the call.
+    // SAFETY: init_fn is valid; host_vtable lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; registrar and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            &mut registrar as *mut PluginRegistrar,
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
             &ctx as *const PluginContext,
         )
     };

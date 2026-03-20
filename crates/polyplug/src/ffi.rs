@@ -1,15 +1,9 @@
 //! FFI — public `#[no_mangle]` C ABI entry points for host language bindings.
 //!
 //! All functions use `catch_unwind` to prevent Rust panics from unwinding across
-//! the C ABI boundary. Errors are stored in a thread-local `LAST_ERROR` string.
+//! the C ABI boundary. Errors are stored per-runtime in the Runtime's last_error field.
 
 #![allow(clippy::std_instead_of_core)]
-
-use core::cell::Ref;
-use core::cell::RefCell;
-use core::sync::atomic::AtomicPtr;
-use core::sync::atomic::Ordering;
-use std::sync::OnceLock;
 
 use crate::loader::BundleLoader;
 use crate::reload::ReloadPhase;
@@ -18,10 +12,6 @@ use crate::runtime::RuntimeConfig;
 use polyplug_abi::PluginHandle;
 
 pub struct OpaqueRuntime(pub Runtime);
-
-thread_local! {
-    static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
-}
 
 // ─── C-compatible types for hot-reload notification ───────────────────────────
 
@@ -161,45 +151,7 @@ impl RuntimeConfigC {
     }
 }
 
-// ─── Global storage for pre-build configuration ───────────────────────────────
-
-/// Type alias for the C reload callback function pointer.
-type ReloadCallbackC = extern "C" fn(ReloadPhaseC);
-
-/// Global storage for the reload callback set via `polyplug_runtime_on_reload`.
-///
-/// Uses `AtomicPtr` to store the function pointer. A null pointer indicates
-/// no callback has been registered.
-static GLOBAL_RELOAD_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
-
-/// Global storage for the runtime config set via `polyplug_runtime_set_config`.
-static GLOBAL_CONFIG: OnceLock<RuntimeConfig> = OnceLock::new();
-
-/// Wrapper that converts the C callback to a Rust callback.
-///
-/// This function is called by the runtime when a reload phase changes.
-/// It reads the stored C callback and invokes it with the C-compatible struct.
-fn invoke_reload_callback(phase: ReloadPhase) {
-    let cb_ptr: *mut () = GLOBAL_RELOAD_CB.load(Ordering::Relaxed);
-    if cb_ptr.is_null() {
-        return;
-    }
-    // SAFETY: cb_ptr was stored by polyplug_runtime_on_reload from a valid
-    // extern "C" function pointer. The pointer remains valid for the process
-    // lifetime (function pointers are 'static). The transmute is safe because
-    // we only store function pointers of the correct type.
-    let cb: ReloadCallbackC = unsafe { core::mem::transmute(cb_ptr) };
-    let phase_c: ReloadPhaseC = ReloadPhaseC::from_reload_phase(&phase);
-    cb(phase_c);
-}
-
-pub fn set_last_error_pub(msg: &str) {
-    set_last_error(msg);
-}
-
-fn set_last_error(msg: impl Into<String>) {
-    LAST_ERROR.with(|e| *e.borrow_mut() = msg.into());
-}
+// ─── Helper functions ──────────────────────────────────────────────────────────
 
 fn pack_handle(h: PluginHandle) -> u64 {
     if h.is_null() {
@@ -220,10 +172,7 @@ fn unpack_handle(packed: u64) -> PluginHandle {
     }
 }
 
-/// Creates a new runtime instance.
-///
-/// Applies any configuration set via `polyplug_runtime_set_config` and any
-/// reload callback registered via `polyplug_runtime_on_reload`.
+/// Creates a new runtime instance with default configuration.
 ///
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
@@ -231,90 +180,62 @@ fn unpack_handle(packed: u64) -> PluginHandle {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create() -> *mut OpaqueRuntime {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match Runtime::builder().build() {
+            Ok(rt) => Box::into_raw(Box::new(OpaqueRuntime(rt))),
+            Err(_) => core::ptr::null_mut(),
+        }
+    }))
+    .unwrap_or(core::ptr::null_mut())
+}
+
+/// Options for creating a runtime instance.
+#[repr(C)]
+pub struct RuntimeCreateOptions {
+    /// Pointer to RuntimeConfigC, or null for default config.
+    pub config: *const RuntimeConfigC,
+    /// Reload callback function pointer, or null for no callback.
+    pub on_reload: Option<extern "C" fn(ReloadPhaseC)>,
+}
+
+/// Creates a new runtime instance with the specified options.
+///
+/// # Safety
+/// - If `options` is non-null, it must point to a valid `RuntimeCreateOptions` struct.
+/// - If `options.config` is non-null, it must point to a valid `RuntimeConfigC` struct.
+/// - Safe to call from any thread.
+/// - Returns null on allocation failure or panic.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_create_with_options(
+    options: *const RuntimeCreateOptions,
+) -> *mut OpaqueRuntime {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut builder = Runtime::builder();
 
-        if let Some(config) = GLOBAL_CONFIG.get() {
-            builder = builder.config(config.clone());
-        }
+        if !options.is_null() {
+            // SAFETY: options is non-null and points to a valid RuntimeCreateOptions per ABI contract.
+            let opts: &RuntimeCreateOptions = unsafe { &*options };
 
-        let cb_ptr: *mut () = GLOBAL_RELOAD_CB.load(Ordering::Relaxed);
-        if !cb_ptr.is_null() {
-            builder = builder.on_reload(invoke_reload_callback);
+            if !opts.config.is_null() {
+                // SAFETY: opts.config is non-null and points to a valid RuntimeConfigC per ABI contract.
+                let config_c: RuntimeConfigC = unsafe { *opts.config };
+                let runtime_config: RuntimeConfig = config_c.into_runtime_config();
+                builder = builder.config(runtime_config);
+            }
+
+            if let Some(cb) = opts.on_reload {
+                builder = builder.on_reload(move |phase: ReloadPhase| {
+                    let phase_c: ReloadPhaseC = ReloadPhaseC::from_reload_phase(&phase);
+                    cb(phase_c);
+                });
+            }
         }
 
         match builder.build() {
             Ok(rt) => Box::into_raw(Box::new(OpaqueRuntime(rt))),
-            Err(e) => {
-                set_last_error(e.to_string());
-                core::ptr::null_mut()
-            }
+            Err(_) => core::ptr::null_mut(),
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_create");
-        core::ptr::null_mut()
-    })
-}
-
-/// Register a callback to be invoked during hot-reload operations.
-///
-/// The callback is invoked at each phase of a hot-reload:
-/// - `Preparing`: Before vtable swap, includes retry count
-/// - `Reloaded`: After successful vtable swap
-/// - `Failed`: When reload fails, includes reason string
-///
-/// The callback is applied to all subsequently created runtimes.
-/// Call before `polyplug_runtime_create`.
-///
-/// # Safety
-/// `callback` must be a valid function pointer with C calling convention.
-/// The callback must not panic. The callback receives borrowed string
-/// pointers that are valid only for the duration of the call.
-///
-/// # Returns
-/// 0 on success, non-zero on error.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_on_reload(callback: extern "C" fn(ReloadPhaseC)) -> u32 {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let ptr: *mut () = callback as *mut ();
-        GLOBAL_RELOAD_CB.store(ptr, Ordering::Relaxed);
-        0u32
-    }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_on_reload");
-        1u32
-    })
-}
-
-/// Set runtime configuration for subsequently created runtimes.
-///
-/// Must be called before `polyplug_runtime_create`. The configuration
-/// is applied to all subsequently created runtimes.
-///
-/// # Safety
-/// `config` must be a valid pointer to a `RuntimeConfigC` struct.
-///
-/// # Returns
-/// 0 on success, non-zero on error.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_set_config(config: *const RuntimeConfigC) -> u32 {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if config.is_null() {
-            set_last_error("null config pointer in polyplug_runtime_set_config");
-            return 1u32;
-        }
-        // SAFETY: config is non-null and points to a valid RuntimeConfigC per ABI contract.
-        let config_c: RuntimeConfigC = unsafe { *config };
-        let runtime_config: RuntimeConfig = config_c.into_runtime_config();
-        // OnceLock::set returns Err when already set — we allow overwriting by ignoring the result.
-        // This matches the pattern used for GLOBAL_WARNING_CB in runtime.rs.
-        let _: Result<(), RuntimeConfig> = GLOBAL_CONFIG.set(runtime_config);
-        0u32
-    }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_set_config");
-        1u32
-    })
+    .unwrap_or(core::ptr::null_mut())
 }
 
 /// Destroys a runtime instance.
@@ -330,9 +251,7 @@ pub unsafe extern "C" fn polyplug_runtime_destroy(rt: *mut OpaqueRuntime) {
             drop(unsafe { Box::from_raw(rt) });
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_destroy");
-    });
+    .unwrap_or(());
 }
 
 /// Loads a plugin bundle.
@@ -348,13 +267,14 @@ pub unsafe extern "C" fn polyplug_runtime_load_bundle(
 ) -> u32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
-            set_last_error("null runtime");
             return 1u32;
         }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         if path.is_null() {
-            set_last_error("null path pointer in polyplug_runtime_load_bundle");
+            runtime
+                .0
+                .set_last_error("null path pointer in polyplug_runtime_load_bundle");
             return 1u32;
         }
         // SAFETY: path is non-null and points to path_len valid UTF-8 bytes per ABI contract.
@@ -362,22 +282,19 @@ pub unsafe extern "C" fn polyplug_runtime_load_bundle(
         let s: &str = match core::str::from_utf8(bytes) {
             Ok(s) => s,
             Err(e) => {
-                set_last_error(e.to_string());
+                runtime.0.set_last_error(e.to_string());
                 return 1u32;
             }
         };
         match runtime.0.load_bundle(std::path::Path::new(s)) {
             Ok(()) => 0u32,
             Err(e) => {
-                set_last_error(e.to_string());
+                runtime.0.set_last_error(e.to_string());
                 1u32
             }
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_load_bundle");
-        1u32
-    })
+    .unwrap_or(1u32)
 }
 
 /// # Safety
@@ -391,13 +308,14 @@ pub unsafe extern "C" fn polyplug_runtime_reload_bundle(
 ) -> u32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
-            set_last_error("null runtime");
             return 1u32;
         }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         if path.is_null() {
-            set_last_error("null path pointer in polyplug_runtime_reload_bundle");
+            runtime
+                .0
+                .set_last_error("null path pointer in polyplug_runtime_reload_bundle");
             return 1u32;
         }
         // SAFETY: path is non-null and points to path_len valid UTF-8 bytes per ABI contract.
@@ -405,22 +323,19 @@ pub unsafe extern "C" fn polyplug_runtime_reload_bundle(
         let s: &str = match core::str::from_utf8(bytes) {
             Ok(s) => s,
             Err(e) => {
-                set_last_error(e.to_string());
+                runtime.0.set_last_error(e.to_string());
                 return 1u32;
             }
         };
         match runtime.0.reload_bundle(std::path::Path::new(s)) {
             Ok(()) => 0u32,
             Err(e) => {
-                set_last_error(e.to_string());
+                runtime.0.set_last_error(e.to_string());
                 1u32
             }
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_reload_bundle");
-        1u32
-    })
+    .unwrap_or(1u32)
 }
 
 /// # Safety
@@ -442,10 +357,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_by_contract(
             Err(_) => u64::MAX,
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_find_by_contract");
-        u64::MAX
-    })
+    .unwrap_or(u64::MAX)
 }
 
 /// # Safety
@@ -471,10 +383,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_by_bundle(
             Err(_) => u64::MAX,
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_find_by_bundle");
-        u64::MAX
-    })
+    .unwrap_or(u64::MAX)
 }
 
 /// # Safety
@@ -492,8 +401,10 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
         if rt.is_null() {
             return 0usize;
         }
+        // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
+        let runtime: &OpaqueRuntime = unsafe { &*rt };
         if out.is_null() && out_cap > 0 {
-            set_last_error(
+            runtime.0.set_last_error(
                 "null output buffer with non-zero capacity in polyplug_runtime_find_all_by_contract",
             );
             return 0usize;
@@ -501,18 +412,13 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
         if out_cap == 0usize {
             return 0usize;
         }
-        // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
-        let runtime: &OpaqueRuntime = unsafe { &*rt };
         // SAFETY: out is valid for out_cap u64 elements per ABI contract.
         let out_slice: &mut [u64] = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
         runtime
             .0
             .find_all_by_contract_packed(contract_id, min_version, out_slice)
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_find_all_by_contract");
-        0usize
-    })
+    .unwrap_or(0usize)
 }
 
 /// Resolve a plugin handle and return the vtable pointer directly.
@@ -532,12 +438,10 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
 ) -> *const () {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
-            set_last_error("null runtime");
             return core::ptr::null();
         }
         const NULL_HANDLE: u64 = u64::MAX;
         if packed_handle == NULL_HANDLE {
-            // Null handle — return null without setting last_error.
             return core::ptr::null();
         }
         let handle: PluginHandle = unpack_handle(packed_handle);
@@ -545,60 +449,73 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime.0.registry().resolve_guard(handle) {
             Ok(guard) => {
-                // Get the vtable pointer from the guard.
-                // The guard is dropped here, but the vtable pointer remains valid
-                // because it points to 'static data in the loaded library.
                 // SAFETY: vtable pointer points to 'static plugin data that remains
                 // valid for the lifetime of the loaded library.
                 guard.vtable() as *const ()
             }
             Err(e) => {
-                set_last_error(e.to_string());
+                runtime.0.set_last_error(e.to_string());
                 core::ptr::null()
             }
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_resolve_plugin");
-        core::ptr::null()
-    })
+    .unwrap_or(core::ptr::null())
 }
 
 /// # Safety
 /// `buf` must be valid for writes of `buf_len` bytes when non-null.
+/// Get the last error message from a runtime.
+///
+/// # Safety
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
+/// `buf` must be valid for writes of `buf_len` bytes when non-null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_last_error(buf: *mut u8, buf_len: usize) -> usize {
+pub unsafe extern "C" fn polyplug_runtime_last_error(
+    rt: *const OpaqueRuntime,
+    buf: *mut u8,
+    buf_len: usize,
+) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let len: usize = LAST_ERROR.with(|e| {
-            let msg: Ref<'_, String> = e.borrow();
-            let bytes: &[u8] = msg.as_bytes();
-            let write_n: usize = bytes.len().min(buf_len);
-            if !buf.is_null() && write_n > 0 {
-                // SAFETY: buf is valid for buf_len bytes per ABI contract.
-                unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, write_n) };
-            }
-            write_n
-        });
-        LAST_ERROR.with(|e| e.borrow_mut().clear());
+        if rt.is_null() {
+            return 0;
+        }
+        // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
+        let runtime: &OpaqueRuntime = unsafe { &*rt };
+
+        if buf.is_null() {
+            let len = runtime.0.last_error_len();
+            runtime.0.clear_last_error();
+            return len;
+        }
+        if buf_len == 0 {
+            runtime.0.clear_last_error();
+            return 0;
+        }
+        // SAFETY: buf is valid for buf_len bytes per ABI contract.
+        let buf_slice: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(buf, buf_len) };
+        let len = runtime.0.get_last_error(buf_slice);
+        runtime.0.clear_last_error();
         len
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_last_error");
-        0usize
-    })
+    .unwrap_or(0usize)
 }
 
+/// Get the length of the last error message from a runtime.
+///
 /// # Safety
-/// Safe to call from any thread. No pointer arguments are required.
+/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_error_message_len() -> usize {
+pub unsafe extern "C" fn polyplug_runtime_error_message_len(rt: *const OpaqueRuntime) -> usize {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        LAST_ERROR.with(|e| e.borrow().len())
+        if rt.is_null() {
+            // Return length of the null runtime error message
+            return b"null runtime pointer".len();
+        }
+        // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
+        let runtime: &OpaqueRuntime = unsafe { &*rt };
+        runtime.0.last_error_len()
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_error_message_len");
-        0usize
-    })
+    .unwrap_or(0usize)
 }
 
 /// # Safety
@@ -614,12 +531,10 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
 ) -> u32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() || loader_ptr.is_null() {
-            set_last_error("null argument in polyplug_runtime_register_loader");
             return 1u32;
         }
         // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
         // loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib compiled
-        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
         // against the same polyplug rlib. The double-box pattern preserves the fat pointer through
         // the c_void erasure. Reconstituting via Box::from_raw as *mut Box<dyn BundleLoader> is valid
         // because both sides agree on the layout via the shared rlib. Ownership is transferred here.
@@ -631,15 +546,12 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
         match runtime.register_loader(loader) {
             Ok(()) => 0u32,
             Err(e) => {
-                set_last_error(e.to_string());
+                runtime.set_last_error(e.to_string());
                 2u32
             }
         }
     }))
-    .unwrap_or_else(|_| {
-        set_last_error("panic in polyplug_runtime_register_loader");
-        1u32
-    })
+    .unwrap_or(1u32)
 }
 
 #[cfg(test)]

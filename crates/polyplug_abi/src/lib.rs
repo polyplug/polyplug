@@ -1,5 +1,5 @@
 // =============================================================================
-// ABI FROZEN — pre-v1.0 (PluginContext was the last breaking addition)
+// ABI FROZEN — pre-v1.0 (HostVTable rt_ctx refactoring)
 // =============================================================================
 //
 // The following types and function signatures constitute the frozen polyplug ABI.
@@ -231,21 +231,48 @@ unsafe impl Sync for PluginVTable {}
 /// Host capabilities passed to every plugin at init time.
 ///
 /// OWNERSHIP: `'static`, lives as long as the runtime.
+///
+/// All functions take `rt_ctx` as first parameter - an opaque pointer to the Runtime.
+/// This allows each Runtime to have its own isolated state (no global registry).
 #[repr(C)]
 pub struct HostVTable {
-    pub alloc: unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    pub free: unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    pub find_by_contract: unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
-    pub find_by_bundle:
-        unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
+    pub register_plugin: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        descriptor: *const PluginDescriptor,
+        vtable: *const PluginVTable,
+    ) -> AbiError,
+    pub alloc:
+        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, size: usize, align: usize) -> *mut u8,
+    pub free: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        ptr: *mut u8,
+        size: usize,
+        align: usize,
+    ),
+    pub find_by_contract: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        contract_id: u64,
+        min_version: u32,
+    ) -> PluginHandle,
+    pub find_by_bundle: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        bundle_id: u64,
+        contract_id: u64,
+        min_version: u32,
+    ) -> PluginHandle,
     pub find_all_by_contract: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
         contract_id: u64,
         min_version: u32,
         out: *mut PluginHandle,
         out_cap: usize,
     ) -> usize,
-    pub resolve_plugin: unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
-    pub get_extension: unsafe extern "C" fn(extension_id: u32) -> *const (),
+    pub resolve_plugin: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        handle: PluginHandle,
+    ) -> *const PluginVTable,
+    pub get_extension:
+        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, extension_id: u32) -> *const (),
 }
 
 // SAFETY: HostVTable contains only function pointers.
@@ -295,21 +322,9 @@ pub struct PluginContext {
     /// Host's supported ABI version for negotiation (Option C).
     /// Plugin can use this to determine available features.
     pub host_abi_version: u32,
-}
 
-/// Bridge used during `polyplug_init` only — not stored long-term.
-///
-/// OWNERSHIP: stack-allocated by the host, passed by pointer to the plugin.
-/// Never stored by the plugin. The `host` pointer is `'static` (valid for
-/// the runtime lifetime). Never freed by the plugin.
-#[repr(C)]
-pub struct PluginRegistrar {
-    pub register_plugin: unsafe extern "C" fn(
-        registrar: *mut PluginRegistrar,
-        descriptor: *const PluginDescriptor,
-        vtable: *const PluginVTable,
-    ) -> AbiError,
-    pub host: *const HostVTable,
+    /// Bundle ID for dependency enforcement during init.
+    pub bundle_id: u64,
 }
 
 /// A single extension entry in the runtime config.
@@ -519,16 +534,17 @@ mod tests {
 
     #[test]
     fn layout_host_vtable() {
-        // HostVTable: 7 extern "C" fn pointers, each 8 bytes on x86_64.
-        assert_eq!(size_of::<HostVTable>(), 56);
+        // HostVTable: 8 extern "C" fn pointers, each 8 bytes on x86_64.
+        assert_eq!(size_of::<HostVTable>(), 64);
         assert_eq!(align_of::<HostVTable>(), 8);
-        assert_eq!(offset_of!(HostVTable, alloc), 0);
-        assert_eq!(offset_of!(HostVTable, free), 8);
-        assert_eq!(offset_of!(HostVTable, find_by_contract), 16);
-        assert_eq!(offset_of!(HostVTable, find_by_bundle), 24);
-        assert_eq!(offset_of!(HostVTable, find_all_by_contract), 32);
-        assert_eq!(offset_of!(HostVTable, resolve_plugin), 40);
-        assert_eq!(offset_of!(HostVTable, get_extension), 48);
+        assert_eq!(offset_of!(HostVTable, register_plugin), 0);
+        assert_eq!(offset_of!(HostVTable, alloc), 8);
+        assert_eq!(offset_of!(HostVTable, free), 16);
+        assert_eq!(offset_of!(HostVTable, find_by_contract), 24);
+        assert_eq!(offset_of!(HostVTable, find_by_bundle), 32);
+        assert_eq!(offset_of!(HostVTable, find_all_by_contract), 40);
+        assert_eq!(offset_of!(HostVTable, resolve_plugin), 48);
+        assert_eq!(offset_of!(HostVTable, get_extension), 56);
     }
 
     #[test]
@@ -542,14 +558,6 @@ mod tests {
         assert_eq!(offset_of!(PluginDescriptor, version_major), 32);
         assert_eq!(offset_of!(PluginDescriptor, version_minor), 36);
         assert_eq!(offset_of!(PluginDescriptor, version_patch), 40);
-    }
-
-    #[test]
-    fn layout_plugin_registrar() {
-        // register_plugin fn ptr (8) + host ptr (8) = 16 bytes.
-        assert_eq!(size_of::<PluginRegistrar>(), 16);
-        assert_eq!(align_of::<PluginRegistrar>(), 8);
-        assert_eq!(offset_of!(PluginRegistrar, host), 8);
     }
 
     #[test]
@@ -577,10 +585,11 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn plugin_context_layout() {
-        // PluginContext: StringView(16) + u32(4) + padding(4) = 24 bytes
-        assert_eq!(size_of::<PluginContext>(), 24);
+        // PluginContext: StringView(16) + u32(4) + padding(4) + u64(8) = 32 bytes
+        assert_eq!(size_of::<PluginContext>(), 32);
         assert_eq!(align_of::<PluginContext>(), 8);
         assert_eq!(offset_of!(PluginContext, bundle_path), 0);
         assert_eq!(offset_of!(PluginContext, host_abi_version), 16);
+        assert_eq!(offset_of!(PluginContext, bundle_id), 24);
     }
 }
