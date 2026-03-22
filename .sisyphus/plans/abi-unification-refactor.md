@@ -304,7 +304,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
 
 ## TODOs
 
-- [ ] 1. Create AbiGenerator trait in build/mod.rs
+- [x] 1. Create AbiGenerator trait in build/mod.rs
 
   **What to do**:
   - Create `crates/polyplug_abi/build/mod.rs`
@@ -343,7 +343,9 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-04-build-rs.log
   ```
 
-- [ ] 5. Create C# AbiGenerator implementation
+- [x] 2. Create Rust type parser using syn/quote (combined with Task 1)
+
+- [x] 5. Create C# AbiGenerator implementation
 
   **What to do**:
   - Create `crates/polyplug_abi/build/csharp.rs`
@@ -396,7 +398,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-05-sizes.log
   ```
 
-- [ ] 6. Create sdks/csharp/ folder structure
+- [x] 6. Create sdks/csharp/ folder structure
 
   **What to do**:
   - Create `sdks/csharp/` directory
@@ -418,7 +420,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `Polyplug.slnx` created and valid
   - [ ] `Directory.Build.props` with shared settings
 
-- [ ] 7. Create Polyplug.ABI project (generated)
+- [x] 7. Create Polyplug.ABI project (generated)
 
   **What to do**:
   - Create `sdks/csharp/abi/Polyplug.ABI.csproj`
@@ -459,7 +461,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-07-constants.log
   ```
 
-- [ ] 8. Migrate Polyplug.Host to new structure
+- [x] 8. Migrate Polyplug.Host to new structure
 
   **What to do**:
   - Create `sdks/csharp/host/Polyplug.Host.csproj`
@@ -488,7 +490,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `dotnet build` succeeds
   - [ ] No PluginVTable references
 
-- [ ] 9. Migrate Polyplug.Guest to new structure
+- [x] 9. Migrate Polyplug.Guest to new structure
 
   **What to do**:
   - Create `sdks/csharp/guest/Polyplug.Guest.csproj`
@@ -512,7 +514,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `dotnet build` succeeds
   - [ ] No PluginVTable references
 
-- [ ] 10. Migrate C# loaders to sdks/csharp/loaders/
+- [x] 10. Migrate C# loaders to sdks/csharp/loaders/
 
   **What to do**:
   - Create `sdks/csharp/loaders/` directory structure
@@ -534,7 +536,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] All loaders build successfully
   - [ ] All loaders added to solution
 
-- [ ] 11. Update C# examples to use new SDK
+- [x] 11. Update C# examples to use new SDK
 
   **What to do**:
   - Update `examples/hosts/csharp/` to reference sdks/csharp/host/
@@ -555,7 +557,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] All C# examples compile
   - [ ] Project references point to sdks/
 
-- [ ] 12. Remove PluginVTable from C# code
+- [x] 12. Remove PluginVTable from C# code
 
   **What to do**:
   - Search all C# files for PluginVTable references
@@ -577,7 +579,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] All code uses PluginInterface
   - [ ] Build succeeds
 
-- [ ] 13. Add string helpers to C# ABI library
+- [x] 13. Add string helpers to C# ABI library
 
   **What to do**:
   - Add `StringHelpers.cs` to `sdks/csharp/abi/` with:
@@ -612,7 +614,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-13-strip-prefix.log
   ```
 
-- [ ] 14. E2E test C# SDK with examples
+- [x] 14. E2E test C# SDK with examples
 
   **What to do**:
   - Build all C# example guests (decoder, encoder, transformer, reporter, validator)
@@ -646,7 +648,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-14-e2e-csharp.log
   ```
 
-- [ ] 15. Create Python AbiGenerator implementation
+- [x] 15. Create Python AbiGenerator implementation
 
   **What to do**:
   - Create `crates/polyplug_abi/build/python.rs`
@@ -675,7 +677,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] All constants present
   - [ ] All ctypes.Structure classes generated
 
-- [ ] 16. Create sdks/python/ folder structure
+- [x] 16. Create sdks/python/ folder structure
 
   **What to do**:
   - Create `sdks/python/` directory
@@ -696,7 +698,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `sdks/python/` exists with all subdirectories
   - [ ] Each package has pyproject.toml
 
-- [ ] 17. Create polyplug_abi package (generated)
+- [x] 17. Create polyplug_abi package (generated)
 
   **What to do**:
   - Create `sdks/python/abi/pyproject.toml`
@@ -730,7 +732,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-17-python-import.log
   ```
 
-- [ ] 18. Migrate polyplug host to sdks/python/host/
+- [x] 18. Migrate polyplug host to sdks/python/host/
 
   **What to do**:
   - Create `sdks/python/host/pyproject.toml`
@@ -752,7 +754,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `pip install -e .` succeeds
   - [ ] No PluginVTable references
 
-- [ ] 19. Migrate polyplug_guest to sdks/python/guest/
+- [x] 19. Migrate polyplug_guest to sdks/python/guest/
 
   **What to do**:
   - Create `sdks/python/guest/pyproject.toml`
@@ -774,7 +776,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `pip install -e .` succeeds
   - [ ] No PluginVTable references
 
-- [ ] 20. Migrate Python loaders to sdks/python/loaders/
+- [x] 20. Migrate Python loaders to sdks/python/loaders/
 
   **What to do**:
   - Create `sdks/python/loaders/` directory structure
@@ -794,7 +796,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] All loader packages migrated
   - [ ] All loaders installable
 
-- [ ] 21. Remove PluginVTable from Python code
+- [x] 21. Remove PluginVTable from Python code
 
   **What to do**:
   - Remove PluginVTable class from generated abi.py
@@ -814,7 +816,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] `grep -r "PluginVTable" sdks/python/` returns 0 results
   - [ ] All code uses PluginInterface
 
-- [ ] 22. Add string helpers to Python ABI library
+- [x] 22. Add string helpers to Python ABI library
 
   **What to do**:
   - Add `helpers.py` to `sdks/python/abi/` with native Python implementations:
@@ -838,7 +840,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - [ ] Functions work with StringView correctly
   - [ ] Available to both host and guest
 
-- [ ] 23. E2E test Python SDK with examples
+- [x] 23. E2E test Python SDK with examples
 
   **What to do**:
   - Run all Python example guests
@@ -864,7 +866,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-23-e2e-python.log
   ```
 
-- [ ] 24. Create C++ AbiGenerator implementation
+- [x] 24. Create C++ AbiGenerator implementation
 
   **What to do**: Create `crates/polyplug_abi/build/cpp.rs`, implement trait, generate `abi.hpp` with `constexpr` constants, `struct` definitions, `extern "C"` declarations.
 
@@ -872,49 +874,49 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
 
   **Parallelization**: YES - with other language generators
 
-- [ ] 25. Create sdks/cpp/ folder structure
+- [x] 25. Create sdks/cpp/ folder structure
 
   **What to do**: Create `sdks/cpp/` with `abi/`, `host/`, `guest/`, `loaders/` subdirectories. Create CMakeLists.txt structure.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 26. Create generated abi.hpp
+- [x] 26. Create generated abi.hpp
 
   **What to do**: Generate `sdks/cpp/abi/polyplug/abi.hpp` with all structs, constants, FNV-1a functions.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 27. Migrate C++ host to sdks/cpp/host/
+- [x] 27. Migrate C++ host to sdks/cpp/host/
 
   **What to do**: Migrate `host-libs/cpp/polyplug/` to `sdks/cpp/host/`. Update includes to use shared abi. Remove PluginVTable, use PluginInterface.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 28. Migrate C++ guest to sdks/cpp/guest/
+- [x] 28. Migrate C++ guest to sdks/cpp/guest/
 
   **What to do**: Migrate `guest-libs/cpp/polyplug/` to `sdks/cpp/guest/`. Update includes. Remove PluginVTable.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 29. Migrate C++ loaders to sdks/cpp/loaders/
+- [x] 29. Migrate C++ loaders to sdks/cpp/loaders/
 
   **What to do**: Migrate `host-libs/cpp/loaders/` to `sdks/cpp/loaders/`.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 30. Remove PluginVTable from C++ code
+- [x] 30. Remove PluginVTable from C++ code
 
   **What to do**: `using PluginVTable = PluginInterface;` should NOT be generated. All code uses PluginInterface directly.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 31. Add string helpers to C++ ABI library
+- [x] 31. Add string helpers to C++ ABI library
 
   **What to do**: Add native `strip_prefix`, `starts_with`, `split` functions to `sdks/cpp/abi/polyplug/helpers.hpp`. Native C++ (no FFI) for zero overhead. Available to both host and guest.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 32. E2E test C++ SDK with examples
+- [x] 32. E2E test C++ SDK with examples
 
   **What to do**: Build and run all C++ examples.
 
@@ -931,55 +933,55 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-32-e2e-cpp.log
   ```
 
-- [ ] 33. Create Lua AbiGenerator implementation
+- [x] 33. Create Lua AbiGenerator implementation
 
   **What to do**: Create `crates/polyplug_abi/build/lua.rs`, generate `polyplug_abi.lua` with FFI definitions, constants, helpers.
 
   **Recommended Agent Profile**: `deep`
 
-- [ ] 34. Create sdks/lua/ folder structure
+- [x] 34. Create sdks/lua/ folder structure
 
   **What to do**: Create `sdks/lua/` with `abi/`, `host/`, `guest/`, `loaders/`. Create rockspec files.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 35. Create generated polyplug_abi.lua
+- [x] 35. Create generated polyplug_abi.lua
 
   **What to do**: Generate FFI cdef block, constants, helper functions.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 36. Migrate Lua host to sdks/lua/host/
+- [x] 36. Migrate Lua host to sdks/lua/host/
 
   **What to do**: Migrate `host-libs/lua/polyplug.lua` and related files. Remove PluginVTable.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 37. Migrate Lua guest to sdks/lua/guest/
+- [x] 37. Migrate Lua guest to sdks/lua/guest/
 
   **What to do**: Migrate `guest-libs/lua/polyplug_guest.lua`. Remove PluginVTable.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 38. Migrate Lua loaders to sdks/lua/loaders/
+- [x] 38. Migrate Lua loaders to sdks/lua/loaders/
 
   **What to do**: Migrate `host-libs/lua/loaders/`.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 39. Remove PluginVTable from Lua code
+- [x] 39. Remove PluginVTable from Lua code
 
   **What to do**: All FFI definitions use PluginInterface only.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 40. Add string helpers to Lua ABI library
+- [x] 40. Add string helpers to Lua ABI library
 
   **What to do**: Add native `strip_prefix`, `starts_with`, `split` functions to `sdks/lua/abi/polyplug_abi.lua`. Native Lua (no FFI) for zero overhead. Available to both host and guest.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 41. E2E test Lua SDK with examples
+- [x] 41. E2E test Lua SDK with examples
 
   **What to do**: Run all Lua examples.
 
