@@ -52,6 +52,7 @@ impl PluginVTableGuard {
             _not_send: core::marker::PhantomData,
         }
     }
+
     /// Returns the raw interface pointer. The pointer is valid as long as this guard is alive.
     pub fn vtable(&self) -> *const PluginInterface {
         self.slot.0
