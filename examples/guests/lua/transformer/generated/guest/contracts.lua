@@ -7,4 +7,25 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
+-- Function pointer type for transformer (data.Transformer@1)
+--   transform(input: StringView) -> StringView
+local TRANSFORMER_VTABLE = ffi.new("PluginVTable")
+TRANSFORMER_VTABLE.contract_id = 0x3D53C682F3F5A9EF
+TRANSFORMER_VTABLE.contract_version = 0
+TRANSFORMER_VTABLE.function_count = 1
+TRANSFORMER_VTABLE.functions = nil
+
+local TRANSFORMER_DESCRIPTOR = ffi.new("PluginDescriptor")
+TRANSFORMER_DESCRIPTOR.name = polyplug_guest.string_view("transformer")
+TRANSFORMER_DESCRIPTOR.contract_name = polyplug_guest.string_view("data.Transformer@1")
+TRANSFORMER_DESCRIPTOR.version_major = 1
+TRANSFORMER_DESCRIPTOR.version_minor = 0
+TRANSFORMER_DESCRIPTOR.version_patch = 0
+
+
+function M.set_transformer_impl(transform_fn)
+    local functions = ffi.new("PluginFunction[1]")
+    functions[0] = ffi.cast("uintptr_t", transform_fn)
+    TRANSFORMER_VTABLE.functions = functions
+end
 return M

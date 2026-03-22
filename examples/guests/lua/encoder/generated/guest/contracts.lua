@@ -7,4 +7,25 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
+-- Function pointer type for encoder (pipeline.Encoder@1)
+--   encode(input: StringView) -> StringView
+local ENCODER_VTABLE = ffi.new("PluginVTable")
+ENCODER_VTABLE.contract_id = 0x127D1703C6EFB432
+ENCODER_VTABLE.contract_version = 0
+ENCODER_VTABLE.function_count = 1
+ENCODER_VTABLE.functions = nil
+
+local ENCODER_DESCRIPTOR = ffi.new("PluginDescriptor")
+ENCODER_DESCRIPTOR.name = polyplug_guest.string_view("encoder")
+ENCODER_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Encoder@1")
+ENCODER_DESCRIPTOR.version_major = 1
+ENCODER_DESCRIPTOR.version_minor = 0
+ENCODER_DESCRIPTOR.version_patch = 0
+
+
+function M.set_encoder_impl(encode_fn)
+    local functions = ffi.new("PluginFunction[1]")
+    functions[0] = ffi.cast("uintptr_t", encode_fn)
+    ENCODER_VTABLE.functions = functions
+end
 return M

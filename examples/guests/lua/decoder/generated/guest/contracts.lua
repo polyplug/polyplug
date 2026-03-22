@@ -7,4 +7,25 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
+-- Function pointer type for decoder (pipeline.Decoder@1)
+--   decode(input: StringView) -> StringView
+local DECODER_VTABLE = ffi.new("PluginVTable")
+DECODER_VTABLE.contract_id = 0x12F3C106B0C3DC1E
+DECODER_VTABLE.contract_version = 0
+DECODER_VTABLE.function_count = 1
+DECODER_VTABLE.functions = nil
+
+local DECODER_DESCRIPTOR = ffi.new("PluginDescriptor")
+DECODER_DESCRIPTOR.name = polyplug_guest.string_view("decoder")
+DECODER_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Decoder@1")
+DECODER_DESCRIPTOR.version_major = 1
+DECODER_DESCRIPTOR.version_minor = 0
+DECODER_DESCRIPTOR.version_patch = 0
+
+
+function M.set_decoder_impl(decode_fn)
+    local functions = ffi.new("PluginFunction[1]")
+    functions[0] = ffi.cast("uintptr_t", decode_fn)
+    DECODER_VTABLE.functions = functions
+end
 return M

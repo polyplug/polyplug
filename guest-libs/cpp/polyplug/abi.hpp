@@ -4,10 +4,10 @@
 // This file is structurally identical to host-libs/cpp/polyplug/abi.hpp.
 // It is kept as a separate copy so guest plugins have no compile-time
 // dependency on the host-libs tree. Both files MUST remain in sync with
-// the Rust source of truth: crates/polyplug-runtime/src/abi/mod.rs
+// the Rust source of truth: crates/polyplug_abi/src/lib.rs
 //
 // Include this header for: StringView, Buffer, AbiError, PluginHandle,
-// PluginVTable, HostVTable, PluginDescriptor, PluginRegistrar, RuntimeConfig.
+// PluginInterface, HostVTable, PluginDescriptor, PluginContext.
 
 #pragma once
 
@@ -58,27 +58,6 @@ struct PluginHandle {
     uint32_t generation;
 };
 
-/// Plugin VTable — one per contract implemented.
-/// OWNERSHIP: Must be 'static (never freed while runtime lives).
-struct PluginVTable {
-    uint64_t      contract_id;      ///< FNV-1a hash of "name@major"
-    uint32_t      contract_version; ///< (minor << 16 | patch)
-    uint32_t      function_count;   ///< entries in functions array
-    void* const*  functions;        ///< static array of fn ptrs, indexed by function_id
-};
-
-/// Host capabilities passed to every plugin at init time.
-/// OWNERSHIP: 'static, lives as long as the runtime.
-struct HostVTable {
-    void*               (*alloc)(size_t size, size_t align);
-    void                (*free)(void* ptr, size_t size, size_t align);
-    PluginHandle        (*find_by_contract)(uint64_t contract_id, uint32_t min_version);
-    PluginHandle        (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
-    size_t              (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
-    const PluginVTable* (*resolve_plugin)(PluginHandle handle);
-    const void*         (*get_extension)(uint32_t extension_id);
-};
-
 /// Metadata about a plugin within a bundle.
 struct PluginDescriptor {
     StringView name;           ///< human-readable plugin name
@@ -88,36 +67,80 @@ struct PluginDescriptor {
     uint32_t   version_patch;
 };
 
-/// Bridge used during polyplug_init only — not stored long-term.
-struct PluginRegistrar {
+/// Opaque host context passed to plugin functions.
+struct HostContext {
+    void*   runtime;   ///< Pointer to the Runtime instance
+    uint64_t bundle_id; ///< Bundle ID for dependency enforcement
+};
+
+/// Dispatch mechanism type.
+enum class DispatchType : uint32_t {
+    Native = 0,
+    VirtualMachine = 1,
+};
+
+/// Native dispatch mechanism — function pointer array.
+struct NativeDispatch {
+    void* const* functions;  ///< static array of fn ptrs, indexed by function_id
+};
+
+/// VM dispatch mechanism — call through VM runtime.
+struct VmDispatch {
+    void*  vm_ctx;     ///< VM-specific context (e.g., QuickJS Runtime, Lua VM)
+    void*  call_fn;    ///< VM-specific call function
+    void*  loader_data; ///< Loader-specific data
+};
+
+/// Union of dispatch mechanisms — access based on dispatch_type.
+union PluginDispatch {
+    NativeDispatch native;
+    VmDispatch vm;
+};
+
+/// Plugin interface — one per contract implemented.
+/// OWNERSHIP: Must be 'static (never freed while runtime lives).
+struct PluginInterface {
+    HostContext*   rt_ctx;           ///< Host context for this plugin
+    uint64_t       contract_id;      ///< FNV-1a hash of "name@major"
+    uint32_t       contract_version; ///< (minor << 16 | patch)
+    uint32_t       function_count;   ///< entries in dispatch array
+    DispatchType   dispatch_type;    ///< Native or VirtualMachine
+    PluginDispatch dispatch;          ///< Dispatch mechanism union
+};
+
+/// Backward-compatible alias.
+using PluginVTable = PluginInterface;
+
+/// Host capabilities passed to every plugin at init time.
+/// OWNERSHIP: 'static, lives as long as the runtime.
+struct HostVTable {
+    /// Register a plugin with the host.
     AbiError (*register_plugin)(
-        PluginRegistrar*        self,
+        void* rt_ctx,
         const PluginDescriptor* descriptor,
-        const PluginVTable*     vtable
+        const PluginInterface* vtable
     );
-    const HostVTable* host;
-};
-
-/// A single extension entry in the runtime config.
-struct ExtensionEntry {
-    uint32_t    extension_id;  ///< FNV-1a lower 32 bits of extension name
-    const void* vtable;        ///< pointer to extension vtable struct
-};
-
-/// Configuration passed to polyplug_runtime_init.
-struct RuntimeConfig {
-    const StringView*    plugin_dirs;      ///< array of plugin_dir_count directories
-    size_t               plugin_dir_count;
-    uint32_t             compatibility;    ///< 0 = Strict (MVP only)
-    const ExtensionEntry* extensions;      ///< array of extension_count entries
-    size_t               extension_count;
+    /// Allocate memory via the host allocator.
+    void* (*alloc)(void* rt_ctx, size_t size, size_t align);
+    /// Free memory previously allocated via host_alloc.
+    void (*free)(void* rt_ctx, void* ptr, size_t size, size_t align);
+    /// Find a plugin by contract ID.
+    PluginHandle (*find_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
+    /// Find a plugin by bundle ID and contract ID.
+    PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    /// Find all plugins implementing a contract.
+    size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
+    /// Resolve a plugin handle to its interface.
+    const PluginInterface* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
+    /// Get an extension by ID.
+    const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
 };
 
 /// Context passed to every guest polyplug_init() function.
-/// bundle_path.ptr is runtime-owned and valid for the PluginRuntime lifetime.
-/// Do NOT store the raw pointer — copy the string if persistence is needed.
 struct PluginContext {
-    StringView bundle_path;  ///< Absolute canonical path to bundle directory
+    StringView bundle_path;       ///< Absolute canonical path to bundle directory
+    uint32_t   host_abi_version;  ///< Host ABI version
+    uint64_t   bundle_id;         ///< Bundle ID
 };
 
 // ─── Allocator (available to guest code) ─────────────────────────────────────

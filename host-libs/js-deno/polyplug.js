@@ -46,8 +46,7 @@ const SYMBOLS = {
   polyplug_runtime_resolve_plugin: { parameters: ["pointer", "u64"], result: "pointer" },
   polyplug_runtime_last_error: { parameters: ["pointer", "usize"], result: "usize" },
   polyplug_runtime_error_message_len: { parameters: [], result: "usize" },
-  polyplug_runtime_on_reload: { parameters: ["pointer"], result: "void" },
-  polyplug_runtime_set_config: { parameters: ["pointer"], result: "u32" },
+  polyplug_runtime_create_with_options: { parameters: ["pointer"], result: "pointer" },
   polyplug_host_free: { parameters: ["pointer", "usize", "usize"], result: "void" },
 };
 
@@ -394,42 +393,47 @@ export function openPolyplug(soPath) {
  * @returns {Runtime}
  */
 export function runtimeNew(lib) {
-  // Register config before creating runtime
-  if (_pendingConfig) {
-    const config = _pendingConfig;
-    const configBuf = new Uint8Array(16);
-    const view = new DataView(configBuf.buffer);
-    view.setUint32(0, config.hotReloadMaxRetries, true);
-    view.setBigUint64(4, BigInt(config.hotReloadRetryIntervalMs), true);
-    view.setUint8(12, config.hotReloadAbortOnMaxRetries ? 1 : 0);
-    const configPtr = Deno.UnsafePointer.of(configBuf);
-    const result = lib.symbols.polyplug_runtime_set_config(configPtr);
-    if (result !== 0) {
-      throw new Error(`polyplug_runtime_set_config failed: ${result}`);
+  let ptr;
+
+  if (_pendingConfig || _pendingReloadCallback) {
+    const optionsBuf = new Uint8Array(24);
+    const optionsView = new DataView(optionsBuf.buffer);
+    let configBuf = null;
+
+    if (_pendingConfig) {
+      configBuf = new Uint8Array(17);
+      const configView = new DataView(configBuf.buffer);
+      configView.setUint32(0, _pendingConfig.hotReloadMaxRetries, true);
+      configView.setBigUint64(4, BigInt(_pendingConfig.hotReloadRetryIntervalMs), true);
+      configView.setUint8(12, _pendingConfig.hotReloadAbortOnMaxRetries ? 1 : 0);
+      optionsView.setBigUint64(0, Deno.UnsafePointer.value(Deno.UnsafePointer.of(configBuf)), true);
     }
+
+    if (_pendingReloadCallback) {
+      const callback = _pendingReloadCallback;
+      _ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE, 
+        (phaseType, bundleId, bundleNamePtr, bundleNameLen, retryCount, reasonPtr, reasonLen) => {
+          let bundleName = "";
+          if (bundleNamePtr !== 0n && bundleNameLen > 0) {
+            bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(Number(bundleNameLen));
+          }
+          let reason = "";
+          if (reasonPtr !== 0n && reasonLen > 0) {
+            reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(Number(reasonLen));
+          }
+          const phase = new ReloadPhase(phaseType, bundleId, bundleName, retryCount, reason);
+          callback(phase);
+        }
+      );
+      optionsView.setBigUint64(8, Deno.UnsafePointer.value(_ffiReloadCallback.pointer), true);
+    }
+
+    const optionsPtr = Deno.UnsafePointer.of(optionsBuf);
+    ptr = lib.symbols.polyplug_runtime_create_with_options(optionsPtr);
+  } else {
+    ptr = lib.symbols.polyplug_runtime_create();
   }
 
-  // Register callback before creating runtime
-  if (_pendingReloadCallback) {
-    const callback = _pendingReloadCallback;
-    _ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE, 
-      (phaseType, bundleId, bundleNamePtr, bundleNameLen, retryCount, reasonPtr, reasonLen) => {
-        let bundleName = "";
-        if (bundleNamePtr !== 0n && bundleNameLen > 0) {
-          bundleName = new Deno.UnsafePointerView(bundleNamePtr).getUtf8String(Number(bundleNameLen));
-        }
-        let reason = "";
-        if (reasonPtr !== 0n && reasonLen > 0) {
-          reason = new Deno.UnsafePointerView(reasonPtr).getUtf8String(Number(reasonLen));
-        }
-        const phase = new ReloadPhase(phaseType, bundleId, bundleName, retryCount, reason);
-        callback(phase);
-      }
-    );
-    lib.symbols.polyplug_runtime_on_reload(_ffiReloadCallback.pointer);
-  }
-
-  const ptr = lib.symbols.polyplug_runtime_create();
   if (ptr === null) {
     const lenVal = lib.symbols.polyplug_runtime_error_message_len();
     const len = Number(lenVal);

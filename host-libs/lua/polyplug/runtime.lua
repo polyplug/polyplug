@@ -58,8 +58,12 @@ ffi.cdef([[
         uint8_t hot_reload_abort_on_max_retries;
     } RuntimeConfigC;
 
-    void polyplug_runtime_on_reload(ReloadPhaseCallback cb);
-    uint32_t polyplug_runtime_set_config(const RuntimeConfigC* config);
+    typedef struct {
+        const RuntimeConfigC* config;
+        ReloadPhaseCallback on_reload;
+    } RuntimeCreateOptions;
+
+    OpaqueRuntime* polyplug_runtime_create_with_options(const RuntimeCreateOptions* options);
 ]])
 
 local M = {}
@@ -105,39 +109,48 @@ end
 
 function M.Runtime.new()
     local lib = get_lib()
+    local rt_ptr
 
-    if M._pending_config then
-        local config_c = ffi.new("RuntimeConfigC", {
-            hot_reload_max_retries = M._pending_config.hot_reload_max_retries,
-            hot_reload_retry_interval_ms = M._pending_config.hot_reload_retry_interval_ms,
-            hot_reload_abort_on_max_retries = M._pending_config.hot_reload_abort_on_max_retries and 1 or 0,
-        })
-        lib.polyplug_runtime_set_config(config_c)
-    end
+    if M._pending_config or M._pending_reload_callback then
+        local options = ffi.new("RuntimeCreateOptions")
+        local config_c
 
-    if M._pending_reload_callback then
-        local callback = M._pending_reload_callback
-        M._ffi_reload_callback = ffi.cast("ReloadPhaseCallback", function(
-            phase_type, bundle_id, bundle_name_ptr, bundle_name_len,
-            retry_count, reason_ptr, reason_len
-        )
-            local bundle_name = ""
-            if bundle_name_ptr ~= nil and bundle_name_len > 0 then
-                bundle_name = ffi.string(bundle_name_ptr, bundle_name_len)
-            end
-            local reason = ""
-            if reason_ptr ~= nil and reason_len > 0 then
-                reason = ffi.string(reason_ptr, reason_len)
-            end
-            local phase = reload_phase.new(
-                phase_type, bundle_id, bundle_name, retry_count, reason
+        if M._pending_config then
+            config_c = ffi.new("RuntimeConfigC", {
+                hot_reload_max_retries = M._pending_config.hot_reload_max_retries,
+                hot_reload_retry_interval_ms = M._pending_config.hot_reload_retry_interval_ms,
+                hot_reload_abort_on_max_retries = M._pending_config.hot_reload_abort_on_max_retries and 1 or 0,
+            })
+            options.config = config_c
+        end
+
+        if M._pending_reload_callback then
+            local callback = M._pending_reload_callback
+            M._ffi_reload_callback = ffi.cast("ReloadPhaseCallback", function(
+                phase_type, bundle_id, bundle_name_ptr, bundle_name_len,
+                retry_count, reason_ptr, reason_len
             )
-            callback(phase)
-        end)
-        lib.polyplug_runtime_on_reload(M._ffi_reload_callback)
+                local bundle_name = ""
+                if bundle_name_ptr ~= nil and bundle_name_len > 0 then
+                    bundle_name = ffi.string(bundle_name_ptr, bundle_name_len)
+                end
+                local reason = ""
+                if reason_ptr ~= nil and reason_len > 0 then
+                    reason = ffi.string(reason_ptr, reason_len)
+                end
+                local phase = reload_phase.new(
+                    phase_type, bundle_id, bundle_name, retry_count, reason
+                )
+                callback(phase)
+            end)
+            options.on_reload = M._ffi_reload_callback
+        end
+
+        rt_ptr = lib.polyplug_runtime_create_with_options(options)
+    else
+        rt_ptr = lib.polyplug_runtime_create()
     end
 
-    local rt_ptr = lib.polyplug_runtime_create()
     if rt_ptr == nil then
         error("polyplug_runtime_create failed")
     end

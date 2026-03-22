@@ -1,11 +1,10 @@
-import { toStr, allocString } from 'polyplug-guest';
-
-export function decode(input) {
-    const s = toStr(input).replace(',', '|');
-    return allocString(`DECODED:${s}`);
+function decode(args_ptr, out_ptr) {
 }
 
-export function polyplug_init(registrar, context) {
-    setJsDecoderImpl({ decode });
-    return { code: 0 };
-}
+globalThis.DECODER_VTABLE = {
+    contractLo: 0xB0C3DC1E,
+    contractHi: 0x12F3C106,
+    fnCount: 1,
+    functions: [decode],
+    contractName: "pipeline.Decoder@1"
+};

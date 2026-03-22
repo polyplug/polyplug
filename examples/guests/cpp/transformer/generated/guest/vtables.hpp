@@ -10,4 +10,40 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
+// Plugin: transformer
+extern DataTransformerPlugin* g_transformer_impl;
+
+constexpr uint64_t TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL;
+
+inline void set_transformer_impl(DataTransformerPlugin* impl) { g_transformer_impl = impl; }
+
+// Forward declaration - user must implement this
+DataTransformerPlugin* create_transformer_impl();
+
+// ABI wrapper for transform (function_id = 0)
+inline AbiError transformer_transform_abi(const void* args, void* out) noexcept {
+    try {
+        auto result = g_transformer_impl->transform(*static_cast<const StringView*>(args));
+        *static_cast<StringView*>(out) = result;
+        return AbiError{ABI_OK, StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
+    } catch (...) {
+        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
+    }
+}
+
+static void* const TRANSFORMER_FNS[] = {
+    reinterpret_cast<void*>(transformer_transform_abi),
+};
+
+static PluginInterface TRANSFORMER_VTABLE = {
+    nullptr,  // rt_ctx (set by host during registration)
+    TRANSFORMER_CONTRACT_ID,
+    0U,
+    1U,
+    DispatchType::Native,
+    PluginDispatch{ .native = NativeDispatch{ TRANSFORMER_FNS } }
+};
+
 }  // namespace polyplug_plugin

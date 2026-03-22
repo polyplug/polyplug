@@ -9,15 +9,15 @@
 use super::types::*;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::runtime::Runtime;
+use polyplug_abi::AbiError;
+use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginVTable;
+use polyplug_abi::StringView;
 use polyplug_abi::ABI_ERROR_GENERIC;
 use polyplug_abi::ABI_ERROR_NOT_FOUND;
 use polyplug_abi::ABI_ERROR_STALE_HANDLE;
 use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
 use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]

@@ -10,4 +10,40 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
+// Plugin: encoder
+extern PipelineEncoderPlugin* g_encoder_impl;
+
+constexpr uint64_t ENCODER_CONTRACT_ID = 0x127D1703C6EFB432ULL;
+
+inline void set_encoder_impl(PipelineEncoderPlugin* impl) { g_encoder_impl = impl; }
+
+// Forward declaration - user must implement this
+PipelineEncoderPlugin* create_encoder_impl();
+
+// ABI wrapper for encode (function_id = 0)
+inline AbiError encoder_encode_abi(const void* args, void* out) noexcept {
+    try {
+        auto result = g_encoder_impl->encode(*static_cast<const StringView*>(args));
+        *static_cast<StringView*>(out) = result;
+        return AbiError{ABI_OK, StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
+    } catch (...) {
+        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
+    }
+}
+
+static void* const ENCODER_FNS[] = {
+    reinterpret_cast<void*>(encoder_encode_abi),
+};
+
+static PluginInterface ENCODER_VTABLE = {
+    nullptr,  // rt_ctx (set by host during registration)
+    ENCODER_CONTRACT_ID,
+    0U,
+    1U,
+    DispatchType::Native,
+    PluginDispatch{ .native = NativeDispatch{ ENCODER_FNS } }
+};
+
 }  // namespace polyplug_plugin

@@ -11,3 +11,6 @@ path = "src/main.rs"
 polyplug = { path = "../../../crates/polyplug" }
 polyplug_abi = { path = "../../../crates/polyplug_abi" }
 polyplug_native = { path = "../../../crates/polyplug_native" }
+polyplug_js = { path = "../../../crates/polyplug_js" }
+polyplug_lua = { path = "../../../crates/polyplug_lua" }
+polyplug_python = { path = "../../../crates/polyplug_python" }

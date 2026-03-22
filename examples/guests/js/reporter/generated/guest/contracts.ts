@@ -4,3 +4,25 @@
 
 import type { } from './types';
 
+// Plugin: reporter (data.Reporter@1)
+//   report(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
+
+const REPORTER_VTABLE = {
+    contractLo: 0xE511D297,
+    contractHi: 0x81D41D43,
+    fnCount: 1,
+    functions: null as unknown as number[],
+    contractName: "data.Reporter@1"
+};
+
+const REPORTER_DESCRIPTOR = {
+    name: "reporter",
+    contractName: "data.Reporter@1",
+    versionMajor: 1,
+    versionMinor: 0,
+    versionPatch: 0
+};
+
+export function setReporterImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
+    REPORTER_VTABLE.functions = [fn0];
+}

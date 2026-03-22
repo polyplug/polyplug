@@ -3,12 +3,56 @@
 // Runtime: js-quickjs
 
 import {
-    setEncoderImpl
+    ENCODER_VTABLE,
+    ENCODER_DESCRIPTOR
 } from './contracts';
 
-// Plugin implementation registration
-// Call each set*Impl function with your plugin's function implementations
-// Example:
-//   setEncoderImpl(/* your function implementations */);
+// ABI constants
+const ABI_OK = 0;
+const ABI_ERROR_GENERIC = 1;
 
-// Implement your plugin functions and call set*Impl above to register them
+interface AbiError {
+    code: number;
+    message: { ptr: number; len: number } | null;
+}
+
+interface HostVTable {
+    register_plugin: (
+        rt_ctx: number,
+        desc_lo: number, desc_hi: number,
+        vtable_lo: number, vtable_hi: number
+    ) => AbiError;
+    get_extension: (ext_id: number) => number;
+}
+
+let _host: HostVTable | null = null;
+
+export function polyplug_init(
+    rt_ctx_lo: number, rt_ctx_hi: number,
+    host_lo: number, host_hi: number,
+    ctx_lo: number, ctx_hi: number
+): AbiError {
+    if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {
+        return { code: ABI_ERROR_GENERIC, message: null };
+    }
+    if (host_lo === 0 && host_hi === 0) {
+        return { code: ABI_ERROR_GENERIC, message: null };
+    }
+    if (ctx_lo === 0 && ctx_hi === 0) {
+        return { code: ABI_ERROR_GENERIC, message: null };
+    }
+
+    const rt_ctx = rt_ctx_lo + (rt_ctx_hi * 0x100000000);
+    const host_ptr = host_lo + (host_hi * 0x100000000);
+    _host = host_ptr as unknown as HostVTable;
+
+    const err_ENCODER = _host.register_plugin(
+        rt_ctx,
+        ENCODER_DESCRIPTOR, ENCODER_VTABLE
+    );
+    if (err_ENCODER.code !== ABI_OK) {
+        return err_ENCODER;
+    }
+
+    return { code: ABI_OK, message: null };
+}

@@ -4,3 +4,25 @@
 
 import type { } from './types';
 
+// Plugin: validator (pipeline.Validator@1)
+//   validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
+
+const VALIDATOR_VTABLE = {
+    contractLo: 0xD11C7AF0,
+    contractHi: 0xA553FAB5,
+    fnCount: 1,
+    functions: null as unknown as number[],
+    contractName: "pipeline.Validator@1"
+};
+
+const VALIDATOR_DESCRIPTOR = {
+    name: "validator",
+    contractName: "pipeline.Validator@1",
+    versionMajor: 1,
+    versionMinor: 0,
+    versionPatch: 0
+};
+
+export function setValidatorImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
+    VALIDATOR_VTABLE.functions = [fn0];
+}

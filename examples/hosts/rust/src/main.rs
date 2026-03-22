@@ -1,10 +1,13 @@
-use polyplug::ReloadPhase;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
+use polyplug_js::{JsConfig, JsLoader};
+use polyplug_lua::{LuaConfig, LuaLoader};
 use polyplug_native::{NativeConfig, NativeLoader};
+use polyplug_python::{PythonConfig, PythonLoader};
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -37,6 +40,9 @@ fn run() -> Result<(), String> {
     let runtime: &'static Runtime = Box::leak(Box::new(
         Runtime::builder()
             .loader(NativeLoader::new(NativeConfig {}))
+            .loader(JsLoader::new(JsConfig {}))
+            .loader(LuaLoader::new(LuaConfig::default()))
+            .loader(PythonLoader::new(PythonConfig::default()))
             .config(config)
             .on_reload(|phase: ReloadPhase| match phase {
                 ReloadPhase::Preparing {

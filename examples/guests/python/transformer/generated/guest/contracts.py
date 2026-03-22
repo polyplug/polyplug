@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, PluginContext, PluginDescriptor, PluginRegistrar, PluginVTable, StringView
+from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -15,18 +15,64 @@ POLYPLUG_ABI_VERSION: int = 1
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
 
+class TRANSFORMERDataTransformerPlugin:
+    def transform(self, input: StringView) -> StringView:
+        raise NotImplementedError
+
+_transformer_IMPL: TRANSFORMERDataTransformerPlugin | None = None
+def set_transformer_impl(impl: TRANSFORMERDataTransformerPlugin) -> None:
+    global _transformer_IMPL
+    _transformer_IMPL = impl
+
+TRANSFORMER_PLUGIN_NAME_BYTES: bytes = b"transformer"
+TRANSFORMER_CONTRACT_NAME_BYTES: bytes = b"data.Transformer@1"
+TRANSFORMER_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(TRANSFORMER_PLUGIN_NAME_BYTES)
+TRANSFORMER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(TRANSFORMER_CONTRACT_NAME_BYTES)
+TRANSFORMER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
+    name=StringView(ptr=TRANSFORMER_PLUGIN_NAME_C, len=len(TRANSFORMER_PLUGIN_NAME_BYTES)),
+    contract_name=StringView(ptr=TRANSFORMER_CONTRACT_NAME_C, len=len(TRANSFORMER_CONTRACT_NAME_BYTES)),
+    version_major=1,
+    version_minor=0,
+    version_patch=0,
+)
+
+def transformer_transform_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
+    impl: TRANSFORMERDataTransformerPlugin | None = _transformer_IMPL
+    if impl is None:
+        return ABI_ERROR_GENERIC
+    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
+    input: StringView = args_ptr_t.contents
+    result = impl.transform(input)
+    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
+    out_ptr_t[0] = result
+    return ABI_OK
+
+TRANSFORMER_transformer_transform_abi_CFUNC = _DISPATCH_FN_CTYPE(transformer_transform_abi)
+
+TRANSFORMER_FNS = (ctypes.c_void_p * 1) (
+    ctypes.cast(TRANSFORMER_transformer_transform_abi_CFUNC, ctypes.c_void_p),
+)
+TRANSFORMER_VTABLE: PluginVTable = PluginVTable(
+    contract_id=0x3D53C682F3F5A9EF,
+    contract_version=0,
+    function_count=1,
+    functions=ctypes.cast(TRANSFORMER_FNS, ctypes.c_void_p),
+)
+
 def polyplug_abi_version() -> int:
     return 1
 
-def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
-    if registrar_addr == 0:
+def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
+    if rt_ctx == 0:
+        return
+    if host_ptr == 0:
         return
     if ctx_ptr == 0:
         return
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
-    registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))
-    err_TRANSFORMER: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(TRANSFORMER_DESCRIPTOR), ctypes.byref(TRANSFORMER_VTABLE)
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))
+    err_TRANSFORMER: AbiError = host.contents.register_plugin(
+        rt_ctx, ctypes.byref(TRANSFORMER_DESCRIPTOR), ctypes.byref(TRANSFORMER_VTABLE)
     )
     if err_TRANSFORMER.code != ABI_OK:
         raise RuntimeError("plugin registration failed")

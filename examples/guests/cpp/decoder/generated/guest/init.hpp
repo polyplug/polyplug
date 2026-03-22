@@ -8,23 +8,23 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
-IPlugin* g_decoder_impl = nullptr;
+PipelineDecoderPlugin* g_decoder_impl = nullptr;
 
 }  // namespace polyplug_plugin
 
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
-extern "C" AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx) {
-    if (!registrar || !ctx) return AbiError{1U, StringView{nullptr, 0}};
+extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host, const PluginContext* ctx) {
+    if (!rt_ctx || !host || !ctx) return AbiError{1U, StringView{nullptr, 0}};
 
     // Register plugin: decoder
     polyplug_plugin::set_decoder_impl(polyplug_plugin::create_decoder_impl());
     PluginDescriptor desc_DECODER = {
         { (const uint8_t*)"decoder", 7U },
-        { (const uint8_t*)"@1", 2U },
+        { (const uint8_t*)"pipeline.Decoder@1", 18U },
         1U, 0U, 0U
     };
-    AbiError err_DECODER = registrar->register_plugin(registrar, &desc_DECODER, &polyplug_plugin::DECODER_VTABLE);
+    AbiError err_DECODER = host->register_plugin(rt_ctx, &desc_DECODER, &polyplug_plugin::DECODER_VTABLE);
     if (err_DECODER.code != 0U) return err_DECODER;
 
     return AbiError{0U, StringView{nullptr, 0}};

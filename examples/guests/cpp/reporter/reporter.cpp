@@ -1,30 +1,28 @@
-#include <polyplug/abi.hpp>
+#include "generated/guest/init.hpp"
 #include <polyplug/helpers.hpp>
 #include <string>
 #include <sstream>
 
-using namespace polyplug;
+namespace polyplug_plugin {
 
-extern "C" {
-
-POLYPLUG_EXPORT uint32_t polyplug_abi_version() {
-    return POLYPLUG_ABI_VERSION;
-}
-
-POLYPLUG_EXPORT AbiError data_reporter_report(StringView input, StringView* out) {
-    if (!out) return {ABI_ERROR_GENERIC, {}};
-    std::string s = guest::to_string(input);
-    if (s.find("TRANSFORMED:") == 0) s = s.substr(12);
-    std::istringstream iss(s);
-    std::string name, value, count_str;
-    if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|')) {
-        std::ostringstream oss;
-        oss << "Report: " << name << " has value '" << value << "' with count " << count_str;
-        *out = guest::alloc_string(oss.str());
-    } else {
-        return {ABI_ERROR_GENERIC, {}};
+class ReporterImpl : public DataReporterPlugin {
+public:
+    StringView report(StringView input) override {
+        std::string s = polyplug::guest::to_string(input);
+        if (s.find("TRANSFORMED:") == 0) s = s.substr(12);
+        std::istringstream iss(s);
+        std::string name, value, count_str;
+        if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|')) {
+            std::ostringstream oss;
+            oss << "Report: " << name << " has value '" << value << "' with count " << count_str;
+            return polyplug::guest::alloc_string(oss.str());
+        }
+        return polyplug::guest::alloc_string("ERROR:invalid input format");
     }
-    return ABI_OK;
+};
+
+DataReporterPlugin* create_reporter_impl() {
+    return new ReporterImpl();
 }
 
-}
+}  // namespace polyplug_plugin

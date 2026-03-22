@@ -210,8 +210,29 @@ class CFFIBackend:
         size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
         size_t polyplug_runtime_error_message_len(void);
         uint32_t polyplug_runtime_register_loader(void* rt, void* loader_ptr);
-        uint32_t polyplug_runtime_set_config(void* config);
-        uint32_t polyplug_runtime_on_reload(void* callback);
+
+        typedef struct {
+            uint32_t hot_reload_max_retries;
+            uint64_t hot_reload_retry_interval_ms;
+            uint8_t hot_reload_abort_on_max_retries;
+        } RuntimeConfigC;
+
+        typedef void (*ReloadPhaseCallback)(
+            uint32_t phase_type,
+            uint64_t bundle_id,
+            const uint8_t* bundle_name,
+            size_t bundle_name_len,
+            uint32_t retry_count,
+            const uint8_t* reason,
+            size_t reason_len
+        );
+
+        typedef struct {
+            const RuntimeConfigC* config;
+            void (*on_reload)(uint32_t, uint64_t, const uint8_t*, size_t, uint32_t, const uint8_t*, size_t);
+        } RuntimeCreateOptions;
+
+        void* polyplug_runtime_create_with_options(const RuntimeCreateOptions* options);
     """
 
     def __init__(self, lib_path: str) -> None:
@@ -367,20 +388,80 @@ def _check_error_code(backend: Backend, code: int, context: str) -> None:
     raise RuntimeError(f"{context} failed with code {code}")
 
 
+def _read_c_string(ptr: int, length: int) -> str:
+    """Read a C string from a pointer and length."""
+    if ptr == 0 or length == 0:
+        return ""
+    import ctypes
+
+    return ctypes.string_at(ptr, length).decode("utf-8", errors="replace")
+
+
 class Runtime:
     """polyplug runtime for loading and managing plugins."""
 
     _on_reload_cb: Optional[Callable[[ReloadPhase], None]] = None
+    _config: Optional["RuntimeConfig"] = None
 
     def __init__(self) -> None:
         lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
 
-        rt_ptr: int = self._backend.create_runtime()
+        # Use create_with_options if we have config or callback
+        if self._on_reload_cb is not None or self._config is not None:
+            rt_ptr: int = self._create_runtime_with_options()
+        else:
+            rt_ptr = self._backend.create_runtime()
+
         if rt_ptr == 0:
             msg: str = _last_error(self._backend)
             raise RuntimeError(msg or "polyplug_runtime_create failed")
         self._runtime: int = rt_ptr
+
+    def _create_runtime_with_options(self) -> int:
+        """Create runtime using polyplug_runtime_create_with_options."""
+        import ctypes
+
+        # Build the options struct
+        class RuntimeConfigC(ctypes.Structure):
+            _fields_ = [
+                ("hot_reload_max_retries", ctypes.c_uint32),
+                ("hot_reload_retry_interval_ms", ctypes.c_uint64),
+                ("hot_reload_abort_on_max_retries", ctypes.c_uint8),
+            ]
+
+        class RuntimeCreateOptionsC(ctypes.Structure):
+            _fields_ = [
+                ("config", ctypes.POINTER(RuntimeConfigC)),
+                ("on_reload", ctypes.c_void_p),
+            ]
+
+        options = RuntimeCreateOptionsC()
+        config_c = None
+
+        if self._config is not None:
+            config_c = RuntimeConfigC(
+                hot_reload_max_retries=self._config.hot_reload_max_retries,
+                hot_reload_retry_interval_ms=self._config.hot_reload_retry_interval_ms,
+                hot_reload_abort_on_max_retries=1
+                if self._config.hot_reload_abort_on_max_retries
+                else 0,
+            )
+            options.config = ctypes.pointer(config_c)
+
+        if self._on_reload_cb is not None:
+            if not hasattr(Runtime, "_c_callback"):
+                Runtime._c_callback = self._make_c_callback()
+            options.on_reload = ctypes.cast(Runtime._c_callback, ctypes.c_void_p)
+
+        # Call the FFI function
+        lib = ctypes.CDLL(os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path())
+        lib.polyplug_runtime_create_with_options.argtypes = [
+            ctypes.POINTER(RuntimeCreateOptionsC)
+        ]
+        lib.polyplug_runtime_create_with_options.restype = ctypes.c_void_p
+
+        return lib.polyplug_runtime_create_with_options(ctypes.byref(options)) or 0
 
     def __del__(self) -> None:
         rt_ptr: int = getattr(self, "_runtime", 0)
@@ -404,7 +485,6 @@ class Runtime:
             callback: Function that receives ReloadPhase objects.
         """
         cls._on_reload_cb = callback
-        cls._register_reload_callback()
 
     @classmethod
     def set_config(cls, config: "RuntimeConfig") -> None:
@@ -415,70 +495,46 @@ class Runtime:
         Args:
             config: RuntimeConfig with hot-reload settings.
         """
-        cls._apply_config(config)
-
-    @classmethod
-    def _register_reload_callback(cls) -> None:
-        """Internal: Register the FFI callback with the library."""
-        if not hasattr(cls, "_c_callback"):
-            cls._c_callback = cls._make_c_callback()
-        if hasattr(cls, "_backend_instance"):
-            lib = cls._backend_instance.lib
-        else:
-            import ctypes
-            import ctypes.util
-
-            lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
-            lib = ctypes.CDLL(lib_path)
-            lib.polyplug_runtime_on_reload.argtypes = [
-                ctypes.CFUNCTYPE(None, ReloadPhaseCStruct)
-            ]
-            lib.polyplug_runtime_on_reload.restype = ctypes.c_uint32
-        lib.polyplug_runtime_on_reload(cls._c_callback)
+        cls._config = config
 
     @classmethod
     def _make_c_callback(cls) -> "ctypes.CFUNCTYPE":
         """Internal: Create a C-compatible callback wrapper."""
         import ctypes
 
-        @ctypes.CFUNCTYPE(None, ReloadPhaseCStruct)
-        def c_callback(c_phase: ReloadPhaseCStruct) -> None:
+        @ctypes.CFUNCTYPE(
+            None,
+            ctypes.c_uint32,  # phase_type
+            ctypes.c_uint64,  # bundle_id
+            ctypes.c_void_p,  # bundle_name_ptr
+            ctypes.c_size_t,  # bundle_name_len
+            ctypes.c_uint32,  # retry_count
+            ctypes.c_void_p,  # reason_ptr
+            ctypes.c_size_t,  # reason_len
+        )
+        def c_callback(
+            phase_type: int,
+            bundle_id: int,
+            bundle_name_ptr: int,
+            bundle_name_len: int,
+            retry_count: int,
+            reason_ptr: int,
+            reason_len: int,
+        ) -> None:
             if cls._on_reload_cb is not None:
-                phase: ReloadPhase = ReloadPhase.from_c_struct(c_phase)
+                # Build the ReloadPhase from the C callback args
+                phase = ReloadPhase(
+                    type=ReloadPhaseType(phase_type),
+                    bundle_id=bundle_id,
+                    bundle_name=_read_c_string(bundle_name_ptr, bundle_name_len),
+                    retry_count=retry_count,
+                    reason=_read_c_string(reason_ptr, reason_len)
+                    if reason_len > 0
+                    else None,
+                )
                 cls._on_reload_cb(phase)
 
         return c_callback
-
-    @classmethod
-    def _apply_config(cls, config: "RuntimeConfig") -> None:
-        """Internal: Apply configuration to the FFI layer."""
-        import ctypes
-        import ctypes.util
-
-        class RuntimeConfigC(ctypes.Structure):
-            _fields_ = [
-                ("hot_reload_max_retries", ctypes.c_uint32),
-                ("hot_reload_retry_interval_ms", ctypes.c_uint64),
-                ("hot_reload_abort_on_max_retries", ctypes.c_uint8),
-            ]
-
-        config_c = RuntimeConfigC(
-            hot_reload_max_retries=config.hot_reload_max_retries,
-            hot_reload_retry_interval_ms=config.hot_reload_retry_interval_ms,
-            hot_reload_abort_on_max_retries=1
-            if config.hot_reload_abort_on_max_retries
-            else 0,
-        )
-
-        if hasattr(cls, "_backend_instance"):
-            lib = cls._backend_instance.lib
-        else:
-            lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
-            lib = ctypes.CDLL(lib_path)
-            lib.polyplug_runtime_set_config.argtypes = [ctypes.POINTER(RuntimeConfigC)]
-            lib.polyplug_runtime_set_config.restype = ctypes.c_uint32
-
-        lib.polyplug_runtime_set_config(ctypes.byref(config_c))
 
     def _ensure_runtime(self) -> int:
         if self._runtime == 0:

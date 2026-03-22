@@ -4,3 +4,25 @@
 
 import type { } from './types';
 
+// Plugin: transformer (data.Transformer@1)
+//   transform(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
+
+const TRANSFORMER_VTABLE = {
+    contractLo: 0xF3F5A9EF,
+    contractHi: 0x3D53C682,
+    fnCount: 1,
+    functions: null as unknown as number[],
+    contractName: "data.Transformer@1"
+};
+
+const TRANSFORMER_DESCRIPTOR = {
+    name: "transformer",
+    contractName: "data.Transformer@1",
+    versionMajor: 1,
+    versionMinor: 0,
+    versionPatch: 0
+};
+
+export function setTransformerImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
+    TRANSFORMER_VTABLE.functions = [fn0];
+}

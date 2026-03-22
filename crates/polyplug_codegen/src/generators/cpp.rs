@@ -273,6 +273,15 @@ fn generate_cpp_guest_plugin_vtable(
         plugin_lower, class_name, plugin_lower
     ));
 
+    // Forward declaration - user must implement this function
+    out.push_str(&format!(
+        "// Forward declaration - user must implement this\n"
+    ));
+    out.push_str(&format!(
+        "{}* create_{}_impl();\n\n",
+        class_name, plugin_lower
+    ));
+
     for func in &contract.functions {
         generate_cpp_guest_abi_wrapper(out, &plugin_lower, func)?;
     }
@@ -287,13 +296,18 @@ fn generate_cpp_guest_plugin_vtable(
     out.push_str("};\n\n");
 
     out.push_str(&format!(
-        "static PluginVTable {}_VTABLE = {{\n",
+        "static PluginInterface {}_VTABLE = {{\n",
         plugin_upper
     ));
+    out.push_str("    nullptr,  // rt_ctx (set by host during registration)\n");
     out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
     out.push_str(&format!("    {}U,\n", contract_version));
     out.push_str(&format!("    {}U,\n", fn_count));
-    out.push_str(&format!("    {}_FNS\n", plugin_upper));
+    out.push_str("    DispatchType::Native,\n");
+    out.push_str(&format!(
+        "    PluginDispatch{{ .native = NativeDispatch{{ {}_FNS }} }}\n",
+        plugin_upper
+    ));
     out.push_str("};\n\n");
 
     Ok(())
@@ -335,14 +349,19 @@ fn generate_cpp_guest_contract_vtable(
     out.push_str("};\n\n");
 
     // VTable static
-    out.push_str(&format!("static PluginVTable {}_VTABLE = {{\n", upper));
+    out.push_str(&format!("static PluginInterface {}_VTABLE = {{\n", upper));
+    out.push_str("    nullptr,  // rt_ctx (set by host during registration)\n");
     out.push_str(&format!("    {}_CONTRACT_ID,\n", upper));
     out.push_str(&format!(
         "    {}U,  // contract_version: (minor << 16) | patch\n",
         contract_version
     ));
     out.push_str(&format!("    {}U,  // function_count\n", fn_count));
-    out.push_str(&format!("    {}_FNS\n", upper));
+    out.push_str("    DispatchType::Native,\n");
+    out.push_str(&format!(
+        "    PluginDispatch{{ .native = NativeDispatch{{ {}_FNS }} }}\n",
+        upper
+    ));
     out.push_str("};\n\n");
 
     Ok(())
@@ -1203,12 +1222,10 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(
-            files
-                .files
-                .iter()
-                .any(|f| f.content.contains("AUTO-GENERATED"))
-        );
+        assert!(files
+            .files
+            .iter()
+            .any(|f| f.content.contains("AUTO-GENERATED")));
     }
 
     #[test]

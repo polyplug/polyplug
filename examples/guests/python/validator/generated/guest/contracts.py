@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, PluginContext, PluginDescriptor, PluginRegistrar, PluginVTable, StringView
+from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -15,18 +15,64 @@ POLYPLUG_ABI_VERSION: int = 1
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
 
+class VALIDATORPipelineValidatorPlugin:
+    def validate(self, input: StringView) -> StringView:
+        raise NotImplementedError
+
+_validator_IMPL: VALIDATORPipelineValidatorPlugin | None = None
+def set_validator_impl(impl: VALIDATORPipelineValidatorPlugin) -> None:
+    global _validator_IMPL
+    _validator_IMPL = impl
+
+VALIDATOR_PLUGIN_NAME_BYTES: bytes = b"validator"
+VALIDATOR_CONTRACT_NAME_BYTES: bytes = b"pipeline.Validator@1"
+VALIDATOR_PLUGIN_NAME_C: ctypes.c_char_p = ctypes.c_char_p(VALIDATOR_PLUGIN_NAME_BYTES)
+VALIDATOR_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(VALIDATOR_CONTRACT_NAME_BYTES)
+VALIDATOR_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
+    name=StringView(ptr=VALIDATOR_PLUGIN_NAME_C, len=len(VALIDATOR_PLUGIN_NAME_BYTES)),
+    contract_name=StringView(ptr=VALIDATOR_CONTRACT_NAME_C, len=len(VALIDATOR_CONTRACT_NAME_BYTES)),
+    version_major=1,
+    version_minor=0,
+    version_patch=0,
+)
+
+def validator_validate_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
+    impl: VALIDATORPipelineValidatorPlugin | None = _validator_IMPL
+    if impl is None:
+        return ABI_ERROR_GENERIC
+    args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
+    input: StringView = args_ptr_t.contents
+    result = impl.validate(input)
+    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
+    out_ptr_t[0] = result
+    return ABI_OK
+
+VALIDATOR_validator_validate_abi_CFUNC = _DISPATCH_FN_CTYPE(validator_validate_abi)
+
+VALIDATOR_FNS = (ctypes.c_void_p * 1) (
+    ctypes.cast(VALIDATOR_validator_validate_abi_CFUNC, ctypes.c_void_p),
+)
+VALIDATOR_VTABLE: PluginVTable = PluginVTable(
+    contract_id=0xA553FAB5D11C7AF0,
+    contract_version=0,
+    function_count=1,
+    functions=ctypes.cast(VALIDATOR_FNS, ctypes.c_void_p),
+)
+
 def polyplug_abi_version() -> int:
     return 1
 
-def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
-    if registrar_addr == 0:
+def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
+    if rt_ctx == 0:
+        return
+    if host_ptr == 0:
         return
     if ctx_ptr == 0:
         return
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
-    registrar_ptr: Any = ctypes.cast(registrar_addr, ctypes.POINTER(PluginRegistrar))
-    err_VALIDATOR: AbiError = registrar_ptr.contents.register_plugin(
-        registrar_ptr, ctypes.byref(VALIDATOR_DESCRIPTOR), ctypes.byref(VALIDATOR_VTABLE)
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))
+    err_VALIDATOR: AbiError = host.contents.register_plugin(
+        rt_ctx, ctypes.byref(VALIDATOR_DESCRIPTOR), ctypes.byref(VALIDATOR_VTABLE)
     )
     if err_VALIDATOR.code != ABI_OK:
         raise RuntimeError("plugin registration failed")

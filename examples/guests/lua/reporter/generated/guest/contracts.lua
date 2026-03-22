@@ -7,4 +7,25 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
+-- Function pointer type for reporter (data.Reporter@1)
+--   report(input: StringView) -> StringView
+local REPORTER_VTABLE = ffi.new("PluginVTable")
+REPORTER_VTABLE.contract_id = 0x81D41D43E511D297
+REPORTER_VTABLE.contract_version = 0
+REPORTER_VTABLE.function_count = 1
+REPORTER_VTABLE.functions = nil
+
+local REPORTER_DESCRIPTOR = ffi.new("PluginDescriptor")
+REPORTER_DESCRIPTOR.name = polyplug_guest.string_view("reporter")
+REPORTER_DESCRIPTOR.contract_name = polyplug_guest.string_view("data.Reporter@1")
+REPORTER_DESCRIPTOR.version_major = 1
+REPORTER_DESCRIPTOR.version_minor = 0
+REPORTER_DESCRIPTOR.version_patch = 0
+
+
+function M.set_reporter_impl(report_fn)
+    local functions = ffi.new("PluginFunction[1]")
+    functions[0] = ffi.cast("uintptr_t", report_fn)
+    REPORTER_VTABLE.functions = functions
+end
 return M

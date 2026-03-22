@@ -17,10 +17,18 @@ inline std::string to_string(StringView sv) {
 
 /// Allocate StringView from std::string using host allocator
 inline StringView alloc_string(const std::string& s) {
-    auto* ptr = polyplug_host_alloc(s.size(), 1);
-    if (!ptr) return {nullptr, 0};
-    std::copy(s.begin(), s.end(), ptr);
-    return {ptr, s.size()};
+    auto* ptr = static_cast<uint8_t*>(polyplug_host_alloc(s.size(), 1));
+    if (!ptr) {
+        StringView sv{};
+        sv.ptr = nullptr;
+        sv.len = 0;
+        return sv;
+    }
+    std::memcpy(ptr, s.data(), s.size());
+    StringView sv{};
+    sv.ptr = ptr;
+    sv.len = s.size();
+    return sv;
 }
 
 } // namespace guest

@@ -2,7 +2,7 @@
 name = "js_validator"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "js"
+runtime = "js-quickjs"
 file = "validator.js"
 
 [[plugin]]

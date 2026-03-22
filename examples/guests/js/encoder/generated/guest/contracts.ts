@@ -4,3 +4,25 @@
 
 import type { } from './types';
 
+// Plugin: encoder (pipeline.Encoder@1)
+//   encode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
+
+const ENCODER_VTABLE = {
+    contractLo: 0xC6EFB432,
+    contractHi: 0x127D1703,
+    fnCount: 1,
+    functions: null as unknown as number[],
+    contractName: "pipeline.Encoder@1"
+};
+
+const ENCODER_DESCRIPTOR = {
+    name: "encoder",
+    contractName: "pipeline.Encoder@1",
+    versionMajor: 1,
+    versionMinor: 0,
+    versionPatch: 0
+};
+
+export function setEncoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
+    ENCODER_VTABLE.functions = [fn0];
+}

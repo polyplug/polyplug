@@ -10,4 +10,40 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
+// Plugin: reporter
+extern DataReporterPlugin* g_reporter_impl;
+
+constexpr uint64_t REPORTER_CONTRACT_ID = 0x81D41D43E511D297ULL;
+
+inline void set_reporter_impl(DataReporterPlugin* impl) { g_reporter_impl = impl; }
+
+// Forward declaration - user must implement this
+DataReporterPlugin* create_reporter_impl();
+
+// ABI wrapper for report (function_id = 0)
+inline AbiError reporter_report_abi(const void* args, void* out) noexcept {
+    try {
+        auto result = g_reporter_impl->report(*static_cast<const StringView*>(args));
+        *static_cast<StringView*>(out) = result;
+        return AbiError{ABI_OK, StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
+    } catch (...) {
+        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
+    }
+}
+
+static void* const REPORTER_FNS[] = {
+    reinterpret_cast<void*>(reporter_report_abi),
+};
+
+static PluginInterface REPORTER_VTABLE = {
+    nullptr,  // rt_ctx (set by host during registration)
+    REPORTER_CONTRACT_ID,
+    0U,
+    1U,
+    DispatchType::Native,
+    PluginDispatch{ .native = NativeDispatch{ REPORTER_FNS } }
+};
+
 }  // namespace polyplug_plugin

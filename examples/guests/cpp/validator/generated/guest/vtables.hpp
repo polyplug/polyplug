@@ -10,4 +10,40 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
+// Plugin: validator
+extern PipelineValidatorPlugin* g_validator_impl;
+
+constexpr uint64_t VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0ULL;
+
+inline void set_validator_impl(PipelineValidatorPlugin* impl) { g_validator_impl = impl; }
+
+// Forward declaration - user must implement this
+PipelineValidatorPlugin* create_validator_impl();
+
+// ABI wrapper for validate (function_id = 0)
+inline AbiError validator_validate_abi(const void* args, void* out) noexcept {
+    try {
+        auto result = g_validator_impl->validate(*static_cast<const StringView*>(args));
+        *static_cast<StringView*>(out) = result;
+        return AbiError{ABI_OK, StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
+    } catch (...) {
+        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
+    }
+}
+
+static void* const VALIDATOR_FNS[] = {
+    reinterpret_cast<void*>(validator_validate_abi),
+};
+
+static PluginInterface VALIDATOR_VTABLE = {
+    nullptr,  // rt_ctx (set by host during registration)
+    VALIDATOR_CONTRACT_ID,
+    0U,
+    1U,
+    DispatchType::Native,
+    PluginDispatch{ .native = NativeDispatch{ VALIDATOR_FNS } }
+};
+
 }  // namespace polyplug_plugin

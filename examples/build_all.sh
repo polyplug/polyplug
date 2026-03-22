@@ -10,89 +10,77 @@ mkdir -p "$PLUGINS_DIR"
 echo "=== Building polyplug examples ==="
 echo ""
 
-# Build polyplugc first
 echo "[1/4] Building polyplugc..."
 cargo build --release -p polyplugc
-POLYPLUGC="$SCRIPT_DIR/../../target/release/polyplugc"
+POLYPLUGC="$SCRIPT_DIR/../target/release/polyplugc"
 
-# Build core libraries
 echo "[2/4] Building libraries..."
 cargo build --release -p polyplug -p polyplug_abi -p polyplug_guest
 
-# Clean plugins dir
 rm -rf "$PLUGINS_DIR"/*
 
 echo "[3/4] Building guest plugins..."
 
-LANGS="rust cpp python lua js"
+LANGS="rust cpp python lua js-quickjs"
 PLUGINS="decoder encoder transformer reporter validator"
 
 for lang in $LANGS; do
     for plugin in $PLUGINS; do
-        dir="guests/$lang/$plugin"
-        bundle_name=$(grep '^name' "$dir/bundle.toml" | head -1 | cut -d'"' -f2)
+        # Map lang to directory name (js-quickjs -> js)
+        lang_dir="$lang"
+        if [ "$lang" = "js-quickjs" ]; then
+            lang_dir="js"
+        fi
+        
+        dir="guests/$lang_dir/$plugin"
+        if [ ! -d "$dir" ]; then
+            continue
+        fi
+
+        # Use fixed naming convention: {lang}_{plugin}
+        bundle_name="${lang_dir}_${plugin}"
         echo "  building: $bundle_name"
-        
-        # Generate code
+
+        # Generate code and manifest
         "$POLYPLUGC" generate --bundle "$dir/bundle.toml" --lang "$lang" --out "$dir/generated" 2>/dev/null || true
-        
+
         bundle_dir="$PLUGINS_DIR/$bundle_name"
         mkdir -p "$bundle_dir"
-        
+
         case "$lang" in
             rust)
                 cargo build --release --manifest-path "$dir/Cargo.toml" 2>/dev/null || true
-                cp "$dir/target/release/lib${plugin}.so" "$bundle_dir/" 2>/dev/null || true
-                runtime="native"
-                file="lib${plugin}.so"
+                cp "$SCRIPT_DIR/../target/release/lib${plugin}.so" "$bundle_dir/" 2>/dev/null || true
                 ;;
             cpp)
-                g++ -std=c++17 -fPIC -shared -O2 \
-                    -I"$SCRIPT_DIR/../../guest-libs/cpp" \
+                g++ -std=c++20 -fPIC -shared -O2 \
+                    -I"$SCRIPT_DIR/../guest-libs/cpp" \
                     -I"$dir/generated" \
                     "$dir/$plugin.cpp" \
+                    -L"$SCRIPT_DIR/../target/release" -lpolyplug \
+                    -Wl,-rpath,'$ORIGIN' \
                     -o "$bundle_dir/lib$plugin.so" 2>/dev/null || true
-                runtime="native"
-                file="lib$plugin.so"
+                cp "$SCRIPT_DIR/../target/release/libpolyplug.so" "$bundle_dir/" 2>/dev/null || true
                 ;;
             python)
                 cp "$dir/$plugin.py" "$bundle_dir/"
-                runtime="python"
-                file="$plugin.py"
                 ;;
             lua)
                 cp "$dir/$plugin.lua" "$bundle_dir/"
-                runtime="lua"
-                file="$plugin.lua"
                 ;;
-            js)
+            js-quickjs)
                 cp "$dir/$plugin.js" "$bundle_dir/"
-                runtime="js"
-                file="$plugin.js"
                 ;;
         esac
-        
-        # Get contract from bundle.toml
-        contract=$(grep 'contracts' "$dir/bundle.toml" | sed 's/.*\["//' | sed 's/"].*//')
-        func_count=$([ "$contract" = "data.Reporter" ] || [ "$contract" = "data.Transformer" ] || [ "$contract" = "pipeline.Validator" ] && echo 1 || echo 1)
-        
-        cat > "$bundle_dir/manifest.toml" <<EOF
-bundle_name = "$bundle_name"
-runtime = "$runtime"
-version = "1.0.0"
-file = "$file"
-provides = ["$contract"]
 
-[function_count]
-"$contract@1" = $func_count
-EOF
+        # Copy generated manifest (not handwritten!)
+        cp "$dir/generated/manifest.toml" "$bundle_dir/"
     done
 done
 
 echo ""
 echo "[4/4] Building hosts..."
 
-# Build Rust host
 cargo build --release --manifest-path "hosts/rust/Cargo.toml" 2>/dev/null || true
 
 echo ""

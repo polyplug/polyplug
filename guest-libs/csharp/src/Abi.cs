@@ -70,7 +70,6 @@ public struct PluginHandle
 }
 
 /// <summary>Dispatch mechanism type — determines how function calls are routed.</summary>
-[StructLayout(LayoutKind.Sequential)]
 public enum DispatchType : uint
 {
     /// <summary>Native dispatch: direct function pointer calls (zero overhead).</summary>

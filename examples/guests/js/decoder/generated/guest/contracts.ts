@@ -4,3 +4,25 @@
 
 import type { } from './types';
 
+// Plugin: decoder (pipeline.Decoder@1)
+//   decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
+
+const DECODER_VTABLE = {
+    contractLo: 0xB0C3DC1E,
+    contractHi: 0x12F3C106,
+    fnCount: 1,
+    functions: null as unknown as number[],
+    contractName: "pipeline.Decoder@1"
+};
+
+const DECODER_DESCRIPTOR = {
+    name: "decoder",
+    contractName: "pipeline.Decoder@1",
+    versionMajor: 1,
+    versionMinor: 0,
+    versionPatch: 0
+};
+
+export function setDecoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
+    DECODER_VTABLE.functions = [fn0];
+}

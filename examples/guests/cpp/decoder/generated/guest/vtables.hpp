@@ -10,4 +10,40 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
+// Plugin: decoder
+extern PipelineDecoderPlugin* g_decoder_impl;
+
+constexpr uint64_t DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EULL;
+
+inline void set_decoder_impl(PipelineDecoderPlugin* impl) { g_decoder_impl = impl; }
+
+// Forward declaration - user must implement this
+PipelineDecoderPlugin* create_decoder_impl();
+
+// ABI wrapper for decode (function_id = 0)
+inline AbiError decoder_decode_abi(const void* args, void* out) noexcept {
+    try {
+        auto result = g_decoder_impl->decode(*static_cast<const StringView*>(args));
+        *static_cast<StringView*>(out) = result;
+        return AbiError{ABI_OK, StringView{nullptr, 0}};
+    } catch (const std::exception&) {
+        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
+    } catch (...) {
+        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
+    }
+}
+
+static void* const DECODER_FNS[] = {
+    reinterpret_cast<void*>(decoder_decode_abi),
+};
+
+static PluginInterface DECODER_VTABLE = {
+    nullptr,  // rt_ctx (set by host during registration)
+    DECODER_CONTRACT_ID,
+    0U,
+    1U,
+    DispatchType::Native,
+    PluginDispatch{ .native = NativeDispatch{ DECODER_FNS } }
+};
+
 }  // namespace polyplug_plugin

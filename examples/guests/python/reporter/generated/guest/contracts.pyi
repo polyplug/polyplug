@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any
-from polyplug_guest.abi import PluginContext, PluginDescriptor, PluginRegistrar, PluginVTable, StringView
+from polyplug_guest.abi import HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
 
 POLYPLUG_ABI_VERSION: int
 _DISPATCH_FN_TYPE: Any
@@ -36,4 +36,4 @@ class PipelineValidatorPlugin:
 def set_PIPELINE_VALIDATOR_impl(impl: PipelineValidatorPlugin) -> None: ...
 
 def polyplug_abi_version() -> int: ...
-def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None: ...
+def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None: ...

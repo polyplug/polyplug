@@ -2,7 +2,7 @@
 name = "js_encoder"
 version = "1.0.0"
 api = "../../../api.toml"
-runtime = "js"
+runtime = "js-quickjs"
 file = "encoder.js"
 
 [[plugin]]

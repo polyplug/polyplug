@@ -1,22 +1,21 @@
-#include <polyplug/abi.hpp>
+#include "generated/guest/init.hpp"
 #include <polyplug/helpers.hpp>
 #include <string>
 #include <algorithm>
 
-using namespace polyplug;
+namespace polyplug_plugin {
 
-extern "C" {
+class DecoderImpl : public PipelineDecoderPlugin {
+public:
+    StringView decode(StringView input) override {
+        std::string s = polyplug::guest::to_string(input);
+        std::replace(s.begin(), s.end(), ',', '|');
+        return polyplug::guest::alloc_string("DECODED:" + s);
+    }
+};
 
-POLYPLUG_EXPORT uint32_t polyplug_abi_version() {
-    return POLYPLUG_ABI_VERSION;
+PipelineDecoderPlugin* create_decoder_impl() {
+    return new DecoderImpl();
 }
 
-POLYPLUG_EXPORT AbiError pipeline_decoder_decode(StringView input, StringView* out) {
-    if (!out) return {ABI_ERROR_GENERIC, {}};
-    std::string s = guest::to_string(input);
-    std::replace(s.begin(), s.end(), ',', '|');
-    *out = guest::alloc_string("DECODED:" + s);
-    return ABI_OK;
-}
-
-}
+}  // namespace polyplug_plugin

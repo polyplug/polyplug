@@ -7,4 +7,25 @@ local polyplug_guest = require("polyplug_guest")
 
 local M = {}
 
+-- Function pointer type for validator (pipeline.Validator@1)
+--   validate(input: StringView) -> StringView
+local VALIDATOR_VTABLE = ffi.new("PluginVTable")
+VALIDATOR_VTABLE.contract_id = 0xA553FAB5D11C7AF0
+VALIDATOR_VTABLE.contract_version = 0
+VALIDATOR_VTABLE.function_count = 1
+VALIDATOR_VTABLE.functions = nil
+
+local VALIDATOR_DESCRIPTOR = ffi.new("PluginDescriptor")
+VALIDATOR_DESCRIPTOR.name = polyplug_guest.string_view("validator")
+VALIDATOR_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Validator@1")
+VALIDATOR_DESCRIPTOR.version_major = 1
+VALIDATOR_DESCRIPTOR.version_minor = 0
+VALIDATOR_DESCRIPTOR.version_patch = 0
+
+
+function M.set_validator_impl(validate_fn)
+    local functions = ffi.new("PluginFunction[1]")
+    functions[0] = ffi.cast("uintptr_t", validate_fn)
+    VALIDATOR_VTABLE.functions = functions
+end
 return M

@@ -490,6 +490,68 @@ fn register_host_functions<'js>(
             })
         })?;
 
+    let read_byte_fn: Function<'js> =
+        Function::new(ctx.clone(), |ptr_bigint: rquickjs::BigInt<'js>| -> u32 {
+            let ptr_u64: u64 = match ptr_bigint.to_i64() {
+                Ok(v) => v as u64,
+                Err(_) => return 0,
+            };
+            let ptr: *const u8 = ptr_u64 as usize as *const u8;
+            if ptr.is_null() {
+                return 0;
+            }
+            // SAFETY: ptr is a valid pointer provided by the host for reading.
+            unsafe { *ptr as u32 }
+        })
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("readByte function creation failed: {e}"),
+            })
+        })?;
+
+    polyplug_obj
+        .set("readByte", read_byte_fn)
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("readByte set failed: {e}"),
+            })
+        })?;
+
+    let write_byte_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ptr_bigint: rquickjs::BigInt<'js>, value: u32| {
+            let ptr_u64: u64 = match ptr_bigint.to_i64() {
+                Ok(v) => v as u64,
+                Err(_) => return,
+            };
+            let ptr: *mut u8 = ptr_u64 as usize as *mut u8;
+            if ptr.is_null() {
+                return;
+            }
+            // SAFETY: ptr is a valid pointer provided by the host for writing.
+            unsafe {
+                *ptr = value as u8;
+            }
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+            runtime: "js-quickjs".to_owned(),
+            message: format!("writeByte function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("writeByte", write_byte_fn)
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("writeByte set failed: {e}"),
+            })
+        })?;
+
     Ok(())
 }
 
