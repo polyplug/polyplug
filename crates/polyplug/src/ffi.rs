@@ -174,13 +174,36 @@ fn unpack_handle(packed: u64) -> PluginHandle {
 
 /// Creates a new runtime instance with default configuration.
 ///
+/// Uses any configuration and callback previously set via `polyplug_runtime_set_config`
+/// and `polyplug_runtime_on_reload`.
+///
 /// # Safety
 /// Safe to call from any thread. No pointer arguments are required.
 /// Returns null on allocation failure or panic.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create() -> *mut OpaqueRuntime {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        match Runtime::builder().build() {
+        let mut builder = Runtime::builder();
+
+        // Apply global config if set
+        if let Ok(guard) = get_global_config().read() {
+            if let Some(ref config) = *guard {
+                builder = builder.config(config.clone());
+            }
+        }
+
+        // Apply global reload callback if set
+        if let Ok(guard) = get_global_reload_callback().read() {
+            if let Some(ref cb) = *guard {
+                let cb = *cb;
+                builder = builder.on_reload(move |phase: ReloadPhase| {
+                    let phase_c: ReloadPhaseC = ReloadPhaseC::from_reload_phase(&phase);
+                    cb(phase_c);
+                });
+            }
+        }
+
+        match builder.build() {
             Ok(rt) => Box::into_raw(Box::new(OpaqueRuntime(rt))),
             Err(_) => core::ptr::null_mut(),
         }
@@ -549,6 +572,82 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
                 runtime.set_last_error(e.to_string());
                 2u32
             }
+        }
+    }))
+    .unwrap_or(1u32)
+}
+
+// ─── Global state for pre-creation config and callback ───────────────────────────
+
+use std::sync::OnceLock;
+use std::sync::RwLock;
+
+static GLOBAL_CONFIG: OnceLock<RwLock<Option<RuntimeConfig>>> = OnceLock::new();
+static GLOBAL_RELOAD_CALLBACK: OnceLock<RwLock<Option<extern "C" fn(ReloadPhaseC)>>> =
+    OnceLock::new();
+
+fn get_global_config() -> &'static RwLock<Option<RuntimeConfig>> {
+    GLOBAL_CONFIG.get_or_init(|| RwLock::new(None))
+}
+
+fn get_global_reload_callback() -> &'static RwLock<Option<extern "C" fn(ReloadPhaseC)>> {
+    GLOBAL_RELOAD_CALLBACK.get_or_init(|| RwLock::new(None))
+}
+
+/// Set the runtime configuration for subsequently created runtimes.
+///
+/// This function stores the configuration in a global variable that will be used
+/// when `polyplug_runtime_create` is called. Must be called before runtime creation.
+///
+/// # Safety
+/// Safe to call from any thread. The configuration is stored in thread-safe global state.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_set_config(config: *const RuntimeConfigC) -> u32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if config.is_null() {
+            return 1u32;
+        }
+        // SAFETY: config is non-null and points to a valid RuntimeConfigC per ABI contract.
+        let config_c: RuntimeConfigC = unsafe { *config };
+        let runtime_config: RuntimeConfig = config_c.into_runtime_config();
+
+        match get_global_config().write() {
+            Ok(mut guard) => {
+                *guard = Some(runtime_config);
+                0u32
+            }
+            Err(_) => 2u32,
+        }
+    }))
+    .unwrap_or(1u32)
+}
+
+/// Register a callback to be invoked during hot-reload operations.
+///
+/// This function stores the callback in a global variable that will be used
+/// when `polyplug_runtime_create` is called. Must be called before runtime creation.
+///
+/// # Safety
+/// Safe to call from any thread. The callback is stored in thread-safe global state.
+/// Pass null to clear a previously registered callback.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_on_reload(callback: *const ()) -> u32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let callback_opt: Option<extern "C" fn(ReloadPhaseC)> = if callback.is_null() {
+            None
+        } else {
+            // SAFETY: callback is a valid function pointer per ABI contract.
+            Some(unsafe {
+                core::mem::transmute::<*const (), extern "C" fn(ReloadPhaseC)>(callback)
+            })
+        };
+
+        match get_global_reload_callback().write() {
+            Ok(mut guard) => {
+                *guard = callback_opt;
+                0u32
+            }
+            Err(_) => 2u32,
         }
     }))
     .unwrap_or(1u32)
