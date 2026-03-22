@@ -1090,7 +1090,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 55. Documentation cleanup and accuracy review
+- [x] 55. Documentation cleanup and accuracy review
 
   **What to do**:
   - Update README.md to reflect new sdks/ structure
@@ -1120,7 +1120,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
   - docs/PLUGIN_INTERFACE_DESIGN.md - old vs new comparison (historical)
   - TRUST_MODEL.md - needs section summaries
 
-- [ ] 56. Final E2E test all SDKs
+- [x] 56. Final E2E test all SDKs
 
   **What to do**: Run complete test matrix: all languages, all examples, all hosts, all guests.
 
