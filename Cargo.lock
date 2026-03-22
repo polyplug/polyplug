@@ -1574,6 +1574,11 @@ dependencies = [
 [[package]]
 name = "polyplug_abi"
 version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
+ "thiserror",
+]
 
 [[package]]
 name = "polyplug_codegen"

@@ -44,6 +44,10 @@ toml = { version = "0.9.8" }
 # Error handling
 thiserror = { version = "2.0" }
 
+# Code parsing (build-time)
+syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
+quote = "1"
+
 # Dynamic loading
 libloading = { version = "0.9" }
 
