@@ -64,9 +64,13 @@ for lang in $LANGS; do
                 ;;
             python)
                 cp "$dir/$plugin.py" "$bundle_dir/"
+                cp -r "$dir/generated" "$bundle_dir/"
+                mkdir -p "$bundle_dir/polyplug_guest"
+                cp "$SCRIPT_DIR/../guest-libs/python/polyplug_guest/"*.py "$bundle_dir/polyplug_guest/"
                 ;;
             lua)
                 cp "$dir/$plugin.lua" "$bundle_dir/"
+                cp -r "$dir/generated" "$bundle_dir/"
                 ;;
             js-quickjs)
                 cp "$dir/$plugin.js" "$bundle_dir/"

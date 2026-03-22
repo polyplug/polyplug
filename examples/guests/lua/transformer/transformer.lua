@@ -1,5 +1,6 @@
 local ffi = require('ffi')
 local polyplug = require('polyplug_guest')
+local contracts = require('generated.guest.contracts')
 
 local function transform(input)
     local s = polyplug.to_str(input)
@@ -15,6 +16,6 @@ local function transform(input)
     return polyplug.alloc_string('INVALID:format')
 end
 
-return {
-    ['data.Transformer'] = { transform = transform },
-}
+contracts.set_transformer_impl(transform)
+
+return contracts

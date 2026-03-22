@@ -1,5 +1,6 @@
 local ffi = require('ffi')
 local polyplug = require('polyplug_guest')
+local contracts = require('generated.guest.contracts')
 
 local function encode(input)
     local s = polyplug.to_str(input)
@@ -7,6 +8,6 @@ local function encode(input)
     return polyplug.alloc_string(s:gsub('|', ','))
 end
 
-return {
-    ['pipeline.Encoder'] = { encode = encode },
-}
+contracts.set_encoder_impl(encode)
+
+return contracts

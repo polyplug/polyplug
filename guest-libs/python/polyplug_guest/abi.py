@@ -136,6 +136,21 @@ class PluginRegistrar(ctypes.Structure):
     ]
 
 
+class HostVTable(ctypes.Structure):
+    """Host capabilities passed to plugins at init time."""
+
+    _fields_: ClassVar = [
+        ("register_plugin", ctypes.c_void_p),
+        ("alloc", ctypes.c_void_p),
+        ("free", ctypes.c_void_p),
+        ("find_by_contract", ctypes.c_void_p),
+        ("find_by_bundle", ctypes.c_void_p),
+        ("find_all_by_contract", ctypes.c_void_p),
+        ("resolve_plugin", ctypes.c_void_p),
+        ("get_extension", ctypes.c_void_p),
+    ]
+
+
 # Type alias for the register_plugin function signature.
 # On x86_64 System V ABI, AbiError (24 bytes) is returned via sret pointer.
 # The caller allocates space and passes a hidden first argument.

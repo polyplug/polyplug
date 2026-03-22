@@ -1,5 +1,6 @@
 local ffi = require('ffi')
 local polyplug = require('polyplug_guest')
+local contracts = require('generated.guest.contracts')
 
 local function validate(input)
     local s = polyplug.to_str(input)
@@ -12,6 +13,6 @@ local function validate(input)
     return polyplug.alloc_string('INVALID:expected name|value|count')
 end
 
-return {
-    ['pipeline.Validator'] = { validate = validate },
-}
+contracts.set_validator_impl(validate)
+
+return contracts

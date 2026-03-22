@@ -1,9 +1,16 @@
-from polyplug_guest import StringView, to_str, alloc_string
+from generated.guest.contracts import (
+    DECODERPipelineDecoderPlugin,
+    set_decoder_impl,
+    polyplug_abi_version,
+    polyplug_init,
+)
+from polyplug_guest import to_str, alloc_string
 
-def decode(input: StringView) -> StringView:
-    s = to_str(input).replace(',', '|')
-    return alloc_string(f"DECODED:{s}")
 
-POLYPLUG_FUNCTIONS = {
-    'pipeline.Decoder': {'decode': decode},
-}
+class DecoderImpl(DECODERPipelineDecoderPlugin):
+    def decode(self, input):
+        s = to_str(input).replace(",", "|")
+        return alloc_string(f"DECODED:{s}")
+
+
+set_decoder_impl(DecoderImpl())

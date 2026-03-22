@@ -1,5 +1,6 @@
 local ffi = require('ffi')
 local polyplug = require('polyplug_guest')
+local contracts = require('generated.guest.contracts')
 
 local function report(input)
     local s = polyplug.to_str(input)
@@ -12,6 +13,6 @@ local function report(input)
     return polyplug.alloc_string('INVALID:format')
 end
 
-return {
-    ['data.Reporter'] = { report = report },
-}
+contracts.set_reporter_impl(report)
+
+return contracts
