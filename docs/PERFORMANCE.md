@@ -335,7 +335,7 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 
 | Loader | Dispatch Overhead | Architecture |
 |--------|-------------------|--------------|
-| **Native** | ~1 ns | Direct function pointer |
+| **Native** | ~2 ns | Direct function pointer |
 | **.NET** | ~1.2 ns | Native function pointer |
 | **Lua** | **~40 ns** | LuaJIT FFI + mlua |
 | **QuickJS** | **~85 ns** | Per-bundle Runtime + Cached Context |
@@ -348,16 +348,18 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 ## Loader Dispatch Benchmarks
 
 > **All numbers below are from actual benchmark runs on the current codebase.**
-> Run `cargo bench -p polyplug_js`, `cargo bench -p polyplug_lua`, etc. to reproduce.
+> Run `cargo bench -p polyplug --bench vtable_dispatch`, `cargo bench -p polyplug_js`, etc. to reproduce.
 
-### Native Baseline
+### Native (Rust/C++/NativeAOT Guest Plugins)
 
-All loaders are compared against native function calls:
+| Benchmark | Time | Description |
+|-----------|------|-------------|
+| `noop` | **2.2 ns** | Trivial function call (add(0,0)) |
+| `struct_arg_and_return` | **2.2 ns** | Struct args with return value |
+| `buffer_arg` | **30 ns** | 4096-byte buffer operation |
+| `cross_plugin` | **43 ns** | find_by_contract + resolve + dispatch |
 
-| Benchmark | Time |
-|-----------|------|
-| Native function call | **~1.0 ns** |
-| Native function pointer call | **~1.3 ns** |
+**Native dispatch is essentially zero overhead** - direct function pointer calls with no VM layer.
 
 ### QuickJS (JS Guest Plugins)
 
@@ -405,7 +407,7 @@ All loaders are compared against native function calls:
 
 | Loader Type | Dispatch Overhead | Best For |
 |-------------|-------------------|----------|
-| **Native** | ~1 ns | Maximum performance |
+| **Native** | ~2 ns | Maximum performance |
 | **.NET** | ~1.2 ns | Near-native with CLR ecosystem |
 | **Lua** | ~40 ns | Fastest VM dispatch, embedded scripting |
 | **QuickJS** | ~85 ns | Fast VM dispatch, JS ecosystem |
@@ -413,10 +415,11 @@ All loaders are compared against native function calls:
 
 ### Performance Insights
 
-1. **Lua is faster than QuickJS** - LuaJIT's FFI provides ~40 ns dispatch vs QuickJS's ~85 ns
-2. **Python's GIL is the bottleneck** - ~14 µs to acquire GIL, but only ~80 ns once held
-3. **.NET is essentially native** - Function pointer dispatch has no measurable overhead
-4. **All VM loaders are "fast enough"** - Even Python's 14 µs is negligible for functions >100 µs
+1. **Native and .NET are essentially zero overhead** - Direct function pointer calls
+2. **Lua is the fastest VM loader** - LuaJIT's FFI provides ~40 ns dispatch
+3. **QuickJS follows closely** - ~85 ns with cached context architecture
+4. **Python's GIL is the bottleneck** - ~14 µs to acquire GIL, but only ~80 ns once held
+5. **All VM loaders are "fast enough"** - Even Python's 14 µs is negligible for functions >100 µs
 
 ---
 

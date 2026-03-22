@@ -6,24 +6,24 @@
 use core::cell::RefCell;
 use core::hint::black_box;
 
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use criterion::criterion_group;
-use criterion::criterion_main;
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
+use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginRegistrar;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
 
 // ─── Plugin paths from build.rs ──────────────────────────────────────────────
 
@@ -50,18 +50,19 @@ struct FillArgs {
 
 thread_local! {
     static BENCH_REGISTRY: RefCell<Registry> = RefCell::new(Registry::new());
-    static LAST_VTABLE: core::cell::Cell<*const PluginVTable> = const { core::cell::Cell::new(core::ptr::null()) };
+    static LAST_VTABLE: core::cell::Cell<*const PluginInterface> = const { core::cell::Cell::new(core::ptr::null()) };
     static LAST_CONTRACT_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    static RT_CTX: core::cell::Cell<*mut core::ffi::c_void> = const { core::cell::Cell::new(core::ptr::null_mut()) };
 }
 
 /// Registration callback used by all benchmarks.
 ///
 /// # Safety
-/// `registrar`, `descriptor`, and `vtable` must be valid pointers for the call duration.
+/// `descriptor` and `vtable` must be valid pointers for the call duration.
 unsafe extern "C" fn bench_register_callback(
-    _registrar: *mut PluginRegistrar,
+    _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     if descriptor.is_null() || vtable.is_null() {
         return AbiError {
@@ -73,7 +74,7 @@ unsafe extern "C" fn bench_register_callback(
     // SAFETY: descriptor and vtable are valid for this call per ABI contract.
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     // SAFETY: vtable is valid for this call per ABI contract.
-    let vt: &PluginVTable = unsafe { &*vtable };
+    let vt: &PluginInterface = unsafe { &*vtable };
 
     // SAFETY: desc.contract_name is set from a &'static str in the benchmark fixture.
     // The bytes are valid UTF-8 by construction.
@@ -114,7 +115,11 @@ unsafe extern "C" fn bench_register_callback(
 ///
 /// # Safety
 /// Must only be called from a bench thread where BENCH_REGISTRY is initialised.
-unsafe extern "C" fn bench_find_by_contract(contract_id: u64, min_version: u32) -> PluginHandle {
+unsafe extern "C" fn bench_find_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
+    contract_id: u64,
+    min_version: u32,
+) -> PluginHandle {
     BENCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, min_version)
@@ -127,12 +132,13 @@ unsafe extern "C" fn bench_find_by_contract(contract_id: u64, min_version: u32) 
 /// # Safety
 /// Always safe to call; delegates to bench_find_by_contract.
 unsafe extern "C" fn bench_find_by_bundle(
+    _rt_ctx: *mut core::ffi::c_void,
     _bundle_id: u64,
     contract_id: u64,
     min_version: u32,
 ) -> PluginHandle {
     // SAFETY: bench_find_by_contract is a safe wrapper around BENCH_REGISTRY.
-    unsafe { bench_find_by_contract(contract_id, min_version) }
+    unsafe { bench_find_by_contract(core::ptr::null_mut(), contract_id, min_version) }
 }
 
 /// find_all_by_contract stub — returns 0 (not used in benches).
@@ -140,6 +146,7 @@ unsafe extern "C" fn bench_find_by_bundle(
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
 unsafe extern "C" fn bench_find_all_by_contract(
+    _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -152,7 +159,10 @@ unsafe extern "C" fn bench_find_all_by_contract(
 ///
 /// # Safety
 /// The returned pointer is valid and 'static — the library is kept alive via mem::forget.
-unsafe extern "C" fn bench_resolve_plugin(handle: PluginHandle) -> *const PluginVTable {
+unsafe extern "C" fn bench_resolve_plugin(
+    _rt_ctx: *mut core::ffi::c_void,
+    handle: PluginHandle,
+) -> *const PluginInterface {
     BENCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).unwrap_or(core::ptr::null()))
 }
 
@@ -160,8 +170,37 @@ unsafe extern "C" fn bench_resolve_plugin(handle: PluginHandle) -> *const Plugin
 ///
 /// # Safety
 /// Always safe to call; always returns null.
-unsafe extern "C" fn bench_get_extension(_: u32) -> *const () {
+unsafe extern "C" fn bench_get_extension(
+    _rt_ctx: *mut core::ffi::c_void,
+    _extension_id: u32,
+) -> *const () {
     core::ptr::null()
+}
+
+/// Alloc wrapper that ignores rt_ctx (uses global allocator).
+///
+/// # Safety
+/// Delegates to polyplug_host_alloc which is safe for any size/align.
+unsafe extern "C" fn bench_alloc(
+    _rt_ctx: *mut core::ffi::c_void,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    polyplug_host_alloc(size, align)
+}
+
+/// Free wrapper that ignores rt_ctx (uses global allocator).
+///
+/// # Safety
+/// Delegates to polyplug_host_free which requires ptr was allocated by polyplug_host_alloc.
+unsafe extern "C" fn bench_free(
+    _rt_ctx: *mut core::ffi::c_void,
+    ptr: *mut u8,
+    size: usize,
+    align: usize,
+) {
+    // SAFETY: ptr was allocated by polyplug_host_alloc (caller's responsibility).
+    unsafe { polyplug_host_free(ptr, size, align) };
 }
 
 // ─── Setup helpers ────────────────────────────────────────────────────────────
@@ -173,20 +212,46 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
     let library: libloading::Library =
         unsafe { libloading::Library::new(path).expect("failed to load plugin") };
 
-    // SAFETY: polyplug_init matches the expected ABI (unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError).
-    let init_fn: libloading::Symbol<'_, unsafe extern "C" fn(*mut PluginRegistrar) -> AbiError> = unsafe {
+    // SAFETY: polyplug_init matches the expected ABI:
+    // unsafe extern "C" fn(rt_ctx: *mut c_void, host: *const HostVTable, ctx: *const PluginContext) -> AbiError
+    let init_fn: libloading::Symbol<
+        '_,
+        unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const polyplug_abi::PluginContext,
+        ) -> AbiError,
+    > = unsafe {
         library
             .get(b"polyplug_init\0")
             .expect("polyplug_init not found")
     };
 
-    let mut registrar: PluginRegistrar = PluginRegistrar {
+    let host_vtable: HostVTable = HostVTable {
         register_plugin: bench_register_callback,
-        host: core::ptr::null(),
+        alloc: bench_alloc,
+        free: bench_free,
+        find_by_contract: bench_find_by_contract,
+        find_by_bundle: bench_find_by_bundle,
+        find_all_by_contract: bench_find_all_by_contract,
+        resolve_plugin: bench_resolve_plugin,
+        get_extension: bench_get_extension,
     };
 
-    // SAFETY: init_fn is a valid function; registrar lives for the call duration.
-    let result: AbiError = unsafe { init_fn(&mut registrar as *mut PluginRegistrar) };
+    let plugin_ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+        bundle_path: StringView::null(),
+        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        bundle_id: 0,
+    };
+
+    // SAFETY: init_fn is a valid function; host_vtable and plugin_ctx live for the call duration.
+    let result: AbiError = unsafe {
+        init_fn(
+            core::ptr::null_mut(),
+            &host_vtable as *const HostVTable,
+            &plugin_ctx as *const polyplug_abi::PluginContext,
+        )
+    };
 
     assert_eq!(result.code, ABI_OK, "polyplug_init failed for {}", path);
     library
@@ -194,22 +259,28 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
 
 /// Retrieve the dispatch function for `fn_id` from the last registered vtable (LAST_VTABLE).
 fn get_vtable_fn(fn_id: usize) -> unsafe extern "C" fn(*const (), *mut ()) -> AbiError {
-    let vtable_ptr: *const PluginVTable = LAST_VTABLE.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = LAST_VTABLE.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable not captured — was load_and_init_plugin called?"
     );
     // SAFETY: vtable_ptr was captured from the polyplug_init callback.
     // The library is kept alive via mem::forget in each benchmark function.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    assert!(
+        vtable.dispatch_type == DispatchType::Native,
+        "expected Native dispatch type, got {:?}",
+        vtable.dispatch_type
+    );
     assert!(
         fn_id < vtable.function_count as usize,
         "fn_id {} out of range (function_count={})",
         fn_id,
         vtable.function_count
     );
-    // SAFETY: vtable.functions is a static array; fn_id is within bounds (checked above).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(fn_id) };
+    // SAFETY: dispatch.native.functions is a static array; fn_id is within bounds (checked above).
+    // We verified dispatch_type == Native above, so accessing .native is safe.
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(fn_id) };
     // SAFETY: transmuting to the generic dispatch signature.
     // Arg/out types are enforced by each benchmark's setup code.
     unsafe { core::mem::transmute(fn_ptr) }
@@ -379,9 +450,9 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
 
     // Build a HostVTable backed by the thread-local BENCH_REGISTRY.
     let host_vtable: HostVTable = HostVTable {
-        alloc: polyplug_host_alloc,
-        // polyplug_host_free has the same signature as HostVTable.free.
-        free: polyplug_host_free,
+        register_plugin: bench_register_callback,
+        alloc: bench_alloc,
+        free: bench_free,
         find_by_contract: bench_find_by_contract,
         find_by_bundle: bench_find_by_bundle,
         find_all_by_contract: bench_find_all_by_contract,
@@ -402,16 +473,18 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("cross_plugin", "find+call"), |b| {
         b.iter(|| {
-            // Simulate the full cross-plugin dispatch: find_by_contract + resolve_plugin + direct dispatch.
-            // This measures the complete path a plugin takes when calling into another plugin.
-
             // SAFETY: bench_find_by_contract is a valid extern C fn backed by BENCH_REGISTRY.
-            let handle: PluginHandle =
-                unsafe { black_box((host_vtable.find_by_contract)(memory_contract_id, 0)) };
+            let handle: PluginHandle = unsafe {
+                black_box((host_vtable.find_by_contract)(
+                    core::ptr::null_mut(),
+                    memory_contract_id,
+                    0,
+                ))
+            };
 
-            // SAFETY: bench_resolve_plugin returns a 'static PluginVTable pointer.
-            let vtable_ptr: *const PluginVTable =
-                unsafe { black_box((host_vtable.resolve_plugin)(handle)) };
+            // SAFETY: bench_resolve_plugin returns a 'static PluginInterface pointer.
+            let vtable_ptr: *const PluginInterface =
+                unsafe { black_box((host_vtable.resolve_plugin)(core::ptr::null_mut(), handle)) };
 
             // SAFETY: vtable_ptr is non-null (plugin is registered), fn 2 is in range.
             // fn 2 = memory_echo_string_view(args: *const StringView, out: *mut StringView).
@@ -423,9 +496,10 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
                 }
             } else {
                 // SAFETY: vtable_ptr is non-null (checked above) and 'static.
-                let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-                // SAFETY: vtable.functions is a valid static array; index 2 is within function_count.
-                let fn_ptr: *const () = unsafe { *vtable.functions.add(2) };
+                let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+                // SAFETY: dispatch.native.functions is a valid static array; index 2 is within function_count.
+                // We assume dispatch_type == Native for benchmark plugins.
+                let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
                 // SAFETY: fn_ptr is a valid extern C fn for the given function id.
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     unsafe { core::mem::transmute(fn_ptr) };
@@ -467,7 +541,9 @@ fn bench_absent_extension_null_check(c: &mut Criterion) {
             b.iter(|| {
                 // SAFETY: bench_get_extension is a safe no-op stub that always returns null.
                 // No pointer preconditions; the argument is a plain integer.
-                let result: *const () = unsafe { bench_get_extension(black_box(0xDEAD_0000_u32)) };
+                let result: *const () = unsafe {
+                    bench_get_extension(core::ptr::null_mut(), black_box(0xDEAD_0000_u32))
+                };
                 black_box(result);
             });
         },
