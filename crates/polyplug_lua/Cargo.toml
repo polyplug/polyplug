@@ -21,5 +21,11 @@ mlua = { workspace = true, features = ["luajit", "vendored", "send"] }
 polyplug = { workspace = true }
 polyplug_abi = { workspace = true }
 tempfile = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "dispatch_benchmark"
+harness = false
+
 [lints]
 workspace = true

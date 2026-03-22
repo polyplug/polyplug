@@ -22,5 +22,12 @@ once_cell = { workspace = true }
 [features]
 download-nethost = ["netcorehost/nethost-download"]
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "dispatch_benchmark"
+harness = false
+
 [lints]
 workspace = true

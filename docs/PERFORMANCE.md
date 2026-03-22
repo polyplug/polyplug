@@ -340,7 +340,7 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 | Loader | Dispatch Overhead | Architecture |
 |--------|-------------------|--------------|
 | **Native** | ~1 ns | Direct function pointer |
-| **QuickJS** | **~75 ns** | Per-bundle Runtime + Cached Context |
+| **QuickJS** | **~75-90 ns** | Per-bundle Runtime + Cached Context |
 | **Lua** | ~1-5 µs | mlua Function call |
 | **Python** | ~1-5 µs | PyO3 GIL + callable |
 | **.NET** | ~1-5 µs | CLR function pointer |
@@ -350,6 +350,70 @@ QuickJS is the fastest VM loader due to:
 2. Cached Context (no per-call creation)
 3. `Persistent<Function>` for direct function reference
 4. Minimal QuickJS runtime overhead
+
+---
+
+## Loader Dispatch Benchmarks
+
+### Native Baseline
+
+All loaders are compared against native function calls:
+
+| Benchmark | Time |
+|-----------|------|
+| Native function call | ~900 ps (0.9 ns) |
+| Native function pointer call | ~1.3 ns |
+
+### QuickJS (JS Guest Plugins)
+
+| Benchmark | Time | Description |
+|-----------|------|-------------|
+| `cached_context_single_call` | **~87 ns** | Single dispatch with cached Context |
+| `cached_context_10_calls` | ~667 ns | 10 calls (~67 ns/call) |
+| `old_fresh_context_per_call` | ~~124 µs~~ | OLD: Context created each call |
+| `new_cached_context_reuse` | **~87 ns** | NEW: Context cached and reused |
+
+**Speedup: 1,400x faster** than creating Context per call.
+
+### Lua (LuaJIT Guest Plugins)
+
+| Benchmark | Time | Description |
+|-----------|------|-------------|
+| `lua_dispatch_single_call` | ~1-5 µs | VM dispatch via mlua |
+| `lua_vm_creation` | ~100+ µs | One-time VM creation cost |
+| `native_baseline` | ~0.9 ns | Native function call reference |
+
+Lua uses LuaJIT with FFI for near-native performance. The dispatch overhead is higher than QuickJS due to the mlua binding layer.
+
+### Python (CPython Guest Plugins)
+
+| Benchmark | Time | Description |
+|-----------|------|-------------|
+| `python_dispatch_single_call` | ~1-5 µs | GIL acquisition + function call |
+| `gil_acquisition` | ~100-500 ns | GIL acquisition cost |
+| `native_baseline` | ~0.9 ns | Native function call reference |
+
+Python dispatch requires GIL acquisition, which adds overhead. For performance-critical paths, consider using native or QuickJS plugins.
+
+### .NET (CLR Guest Plugins)
+
+| Benchmark | Time | Description |
+|-----------|------|-------------|
+| `native_dispatch` | ~1-5 ns | Native function pointer call |
+| `dispatch_signature` | ~1-5 ns | Exact .NET dispatch signature |
+| `native_baseline` | ~0.9 ns | Native function call reference |
+
+.NET uses native function pointers for dispatch, providing near-native performance. The CLR initialization cost is amortized across all calls.
+
+### Summary
+
+| Loader Type | Dispatch Overhead | Best For |
+|-------------|-------------------|----------|
+| **Native** | ~1 ns | Maximum performance |
+| **.NET** | ~1-5 ns | Near-native with CLR ecosystem |
+| **QuickJS** | ~75-90 ns | Fastest VM dispatch |
+| **Lua** | ~1-5 µs | Embedded scripting |
+| **Python** | ~1-5 µs | Data science, ML ecosystem |
 
 ---
 

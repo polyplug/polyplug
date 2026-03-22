@@ -19,11 +19,10 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
@@ -33,6 +32,7 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
+use polyplug_abi::ABI_OK;
 
 use crate::config::JsConfig;
 
@@ -511,26 +511,18 @@ impl BundleLoader for JsLoader {
         "js-quickjs"
     }
 
-    fn is_file_loader(&self) -> bool {
-        true
-    }
-
-    fn load(&self, path: &Path, runtime: &PolyplugRuntime) -> Result<(), PolyplugError> {
+    fn load(
+        &self,
+        manifest: &ManifestData,
+        runtime: &PolyplugRuntime,
+    ) -> Result<(), PolyplugError> {
         let host_vtable: &'static HostVTable = runtime.host_vtable();
-
-        let bundle_dir: &Path = if path.is_dir() {
-            path
-        } else {
-            path.parent().unwrap_or(path)
-        };
-        let manifest: ManifestData = polyplug::loader::parse_manifest(bundle_dir)
-            .map_err(|e: polyplug::error::LoaderError| PolyplugError::Loader(e))?;
         let bundle_id: u64 = manifest.id;
 
-        let bundle_path: PathBuf = if path.is_dir() {
-            path.join("bundle.js")
+        let bundle_path: PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
         } else {
-            path.to_path_buf()
+            manifest.path.join("bundle.js")
         };
         let bundle_js: String =
             std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
@@ -539,6 +531,8 @@ impl BundleLoader for JsLoader {
                     reason: e.to_string(),
                 })
             })?;
+
+        let bundle_dir: &Path = &manifest.path;
 
         let qjs_runtime: Runtime = Runtime::new().map_err(|e: rquickjs::Error| {
             PolyplugError::Loader(LoaderError::JsRuntimeInitFailed {

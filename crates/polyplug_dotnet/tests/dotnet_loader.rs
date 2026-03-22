@@ -6,6 +6,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -14,13 +15,14 @@ use tempfile::NamedTempFile;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_dotnet::version::read_target_framework;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
-use polyplug_dotnet::version::read_target_framework;
 
 fn temp_file_with_bytes(bytes: &[u8]) -> NamedTempFile {
     let mut f: NamedTempFile = NamedTempFile::new().expect("tempfile creation failed");
@@ -48,6 +50,21 @@ fn test_runtime() -> Runtime {
     RuntimeBuilder::new()
         .build()
         .expect("failed to build test runtime")
+}
+
+fn make_manifest(path: &Path, name: &str) -> ManifestData {
+    ManifestData {
+        id: polyplug_abi::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "dotnet".to_owned(),
+        file: path.file_name().unwrap().to_string_lossy().into_owned(),
+        path: path.parent().unwrap().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +209,9 @@ fn dotnet_loader_runtime_name_is_dotnet() {
 fn load_nonexistent_assembly_returns_assembly_not_found() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> =
-        loader.load(Path::new("/does/not/exist/Plugin.dll"), &runtime);
+    let path: PathBuf = PathBuf::from("/does/not/exist/Plugin.dll");
+    let manifest: ManifestData = make_manifest(&path, "nonexistent");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound, got {other:?}"),
@@ -205,7 +223,8 @@ fn load_invalid_pe_file_returns_assembly_not_found() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"not a valid PE binary at all");
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> = loader.load(tmp.path(), &runtime);
+    let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound for invalid PE, got {other:?}"),
@@ -221,7 +240,9 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> = loader.load(Path::new("/no/such/Plugin.dll"), &runtime);
+    let path: PathBuf = PathBuf::from("/no/such/Plugin.dll");
+    let manifest: ManifestData = make_manifest(&path, "missing_dll");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         matches!(
             result,
@@ -249,7 +270,8 @@ fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
+    let manifest: ManifestData = make_manifest(&dll, "Polyplug");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
             assert_eq!(required, "net6.0");
@@ -272,7 +294,8 @@ fn load_dll_with_matching_version_passes_tfm_check() {
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
+    let manifest: ManifestData = make_manifest(&dll, "Polyplug");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         !matches!(
             result,
@@ -302,7 +325,8 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
     };
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
+    let manifest: ManifestData = make_manifest(&dll, "Polyplug");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     match result {
         Err(PolyplugError::Loader(LoaderError::ClrInitFailed { path, .. }))
         | Err(PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle: path })) => {
@@ -331,7 +355,8 @@ fn full_clr_init_reaches_init_symbol_check() {
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&dll, &runtime);
+    let manifest: ManifestData = make_manifest(&dll, "Polyplug");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         !matches!(
             result,

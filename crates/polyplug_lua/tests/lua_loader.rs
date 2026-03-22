@@ -13,6 +13,7 @@
 // allow expect_used in test code per AGENTS.md §4
 #![allow(clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -20,13 +21,14 @@ use std::sync::MutexGuard;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
+use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -103,11 +105,29 @@ end
 "#
 }
 
+/// Create a ManifestData for a Lua bundle at the given path.
+fn make_manifest(path: &Path, name: &str) -> ManifestData {
+    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    ManifestData {
+        id: bundle_id,
+        name: name.to_owned(),
+        runtime: "lua".to_owned(),
+        file: path.file_name().unwrap().to_string_lossy().into_owned(),
+        path: path.parent().unwrap().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    }
+}
+
 /// Load the supplied Lua source via `LuaLoader::load` and return the result.
-fn load_script(path: &Path) -> Result<(), PolyplugError> {
+fn load_script(path: &Path, name: &str) -> Result<(), PolyplugError> {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
-    loader.load(path, &runtime)
+    let manifest: ManifestData = make_manifest(path, name);
+    loader.load(&manifest, &runtime)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -128,7 +148,7 @@ fn lua_loader_runtime_name_is_lua() {
 fn lua_state_initializes_on_first_load() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_init_test", valid_plugin_script());
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_init_test");
     assert!(
         result.is_ok(),
         "Lua VM must initialize and bundle must load: {:?}",
@@ -142,9 +162,9 @@ fn lua_state_initializes_on_first_load() {
 fn lua_state_init_is_idempotent() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_idempotent", valid_plugin_script());
-    load_script(&path).expect("first load must succeed");
+    load_script(&path, "lua_loader_idempotent").expect("first load must succeed");
     // Second load of the same file: VM is already initialized — must not panic.
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_idempotent");
     assert!(
         result.is_ok(),
         "second load must succeed (idempotent VM init): {:?}",
@@ -158,7 +178,7 @@ fn lua_state_init_is_idempotent() {
 fn load_valid_bundle_succeeds() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_valid", valid_plugin_script());
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_valid");
     assert!(result.is_ok(), "valid bundle must load: {:?}", result.err());
 }
 
@@ -172,7 +192,7 @@ fn load_syntax_error_returns_script_load_failed() {
         "lua_loader_syntax_error",
         b"function polyplug_init( -- SYNTAX ERROR: unclosed paren\n",
     );
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_syntax_error");
     assert!(result.is_err(), "syntax error must produce an Err");
     let err: PolyplugError = result.expect_err("expected Err for syntax error");
     assert!(
@@ -196,7 +216,7 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
         "lua_loader_runtime_err",
         b"function polyplug_init(_reg, _ctx)\n  error('deliberate runtime error')\nend\n",
     );
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_runtime_err");
     assert!(result.is_err(), "runtime error in init must produce Err");
     let err: PolyplugError = result.expect_err("expected Err for runtime error in init");
     assert!(
@@ -218,7 +238,7 @@ fn load_missing_polyplug_init_returns_typed_error() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) =
         write_temp_bundle("lua_loader_no_init", b"local x = 1  -- no polyplug_init\n");
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_no_init");
     assert!(result.is_err(), "missing init must produce Err");
     let err: PolyplugError = result.expect_err("expected Err for missing polyplug_init");
     assert!(
@@ -238,7 +258,7 @@ fn load_nonexistent_path_returns_script_load_failed() {
     let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let path: PathBuf = dir.path().join("this_file_does_not_exist_42.lua");
-    let result: Result<(), PolyplugError> = load_script(&path);
+    let result: Result<(), PolyplugError> = load_script(&path, "nonexistent");
     assert!(result.is_err(), "missing file must produce Err");
     let err: PolyplugError = result.expect_err("expected Err for nonexistent file");
     assert!(
@@ -261,8 +281,9 @@ fn vtable_is_registered_after_load() {
     let (_dir, path) = write_temp_bundle("lua_loader_vtable", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_vtable");
     loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
@@ -292,8 +313,9 @@ fn vtable_function_count_matches_script() {
     let (_dir, path) = write_temp_bundle("lua_loader_two_fn", two_function_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_two_fn");
     loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect("two-function bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.two", 1);
@@ -318,8 +340,9 @@ fn vtable_contract_id_matches_computed_hash() {
     let (_dir, path) = write_temp_bundle("lua_loader_cid", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_cid");
     loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
     let expected_cid: u64 = polyplug_abi::contract_id("test.loader", 1);
@@ -348,11 +371,13 @@ fn sequential_loads_both_succeed() {
 
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
+    let manifest1: ManifestData = make_manifest(&path1, "lua_loader_seq1");
+    let manifest2: ManifestData = make_manifest(&path2, "lua_loader_seq2");
     loader
-        .load(&path1, &runtime)
+        .load(&manifest1, &runtime)
         .expect("first sequential load must succeed");
     loader
-        .load(&path2, &runtime)
+        .load(&manifest2, &runtime)
         .expect("second sequential load must succeed");
 
     // Both contracts must be visible.
@@ -396,7 +421,19 @@ fn concurrent_loaders_do_not_race() {
                     .loader(LuaLoader::new(LuaConfig::default()))
                     .build()
                     .expect("runtime build must succeed");
-                loader.load(p.as_ref(), &runtime)
+                let manifest: ManifestData = ManifestData {
+                    id: polyplug_abi::bundle_id("lua_loader_thread_safety"),
+                    name: "lua_loader_thread_safety".to_owned(),
+                    runtime: "lua".to_owned(),
+                    file: p.file_name().unwrap().to_string_lossy().into_owned(),
+                    path: p.parent().unwrap().to_path_buf(),
+                    version: String::new(),
+                    provides: Vec::new(),
+                    function_count: HashMap::new(),
+                    dependencies: Vec::new(),
+                    needs_reinit_on_dep_reload: false,
+                };
+                loader.load(&manifest, &runtime)
             })
         })
         .collect::<Vec<std::thread::JoinHandle<Result<(), PolyplugError>>>>();
@@ -423,8 +460,9 @@ fn vtable_function_dispatch_returns_abi_ok() {
     let (_dir, path) = write_temp_bundle("lua_loader_dispatch", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "lua_loader_dispatch");
     loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);

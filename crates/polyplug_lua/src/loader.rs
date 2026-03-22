@@ -111,18 +111,25 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
-    fn is_file_loader(&self) -> bool {
-        true
-    }
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError> {
+        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
 
-    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
-        // Check file existence BEFORE any other operations.
-        if !path.exists() {
+        if !bundle_path.exists() {
             return Err(PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
-                path: path.display().to_string(),
+                path: bundle_path.display().to_string(),
                 reason: "file does not exist".to_owned(),
             }));
         }
+
+        let bundle_id: u64 = manifest.id;
+        let bundle_dir: &Path = &manifest.path;
+        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
 
         // Create a new Lua VM for this bundle (per-bundle isolation).
         // mlua 0.10: Lua::unsafe_new() enables the FFI module required by LuaJIT plugins.
@@ -144,27 +151,13 @@ impl BundleLoader for LuaLoader {
             })?;
 
         // Read the plugin script source.
-        let source: String = std::fs::read_to_string(path).map_err(|e: std::io::Error| {
-            PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
-                path: path.display().to_string(),
-                reason: e.to_string(),
-            })
-        })?;
-
-        // Extract bundle directory for package.path / package.cpath injection.
-        let bundle_dir: std::path::PathBuf = path.parent().unwrap_or(path).to_path_buf();
-        let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
-
-        // Parse manifest to get bundle_id.
-        let manifest: ManifestData =
-            polyplug::loader::parse_manifest(&bundle_dir).map_err(PolyplugError::Loader)?;
-        if manifest.id == 0 {
-            return Err(PolyplugError::Loader(LoaderError::InitFailed {
-                bundle: path.display().to_string(),
-                error: "manifest.id is required but was 0 or missing".to_owned(),
-            }));
-        }
-        let bundle_id: u64 = manifest.id;
+        let source: String =
+            std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
+                PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
+                    path: bundle_path.display().to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
 
         let bundle_dir_fwd: String = bundle_dir_str.replace('\\', "/");
         let path_code: String = format!(
@@ -189,16 +182,16 @@ impl BundleLoader for LuaLoader {
         // Execute the script. This defines polyplug_init in the global environment.
         lua.load(&source).exec().map_err(|e: mlua::Error| {
             PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
-                path: path.display().to_string(),
+                path: bundle_path.display().to_string(),
                 reason: e.to_string(),
             })
         })?;
 
         // Derive bundle name for error messages.
-        let bundle_name: String = path
+        let bundle_name: String = bundle_path
             .file_name()
             .map(|n: &OsStr| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
+            .unwrap_or_else(|| bundle_path.display().to_string());
 
         // Retrieve polyplug_init global function.
         let init_fn: Function =

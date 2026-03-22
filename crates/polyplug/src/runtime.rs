@@ -357,23 +357,12 @@ impl RuntimeBuilder {
                         })
                     })?;
 
-                // For directory bundles, resolve the actual file path from manifest.file.
-                // Loaders (Python, Lua, JS, dotnet) expect a direct file path — they
-                // call file_stem(), read_to_string(), canonicalize(), etc. on the path.
-                // The scanner passes the directory path for directory bundles; here we
-                // join manifest.file to get the real file inside the bundle directory.
-                let effective_path: PathBuf = if !manifest.file.is_empty() {
-                    bundle_path.join(&manifest.file)
-                } else {
-                    bundle_path.clone()
-                };
-
                 loader
-                    .load(&effective_path, &runtime)
+                    .load(manifest, &runtime)
                     .map_err(|e: PolyplugError| match e {
                         PolyplugError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: effective_path.display().to_string(),
+                            bundle: manifest.name.clone(),
                             error: other.to_string(),
                         }),
                     })?;
@@ -549,35 +538,14 @@ impl Runtime {
 
     /// Load a single plugin bundle explicitly with options.
     pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), PolyplugError> {
-        // Handle file-based loaders (Python, Lua, .NET, JS) differently from directory-based (native).
-        if path.is_file() || !path.exists() {
-            // Find a file-based loader by extension
-            let ext: &str = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let loader: &dyn BundleLoader = self
-                .loaders
-                .values()
-                .map(Box::as_ref)
-                .find(|l| {
-                    l.is_file_loader() && Self::loader_matches_extension(l.runtime_name(), ext)
-                })
-                .ok_or_else(|| {
-                    PolyplugError::Loader(LoaderError::NoLoaderForRuntime {
-                        bundle: path.display().to_string(),
-                        runtime_name: ext.to_owned(),
-                    })
-                })?;
-            return loader.load(path, self);
-        }
-        // Directory-based bundle: require manifest.toml
-        let manifest_path: PathBuf = path.join("manifest.toml");
-        if !manifest_path.exists() {
-            return Err(PolyplugError::Loader(LoaderError::ManifestParse {
-                path: manifest_path.display().to_string(),
-                reason: "manifest.toml not found in bundle directory".to_owned(),
-            }));
-        }
-        // Parse manifest and validate bundle_id is present
-        let manifest: ManifestData = crate::loader::parse_manifest(path)
+        // Determine the bundle directory: if path is a file, use its parent; otherwise use path as-is.
+        let bundle_dir: &Path = if path.is_file() {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+
+        let manifest: ManifestData = crate::loader::parse_manifest(bundle_dir)
             .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
         if manifest.id == 0 {
             return Err(PolyplugError::Loader(LoaderError::InitFailed {
@@ -585,6 +553,7 @@ impl Runtime {
                 error: "manifest.id is required but was 0 or missing".to_owned(),
             }));
         }
+
         // Validate function_count entries for this explicit load
         if !opts.ignore_function_count_mismatch {
             let major_str: &str = match manifest.version.split_once('.') {
@@ -618,6 +587,7 @@ impl Runtime {
                 }
             }
         }
+
         // Find the loader for this runtime
         let runtime_name: &str = &manifest.runtime;
         let loader: &dyn BundleLoader = self
@@ -630,12 +600,8 @@ impl Runtime {
                     runtime_name: runtime_name.to_owned(),
                 })
             })?;
-        let effective_path: PathBuf = if !manifest.file.is_empty() {
-            path.join(&manifest.file)
-        } else {
-            path.to_path_buf()
-        };
-        let result: Result<(), PolyplugError> = loader.load(&effective_path, self);
+
+        let result: Result<(), PolyplugError> = loader.load(&manifest, self);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
             let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = self
@@ -645,17 +611,6 @@ impl Runtime {
             manifests.insert(bundle_name, manifest);
         }
         result
-    }
-
-    fn loader_matches_extension(runtime_name: &str, ext: &str) -> bool {
-        matches!(
-            (runtime_name, ext),
-            ("lua", "lua")
-                | ("python", "py")
-                | ("dotnet", "dll")
-                | ("js" | "deno", "js")
-                | ("quickjs", "js")
-        )
     }
 }
 
@@ -1272,7 +1227,7 @@ mod tests {
 
         fn load(
             &self,
-            _path: &Path,
+            _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::PolyplugError> {
             Err(RuntimeError::UndeclaredDependency {
@@ -1293,7 +1248,7 @@ mod tests {
 
         fn load(
             &self,
-            _path: &Path,
+            _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::PolyplugError> {
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
@@ -1315,7 +1270,7 @@ mod tests {
 
         fn load(
             &self,
-            _path: &Path,
+            _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::PolyplugError> {
             panic!("intentional panic in PanicLoader");
@@ -1339,7 +1294,7 @@ mod tests {
 
         fn load(
             &self,
-            _path: &Path,
+            _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::PolyplugError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
@@ -1395,7 +1350,7 @@ mod tests {
 
         fn load(
             &self,
-            _path: &Path,
+            _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::PolyplugError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {

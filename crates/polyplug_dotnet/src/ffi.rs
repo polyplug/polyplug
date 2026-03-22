@@ -4,7 +4,7 @@ use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;
 
-use crate::{DotnetConfig, DotnetLoader, config::HostfxrLocation};
+use crate::{config::HostfxrLocation, DotnetConfig, DotnetLoader};
 
 /// C-visible configuration passed to `polyplug_dotnet_loader_create`.
 ///

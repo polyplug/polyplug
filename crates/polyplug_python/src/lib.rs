@@ -20,14 +20,14 @@ pub use config::PythonConfig;
 
 use std::path::Path;
 
-use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
+use pyo3::Python;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::HostVTable;
@@ -62,28 +62,29 @@ impl BundleLoader for PythonLoader {
         "python"
     }
 
-    fn is_file_loader(&self) -> bool {
-        true
-    }
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError> {
+        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
 
-    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
-        // Step 0: Check file exists before any other operations.
-        if !path.exists() {
+        if !bundle_path.exists() {
             return Err(PolyplugError::Loader(
                 LoaderError::PythonModuleImportFailed {
-                    path: path.to_string_lossy().into_owned(),
+                    path: bundle_path.to_string_lossy().into_owned(),
                     reason: "file does not exist".to_owned(),
                 },
             ));
         }
 
-        // Step 1: Initialize (or verify already initialized) CPython.
         ensure_python_initialized(&self.config)?;
 
-        // Step 2: Canonicalize the path.
-        let abs_path: std::path::PathBuf = path.canonicalize().map_err(|_| {
+        let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
             PolyplugError::Loader(LoaderError::PythonModuleImportFailed {
-                path: path.to_string_lossy().into_owned(),
+                path: bundle_path.to_string_lossy().into_owned(),
                 reason: "path does not exist or is not accessible".to_owned(),
             })
         })?;
@@ -94,22 +95,8 @@ impl BundleLoader for PythonLoader {
             .to_string_lossy()
             .into_owned();
 
-        // Compute bundle directory for sys.path injection.
-        let bundle_dir: std::path::PathBuf = abs_path
-            .parent()
-            .unwrap_or(abs_path.as_path())
-            .to_path_buf();
+        let bundle_dir: &Path = &manifest.path;
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
-
-        // Parse manifest to get bundle_id.
-        let manifest: ManifestData =
-            polyplug::loader::parse_manifest(&bundle_dir).map_err(PolyplugError::Loader)?;
-        if manifest.id == 0 {
-            return Err(PolyplugError::Loader(LoaderError::InitFailed {
-                bundle: path.display().to_string(),
-                error: "manifest.id is required but was 0 or missing".to_owned(),
-            }));
-        }
         let bundle_id: u64 = manifest.id;
 
         // Create HostContext for rt_ctx parameter.

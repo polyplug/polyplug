@@ -20,10 +20,15 @@ pyo3 = { workspace = true }
 polyplug = { workspace = true }
 polyplug_abi = { workspace = true }
 tempfile = { workspace = true }
+criterion = { workspace = true }
 
 [[test]]
 name = "python_loader"
 path = "tests/python_loader.rs"
+
+[[bench]]
+name = "dispatch_benchmark"
+harness = false
 
 [lints]
 workspace = true

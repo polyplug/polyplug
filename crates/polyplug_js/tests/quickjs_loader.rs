@@ -6,9 +6,11 @@
 
 #![allow(clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
@@ -82,6 +84,22 @@ fn make_runtime() -> Runtime {
         .expect("runtime build must succeed")
 }
 
+/// Create a ManifestData for a JS bundle.
+fn make_manifest(path: &std::path::PathBuf, name: &str) -> ManifestData {
+    ManifestData {
+        id: polyplug_abi::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "js-quickjs".to_owned(),
+        file: path.file_name().unwrap().to_string_lossy().into_owned(),
+        path: path.parent().unwrap().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    }
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 // ── Runtime initialisation ────────────────────────────────────────────────────
@@ -104,7 +122,8 @@ fn load_valid_bundle_registers_vtable() {
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered by querying the registry.
@@ -144,7 +163,8 @@ globalThis.TEST_VTABLE = {{
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered.
@@ -175,7 +195,7 @@ fn load_accepts_directory_path() {
     std::fs::write(dir.path().join("bundle.js"), &bundle).expect("write bundle.js");
 
     let bundle_id: u64 = polyplug_abi::bundle_id("test.dir");
-    let manifest: String = format!(
+    let manifest_toml: String = format!(
         r#"id = {}
 name = "test.dir"
 runtime = "js-quickjs"
@@ -183,13 +203,24 @@ file = "bundle.js"
 "#,
         bundle_id
     );
-    std::fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+    std::fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    // Pass the directory — loader must append "bundle.js" automatically.
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(dir.path(), &runtime);
+    let manifest: ManifestData = ManifestData {
+        id: bundle_id,
+        name: "test.dir".to_owned(),
+        runtime: "js-quickjs".to_owned(),
+        file: "bundle.js".to_owned(),
+        path: dir.path().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    };
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "load from directory path must succeed: {result:?}"
@@ -213,7 +244,8 @@ fn load_syntax_error_returns_error() {
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "syntax error bundle must return Err");
 
     // The error must be a JsRuntimePanic mentioning the eval failure.
@@ -237,7 +269,8 @@ fn load_runtime_error_returns_error() {
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "runtime error bundle must return Err");
 
     let err_str: String = result
@@ -260,7 +293,8 @@ fn load_bundle_without_vtable_returns_error() {
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "bundle without _VTABLE must return Err");
 
     let err_str: String = result
@@ -282,7 +316,19 @@ fn load_nonexistent_file_returns_error() {
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = ManifestData {
+        id: 0,
+        name: "nonexistent".to_owned(),
+        runtime: "js-quickjs".to_owned(),
+        file: "bundle.js".to_owned(),
+        path: path.parent().unwrap().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    };
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "non-existent file must return Err");
 }
 
@@ -315,7 +361,8 @@ globalThis.TEST_VTABLE = {{
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "bundle reading bundlePath must succeed: {result:?}"
@@ -354,7 +401,8 @@ globalThis.TEST_VTABLE = {{
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "all polyplug methods must be present: {result:?}"
@@ -373,7 +421,8 @@ fn vtable_contract_id_roundtrip() {
 
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = make_loader();
-    loader.load(&path, &runtime).expect("load must succeed");
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    loader.load(&manifest, &runtime).expect("load must succeed");
 
     // Verify the plugin was registered with the correct contract_id.
     let handle: PluginHandle = runtime
@@ -412,7 +461,8 @@ globalThis.TEST_VTABLE = {{
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
-    loader.load(&path, &runtime).expect("load must succeed");
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    loader.load(&manifest, &runtime).expect("load must succeed");
 
     // Verify the plugin was registered and get its vtable.
     let handle: PluginHandle = runtime
@@ -468,7 +518,8 @@ globalThis.TEST_VTABLE = {{
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "bundle with alloc+free must succeed: {result:?}"
@@ -502,7 +553,8 @@ fn concurrent_loads_do_not_panic() {
                     .expect("runtime build must succeed");
                 let loader: JsLoader = JsLoader::new(JsConfig {});
 
-                if let Err(e) = loader.load(&path, &runtime) {
+                let manifest: ManifestData = make_manifest(&path, "test.bundle");
+                if let Err(e) = loader.load(&manifest, &runtime) {
                     let mut guard: std::sync::MutexGuard<'_, Vec<String>> =
                         errors_clone.lock().unwrap_or_else(|e| e.into_inner());
                     guard.push(format!("thread {i}: {e}"));
@@ -535,7 +587,8 @@ fn sequential_loads_of_different_contracts_all_succeed() {
         let bundle: String = make_bundle_js(contract_id, 1, &format!("test.sequential.{i}"));
         let (_dir, path) = write_temp_bundle(&bundle);
 
-        let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+        let manifest: ManifestData = make_manifest(&path, "test.bundle");
+        let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
         assert!(
             result.is_ok(),
             "sequential load {i} must succeed: {result:?}"
@@ -558,7 +611,8 @@ fn dispatch_vm_call_works_correctly() {
     let runtime: Runtime = make_runtime();
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     let handle: PluginHandle = runtime

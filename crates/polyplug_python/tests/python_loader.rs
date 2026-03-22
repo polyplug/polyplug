@@ -4,12 +4,14 @@
 // missing polyplug_init, vtable registration, GIL acquisition, and thread safety.
 #![allow(clippy::expect_used)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
@@ -46,6 +48,22 @@ fn make_runtime() -> Runtime {
         .loader(PythonLoader::default())
         .build()
         .expect("runtime build must succeed")
+}
+
+/// Create a ManifestData for a Python bundle.
+fn make_manifest(path: &PathBuf, name: &str) -> ManifestData {
+    ManifestData {
+        id: polyplug_abi::bundle_id(name),
+        name: name.to_owned(),
+        runtime: "python".to_owned(),
+        file: path.file_name().unwrap().to_string_lossy().into_owned(),
+        path: path.parent().unwrap().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    }
 }
 
 /// A Python plugin source that registers one vtable via `polyplug_init`.
@@ -177,7 +195,8 @@ fn test_interpreter_initializes_without_panic() {
     let (_dir, path) = write_bundle("noop_init", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "noop_init");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "unexpected error: {result:?}");
 }
 
@@ -191,8 +210,9 @@ fn test_default_config_version_check_passes() {
         .loader(loader)
         .build()
         .expect("runtime build must succeed");
+    let manifest: ManifestData = make_manifest(&path, "ver_check");
     let result: Result<(), PolyplugError> =
-        PythonLoader::new(PythonConfig::default()).load(&path, &runtime);
+        PythonLoader::new(PythonConfig::default()).load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "version check failed unexpectedly: {result:?}"
@@ -212,8 +232,9 @@ fn test_version_too_old_returns_version_mismatch() {
         .loader(loader)
         .build()
         .expect("runtime build must succeed");
+    let manifest: ManifestData = make_manifest(&path, "ver_mismatch");
     let err: PolyplugError = PythonLoader::new(config)
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect_err("expected version mismatch");
     match err {
         PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found }) => {
@@ -234,7 +255,8 @@ fn test_valid_plugin_registers_in_registry() {
     let (_dir, path) = write_bundle("valid_plugin", VALID_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "valid_plugin");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load failed: {result:?}");
     // The plugin registers with contract_id = 0xDEADBEEFCAFEBABE
     let contract_id: u64 = 0xDEADBEEFCAFEBABE;
@@ -249,8 +271,9 @@ fn test_syntax_error_returns_module_import_failed() {
     let (_dir, path) = write_bundle("syntax_err", SYNTAX_ERROR_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "syntax_err");
     let err: PolyplugError = loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect_err("expected failure for syntax error plugin");
     match err {
         PolyplugError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
@@ -270,8 +293,9 @@ fn test_import_error_returns_module_import_failed() {
     let (_dir, path) = write_bundle("import_err", IMPORT_ERROR_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "import_err");
     let err: PolyplugError = loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect_err("expected failure for import-error plugin");
     match err {
         PolyplugError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
@@ -295,8 +319,9 @@ fn test_missing_init_returns_init_symbol_missing() {
     let (_dir, path) = write_bundle("no_init", MISSING_INIT_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "no_init");
     let err: PolyplugError = loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect_err("expected failure for plugin missing polyplug_init");
     match err {
         PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle }) => {
@@ -315,8 +340,9 @@ fn test_raising_init_returns_init_raised_exception() {
     let (_dir, path) = write_bundle("raising_init", RAISING_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = make_manifest(&path, "raising_init");
     let err: PolyplugError = loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect_err("expected failure for raising plugin");
     match err {
         PolyplugError::Loader(LoaderError::PythonInitRaisedException { bundle, message }) => {
@@ -338,11 +364,22 @@ fn test_raising_init_returns_init_raised_exception() {
 #[test]
 fn test_nonexistent_path_returns_import_failed() {
     let dir: TempDir = TempDir::new().expect("tempdir");
-    let path: PathBuf = dir.path().join("does_not_exist.py");
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
+    let manifest: ManifestData = ManifestData {
+        id: 0,
+        name: "does_not_exist".to_owned(),
+        runtime: "python".to_owned(),
+        file: "does_not_exist.py".to_owned(),
+        path: dir.path().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    };
     let err: PolyplugError = loader
-        .load(&path, &runtime)
+        .load(&manifest, &runtime)
         .expect_err("expected failure for nonexistent path");
     match err {
         PolyplugError::Loader(LoaderError::PythonModuleImportFailed { .. }) => {}
@@ -358,7 +395,8 @@ fn test_gil_released_between_sequential_loads() {
     for i in 0u32..4u32 {
         let name: String = format!("gil_seq_{i}");
         let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
-        let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+        let manifest: ManifestData = make_manifest(&path, &name);
+        let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
         assert!(result.is_ok(), "sequential load {i} failed: {result:?}");
     }
 }
@@ -383,8 +421,10 @@ fn test_second_loader_reuses_interpreter() {
     let runtime_a: Runtime = make_runtime();
     let runtime_b: Runtime = make_runtime();
 
-    let result_a: Result<(), PolyplugError> = loader_a.load(&path1, &runtime_a);
-    let result_b: Result<(), PolyplugError> = loader_b.load(&path2, &runtime_b);
+    let manifest1: ManifestData = make_manifest(&path1, "reuse1");
+    let manifest2: ManifestData = make_manifest(&path2, "reuse2");
+    let result_a: Result<(), PolyplugError> = loader_a.load(&manifest1, &runtime_a);
+    let result_b: Result<(), PolyplugError> = loader_b.load(&manifest2, &runtime_b);
 
     assert!(result_a.is_ok(), "first loader failed: {result_a:?}");
     assert!(
@@ -406,7 +446,8 @@ fn test_plugin_path_with_underscore_digits_loads() {
     let (_dir, path) = write_bundle("plugin_42_ok", NOOP_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "plugin_42_ok");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "underscore-digit stem load failed: {result:?}"
@@ -432,7 +473,7 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     let path: PathBuf = dir.path().join("bundle.py");
     fs::write(&path, plugin_src).expect("write bundle.py");
 
-    let manifest: String = format!(
+    let manifest_toml: String = format!(
         r#"id = {}
 name = "imports_helper"
 runtime = "python"
@@ -440,11 +481,23 @@ file = "bundle.py"
 "#,
         polyplug_abi::bundle_id("imports_helper")
     );
-    fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+    fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = ManifestData {
+        id: polyplug_abi::bundle_id("imports_helper"),
+        name: "imports_helper".to_owned(),
+        runtime: "python".to_owned(),
+        file: "bundle.py".to_owned(),
+        path: dir.path().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    };
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "sibling import failed: {result:?}");
 }
 
@@ -467,7 +520,7 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, _ctx: int) -> None:
     let path: PathBuf = dir.path().join("bundle.py");
     fs::write(&path, plugin_src).expect("write bundle.py");
 
-    let manifest: String = format!(
+    let manifest_toml: String = format!(
         r#"id = {}
 name = "uses_site_pkg"
 runtime = "python"
@@ -475,11 +528,23 @@ file = "bundle.py"
 "#,
         polyplug_abi::bundle_id("uses_site_pkg")
     );
-    fs::write(dir.path().join("manifest.toml"), &manifest).expect("write manifest.toml");
+    fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = ManifestData {
+        id: polyplug_abi::bundle_id("uses_site_pkg"),
+        name: "uses_site_pkg".to_owned(),
+        runtime: "python".to_owned(),
+        file: "bundle.py".to_owned(),
+        path: dir.path().to_path_buf(),
+        version: String::new(),
+        provides: Vec::new(),
+        function_count: HashMap::new(),
+        dependencies: Vec::new(),
+        needs_reinit_on_dep_reload: false,
+    };
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "site-packages import failed: {result:?}");
 }
 
@@ -490,7 +555,10 @@ fn test_error_contains_bundle_name() {
     let (_dir, path) = write_bundle("named_raising_plugin", RAISING_PLUGIN_SRC);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let err: PolyplugError = loader.load(&path, &runtime).expect_err("expected error");
+    let manifest: ManifestData = make_manifest(&path, "named_raising_plugin");
+    let err: PolyplugError = loader
+        .load(&manifest, &runtime)
+        .expect_err("expected error");
     let display: String = err.to_string();
     assert!(
         display.contains("bundle"),
@@ -521,7 +589,8 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
     let (_dir, path) = write_bundle("ctx_check", plugin_src);
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
-    let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+    let manifest: ManifestData = make_manifest(&path, "ctx_check");
+    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
 }
 
@@ -534,7 +603,8 @@ fn test_many_sequential_loads_no_state_leak() {
     for i in 0u32..16u32 {
         let name: String = format!("stress_{i}");
         let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
-        let result: Result<(), PolyplugError> = loader.load(&path, &runtime);
+        let manifest: ManifestData = make_manifest(&path, &name);
+        let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
         assert!(result.is_ok(), "stress load {i} failed: {result:?}");
     }
 }
@@ -548,13 +618,16 @@ fn test_valid_load_after_failed_load_succeeds() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
 
+    let bad_manifest: ManifestData = make_manifest(&bad_path, "bad_recover");
+    let good_manifest: ManifestData = make_manifest(&good_path, "good_after_bad");
+
     // First load — should fail.
     assert!(
-        loader.load(&bad_path, &runtime).is_err(),
+        loader.load(&bad_manifest, &runtime).is_err(),
         "bad load should fail"
     );
 
     // Second load — should succeed.
-    let result: Result<(), PolyplugError> = loader.load(&good_path, &runtime);
+    let result: Result<(), PolyplugError> = loader.load(&good_manifest, &runtime);
     assert!(result.is_ok(), "recovery load failed: {result:?}");
 }

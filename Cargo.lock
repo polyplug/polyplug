@@ -1589,6 +1589,7 @@ dependencies = [
 name = "polyplug_dotnet"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "netcorehost",
  "once_cell",
  "pelite",
@@ -1620,6 +1621,7 @@ dependencies = [
 name = "polyplug_lua"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "mlua",
  "polyplug",
  "polyplug_abi",
@@ -1638,6 +1640,7 @@ dependencies = [
 name = "polyplug_python"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "polyplug",
  "polyplug_abi",
  "pyo3",

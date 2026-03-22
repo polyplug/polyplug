@@ -19,9 +19,9 @@ use crate::error::LoaderError;
 use crate::registry::Registry;
 use crate::runtime::HostContext;
 use crate::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::sync::Arc;
 
@@ -49,23 +49,17 @@ pub trait BundleLoader: Send + Sync {
         vec![self.runtime_name().to_owned()]
     }
 
-    /// Whether this loader expects a file path (not a directory).
+    /// Load a bundle given its manifest.
     ///
-    /// File-based loaders (Python, Lua, .NET, JS) receive the plugin file directly.
-    /// Directory-based loaders (native) receive a bundle directory containing
-    /// manifest.toml and the shared library.
-    ///
-    /// Defaults to `false` (directory-based).
-    fn is_file_loader(&self) -> bool {
-        false
-    }
-
-    /// Load a bundle at `path`.
+    /// The manifest contains all metadata needed to load the bundle:
+    /// - `manifest.path` - the bundle directory
+    /// - `manifest.file` - the plugin file (relative to bundle directory)
+    /// - `manifest.id` - the bundle ID
     ///
     /// # Errors
     /// Returns `Err(PolyplugError::...)` on any failure. For stub loaders,
     /// returns `Err(PolyplugError::Loader(LoaderError::JsRuntimePanic { .. }))`.
-    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError>;
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError>;
 }
 
 /// The built-in loader for native (Rust/C++/NativeAOT) bundles.
@@ -98,18 +92,28 @@ impl BundleLoader for NativeBundleLoader {
         "native"
     }
 
-    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
-        let bundle_dir: &Path = path.parent().unwrap_or(path);
-        let manifest: ManifestData =
-            parse_manifest(bundle_dir).map_err(|e: LoaderError| PolyplugError::Loader(e))?;
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError> {
         if manifest.id == 0 {
             return Err(PolyplugError::Loader(LoaderError::InitFailed {
-                bundle: path.display().to_string(),
+                bundle: manifest.path.display().to_string(),
                 error: "manifest.id is required but was 0 or missing".to_owned(),
             }));
         }
-        load_bundle(path, &manifest, &self.registry, self.host_vtable, runtime)
-            .map_err(|e: LoaderError| PolyplugError::Loader(e))
+        let bundle_path: PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
+        load_bundle(
+            &bundle_path,
+            manifest,
+            &self.registry,
+            self.host_vtable,
+            runtime,
+        )
+        .map_err(|e: LoaderError| PolyplugError::Loader(e))
     }
 }
 

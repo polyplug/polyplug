@@ -1,12 +1,12 @@
 //! Native bundle loader — delegates to `polyplug::loader::load_bundle`.
 
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::config::NativeConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 
 pub struct NativeLoader {
@@ -24,22 +24,26 @@ impl BundleLoader for NativeLoader {
         "native"
     }
 
-    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError> {
         let registry = runtime.registry();
         let host_vtable = runtime.host_vtable();
 
-        let bundle_dir: &Path = path.parent().unwrap_or(path);
-        let manifest: ManifestData =
-            polyplug::loader::parse_manifest(bundle_dir).map_err(PolyplugError::Loader)?;
-
         if manifest.id == 0 {
             return Err(PolyplugError::Loader(LoaderError::InitFailed {
-                bundle: path.to_string_lossy().into_owned(),
+                bundle: manifest.name.clone(),
                 error: "manifest.id is required but was 0 or missing".to_owned(),
             }));
         }
 
-        polyplug::loader::load_bundle(path, &manifest, registry, host_vtable, runtime)
+        let bundle_path: PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
+
+        polyplug::loader::load_bundle(&bundle_path, manifest, registry, host_vtable, runtime)
             .map_err(PolyplugError::Loader)
     }
 }

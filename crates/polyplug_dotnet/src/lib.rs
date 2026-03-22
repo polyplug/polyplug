@@ -14,15 +14,14 @@ use netcorehost::pdcstring::PdCString;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
-use polyplug::loader::parse_manifest;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::HostVTable;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-use crate::context::CLR_CONTEXT;
-use crate::context::InitFn;
 use crate::context::init_context;
+use crate::context::InitFn;
+use crate::context::CLR_CONTEXT;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
@@ -98,46 +97,39 @@ impl BundleLoader for DotnetLoader {
         "dotnet"
     }
 
-    fn is_file_loader(&self) -> bool {
-        true
-    }
+    fn load(
+        &self,
+        manifest: &polyplug::loader::manifest::ManifestData,
+        runtime: &Runtime,
+    ) -> Result<(), PolyplugError> {
+        let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
+            manifest.path.join(&manifest.file)
+        } else {
+            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        };
 
-    fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
-        // Check file existence first, before any other operations.
-        if !path.exists() {
+        if !bundle_path.exists() {
             return Err(PolyplugError::Loader(LoaderError::AssemblyNotFound {
-                path: path.to_string_lossy().into_owned(),
+                path: bundle_path.to_string_lossy().into_owned(),
             }));
         }
 
-        let tfm: String = crate::version::read_target_framework(path)?;
+        let tfm: String = crate::version::read_target_framework(&bundle_path)?;
         check_version_compatibility(&tfm, &self.config.min_framework)?;
 
-        let abs_path: std::path::PathBuf = path.canonicalize().map_err(|_| {
+        let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
             PolyplugError::Loader(LoaderError::AssemblyNotFound {
-                path: path.to_string_lossy().into_owned(),
+                path: bundle_path.to_string_lossy().into_owned(),
             })
         })?;
 
-        let bundle_dir: std::path::PathBuf =
-            path.parent().unwrap_or(path).canonicalize().map_err(|_| {
-                PolyplugError::Loader(LoaderError::AssemblyNotFound {
-                    path: path.to_string_lossy().into_owned(),
-                })
-            })?;
-
-        let manifest: polyplug::loader::manifest::ManifestData =
-            parse_manifest(&bundle_dir).map_err(|e: LoaderError| PolyplugError::Loader(e))?;
-        if manifest.id == 0 {
-            return Err(PolyplugError::Loader(LoaderError::InitFailed {
-                bundle: path.display().to_string(),
-                error: "manifest.id is required but was 0 or missing".to_owned(),
-            }));
-        }
+        let bundle_dir: &Path = &manifest.path;
         let bundle_id: u64 = manifest.id;
 
         let context: std::sync::Arc<crate::context::DotnetContext> = std::sync::Arc::clone(
-            CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, &bundle_dir))?,
+            CLR_CONTEXT.get_or_try_init(|| init_context(&self.config, bundle_dir))?,
         );
 
         let stem: std::borrow::Cow<'_, str> =
