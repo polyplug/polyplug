@@ -83,14 +83,14 @@ unsafe extern "C" fn js_dispatch(
 
     let args_usize: usize = args as usize;
     let out_usize: usize = out as usize;
-    let args_lo: u32 = args_usize as u32;
-    let args_hi: u32 = (args_usize >> 32) as u32;
-    let out_lo: u32 = out_usize as u32;
-    let out_hi: u32 = (out_usize >> 32) as u32;
 
     let call_result: Result<(), rquickjs::Error> = data.ctx.with(|ctx| {
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
-        js_fn.call::<(u32, u32, u32, u32), ()>((args_lo, args_hi, out_lo, out_hi))
+        let args_bigint: rquickjs::BigInt<'_> =
+            rquickjs::BigInt::from_i64(ctx.clone(), args_usize as i64)?;
+        let out_bigint: rquickjs::BigInt<'_> =
+            rquickjs::BigInt::from_i64(ctx.clone(), out_usize as i64)?;
+        js_fn.call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), ()>((args_bigint, out_bigint))
     });
 
     match call_result {
@@ -428,22 +428,25 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    // readI32(ptr_lo: u32, ptr_hi: u32) -> i32
-    // Reads an i32 from host memory at the given pointer.
-    let read_i32_fn: Function<'js> = Function::new(ctx.clone(), |lo: u32, hi: u32| -> i32 {
-        let ptr: *const i32 = ((hi as u64) << 32 | lo as u64) as usize as *const i32;
-        if ptr.is_null() {
-            return 0;
-        }
-        // SAFETY: ptr is a valid pointer provided by the host for reading.
-        unsafe { *ptr }
-    })
-    .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("readI32 function creation failed: {e}"),
+    let read_i32_fn: Function<'js> =
+        Function::new(ctx.clone(), |ptr_bigint: rquickjs::BigInt<'js>| -> i32 {
+            let ptr_u64: u64 = match ptr_bigint.to_i64() {
+                Ok(v) => v as u64,
+                Err(_) => return 0,
+            };
+            let ptr: *const i32 = ptr_u64 as usize as *const i32;
+            if ptr.is_null() {
+                return 0;
+            }
+            // SAFETY: ptr is a valid pointer provided by the host for reading.
+            unsafe { *ptr }
         })
-    })?;
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("readI32 function creation failed: {e}"),
+            })
+        })?;
 
     polyplug_obj
         .set("readI32", read_i32_fn)
@@ -454,18 +457,23 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    // writeI32(ptr_lo: u32, ptr_hi: u32, value: i32) -> void
-    // Writes an i32 to host memory at the given pointer.
-    let write_i32_fn: Function<'js> = Function::new(ctx.clone(), |lo: u32, hi: u32, value: i32| {
-        let ptr: *mut i32 = ((hi as u64) << 32 | lo as u64) as usize as *mut i32;
-        if ptr.is_null() {
-            return;
-        }
-        // SAFETY: ptr is a valid pointer provided by the host for writing.
-        unsafe {
-            *ptr = value;
-        }
-    })
+    let write_i32_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ptr_bigint: rquickjs::BigInt<'js>, value: i32| {
+            let ptr_u64: u64 = match ptr_bigint.to_i64() {
+                Ok(v) => v as u64,
+                Err(_) => return,
+            };
+            let ptr: *mut i32 = ptr_u64 as usize as *mut i32;
+            if ptr.is_null() {
+                return;
+            }
+            // SAFETY: ptr is a valid pointer provided by the host for writing.
+            unsafe {
+                *ptr = value;
+            }
+        },
+    )
     .map_err(|e: rquickjs::Error| {
         PolyplugError::Loader(LoaderError::JsRuntimePanic {
             runtime: "js-quickjs".to_owned(),

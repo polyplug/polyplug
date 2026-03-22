@@ -1,56 +1,45 @@
 // Test plugin for JS/QuickJS loader
 // Contract: test.add@1 (contract_id = 0xCC4232FAB0410D2B)
 
-function addOffset(lo, hi, offset) {
-    var newLo = (lo + offset) >>> 0;
-    var carry = (lo + offset) > 0xFFFFFFFF ? 1 : 0;
-    var newHi = (hi + carry) >>> 0;
-    return [newLo, newHi];
-}
-
-function add(argsLo, argsHi, outLo, outHi) {
+function add(argsPtr, outPtr) {
     try {
-        var a = polyplug.readI32(argsLo, argsHi);
-        var ptr2 = addOffset(argsLo, argsHi, 4);
-        var b = polyplug.readI32(ptr2[0], ptr2[1]);
+        var a = polyplug.readI32(argsPtr);
+        var b = polyplug.readI32(argsPtr + 4n);
         var sum = a + b;
-        polyplug.writeI32(outLo, outHi, sum);
+        polyplug.writeI32(outPtr, sum);
         return 0;
     } catch (e) {
         return 1;
     }
 }
 
-function subtract(argsLo, argsHi, outLo, outHi) {
+function subtract(argsPtr, outPtr) {
     try {
-        var a = polyplug.readI32(argsLo, argsHi);
-        var ptr2 = addOffset(argsLo, argsHi, 4);
-        var b = polyplug.readI32(ptr2[0], ptr2[1]);
-        polyplug.writeI32(outLo, outHi, a - b);
+        var a = polyplug.readI32(argsPtr);
+        var b = polyplug.readI32(argsPtr + 4n);
+        polyplug.writeI32(outPtr, a - b);
         return 0;
     } catch (e) {
         return 1;
     }
 }
 
-function multiply(argsLo, argsHi, outLo, outHi) {
+function multiply(argsPtr, outPtr) {
     try {
-        var a = polyplug.readI32(argsLo, argsHi);
-        var ptr2 = addOffset(argsLo, argsHi, 4);
-        var b = polyplug.readI32(ptr2[0], ptr2[1]);
-        polyplug.writeI32(outLo, outHi, a * b);
+        var a = polyplug.readI32(argsPtr);
+        var b = polyplug.readI32(argsPtr + 4n);
+        polyplug.writeI32(outPtr, a * b);
         return 0;
     } catch (e) {
         return 1;
     }
 }
 
-function divide(argsLo, argsHi, outLo, outHi) {
+function divide(argsPtr, outPtr) {
     try {
-        var a = polyplug.readI32(argsLo, argsHi);
-        var ptr2 = addOffset(argsLo, argsHi, 4);
-        var b = polyplug.readI32(ptr2[0], ptr2[1]);
-        polyplug.writeI32(outLo, outHi, b === 0 ? 0 : Math.floor(a / b));
+        var a = polyplug.readI32(argsPtr);
+        var b = polyplug.readI32(argsPtr + 4n);
+        polyplug.writeI32(outPtr, b === 0 ? 0 : Math.floor(a / b));
         return 0;
     } catch (e) {
         return 1;
