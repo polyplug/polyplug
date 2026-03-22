@@ -1,10 +1,11 @@
 //! LuaJIT VM initialization and plugin loader implementation.
+//!
+//! Loads Lua plugin bundles via the embedded LuaJIT VM (mlua).
+//! Each bundle gets its own Lua VM for complete isolation between bundles
+//! and between polyplug Runtime instances.
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
-use std::sync::OnceLock;
 
 use mlua::Function;
 use mlua::Lua;
@@ -14,35 +15,30 @@ use mlua::Value;
 use crate::config::LuaConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::contract_id;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
-use polyplug_abi::contract_id;
+use polyplug_abi::ABI_OK;
 
 /// The path to the guest-libs/lua/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
 
-/// Process-global LuaJIT VM. Created on first use.
-/// mlua::Lua with the `send` feature is Send+Sync, so OnceLock<Lua> is valid.
-/// A separate Mutex serializes the initialization race.
-static LUA_VM: OnceLock<Lua> = OnceLock::new();
-
-/// Guards concurrent initialization of LUA_VM.
-static LUA_VM_INIT: Mutex<()> = Mutex::new(());
-
 // ─── Lua Loader Data for VM Dispatch ───────────────────────────────────────────
 
 /// Loader-specific data for Lua plugin dispatch.
+///
+/// Each bundle gets its own Lua VM, ensuring complete isolation between
+/// bundles and between polyplug Runtime instances.
 pub struct LuaLoaderData {
-    pub ctx: Lua,
+    pub _vm: Lua,
     pub functions: Vec<Function>,
 }
 
@@ -94,46 +90,6 @@ unsafe extern "C" fn lua_dispatch(
     }
 }
 
-/// Ensures the global Lua VM is initialized with the correct package.path.
-/// Idempotent: subsequent calls return the already-initialized VM.
-///
-/// # Errors
-/// Returns `PolyplugError::Loader(LoaderError::LuaVmInitFailed)` if VM creation fails.
-pub(crate) fn ensure_lua_initialized(_config: &LuaConfig) -> Result<&'static Lua, PolyplugError> {
-    if let Some(vm) = LUA_VM.get() {
-        return Ok(vm);
-    }
-    let _guard: MutexGuard<'_, ()> = LUA_VM_INIT.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(vm) = LUA_VM.get() {
-        return Ok(vm);
-    }
-    // mlua 0.10: Lua::new() returns Lua directly (not Result).
-    // mlua 0.10: Lua::unsafe_new() enables the FFI module required by LuaJIT plugins.
-    // SAFETY: We trust the Lua scripts loaded through this loader. The LuaJIT FFI is
-    // required for the polyplug_guest.lua ABI bridge (struct layout, pointer casts).
-    // All plugins are vetted before being passed to the loader.
-    let lua: Lua = unsafe { Lua::unsafe_new() };
-    // Set package.path so that require("polyplug_guest") resolves correctly.
-    let package_path_code: String = format!(
-        "package.path = package.path .. ';' .. '{}/?.lua'",
-        GUEST_LUA_DIR.replace('\\', "/")
-    );
-    lua.load(&package_path_code)
-        .exec()
-        .map_err(|e: mlua::Error| {
-            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                reason: format!("failed to set package.path: {}", e),
-            })
-        })?;
-    // SAFETY: We hold `_guard` (LUA_VM_INIT) and already checked above that
-    let _ = LUA_VM.set(lua);
-    LUA_VM.get().ok_or_else(|| {
-        PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-            reason: "LUA_VM unavailable after initialization".to_owned(),
-        })
-    })
-}
-
 /// Lua plugin loader — loads Lua plugin bundles via the embedded LuaJIT VM.
 ///
 /// The Lua script must define a global function `polyplug_init(registrar_ptr: integer)`
@@ -168,22 +124,22 @@ impl BundleLoader for LuaLoader {
             }));
         }
 
-        let lua: &Lua = ensure_lua_initialized(&self.config)?;
+        // Create a new Lua VM for this bundle (per-bundle isolation).
+        // mlua 0.10: Lua::unsafe_new() enables the FFI module required by LuaJIT plugins.
+        // SAFETY: We trust the Lua scripts loaded through this loader. The LuaJIT FFI is
+        // required for the polyplug_guest.lua ABI bridge (struct layout, pointer casts).
+        let lua: Lua = unsafe { Lua::unsafe_new() };
 
-        // Clear globals from any previous load to ensure isolation.
-        // If the script does not define polyplug_init, we must return LuaInitFunctionMissing.
-        lua.globals()
-            .set("polyplug_init", mlua::Value::Nil)
+        // Set package.path so that require("polyplug_guest") resolves correctly.
+        let guest_path_code: String = format!(
+            "package.path = package.path .. ';' .. '{}/?.lua'",
+            GUEST_LUA_DIR.replace('\\', "/")
+        );
+        lua.load(&guest_path_code)
+            .exec()
             .map_err(|e: mlua::Error| {
                 PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                    reason: format!("failed to clear polyplug_init global: {}", e),
-                })
-            })?;
-        lua.globals()
-            .set("_polyplug_handlers", mlua::Value::Nil)
-            .map_err(|e: mlua::Error| {
-                PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                    reason: format!("failed to clear _polyplug_handlers global: {}", e),
+                    reason: format!("failed to set guest package.path: {}", e),
                 })
             })?;
 
@@ -353,9 +309,9 @@ impl BundleLoader for LuaLoader {
         // Build contract_id from contract_name and version.
         let cid: u64 = contract_id(&contract_name_str, contract_version);
 
-        // Create LuaLoaderData with the Lua VM reference and functions.
+        // Create LuaLoaderData with the Lua VM and functions.
         let loader_data: Box<LuaLoaderData> = Box::new(LuaLoaderData {
-            ctx: lua.clone(),
+            _vm: lua,
             functions: lua_functions,
         });
 
