@@ -6,7 +6,7 @@ use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;
 
-use crate::{config::PythonConfig, PythonLoader};
+use crate::{PythonLoader, config::PythonConfig};
 
 /// C-visible configuration passed to `polyplug_python_loader_create`.
 ///

@@ -6,9 +6,9 @@ use std::collections::HashMap;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
+use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::manifest::RawManifestDependency;
-use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::version::Compatibility;
 use std::fs;

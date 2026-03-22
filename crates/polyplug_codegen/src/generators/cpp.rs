@@ -274,9 +274,7 @@ fn generate_cpp_guest_plugin_vtable(
     ));
 
     // Forward declaration - user must implement this function
-    out.push_str(&format!(
-        "// Forward declaration - user must implement this\n"
-    ));
+    out.push_str("// Forward declaration - user must implement this\n");
     out.push_str(&format!(
         "{}* create_{}_impl();\n\n",
         class_name, plugin_lower

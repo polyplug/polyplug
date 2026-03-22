@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use clap::Subcommand;
 
-use polyplug_codegen::{generate, pack, GenerateConfig, Lang, PackConfig, Side};
+use polyplug_codegen::{GenerateConfig, Lang, PackConfig, Side, generate, pack};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]

@@ -10,7 +10,7 @@
 #![allow(clippy::expect_used)]
 
 use core::hint::black_box;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::path::PathBuf;
 use std::sync::Mutex;
 

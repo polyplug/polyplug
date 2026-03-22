@@ -6,21 +6,21 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use std::sync::OnceLock;
+use super::contracts::DataReporterPlugin;
+use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineDecoderPlugin;
+use super::contracts::PipelineEncoderPlugin;
+use super::contracts::PipelineValidatorPlugin;
+use super::types::*;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};
-use super::types::*;
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineEncoderPlugin;
-use super::contracts::DataReporterPlugin;
-use super::contracts::PipelineValidatorPlugin;
+use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_OK};
+use std::sync::OnceLock;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -38,7 +38,9 @@ pub const DECODER_CONTRACT_ID: u64 = 0x12F3C106B0C3DC1E;
 pub static DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderPlugin>> = OnceLock::new();
 
 pub fn set_decoder_impl(impl_: Box<dyn PipelineDecoderPlugin>) -> Result<(), &'static str> {
-    DECODER_IMPL.set(impl_).map_err(|_| "decoder already registered")
+    DECODER_IMPL
+        .set(impl_)
+        .map_err(|_| "decoder already registered")
 }
 
 /// ABI wrapper for decode (function_id = 0).
@@ -47,17 +49,27 @@ extern "C" fn decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn PipelineDecoderPlugin = match DECODER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
+            None => {
+                return AbiError {
+                    code: ABI_ERROR_GENERIC,
+                    message: StringView::null(),
+                };
+            }
         };
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.decode(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe { std::ptr::write(out as *mut StringView, val); }
+                unsafe {
+                    std::ptr::write(out as *mut StringView, val);
+                }
                 AbiError::ok()
             }
-            Err(e) => AbiError { code: e.code, message: StringView::null() },
+            Err(e) => AbiError {
+                code: e.code,
+                message: StringView::null(),
+            },
         }
     })) {
         Ok(err) => err,
@@ -65,9 +77,7 @@ extern "C" fn decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
     }
 }
 
-static DECODER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(decoder_decode_abi as *const ()),
-];
+static DECODER_FNS: [FnPtr; 1_usize] = [FnPtr(decoder_decode_abi as *const ())];
 
 pub static DECODER_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -81,4 +91,3 @@ pub static DECODER_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
-

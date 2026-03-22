@@ -15,14 +15,14 @@ use tempfile::NamedTempFile;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
-use polyplug_dotnet::version::read_target_framework;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
+use polyplug_dotnet::version::read_target_framework;
 
 fn temp_file_with_bytes(bytes: &[u8]) -> NamedTempFile {
     let mut f: NamedTempFile = NamedTempFile::new().expect("tempfile creation failed");

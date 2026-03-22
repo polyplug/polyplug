@@ -19,9 +19,9 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::HostVTable;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-use crate::context::init_context;
-use crate::context::InitFn;
 use crate::context::CLR_CONTEXT;
+use crate::context::InitFn;
+use crate::context::init_context;
 
 pub struct DotnetLoader {
     config: DotnetConfig,

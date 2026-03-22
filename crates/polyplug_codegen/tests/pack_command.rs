@@ -8,7 +8,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{pack, Lang, PackConfig};
+use polyplug_codegen::{Lang, PackConfig, pack};
 use std::fs;
 use std::path::PathBuf;
 

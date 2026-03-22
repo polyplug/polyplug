@@ -380,7 +380,7 @@ impl AbiGenerator for LuaGenerator {
             ));
         }
 
-        output.push_str("\n");
+        output.push('\n');
         output
     }
 

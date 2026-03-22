@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::DispatchType;
@@ -602,7 +602,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
 fn dispatch_vm_call_works_correctly() {
     // This test actually invokes dispatch.vm.call to verify the JS function
     // can be called through the ABI dispatch mechanism.
-    use polyplug_abi::{AbiError, ABI_OK};
+    use polyplug_abi::{ABI_OK, AbiError};
 
     let contract_id: u64 = polyplug_abi::contract_id("test.dispatch.call", 1);
     let bundle: String = make_bundle_js(contract_id, 1, "test.dispatch.call");

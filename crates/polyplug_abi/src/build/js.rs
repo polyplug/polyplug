@@ -253,13 +253,9 @@ impl JsGenerator {
         // Generate as a union type with nested interfaces
         output.push_str(&format!("export type {} =\n", union_info.name));
 
-        for (i, variant) in union_info.variants.iter().enumerate() {
+        for variant in union_info.variants.iter() {
             let ts_type: String = Self::rust_type_to_ts(&variant.type_name);
-            if i == 0 {
-                output.push_str(&format!("    | {{ {}: {} }}\n", variant.name, ts_type));
-            } else {
-                output.push_str(&format!("    | {{ {}: {} }}\n", variant.name, ts_type));
-            }
+            output.push_str(&format!("    | {{ {}: {} }}\n", variant.name, ts_type));
         }
 
         output.push_str(";\n\n");
@@ -764,9 +760,11 @@ mod tests {
         assert_eq!(files.files.len(), 1);
         assert_eq!(files.files[0].path, PathBuf::from("polyplug_abi.ts"));
         assert!(files.files[0].content.contains("export const ABI_OK"));
-        assert!(files.files[0]
-            .content
-            .contains("export interface StringView"));
+        assert!(
+            files.files[0]
+                .content
+                .contains("export interface StringView")
+        );
     }
 
     /// Generate the polyplug_abi.ts file for the SDK.

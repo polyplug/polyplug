@@ -19,9 +19,9 @@ use crate::error::LoaderError;
 use crate::registry::Registry;
 use crate::runtime::HostContext;
 use crate::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::sync::Arc;
 

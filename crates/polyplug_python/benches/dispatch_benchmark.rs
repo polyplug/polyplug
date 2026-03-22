@@ -11,11 +11,11 @@
 #![allow(clippy::expect_used)]
 
 use core::hint::black_box;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
+use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyDictMethods;
 use pyo3::types::PyModule;
-use pyo3::Python;
 
 /// Benchmark Python GIL acquisition and function call overhead.
 ///
@@ -33,15 +33,15 @@ fn bench_python_dispatch(c: &mut Criterion) {
             Python::attach(|py| {
                 // Use PyDict::new and py.run to define a simple no-op function.
                 let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-                let globals: pyo3::Bound<'_, pyo3::types::PyDict> =
-                    pyo3::types::PyDict::new(py);
-                py.run(code, Some(&globals), None).expect("Failed to run code");
-                
+                let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
+                py.run(code, Some(&globals), None)
+                    .expect("Failed to run code");
+
                 let noop_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
                     .get_item("noop_dispatch")
                     .expect("Failed to get noop_dispatch")
                     .expect("noop_dispatch not found");
-                
+
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
@@ -56,15 +56,15 @@ fn bench_python_dispatch(c: &mut Criterion) {
         b.iter(|| {
             Python::attach(|py| {
                 let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-                let globals: pyo3::Bound<'_, pyo3::types::PyDict> =
-                    pyo3::types::PyDict::new(py);
-                py.run(code, Some(&globals), None).expect("Failed to run code");
-                
+                let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
+                py.run(code, Some(&globals), None)
+                    .expect("Failed to run code");
+
                 let noop_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
                     .get_item("noop_dispatch")
                     .expect("Failed to get noop_dispatch")
                     .expect("noop_dispatch not found");
-                
+
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 for _ in 0..10 {
@@ -151,12 +151,12 @@ fn bench_python_computation(c: &mut Criterion) {
                 let globals: pyo3::Bound<'_, pyo3::types::PyDict> =
                     pyo3::types::PyDict::new(py);
                 py.run(code, Some(&globals), None).expect("Failed to run code");
-                
+
                 let compute_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
                     .get_item("compute_sum")
                     .expect("Failed to get compute_sum")
                     .expect("compute_sum not found");
-                
+
                 let args_i64: i64 = 0;
                 let out_i64: i64 = 0;
                 let _: Result<pyo3::Bound<'_, pyo3::PyAny>, pyo3::PyErr> =
@@ -182,10 +182,10 @@ fn bench_cached_dispatch(c: &mut Criterion) {
     // Setup: Create function once (not measured).
     let cached_fn: pyo3::Py<pyo3::PyAny> = Python::attach(|py| {
         let code: &std::ffi::CStr = c"def noop_dispatch(args, out): return 0";
-        let globals: pyo3::Bound<'_, pyo3::types::PyDict> =
-            pyo3::types::PyDict::new(py);
-        py.run(code, Some(&globals), None).expect("Failed to run code");
-        
+        let globals: pyo3::Bound<'_, pyo3::types::PyDict> = pyo3::types::PyDict::new(py);
+        py.run(code, Some(&globals), None)
+            .expect("Failed to run code");
+
         let noop_fn: pyo3::Bound<'_, pyo3::PyAny> = globals
             .get_item("noop_dispatch")
             .expect("Failed to get noop_dispatch")

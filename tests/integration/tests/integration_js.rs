@@ -11,11 +11,11 @@ use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::ABI_OK;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 

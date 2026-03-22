@@ -13,7 +13,7 @@
 #![allow(clippy::expect_used)]
 
 use core::hint::black_box;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rquickjs::{Context, Function, Object, Persistent, Runtime};
 
 fn bench_js_dispatch(c: &mut Criterion) {
