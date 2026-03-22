@@ -476,3 +476,4 @@ tests/fixtures/*.dll
 # Python build artifacts
 *.egg-info/
 *.egg
+host-libs/python/loaders/polyplug-loaders-python/build/
