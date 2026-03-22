@@ -58,5 +58,5 @@ examples/
 ## See Also
 
 - `api.toml` — API definition
-- `guest-libs/` — Guest libraries
-- `host-libs/` — Host libraries
+- `../sdks/` — SDKs for each language
+- `../../docs/` — Design documentation

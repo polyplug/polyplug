@@ -23,7 +23,7 @@ Arc::strong_count > 1   →  Instances exist (each instance holds an Arc)
 
 ### 2. Hidden Implementation
 
-The generated contract classes hide `PluginGuard` and `PluginVTable` from the application developer. They only see:
+The generated contract classes hide `PluginGuard` and `PluginInterface` from the application developer. They only see:
 
 ```cpp
 auto decoder = PipelineDecoder::create(rt, contract_id);
@@ -223,13 +223,13 @@ public:
         StringView out_sv{nullptr, 0};
         
         // Get function pointer from hidden guard
-        const PluginVTable* vt = guard_.vtable();
-        if (!vt || vt->function_count == 0) {
-            throw std::runtime_error("invalid vtable");
+        const PluginInterface* iface = guard_.interface();
+        if (!iface || iface->function_count == 0) {
+            throw std::runtime_error("invalid interface");
         }
         
         // Call plugin function
-        auto fn = reinterpret_cast<AbiError(*)(const void*, void*)>(vt->functions[0]);
+        auto fn = reinterpret_cast<AbiError(*)(const void*, void*)>(iface->functions[0]);
         AbiError err = fn(&in_sv, &out_sv);
         
         if (err.code != 0) {
@@ -900,7 +900,7 @@ private:
 
 ### Hidden Implementation Details
 
-Generated code hides `PluginGuard` and `PluginVTable` from the public API:
+Generated code hides `PluginGuard` and `PluginInterface` from the public API:
 
 ```cpp
 // PUBLIC API - what app developers see
@@ -916,7 +916,7 @@ private:
 };
 
 // INTERNAL - not exposed to app developers
-struct PluginVTable {
+struct PluginInterface {
     uint64_t contract_id;
     uint32_t contract_version;
     uint32_t function_count;

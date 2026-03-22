@@ -180,7 +180,7 @@ size_t       find_all_by_contract(uint64_t contract_id, uint32_t min_version,
 
 // One-time resolution at init: PluginHandle → arc-swap Guard (opaque)
 // Returned guard keeps vtable alive. Store the guard, use guard->vtable on hot path.
-const PluginVTableGuard* resolve_plugin(PluginHandle handle);
+const PluginInterfaceGuard* resolve_plugin(PluginHandle handle);
 
 // Extension lookup
 const void* get_extension(uint32_t extension_id);
@@ -230,7 +230,7 @@ typedef struct {
 
 // Opaque — managed by runtime. Holds an arc-swap read guard keeping the
 // vtable pointer alive for exactly one call sequence.
-typedef struct PluginVTableGuard PluginVTableGuard;
+typedef struct PluginInterfaceGuard PluginInterfaceGuard;
 ```
 
 **Dependency enforcement — hard error on undeclared access:**
@@ -239,7 +239,7 @@ typedef struct PluginVTableGuard PluginVTableGuard;
 
 **Trust model:**
 
-polyplug assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. `PluginVTable` pointers must never be cast to mutable and written to — doing so is undefined behavior. There is no runtime enforcement: `mprotect` is bypassable by in-process code and is not used (security theater). See `TRUST_MODEL.md`.
+polyplug assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. `PluginInterface` pointers must never be cast to mutable and written to — doing so is undefined behavior. There is no runtime enforcement: `mprotect` is bypassable by in-process code and is not used (security theater). See `TRUST_MODEL.md`.
 
 **Rules:**
 - All strings crossing the ABI boundary are UTF-8
@@ -268,16 +268,16 @@ Host calls init(registrar, ctx) passing HostVTable ptr and PluginContext
         │
         ▼
 Plugin resolves declared dependencies via find_by_contract / find_by_bundle
-Plugin stores PluginVTableGuard for each dependency (arc-swap read guard)
+Plugin stores PluginInterfaceGuard for each dependency (arc-swap read guard)
         │
         ▼
-Plugin builds PluginVTable (its functions for host to call)
+Plugin builds PluginInterface (its functions for host to call)
         │
         ▼
-Plugin calls registrar->register() passing PluginVTable ptr
+Plugin calls registrar->register() passing PluginInterface ptr
         │
         ▼
-Host stores PluginVTable ptr in arc-swap slot
+Host stores PluginInterface ptr in arc-swap slot
         │
         ▼
 Load complete. All future calls = one indirect call.
@@ -295,12 +295,12 @@ typedef struct {
     PluginHandle             (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t                   (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version,
                                                       PluginHandle* out, size_t out_cap);
-    const PluginVTableGuard* (*resolve_plugin)(PluginHandle handle);
+    const PluginInterfaceGuard* (*resolve_plugin)(PluginHandle handle);
     const void*              (*get_extension)(uint32_t extension_id);
 } HostVTable;
 ```
 
-**PluginVTable — one per contract implemented:**
+**PluginInterface — one per contract implemented:**
 
 ```c
 typedef struct {
@@ -308,7 +308,7 @@ typedef struct {
     uint32_t contract_version;
     uint32_t function_count;
     void*    functions[];      // fixed order defined by contract schema
-} PluginVTable;
+} PluginInterface;
 ```
 
 **PluginRegistrar — bridge during init only:**
@@ -318,7 +318,7 @@ typedef struct {
     void (*register_plugin)(
         PluginRegistrar*        self,
         const PluginDescriptor* descriptor,
-        const PluginVTable*     vtable
+        const PluginInterface*     vtable
     );
     const HostVTable* host;
 } PluginRegistrar;
@@ -341,8 +341,8 @@ struct PluginSlot {
     generation: u32,                   // incremented on unload, detects stale handles
 }
 
-struct VTableSlot(pub *const PluginVTable);
-// SAFETY: PluginVTable is read-only after registration. Send+Sync by trust model.
+struct VTableSlot(pub *const PluginInterface);
+// SAFETY: PluginInterface is read-only after registration. Send+Sync by trust model.
 unsafe impl Send for VTableSlot {}
 unsafe impl Sync for VTableSlot {}
 ```
@@ -2055,7 +2055,7 @@ Every plugin slot in the registry holds an `ArcSwap<VTableSlot>`. Readers (calle
 New version of bundle B detected (inotify / polling / explicit API)
         │
         ▼
-Runtime loads new_B.so (via correct loader), runs init, gets new PluginVTable*
+Runtime loads new_B.so (via correct loader), runs init, gets new PluginInterface*
         │
         ▼
 Runtime atomically swaps arc-swap slot: vtable_slot.store(Arc::new(VTableSlot(new_ptr)))

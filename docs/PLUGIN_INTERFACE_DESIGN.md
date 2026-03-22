@@ -1,5 +1,7 @@
 # PluginInterface Design Rationale
 
+> **Historical Document** — This document describes the design rationale for the `PluginInterface` architecture. The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug/src/abi/` and `sdks/*/abi/`.
+
 ## Overview
 
 This document explains the design decisions behind the `PluginInterface` architecture, which replaces the previous `PluginVTable` design. The key goals are:

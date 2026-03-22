@@ -94,20 +94,12 @@ polyplug/
 │   ├── polyplug_guest/     # Guest library for Rust plugins
 │   ├── polyplugc/          # CLI codegen tool
 │   └── polyplug_codegen/   # Code generation library
-├── host-libs/              # Host libraries for each language
-│   ├── rust/
-│   ├── python/
-│   ├── csharp/
-│   ├── lua/
-│   ├── js/
-│   └── cpp/
-├── guest-libs/             # Guest libraries for plugin authors
-│   ├── rust/
-│   ├── python/
-│   ├── csharp/
-│   ├── lua/
-│   ├── js/
-│   └── cpp/
+├── sdks/                   # Cross-language SDKs (host + guest + ABI)
+│   ├── csharp/             # C# SDK (abi/, host/, guest/, loaders/)
+│   ├── python/             # Python SDK (abi/, host/, guest/, loaders/)
+│   ├── cpp/                # C++ SDK (abi/, host/, guest/, loaders/)
+│   ├── lua/                # Lua SDK (abi/, host/, guest/, loaders/)
+│   └── js/                 # JavaScript SDK (abi/, host/, guest/, loaders/)
 └── examples/               # Example hosts and plugins
     ├── hosts/
     └── guests/
@@ -115,9 +107,9 @@ polyplug/
 
 ## Documentation
 
-- **Host Libraries** — See `host-libs/` for integrating polyplug into your application
-- **Guest Libraries** — See `guest-libs/` for writing plugins in each language
+- **SDKs** — See `sdks/` for host and guest libraries in each language
 - **Examples** — See `examples/` for complete working examples
+- **Design Docs** — See `docs/` for architecture and design decisions
 
 ## Code Generation
 

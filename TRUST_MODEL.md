@@ -2,6 +2,27 @@
 
 This document defines the security boundaries, dependency enforcement mechanisms, and trust assumptions of the polyplug runtime platform.
 
+## Executive Summary
+
+**What this document covers:** How polyplug enforces dependency contracts between plugins without sacrificing performance.
+
+**Key insight:** Dependency enforcement happens once at load time (Phase 1), not on every call (Phase 2). This gives us zero-overhead hot paths while maintaining architectural integrity.
+
+**Trust boundaries:**
+- Host app: Fully trusted (unrestricted access)
+- Plugins: Semi-trusted (restricted to declared dependencies during init)
+- Runtime: Root of trust (enforces all contracts)
+
+**What we protect against:** Undeclared dependencies, version mismatches, use-after-unload, malformed binaries, null pointer inputs.
+
+**What we don't protect against:** Malicious memory access, plugin crashes, privilege escalation. Plugins run in-process with full host privileges.
+
+**Bottom line:** polyplug is an architecture enforcement tool, not a security sandbox. For untrusted plugins, use OS-level isolation (WASM, containers, separate processes).
+
+---
+
+This document defines the security boundaries, dependency enforcement mechanisms, and trust assumptions of the polyplug runtime platform.
+
 ## 1. Overview
 
 The polyplug trust model governs how independent plugin bundles interact within a shared process space. Unlike OS-level process isolation, polyplug operates within a single address space, prioritizing performance and architectural integrity over hostile-actor sandboxing.
