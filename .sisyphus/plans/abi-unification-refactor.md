@@ -165,11 +165,11 @@ Unify all language bindings under a single `sdks/` structure with auto-generated
 - PluginVTable removed everywhere, PluginInterface used directly
 
 ### Definition of Done
-- [ ] `cargo build` succeeds
-- [ ] `cargo test --all` passes
-- [ ] All 5 SDKs compile and pass E2E tests with example hosts/guests
-- [ ] No PluginVTable references remain (except in comments/docs)
-- [ ] All ABI constants exported in all languages
+- [x] `cargo build` succeeds
+- [x] `cargo test --all` passes
+- [x] All 5 SDKs compile and pass E2E tests with example hosts/guests
+- [x] No PluginVTable references remain (except in comments/docs)
+- [x] All ABI constants exported in all languages
 
 ### Must Have
 - Modular build.rs with AbiGenerator trait
