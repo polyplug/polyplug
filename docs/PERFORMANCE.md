@@ -305,10 +305,6 @@ QuickJS guest plugins use a cached Context architecture for minimal dispatch ove
 |-----------|------|-------------|
 | `cached_context_single_call` | **82-88 ns** | Single dispatch with cached Context |
 | `cached_context_10_calls` | 698-759 ns | 10 calls (~70-76 ns/call) |
-| `old_fresh_context_per_call` | ~~122-125 µs~~ | OLD: Context created each call |
-| `new_cached_context_reuse` | **82-83 ns** | NEW: Context cached and reused |
-
-**Speedup: ~1,500x faster** than creating Context per call.
 
 #### Why This Is Minimal Overhead
 
@@ -369,10 +365,6 @@ All loaders are compared against native function calls:
 |-----------|------|-------------|
 | `cached_context_single_call` | **82-88 ns** | Single dispatch with cached Context |
 | `cached_context_10_calls` | 698-759 ns | 10 calls (~70-76 ns/call) |
-| `old_fresh_context_per_call` | ~~122-125 µs~~ | OLD: Context created each call |
-| `new_cached_context_reuse` | **82-83 ns** | NEW: Context cached and reused |
-
-**Speedup: ~1,500x faster** than creating Context per call.
 
 ### Lua (LuaJIT Guest Plugins)
 
