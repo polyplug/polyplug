@@ -522,7 +522,7 @@ fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, pref
     out.push_str(&format!("function M.{fn_name}(vtable{sig_params})\n"));
     emit_lua_host_args_setup(out, func, prefix);
     emit_lua_host_out_setup(out, &func.returns);
-    out.push_str("    local fn_ptr = vtable.functions[");
+    out.push_str("    local fn_ptr = vtable.dispatch.native.functions[");
     out.push_str(&format!("{}]", func.function_id));
     out.push('\n');
     out.push_str("    if fn_ptr == nil then\n");

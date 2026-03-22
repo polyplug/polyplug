@@ -202,31 +202,163 @@ impl PluginHandle {
     }
 }
 
-/// Plugin VTable — one per contract implemented by a plugin.
+/// Opaque host context passed to plugin functions via rt_ctx parameter.
 ///
-/// OWNERSHIP: Must be `'static` or intentionally leaked.
-/// Never stack-allocated. Never freed while runtime lives.
+/// Contains the runtime pointer and the bundle_id of the calling bundle.
+/// The actual implementation is in the polyplug crate; this definition
+/// establishes the ABI layout.
+///
+/// OWNERSHIP: `'static`, lives as long as the runtime.
 #[repr(C)]
-pub struct PluginVTable {
-    /// FNV-1a hash of "contract_name@major_version".
-    pub contract_id: u64,
-    /// minor.patch encoded as `(minor << 16 | patch)`.
-    pub contract_version: u32,
-    /// Number of valid entries in the `functions` array.
-    pub function_count: u32,
+#[derive(Debug, Clone, Copy)]
+pub struct HostContext {
+    /// Opaque pointer to the Runtime. Never dereferenced by plugins.
+    pub runtime: *mut core::ffi::c_void,
+    /// Bundle ID of the calling bundle for dependency enforcement.
+    pub bundle_id: u64,
+}
+
+// SAFETY: HostContext contains a raw pointer (which is Send+Sync as raw ptr)
+// and a u64. The pointer is only dereferenced by the host runtime.
+unsafe impl Send for HostContext {}
+
+// SAFETY: HostContext contains only a raw pointer and a u64.
+// Concurrent reads are safe — no mutation occurs through shared references.
+unsafe impl Sync for HostContext {}
+
+// ─── Dispatch Types for Hybrid Native/VM Plugins ─────────────────────────────
+
+/// Dispatch mechanism type — determines how function calls are routed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchType {
+    /// Native dispatch: direct function pointer calls (zero overhead).
+    Native = 0,
+    /// VM dispatch: call through a dispatch function with loader_data.
+    VirtualMachine = 1,
+}
+
+// SAFETY: DispatchType is a simple C enum (Copy type). Safe to share across threads.
+unsafe impl Send for DispatchType {}
+
+// SAFETY: DispatchType is a simple C enum (Copy type). Concurrent reads are safe.
+unsafe impl Sync for DispatchType {}
+
+/// Native dispatch data — direct function pointer array.
+///
+/// Used when `dispatch_type == DispatchType::Native`.
+/// The `functions` array contains `function_count` function pointers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDispatch {
     /// Pointer to a static array of function pointers, indexed by function_id.
     pub functions: *const *const (),
 }
 
-// SAFETY: PluginVTable only contains data that is 'static (the functions pointer
-// points to a static array). All fields are copy types or static pointers.
-// Sending/sharing across threads only reads these static pointers.
-unsafe impl Send for PluginVTable {}
+// SAFETY: NativeDispatch contains only a pointer to static data.
+// The function pointers are 'static and safe to call from any thread.
+unsafe impl Send for NativeDispatch {}
 
-// SAFETY: PluginVTable only contains data that is 'static (the functions pointer
-// points to a static array). All fields are copy types or static pointers.
-// Sending/sharing across threads only reads these static pointers.
-unsafe impl Sync for PluginVTable {}
+// SAFETY: NativeDispatch contains only a pointer to static data.
+// Concurrent reads of the pointer are safe.
+unsafe impl Sync for NativeDispatch {}
+
+/// VM dispatch data — call through a dispatch function.
+///
+/// Used when `dispatch_type == DispatchType::VirtualMachine`.
+/// The `call` function receives `loader_data` which contains VM-specific state.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VmDispatch {
+    /// Dispatch function called for every VM function invocation.
+    ///
+    /// # Arguments
+    /// - `loader_data`: VM-specific data (cast from `*mut c_void`)
+    /// - `fn_id`: Function index within the contract
+    /// - `args`: Pointer to packed arguments (ABI-specific layout)
+    /// - `out`: Pointer to output buffer for return value
+    pub call: unsafe extern "C" fn(
+        loader_data: *mut core::ffi::c_void,
+        fn_id: u32,
+        args: *const (),
+        out: *mut (),
+    ) -> AbiError,
+    /// Loader-specific data (e.g., LuaLoaderData, JsLoaderData).
+    /// Opaque to the host; interpreted by the dispatch function.
+    pub loader_data: *mut core::ffi::c_void,
+}
+
+// SAFETY: VmDispatch contains a function pointer and a raw pointer.
+// The function pointer is safe to call from any thread (the dispatch function
+// must handle its own synchronization). The loader_data pointer is owned by
+// the loader and must be thread-safe.
+unsafe impl Send for VmDispatch {}
+
+// SAFETY: VmDispatch contains only a function pointer and a raw pointer.
+// Concurrent calls to the dispatch function must be safe (loader's responsibility).
+unsafe impl Sync for VmDispatch {}
+
+/// Union of dispatch mechanisms — use based on `dispatch_type`.
+///
+/// # Safety
+/// Access the correct variant based on `PluginInterface::dispatch_type`:
+/// - `dispatch_type == Native` → access `.native`
+/// - `dispatch_type == VirtualMachine` → access `.vm`
+#[repr(C)]
+pub union PluginDispatch {
+    /// Native dispatch data (when dispatch_type == Native).
+    pub native: NativeDispatch,
+    /// VM dispatch data (when dispatch_type == VirtualMachine).
+    pub vm: VmDispatch,
+}
+
+// SAFETY: PluginDispatch is a union of Send+Sync types.
+// The caller must access the correct variant based on dispatch_type.
+unsafe impl Send for PluginDispatch {}
+
+// SAFETY: PluginDispatch is a union of Send+Sync types.
+// Concurrent access requires the caller to use the correct variant.
+unsafe impl Sync for PluginDispatch {}
+
+/// Plugin interface — one per contract implemented by a plugin.
+///
+/// OWNERSHIP: Must be `'static` or intentionally leaked.
+/// Never stack-allocated. Never freed while runtime lives.
+///
+/// # Dispatch
+/// - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id]`
+/// - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(...)`
+#[repr(C)]
+pub struct PluginInterface {
+    /// Pointer to the host context for this plugin.
+    /// Used for host function calls and dependency enforcement.
+    pub rt_ctx: *const HostContext,
+    /// FNV-1a hash of "contract_name@major_version".
+    pub contract_id: u64,
+    /// minor.patch encoded as `(minor << 16 | patch)`.
+    pub contract_version: u32,
+    /// Number of valid entries in the dispatch array.
+    pub function_count: u32,
+    /// Dispatch mechanism type (Native or VirtualMachine).
+    pub dispatch_type: DispatchType,
+    /// Union of dispatch mechanisms — access based on dispatch_type.
+    pub dispatch: PluginDispatch,
+}
+
+// SAFETY: PluginInterface contains only data that is 'static or thread-safe.
+// - rt_ctx: points to a HostContext owned by the runtime
+// - contract_id, contract_version, function_count: plain data
+// - dispatch_type: C enum (Copy)
+// - dispatch: union of Send+Sync types
+// Sending/sharing across threads only reads these values.
+unsafe impl Send for PluginInterface {}
+
+// SAFETY: PluginInterface contains only data that is 'static or thread-safe.
+// Concurrent reads are safe — no mutation occurs through shared references.
+unsafe impl Sync for PluginInterface {}
+
+/// Backward-compatible alias for PluginInterface.
+pub type PluginVTable = PluginInterface;
 
 /// Host capabilities passed to every plugin at init time.
 ///
@@ -239,7 +371,7 @@ pub struct HostVTable {
     pub register_plugin: unsafe extern "C" fn(
         rt_ctx: *mut core::ffi::c_void,
         descriptor: *const PluginDescriptor,
-        vtable: *const PluginVTable,
+        vtable: *const PluginInterface,
     ) -> AbiError,
     pub alloc:
         unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, size: usize, align: usize) -> *mut u8,
@@ -270,7 +402,7 @@ pub struct HostVTable {
     pub resolve_plugin: unsafe extern "C" fn(
         rt_ctx: *mut core::ffi::c_void,
         handle: PluginHandle,
-    ) -> *const PluginVTable,
+    ) -> *const PluginInterface,
     pub get_extension:
         unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, extension_id: u32) -> *const (),
 }
@@ -523,13 +655,50 @@ mod tests {
     }
 
     #[test]
-    fn layout_plugin_vtable() {
-        assert_eq!(size_of::<PluginVTable>(), 24);
-        assert_eq!(align_of::<PluginVTable>(), 8);
-        assert_eq!(offset_of!(PluginVTable, contract_id), 0);
-        assert_eq!(offset_of!(PluginVTable, contract_version), 8);
-        assert_eq!(offset_of!(PluginVTable, function_count), 12);
-        assert_eq!(offset_of!(PluginVTable, functions), 16);
+    fn layout_host_context() {
+        assert_eq!(size_of::<HostContext>(), 16);
+        assert_eq!(align_of::<HostContext>(), 8);
+        assert_eq!(offset_of!(HostContext, runtime), 0);
+        assert_eq!(offset_of!(HostContext, bundle_id), 8);
+    }
+
+    #[test]
+    fn layout_dispatch_type() {
+        assert_eq!(size_of::<DispatchType>(), 4);
+        assert_eq!(align_of::<DispatchType>(), 4);
+    }
+
+    #[test]
+    fn layout_native_dispatch() {
+        assert_eq!(size_of::<NativeDispatch>(), 8);
+        assert_eq!(align_of::<NativeDispatch>(), 8);
+        assert_eq!(offset_of!(NativeDispatch, functions), 0);
+    }
+
+    #[test]
+    fn layout_vm_dispatch() {
+        assert_eq!(size_of::<VmDispatch>(), 16);
+        assert_eq!(align_of::<VmDispatch>(), 8);
+        assert_eq!(offset_of!(VmDispatch, call), 0);
+        assert_eq!(offset_of!(VmDispatch, loader_data), 8);
+    }
+
+    #[test]
+    fn layout_plugin_dispatch() {
+        assert_eq!(size_of::<PluginDispatch>(), 16);
+        assert_eq!(align_of::<PluginDispatch>(), 8);
+    }
+
+    #[test]
+    fn layout_plugin_interface() {
+        assert_eq!(size_of::<PluginInterface>(), 48);
+        assert_eq!(align_of::<PluginInterface>(), 8);
+        assert_eq!(offset_of!(PluginInterface, rt_ctx), 0);
+        assert_eq!(offset_of!(PluginInterface, contract_id), 8);
+        assert_eq!(offset_of!(PluginInterface, contract_version), 16);
+        assert_eq!(offset_of!(PluginInterface, function_count), 20);
+        assert_eq!(offset_of!(PluginInterface, dispatch_type), 24);
+        assert_eq!(offset_of!(PluginInterface, dispatch), 32);
     }
 
     #[test]

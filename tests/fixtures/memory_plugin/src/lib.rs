@@ -6,178 +6,7 @@
 //! zero-length roundtrip.
 
 use core::mem::align_of;
-
-// ─── ABI Types (mirrored from polyplug) ──────────────────────────────────────
-// We cannot depend on polyplug here (cdylib circular dependency).
-// Mirror the ABI types inline. These are frozen per §7 ABI Stability.
-
-/// Non-owning UTF-8 string view — mirrors polyplug_abi::StringView.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct StringView {
-    pub ptr: *const u8,
-    pub len: usize,
-}
-
-impl StringView {
-    /// Construct the null/empty StringView.
-    pub const fn null() -> StringView {
-        StringView {
-            ptr: core::ptr::null(),
-            len: 0,
-        }
-    }
-}
-
-// SAFETY: StringView is a read-only view into externally-owned 'static data.
-// Concurrent reads from multiple threads are safe.
-unsafe impl Send for StringView {}
-// SAFETY: Same reasoning as Send.
-unsafe impl Sync for StringView {}
-
-/// ABI error — mirrors polyplug_abi::AbiError.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct AbiError {
-    pub code: u32,
-    pub message: StringView,
-}
-
-impl AbiError {
-    /// Construct a success AbiError.
-    pub const fn ok() -> AbiError {
-        AbiError {
-            code: 0,
-            message: StringView::null(),
-        }
-    }
-}
-
-// SAFETY: AbiError is a plain-old-data struct with no interior mutability.
-unsafe impl Send for AbiError {}
-// SAFETY: AbiError is a plain-old-data struct with no interior mutability.
-unsafe impl Sync for AbiError {}
-
-/// Byte buffer — mirrors polyplug_abi::Buffer.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct Buffer {
-    pub ptr: *mut u8,
-    pub len: usize,
-    pub cap: usize,
-}
-
-// SAFETY: Buffer points to host-allocated memory managed by the host allocator.
-// Ownership and aliasing are enforced by the ABI contract.
-unsafe impl Send for Buffer {}
-// SAFETY: Same reasoning as Send — host manages lifetime.
-unsafe impl Sync for Buffer {}
-
-/// Plugin context passed by the loader — mirrors polyplug_abi::PluginContext.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct PluginContext {
-    pub bundle_path: StringView,
-    pub host_abi_version: u32,
-    pub bundle_id: u64,
-}
-
-/// Plugin VTable — mirrors polyplug_abi::PluginVTable.
-#[repr(C)]
-pub struct PluginVTable {
-    pub contract_id: u64,
-    pub contract_version: u32,
-    pub function_count: u32,
-    pub functions: *const *const (),
-}
-
-// SAFETY: PluginVTable points to 'static function arrays. All fields are static pointers.
-unsafe impl Send for PluginVTable {}
-// SAFETY: PluginVTable points to 'static function arrays. All fields are static pointers.
-unsafe impl Sync for PluginVTable {}
-
-/// Plugin descriptor — mirrors polyplug_abi::PluginDescriptor.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct PluginDescriptor {
-    pub name: StringView,
-    pub contract_name: StringView,
-    pub version_major: u32,
-    pub version_minor: u32,
-    pub version_patch: u32,
-}
-
-// SAFETY: PluginDescriptor contains only StringViews and u32 values.
-unsafe impl Send for PluginDescriptor {}
-// SAFETY: PluginDescriptor contains only StringViews and u32 values.
-unsafe impl Sync for PluginDescriptor {}
-
-/// Opaque handle to a loaded plugin — mirrors polyplug_abi::PluginHandle.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PluginHandle {
-    pub index: u32,
-    pub generation: u32,
-}
-
-/// Host VTable — mirrors polyplug_abi::HostVTable.
-/// All functions take rt_ctx as first parameter.
-#[repr(C)]
-pub struct HostVTable {
-    pub register_plugin: unsafe extern "C" fn(
-        rt_ctx: *mut core::ffi::c_void,
-        descriptor: *const PluginDescriptor,
-        vtable: *const PluginVTable,
-    ) -> AbiError,
-    pub alloc:
-        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, size: usize, align: usize) -> *mut u8,
-    pub free: unsafe extern "C" fn(
-        rt_ctx: *mut core::ffi::c_void,
-        ptr: *mut u8,
-        size: usize,
-        align: usize,
-    ),
-    pub find_by_contract: unsafe extern "C" fn(
-        rt_ctx: *mut core::ffi::c_void,
-        contract_id: u64,
-        min_version: u32,
-    ) -> PluginHandle,
-    pub find_by_bundle: unsafe extern "C" fn(
-        rt_ctx: *mut core::ffi::c_void,
-        bundle_id: u64,
-        contract_id: u64,
-        min_version: u32,
-    ) -> PluginHandle,
-    pub find_all_by_contract: unsafe extern "C" fn(
-        rt_ctx: *mut core::ffi::c_void,
-        contract_id: u64,
-        min_version: u32,
-        out: *mut PluginHandle,
-        out_cap: usize,
-    ) -> usize,
-    pub resolve_plugin: unsafe extern "C" fn(
-        rt_ctx: *mut core::ffi::c_void,
-        handle: PluginHandle,
-    ) -> *const PluginVTable,
-    pub get_extension:
-        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, extension_id: u32) -> *const (),
-}
-
-// ─── Function pointer newtype wrapper ────────────────────────────────────────
-// Raw `*const ()` is not `Sync`, but function pointers in a static array are
-// effectively 'static and immutable. We wrap them to implement Sync.
-
-/// Wrapper for a function pointer stored in a static vtable array.
-/// The pointer is 'static (lifetime of the plugin binary) and read-only.
-#[repr(transparent)]
-pub struct FnPtr(pub *const ());
-
-// SAFETY: FnPtr wraps a 'static function pointer. Function pointers are safe
-// to share across threads — the function itself handles its own synchronization.
-unsafe impl Send for FnPtr {}
-// SAFETY: Function pointers are inherently Sync — multiple threads may call the
-// same function concurrently. The underlying data is read-only 'static memory.
-unsafe impl Sync for FnPtr {}
+use polyplug_abi::*;
 
 // ─── FNV-1a hash (compile-time constant for "memory.test@1") ─────────────────
 
@@ -247,19 +76,19 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
     let required_align: usize = align_of::<u64>();
     if cap < len {
         return AbiError {
-            code: 1_u32, // ABI_ERROR_GENERIC
+            code: ABI_ERROR_GENERIC,
             message: StringView::null(),
         };
     }
     if cap > 0 && ptr.is_null() {
         return AbiError {
-            code: 1_u32, // ABI_ERROR_GENERIC
+            code: ABI_ERROR_GENERIC,
             message: StringView::null(),
         };
     }
     if cap > 0 && (ptr as usize) % required_align != 0 {
         return AbiError {
-            code: 1_u32, // ABI_ERROR_GENERIC
+            code: ABI_ERROR_GENERIC,
             message: StringView::null(),
         };
     }
@@ -296,7 +125,7 @@ extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> Abi
     let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.rt_ctx, size, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: 1_u32, // ABI_ERROR_GENERIC
+            code: ABI_ERROR_GENERIC,
             message: StringView::null(),
         };
     }
@@ -334,7 +163,7 @@ extern "C" fn memory_echo_string_view(args: *const (), out: *mut ()) -> AbiError
     let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
     if core::str::from_utf8(bytes).is_err() {
         return AbiError {
-            code: 1_u32, // ABI_ERROR_GENERIC — invalid UTF-8
+            code: ABI_ERROR_GENERIC, // invalid UTF-8
             message: StringView::null(),
         };
     }
@@ -365,6 +194,18 @@ extern "C" fn memory_zero_length_roundtrip(args: *const (), out: *mut ()) -> Abi
 
 // ─── Static VTable ────────────────────────────────────────────────────────────
 
+/// Wrapper for a function pointer stored in a static vtable array.
+/// The pointer is 'static (lifetime of the plugin binary) and read-only.
+#[repr(transparent)]
+pub struct FnPtr(pub *const ());
+
+// SAFETY: FnPtr wraps a 'static function pointer. Function pointers are safe
+// to share across threads — the function itself handles its own synchronization.
+unsafe impl Send for FnPtr {}
+// SAFETY: Function pointers are inherently Sync — multiple threads may call the
+// same function concurrently. The underlying data is read-only 'static memory.
+unsafe impl Sync for FnPtr {}
+
 // The function pointer array for the memory.test vtable.
 // function_id 0 = memory_fill_preallocated_buffer(args: FillArgs) -> u32
 // function_id 1 = memory_alloc_buffer_via_host(args: AllocArgs) -> Buffer
@@ -377,11 +218,17 @@ static MEMORY_TEST_FNS: [FnPtr; 4] = [
     FnPtr(memory_zero_length_roundtrip as *const ()),
 ];
 
-static MEMORY_TEST_VTABLE: PluginVTable = PluginVTable {
+static MEMORY_TEST_INTERFACE: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: MEMORY_TEST_CONTRACT_ID,
     contract_version: 1_u32 << 16, // minor=1, patch=0
     function_count: 4,
-    functions: MEMORY_TEST_FNS.as_ptr() as *const *const (),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MEMORY_TEST_FNS.as_ptr() as *const *const (),
+        },
+    },
 };
 
 static MEMORY_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
@@ -420,13 +267,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: 1, // ABI_ERROR_GENERIC
+            code: ABI_ERROR_GENERIC,
             message: StringView::null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: 1,
+            code: ABI_ERROR_GENERIC,
             message: StringView::null(),
         };
     }
@@ -435,12 +282,12 @@ pub unsafe extern "C" fn polyplug_init(
     let host: &HostVTable = unsafe { &*host_vtable };
 
     // SAFETY: register_plugin is a valid function pointer set by the host.
-    // MEMORY_TEST_DESCRIPTOR and MEMORY_TEST_VTABLE are 'static.
+    // MEMORY_TEST_DESCRIPTOR and MEMORY_TEST_INTERFACE are 'static.
     unsafe {
         (host.register_plugin)(
             rt_ctx,
             &MEMORY_TEST_DESCRIPTOR as *const PluginDescriptor,
-            &MEMORY_TEST_VTABLE as *const PluginVTable,
+            &MEMORY_TEST_INTERFACE as *const PluginInterface,
         )
     }
 }

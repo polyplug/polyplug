@@ -12,10 +12,10 @@ use polyplug::error::RegistryError;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
+use polyplug_abi::{
+    DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
+    StringView,
+};
 
 const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;
@@ -60,72 +60,39 @@ const CONTRACT_NAMES: [&str; THREADS] = [
 
 const MOCK_FUNCTIONS: [*const (); 0] = [];
 
-static VTABLES_V1: [PluginVTable; THREADS] = [
-    PluginVTable {
-        contract_id: CONTRACT_IDS[0],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[1],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[2],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[3],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[4],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[5],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[6],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
-    PluginVTable {
-        contract_id: CONTRACT_IDS[7],
-        contract_version: VERSION_V1,
-        function_count: 0_u32,
-        functions: MOCK_FUNCTIONS.as_ptr(),
-    },
+macro_rules! make_interface {
+    ($contract_id:expr, $version:expr) => {
+        PluginInterface {
+            rt_ctx: core::ptr::null(),
+            contract_id: $contract_id,
+            contract_version: $version,
+            function_count: 0_u32,
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FUNCTIONS.as_ptr(),
+                },
+            },
+        }
+    };
+}
+
+static VTABLES_V1: [PluginInterface; THREADS] = [
+    make_interface!(CONTRACT_IDS[0], VERSION_V1),
+    make_interface!(CONTRACT_IDS[1], VERSION_V1),
+    make_interface!(CONTRACT_IDS[2], VERSION_V1),
+    make_interface!(CONTRACT_IDS[3], VERSION_V1),
+    make_interface!(CONTRACT_IDS[4], VERSION_V1),
+    make_interface!(CONTRACT_IDS[5], VERSION_V1),
+    make_interface!(CONTRACT_IDS[6], VERSION_V1),
+    make_interface!(CONTRACT_IDS[7], VERSION_V1),
 ];
 
 const SWAP_CONTRACT_ID: u64 = 0x7171_0000_0000_2000_u64;
 
-static VTABLE_SWAP_V1: PluginVTable = PluginVTable {
-    contract_id: SWAP_CONTRACT_ID,
-    contract_version: VERSION_V1,
-    function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
-};
+static VTABLE_SWAP_V1: PluginInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V1);
 
-static VTABLE_SWAP_V2: PluginVTable = PluginVTable {
-    contract_id: SWAP_CONTRACT_ID,
-    contract_version: VERSION_V2,
-    function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
-};
+static VTABLE_SWAP_V2: PluginInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V2);
 
 fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
     PluginDescriptor {
@@ -163,7 +130,7 @@ fn stress_concurrent_register_find_resolve() {
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             let descriptor: PluginDescriptor =
                 make_descriptor(PLUGIN_NAMES[idx], CONTRACT_NAMES[idx]);
-            let vtable: &'static PluginVTable = &VTABLES_V1[idx];
+            let vtable: &'static PluginInterface = &VTABLES_V1[idx];
             barrier_clone.wait();
             // SAFETY: vtable is a static reference valid for the test lifetime.
             let handle: PluginHandle = unsafe {
@@ -184,7 +151,7 @@ fn stress_concurrent_register_find_resolve() {
                 let guard: PluginVTableGuard = reg_clone
                     .resolve_guard(found)
                     .expect("resolve_guard must succeed");
-                let vtable_ptr: *const PluginVTable = guard.vtable();
+                let vtable_ptr: *const PluginInterface = guard.vtable();
                 // SAFETY: vtable_ptr is from the registry and valid for the guard lifetime.
                 let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
                 // SAFETY: vtable_ptr is from the registry and valid for the guard lifetime.
@@ -193,7 +160,7 @@ fn stress_concurrent_register_find_resolve() {
                 assert_eq!(version, VERSION_V1);
             }
 
-            let resolved: Result<*const PluginVTable, RegistryError> = reg_clone.resolve(handle);
+            let resolved: Result<*const PluginInterface, RegistryError> = reg_clone.resolve(handle);
             assert!(
                 resolved.is_ok(),
                 "resolve must succeed for registered handle"
@@ -213,7 +180,7 @@ fn stress_concurrent_register_find_resolve() {
         let guard: PluginVTableGuard = registry
             .resolve_guard(found)
             .expect("main-thread resolve_guard must succeed");
-        let vtable_ptr: *const PluginVTable = guard.vtable();
+        let vtable_ptr: *const PluginInterface = guard.vtable();
         // SAFETY: vtable_ptr is valid while guard is alive.
         let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
         assert_eq!(contract_id, CONTRACT_IDS[idx]);
@@ -256,7 +223,7 @@ fn stress_concurrent_swaps_with_resolvers() {
                     let guard_result: Result<PluginVTableGuard, RegistryError> =
                         reg_clone.resolve_guard(found);
                     if let Ok(guard) = guard_result {
-                        let vtable_ptr: *const PluginVTable = guard.vtable();
+                        let vtable_ptr: *const PluginInterface = guard.vtable();
                         // SAFETY: vtable_ptr is valid for the guard lifetime.
                         let version: u32 = unsafe { (*vtable_ptr).contract_version };
                         assert!(
@@ -274,7 +241,7 @@ fn stress_concurrent_swaps_with_resolvers() {
     ready.wait();
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static PluginVTable = if round % 2_usize == 0_usize {
+        let new_vtable: &'static PluginInterface = if round % 2_usize == 0_usize {
             &VTABLE_SWAP_V2
         } else {
             &VTABLE_SWAP_V1

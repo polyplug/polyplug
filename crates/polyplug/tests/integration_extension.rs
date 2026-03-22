@@ -219,8 +219,3 @@ fn codegen_js_quickjs_emits_ext_trace_id() {
         "js-quickjs init.ts must contain EXT_TRACE_ID; got:\n{init_content}"
     );
 }
-
-// NOTE: js-deno guest generation is intentionally NOT supported.
-// V8 cannot be loaded as a shared library (.so) on Linux due to TLS requirements.
-// The js-deno generator returns GuestGenerationNotSupported error for guest code.
-// Use js-quickjs for JavaScript guest plugins instead.

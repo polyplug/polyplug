@@ -3,12 +3,12 @@
 //! Integration tests: non-UTF-8 bytes passed to polyplug_runtime_load_bundle / polyplug_runtime_reload_bundle
 //! must produce a non-zero return code and a last_error message, not a panic or UB.
 
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_reload_bundle;
-use polyplug::ffi::OpaqueRuntime;
 
 /// Helper: read last_error into a String.
 fn read_last_error(rt: *const OpaqueRuntime) -> String {

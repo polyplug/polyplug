@@ -69,18 +69,79 @@ public struct PluginHandle
     public bool IsNull => Index == uint.MaxValue;
 }
 
+/// <summary>Dispatch mechanism type — determines how function calls are routed.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public enum DispatchType : uint
+{
+    /// <summary>Native dispatch: direct function pointer calls (zero overhead).</summary>
+    Native = 0,
+    /// <summary>VM dispatch: call through a dispatch function with loader_data.</summary>
+    VirtualMachine = 1,
+}
+
+/// <summary>Native dispatch data — direct function pointer array.</summary>
+/// <remarks>Used when <see cref="DispatchType"/> == <see cref="DispatchType.Native"/>.</remarks>
+[StructLayout(LayoutKind.Sequential)]
+public struct NativeDispatch
+{
+    /// <summary>Pointer to a static array of function pointers, indexed by function_id.</summary>
+    public IntPtr Functions;  // 8 bytes — *const *const ()
+}
+
+/// <summary>VM dispatch data — call through a dispatch function.</summary>
+/// <remarks>Used when <see cref="DispatchType"/> == <see cref="DispatchType.VirtualMachine"/>.</remarks>
+[StructLayout(LayoutKind.Sequential)]
+public struct VmDispatch
+{
+    /// <summary>Dispatch function called for every VM function invocation.</summary>
+    public IntPtr Call;       // 8 bytes — function pointer
+    /// <summary>Loader-specific data (e.g., LuaLoaderData, JsLoaderData).</summary>
+    public IntPtr LoaderData; // 8 bytes — opaque loader data
+}
+
+/// <summary>Union of dispatch mechanisms — use based on <see cref="PluginInterface.DispatchType"/>.</summary>
+[StructLayout(LayoutKind.Explicit)]
+public struct PluginDispatch
+{
+    /// <summary>Native dispatch data (when DispatchType == Native).</summary>
+    [FieldOffset(0)]
+    public NativeDispatch Native;
+    /// <summary>VM dispatch data (when DispatchType == VirtualMachine).</summary>
+    [FieldOffset(0)]
+    public VmDispatch Vm;
+}
+
 /// <summary>
-/// Plugin VTable — one per contract implemented by a plugin.
-/// contract_id(8) + contract_version(4) + function_count(4) + functions_ptr(8) = 24 bytes.
-/// Matches Rust PluginVTable.
+/// Plugin interface — one per contract implemented by a plugin.
+/// rt_ctx(8) + contract_id(8) + contract_version(4) + function_count(4) + dispatch_type(4) + _pad(4) + dispatch(16) = 48 bytes.
+/// Matches Rust PluginInterface.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
+public struct PluginInterface
+{
+    /// <summary>Pointer to the host context for this plugin.</summary>
+    public IntPtr RtCtx;            // 8 bytes — *const HostContext
+    /// <summary>FNV-1a hash of "contract_name@major_version".</summary>
+    public ulong  ContractId;       // 8 bytes
+    /// <summary>minor.patch encoded as (minor &lt;&lt; 16 | patch).</summary>
+    public uint   ContractVersion;  // 4 bytes
+    /// <summary>Number of valid entries in the dispatch array.</summary>
+    public uint   FunctionCount;    // 4 bytes
+    /// <summary>Dispatch mechanism type (Native or VirtualMachine).</summary>
+    public DispatchType DispatchType; // 4 bytes
+    /// <summary>Padding for alignment.</summary>
+    private uint  _pad;             // 4 bytes explicit padding
+    /// <summary>Union of dispatch mechanisms — access based on DispatchType.</summary>
+    public PluginDispatch Dispatch; // 16 bytes — total: 48 bytes
+}
+
+/// <summary>
+/// Backward-compatible alias for PluginInterface.
+/// </summary>
 public struct PluginVTable
 {
-    public ulong  ContractId;       // 8 bytes — FNV-1a hash of "contract_name@major_version"
-    public uint   ContractVersion;  // 4 bytes — minor.patch encoded as (minor << 16 | patch)
-    public uint   FunctionCount;    // 4 bytes — number of valid entries in FunctionsPtr
-    public IntPtr FunctionsPtr;     // 8 bytes — pointer to static array of fn ptrs — total: 24 bytes
+    /// <summary>Use the PluginInterface fields directly.</summary>
+    public PluginInterface Interface;
 }
 
 /// <summary>

@@ -22,7 +22,6 @@ pub enum Lang {
     Python,
     Lua,
     JsQuickJs,
-    JsDeno,
 }
 
 impl Lang {
@@ -34,7 +33,6 @@ impl Lang {
             Lang::Python => "python",
             Lang::Lua => "lua",
             Lang::JsQuickJs => "js-quickjs",
-            Lang::JsDeno => "js-deno",
         }
     }
 }
@@ -96,7 +94,6 @@ pub fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError
         Lang::Python => Box::new(generators::python::PythonGenerator),
         Lang::Lua => Box::new(generators::lua::LuaGenerator),
         Lang::JsQuickJs => Box::new(generators::js_quickjs::JsQuickjsGenerator),
-        Lang::JsDeno => Box::new(generators::js_deno::JsDenoGenerator),
     };
 
     let mut files: GeneratedFiles = GeneratedFiles::default();

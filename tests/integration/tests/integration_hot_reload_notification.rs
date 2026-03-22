@@ -21,7 +21,7 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
     // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
-        let fns: *const *const () = (*vtable).functions;
+        let fns: *const *const () = (*vtable).dispatch.native.functions;
         core::mem::transmute(*fns)
     };
     Some(fn_ptr)

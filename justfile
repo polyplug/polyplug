@@ -73,7 +73,7 @@ build-rust:
     @echo "=== Building Core Rust Crates ==="
     cargo build --{{profile}} -p polyplug -p polyplug_abi -p polyplug_guest \
         -p polyplug_native -p polyplug_python -p polyplug_lua \
-        -p polyplug_js -p polyplug_js_deno -p polyplug_dotnet \
+        -p polyplug_js -p polyplug_dotnet \
         -p polyplugc -p polyplug_codegen
 
 # Build the CLI tool (polyplugc)
@@ -385,7 +385,7 @@ test-host-js:
         exit 0; \
     fi
     @if command -v deno >/dev/null 2>&1; then \
-        cd host-libs/js/tests && deno test reload_notification_test.ts; \
+        cd host-libs/js-deno/tests && deno test reload_notification_test.ts; \
     else \
         echo "deno not installed, skipping"; \
     fi
@@ -628,13 +628,11 @@ _dist-copy-host-libs:
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/python
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/lua
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/js
-    @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/js_deno
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/dotnet
     @cp {{host_libs_dir}}/cpp/loaders/native/*.hpp {{dist_dir}}/host-libs/cpp/loaders/native/ 2>/dev/null || true
     @cp {{host_libs_dir}}/cpp/loaders/python/*.hpp {{dist_dir}}/host-libs/cpp/loaders/python/ 2>/dev/null || true
     @cp {{host_libs_dir}}/cpp/loaders/lua/*.hpp {{dist_dir}}/host-libs/cpp/loaders/lua/ 2>/dev/null || true
     @cp {{host_libs_dir}}/cpp/loaders/js/*.hpp {{dist_dir}}/host-libs/cpp/loaders/js/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/cpp/loaders/js_deno/*.hpp {{dist_dir}}/host-libs/cpp/loaders/js_deno/ 2>/dev/null || true
     @cp {{host_libs_dir}}/cpp/loaders/dotnet/*.hpp {{dist_dir}}/host-libs/cpp/loaders/dotnet/ 2>/dev/null || true
     @# Python (pure Python) - ONLY .py files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/python/polyplug
@@ -652,7 +650,6 @@ _dist-copy-host-libs:
         dotnet build {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release 2>/dev/null || true; \
         dotnet build {{host_libs_dir}}/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release 2>/dev/null || true; \
         dotnet build {{host_libs_dir}}/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{host_libs_dir}}/csharp/Loaders/JsDeno/Polyplug.Loaders.JsDeno.csproj -c Release 2>/dev/null || true; \
         dotnet build {{host_libs_dir}}/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release 2>/dev/null || true; \
         mkdir -p {{dist_dir}}/host-libs/csharp; \
         cp {{host_libs_dir}}/csharp/Polyplug/bin/Release/net10.0/Polyplug.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
@@ -660,7 +657,6 @@ _dist-copy-host-libs:
         cp {{host_libs_dir}}/csharp/Loaders/Python/bin/Release/net10.0/Polyplug.Loaders.Python.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/csharp/Loaders/Lua/bin/Release/net10.0/Polyplug.Loaders.Lua.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/csharp/Loaders/Js/bin/Release/net10.0/Polyplug.Loaders.Js.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/csharp/Loaders/JsDeno/bin/Release/net10.0/Polyplug.Loaders.JsDeno.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/csharp/Loaders/Dotnet/bin/Release/net10.0/Polyplug.Loaders.Dotnet.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
     fi
     @# Lua (pure Lua) - ONLY .lua files, NO .so files
@@ -673,13 +669,13 @@ _dist-copy-host-libs:
     @cp -r {{host_libs_dir}}/lua/loaders/* {{dist_dir}}/host-libs/lua/loaders/
     @find {{dist_dir}}/host-libs/lua/loaders -name "*.rockspec" -delete 2>/dev/null || true
     @# JS (pure JS) - ONLY .js/.ts files, NO .so files
-    @mkdir -p {{dist_dir}}/host-libs/js/polyplug
-    @cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js/
-    @cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/js/polyplug/*.js {{dist_dir}}/host-libs/js/polyplug/
+    @mkdir -p {{dist_dir}}/host-libs/js-deno/polyplug
+    @cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js-deno/
+    @cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true
+    @cp {{host_libs_dir}}/js/polyplug/*.js {{dist_dir}}/host-libs/js-deno/polyplug/
     @# JS loaders - ONLY .js/.ts files
-    @mkdir -p {{dist_dir}}/host-libs/js/loaders
-    @cp -r {{host_libs_dir}}/js/loaders/* {{dist_dir}}/host-libs/js/loaders/
+    @mkdir -p {{dist_dir}}/host-libs/js-deno/loaders
+    @cp -r {{host_libs_dir}}/js/loaders/* {{dist_dir}}/host-libs/js-deno/loaders/
 
 # Copy guest libraries to dist (library files ONLY - NO build artifacts)
 _dist-copy-guest-libs:
@@ -751,7 +747,6 @@ _prepare-crate-packages:
     @cargo package -p polyplug_python --allow-dirty 2>/dev/null || true
     @cargo package -p polyplug_lua --allow-dirty 2>/dev/null || true
     @cargo package -p polyplug_js --allow-dirty 2>/dev/null || true
-    @cargo package -p polyplug_js_deno --allow-dirty 2>/dev/null || true
     @cargo package -p polyplug_dotnet --allow-dirty 2>/dev/null || true
     @# Copy all crates to dist
     @cp target/package/polyplug_abi-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
@@ -763,7 +758,6 @@ _prepare-crate-packages:
     @cp target/package/polyplug_python-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplug_lua-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplug_js-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
-    @cp target/package/polyplug_js_deno-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @cp target/package/polyplug_dotnet-*.crate {{dist_dir}}/publish/crates.io/ 2>/dev/null || true
     @echo "  [crates.io] ✓ Packages ready"
 
@@ -781,7 +775,6 @@ _prepare-nuget-packages:
         dotnet pack {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{host_libs_dir}}/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{host_libs_dir}}/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
-        dotnet pack {{host_libs_dir}}/csharp/Loaders/JsDeno/Polyplug.Loaders.JsDeno.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{host_libs_dir}}/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] ✓ Packages ready"; \
     else \
@@ -805,7 +798,7 @@ _prepare-pypi-packages:
         cp {{guest_libs_dir}}/python/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
         cd {{dist_dir}}/guest-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building loaders..."; \
-        for loader in native python lua js js-deno dotnet; do \
+        for loader in native python lua js dotnet; do \
             loader_dir="{{host_libs_dir}}/python/loaders/polyplug-loaders-$$loader"; \
             if [ -d "$$loader_dir" ]; then \
                 echo "  [pypi]   Building polyplug-loaders-$$loader..."; \
@@ -825,9 +818,9 @@ _prepare-npm-packages:
     @mkdir -p {{dist_dir}}/publish/npm
     @if command -v npm >/dev/null 2>&1; then \
         echo "  [npm] Packing host library..."; \
-        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/ 2>/dev/null || true; \
-        (cd {{dist_dir}}/host-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
+        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
+        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
+        (cd {{dist_dir}}/host-libs/js-deno && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing guest library..."; \
         cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
         (cd {{dist_dir}}/guest-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
@@ -836,7 +829,6 @@ _prepare-npm-packages:
         npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-python 2>/dev/null || true; \
         npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-lua 2>/dev/null || true; \
         npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-js 2>/dev/null || true; \
-        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-js-deno 2>/dev/null || true; \
         npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-dotnet 2>/dev/null || true; \
         mv polyplug-loaders-*.tgz {{dist_dir}}/publish/npm/ 2>/dev/null || true; \
         echo "  [npm] ✓ Packages ready"; \
@@ -858,7 +850,6 @@ _prepare-luarocks-packages:
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-python/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-js/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-js-deno/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-dotnet/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         echo "  [luarocks] ✓ Rockspecs ready for upload"; \
     else \
@@ -871,14 +862,14 @@ _prepare-jsr-packages:
     @echo "  [jsr.io] Preparing packages..."
     @if command -v deno >/dev/null 2>&1; then \
         echo "  [jsr.io] Preparing host library..."; \
-        mkdir -p {{dist_dir}}/host-libs/js/polyplug; \
-        cp {{host_libs_dir}}/js/deno.json {{dist_dir}}/host-libs/js/; \
-        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js/; \
-        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js/; \
-        cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js/; \
-        cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js/; \
-        cp -r {{host_libs_dir}}/js/polyplug/* {{dist_dir}}/host-libs/js/polyplug/; \
-        (cd {{dist_dir}}/host-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
+        mkdir -p {{dist_dir}}/host-libs/js-deno/polyplug; \
+        cp {{host_libs_dir}}/js/deno.json {{dist_dir}}/host-libs/js-deno/; \
+        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js-deno/; \
+        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js-deno/; \
+        cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js-deno/; \
+        cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/; \
+        cp -r {{host_libs_dir}}/js/polyplug/* {{dist_dir}}/host-libs/js-deno/polyplug/; \
+        (cd {{dist_dir}}/host-libs/js-deno && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing guest library..."; \
         mkdir -p {{dist_dir}}/guest-libs/js; \
         cp {{guest_libs_dir}}/js/deno.json {{dist_dir}}/guest-libs/js/; \
@@ -887,9 +878,9 @@ _prepare-jsr-packages:
         cp {{guest_libs_dir}}/js/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/; \
         (cd {{dist_dir}}/guest-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing loaders..."; \
-        for loader in native python lua js js-deno dotnet; do \
+        for loader in native python lua js dotnet; do \
             src_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
-            dst_dir="{{dist_dir}}/host-libs/js/loaders/@polyplug/loaders-$$loader"; \
+            dst_dir="{{dist_dir}}/host-libs/js-deno/loaders/@polyplug/loaders-$$loader"; \
             if [ -d "$$src_dir" ]; then \
                 echo "  [jsr.io]   Preparing @polyplug/loaders-$$loader..."; \
                 mkdir -p "$$dst_dir"; \
@@ -931,7 +922,6 @@ info:
     @echo "  - polyplug_python  (Python plugins)"
     @echo "  - polyplug_lua     (LuaJIT plugins)"
     @echo "  - polyplug_js      (QuickJS plugins)"
-    @echo "  - polyplug_js_deno (Deno plugins)"
     @echo "  - polyplug_dotnet  (.NET plugins)"
     @echo ""
     @echo "Host Libraries: cpp, python, csharp, lua, js"

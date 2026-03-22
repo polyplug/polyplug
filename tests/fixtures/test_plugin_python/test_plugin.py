@@ -8,18 +8,15 @@ import sys
 from pathlib import Path
 
 # Add guest-libs to path for this fixture
-_REPO_ROOT = Path(__file__).parent.parent.parent
+_REPO_ROOT = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "guest-libs" / "python"))
 
 from polyplug_guest.abi import (
     ABI_OK,
     AbiError,
-    PluginContext,
     PluginDescriptor,
-    PluginRegistrar,
     PluginVTable,
     StringView,
-    REGISTER_FN_TYPE,
 )
 
 # ── Contract constants ────────────────────────────────────────────────────────
@@ -118,11 +115,45 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
     ctypes.cast(_FN_RESET, ctypes.c_void_p),
 )
 
+# ── HostVTable definition (matches polyplug_abi::HostVTable) ───────────────────
+
+
+class HostVTable(ctypes.Structure):
+    """Host vtable passed to polyplug_init. 64 bytes (8 function pointers)."""
+
+    _fields_ = [
+        ("register_plugin", ctypes.c_void_p),
+        ("alloc", ctypes.c_void_p),
+        ("free", ctypes.c_void_p),
+        ("find_by_contract", ctypes.c_void_p),
+        ("find_by_bundle", ctypes.c_void_p),
+        ("find_all_by_contract", ctypes.c_void_p),
+        ("resolve_plugin", ctypes.c_void_p),
+        ("get_extension", ctypes.c_void_p),
+    ]
+
+
+# Type for register_plugin function pointer.
+# On x86_64 System V ABI, AbiError (24 bytes) is returned via sret pointer.
+_REGISTER_PLUGIN_FN_TYPE = ctypes.CFUNCTYPE(
+    None,  # void return - result written via sret pointer
+    ctypes.POINTER(AbiError),  # sret: hidden pointer where caller expects AbiError
+    ctypes.c_void_p,  # rt_ctx
+    ctypes.POINTER(PluginDescriptor),  # descriptor
+    ctypes.POINTER(PluginVTable),  # vtable
+)
+
+# ── Plugin interface (vtable) ──────────────────────────────────────────────────
+
 _VTABLE = PluginVTable(
+    rt_ctx=None,  # Will be set by host during registration
     contract_id=_TEST_ADD_CONTRACT_ID,
     contract_version=(0 << 16) | 0,  # minor=0, patch=0
     function_count=4,
-    functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p),
+    dispatch_type=0,  # DispatchType::Native
+    _pad=0,
+    dispatch_functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p),
+    dispatch_loader_data=None,
 )
 
 _PLUGIN_NAME_BYTES = b"python_test_adder"
@@ -144,16 +175,22 @@ def polyplug_abi_version() -> int:
     return 1
 
 
-def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
-    """Called by PythonLoader with the PluginRegistrar address as an integer."""
-    registrar = PluginRegistrar.from_address(registrar_addr)
+def polyplug_init(rt_ctx: int, host_vtable: int, ctx_ptr: int) -> None:
+    """Called by PythonLoader with rt_ctx, host_vtable, and ctx pointers."""
+    if host_vtable == 0:
+        raise RuntimeError("host_vtable is null")
+
+    # Cast the host_vtable pointer to HostVTable structure
+    host = HostVTable.from_address(host_vtable)
+
     # Cast the register_plugin function pointer to the correct type (sret convention)
-    register_fn = ctypes.cast(registrar.register_plugin, REGISTER_FN_TYPE)
+    register_fn = ctypes.cast(host.register_plugin, _REGISTER_PLUGIN_FN_TYPE)
+
     # Allocate space for the return value (AbiError struct)
     err = AbiError()
     register_fn(
         ctypes.byref(err),  # sret pointer
-        ctypes.byref(registrar),
+        rt_ctx,  # rt_ctx passed through
         ctypes.byref(_DESCRIPTOR),
         ctypes.byref(_VTABLE),
     )

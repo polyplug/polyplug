@@ -186,9 +186,9 @@ jobs:
       - name: Test Deno native loading
         shell: bash
         run: |
-          mkdir -p host-libs/js/_native/${{ matrix.platform }}
-          cp native/*${{ matrix.ext }} host-libs/js/_native/${{ matrix.platform }}/ 2>/dev/null || true
-          cd host-libs/js
+          mkdir -p host-libs/js-deno/_native/${{ matrix.platform }}
+          cp native/*${{ matrix.ext }} host-libs/js-deno/_native/${{ matrix.platform }}/ 2>/dev/null || true
+          cd host-libs/js-deno
           deno run --allow-ffi --allow-env --allow-read -e "
             import { NativeLibLoader } from './native-loader.ts';
             const loader = new NativeLibLoader();
@@ -290,7 +290,7 @@ jobs:
       - name: Publish to crates.io (dry-run)
         if: inputs.dry-run == 'true'
         run: |
-          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_js_deno polyplug_dotnet; do
+          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet; do
             echo "Dry-run: $crate"
             cargo publish -p $crate --dry-run
           done
@@ -301,7 +301,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           # Publish all crates - cargo handles dependency resolution locally
-          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_js_deno polyplug_dotnet; do
+          for crate in polyplug_abi polyplug polyplug_guest polyplug_codegen polyplugc polyplug_native polyplug_python polyplug_lua polyplug_js polyplug_dotnet; do
             echo "Publishing $crate..."
             cargo publish -p $crate
           done
@@ -335,15 +335,13 @@ jobs:
 
       - name: Build Python loader packages with embedded natives
         run: |
-          for loader in native python lua js js-deno dotnet; do
+          for loader in native python lua js dotnet; do
             loader_dir="host-libs/python/loaders/polyplug-loaders-$loader"
             if [ -d "$loader_dir" ]; then
               echo "Building polyplug-loaders-$loader..."
 
               if [ "$loader" = "native" ]; then
                 lib_name="libpolyplug_native"
-              elif [ "$loader" = "js-deno" ]; then
-                lib_name="libpolyplug_js"
               else
                 lib_name="libpolyplug_$loader"
               fi
@@ -416,17 +414,13 @@ jobs:
 
       - name: Build NuGet loader packages with embedded natives
         run: |
-          for loader in Native Python Lua Js JsDeno Dotnet; do
+          for loader in Native Python Lua Js Dotnet; do
             loader_dir="host-libs/csharp/Loaders/$loader"
             if [ -d "$loader_dir" ]; then
               echo "Building Polyplug.Loaders.$loader..."
 
               loader_lower=$(echo "$loader" | tr '[:upper:]' '[:lower:]')
-              if [ "$loader_lower" = "jsdeno" ]; then
-                lib_name="libpolyplug_js"
-              else
-                lib_name="libpolyplug_$loader_lower"
-              fi
+              lib_name="libpolyplug_$loader_lower"
 
               mkdir -p "$loader_dir/runtimes/linux-x64/native"
               mkdir -p "$loader_dir/runtimes/osx-x64/native"
@@ -474,7 +468,7 @@ jobs:
 
       - name: Build npm host package with embedded natives
         run: |
-          cd host-libs/js
+          cd host-libs/js-deno
 
           mkdir -p _native/{linux-x64,macos-x64,macos-arm64,windows-x64}
           cp ../../dist/native/linux-x64/libpolyplug.so _native/linux-x64/
@@ -492,16 +486,12 @@ jobs:
 
       - name: Build npm loader packages with embedded natives
         run: |
-          for loader in native python lua js js-deno dotnet; do
-            loader_dir="host-libs/js/loaders/@polyplug/loaders-$loader"
+          for loader in native python lua js dotnet; do
+            loader_dir="host-libs/js-deno/loaders/@polyplug/loaders-$loader"
             if [ -d "$loader_dir" ]; then
               echo "Building @polyplug/loaders-$loader..."
 
-              if [ "$loader" = "js-deno" ]; then
-                lib_name="libpolyplug_js"
-              else
-                lib_name="libpolyplug_$loader"
-              fi
+              lib_name="libpolyplug_$loader"
 
               mkdir -p "$loader_dir/_native/linux-x64" "$loader_dir/_native/macos-x64" "$loader_dir/_native/macos-arm64" "$loader_dir/_native/windows-x64"
               cp dist/native/linux-x64/${lib_name}.so "$loader_dir/_native/linux-x64/" 2>/dev/null || true
@@ -519,13 +509,13 @@ jobs:
       - name: Publish to npm (dry-run)
         if: inputs.dry-run == 'true'
         run: |
-          cd host-libs/js
+          cd host-libs/js-deno
           npm publish --dry-run
 
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          cd host-libs/js
+          cd host-libs/js-deno
           npm publish --access public
 
           for tgz in ../../dist/npm/*.tgz; do
@@ -544,14 +534,14 @@ jobs:
       - name: Publish to jsr.io (dry-run)
         if: inputs.dry-run == 'true'
         run: |
-          cd host-libs/js
+          cd host-libs/js-deno
           deno publish --dry-run
 
           cd ../../guest-libs/js
           deno publish --dry-run
 
-          for loader in native python lua js js-deno dotnet; do
-            cd host-libs/js/loaders/@polyplug/loaders-$loader
+          for loader in native python lua js dotnet; do
+            cd host-libs/js-deno/loaders/@polyplug/loaders-$loader
             deno publish --dry-run
             cd -
           done
@@ -559,14 +549,14 @@ jobs:
       - name: Publish to jsr.io
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          cd host-libs/js
+          cd host-libs/js-deno
           deno publish
 
           cd ../../guest-libs/js
           deno publish
 
-          for loader in native python lua js js-deno dotnet; do
-            cd host-libs/js/loaders/@polyplug/loaders-$loader
+          for loader in native python lua js dotnet; do
+            cd host-libs/js-deno/loaders/@polyplug/loaders-$loader
             deno publish
             cd -
           done
@@ -636,7 +626,7 @@ jobs:
 
           cp host-libs/python/dist/*.whl release-assets/ 2>/dev/null || true
           cp dist/nuget/*.nupkg release-assets/ 2>/dev/null || true
-          cp host-libs/js/*.tgz release-assets/ 2>/dev/null || true
+          cp host-libs/js-deno/*.tgz release-assets/ 2>/dev/null || true
           cp dist/npm/*.tgz release-assets/ 2>/dev/null || true
 
           ls -la release-assets/
@@ -655,7 +645,7 @@ jobs:
             pip install polyplug
             pip install polyplug-guest
             # Loaders
-            pip install polyplug-loaders-native polyplug-loaders-python polyplug-loaders-lua polyplug-loaders-js polyplug-loaders-js-deno polyplug-loaders-dotnet
+            pip install polyplug-loaders-native polyplug-loaders-python polyplug-loaders-lua polyplug-loaders-js polyplug-loaders-dotnet
             ```
 
             ### C#/.NET
@@ -667,7 +657,6 @@ jobs:
             dotnet add package Polyplug.Loaders.Python
             dotnet add package Polyplug.Loaders.Lua
             dotnet add package Polyplug.Loaders.Js
-            dotnet add package Polyplug.Loaders.JsDeno
             dotnet add package Polyplug.Loaders.Dotnet
             ```
 
@@ -677,7 +666,7 @@ jobs:
             npm install @polyplug/runtime
             npm install @polyplug/guest
             # Loaders
-            npm install @polyplug/loaders-native @polyplug/loaders-python @polyplug/loaders-lua @polyplug/loaders-js @polyplug/loaders-js-deno @polyplug/loaders-dotnet
+            npm install @polyplug/loaders-native @polyplug/loaders-python @polyplug/loaders-lua @polyplug/loaders-js @polyplug/loaders-dotnet
             ```
 
             ### Lua
@@ -698,7 +687,6 @@ jobs:
             polyplug_python = "${{ steps.version.outputs.version }}"
             polyplug_lua = "${{ steps.version.outputs.version }}"
             polyplug_js = "${{ steps.version.outputs.version }}"
-            polyplug_js_deno = "${{ steps.version.outputs.version }}"
             polyplug_dotnet = "${{ steps.version.outputs.version }}"
             ```
 
@@ -715,4 +703,4 @@ jobs:
             ```
 
             ## Native Libraries
-            All native libraries (core + 5 loaders) are embedded in the packages. No manual installation required.
+            All native libraries (core + 4 loaders) are embedded in the packages. No manual installation required.

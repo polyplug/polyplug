@@ -6,17 +6,17 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::AbiError;
-use polyplug_guest::ABI_OK;
-use polyplug_guest::ABI_ERROR_GENERIC;
-use polyplug_guest::PluginDescriptor;
-use polyplug_guest::HostVTable;
-use polyplug_guest::PluginVTable;
-use polyplug_guest::StringView;
-use polyplug_guest::PluginContext;
-use core::ffi::c_void;
 use super::vtables::VALIDATOR_CONTRACT_ID;
 use super::vtables::VALIDATOR_VTABLE;
+use core::ffi::c_void;
+use polyplug_guest::ABI_ERROR_GENERIC;
+use polyplug_guest::ABI_OK;
+use polyplug_guest::AbiError;
+use polyplug_guest::HostVTable;
+use polyplug_guest::PluginContext;
+use polyplug_guest::PluginDescriptor;
+use polyplug_guest::PluginVTable;
+use polyplug_guest::StringView;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -34,13 +34,22 @@ pub unsafe extern "C" fn polyplug_init(
     ctx: *const PluginContext,
 ) -> AbiError {
     if rt_ctx.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: StringView::null(),
+        };
     }
     if host.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: StringView::null(),
+        };
     }
     if ctx.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: StringView::null(),
+        };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
     let ctx: &PluginContext = unsafe { &*ctx };
@@ -53,18 +62,30 @@ pub unsafe extern "C" fn polyplug_init(
         fn polyplug_user_init();
     }
     // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe { polyplug_user_init(); }
+    unsafe {
+        polyplug_user_init();
+    }
 
     let desc_VALIDATOR: PluginDescriptor = PluginDescriptor {
-        name: StringView { ptr: b"validator".as_ptr(), len: 9_usize },
-        contract_name: StringView { ptr: b"pipeline.Validator@1".as_ptr(), len: 20_usize },
+        name: StringView {
+            ptr: b"validator".as_ptr(),
+            len: 9_usize,
+        },
+        contract_name: StringView {
+            ptr: b"pipeline.Validator@1".as_ptr(),
+            len: 20_usize,
+        },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
     let err_VALIDATOR: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_VALIDATOR as *const PluginDescriptor, &VALIDATOR_VTABLE as *const PluginVTable)
+        (host.register_plugin)(
+            rt_ctx,
+            &desc_VALIDATOR as *const PluginDescriptor,
+            &VALIDATOR_VTABLE as *const PluginVTable,
+        )
     };
     if err_VALIDATOR.code != ABI_OK {
         return err_VALIDATOR;

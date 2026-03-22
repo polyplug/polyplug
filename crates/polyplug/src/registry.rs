@@ -21,13 +21,13 @@ use arc_swap::ArcSwap;
 use crate::error::RegistryError;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 
-/// A `Send + Sync` wrapper around a raw vtable pointer.
+/// A `Send + Sync` wrapper around a raw interface pointer.
 /// The pointer is guaranteed to point to `'static` data that is never mutated after registration.
-pub struct VTableSlot(pub *const PluginVTable);
+pub struct VTableSlot(pub *const PluginInterface);
 
-// SAFETY: *const PluginVTable points to 'static plugin data. Once registered, the data is never
+// SAFETY: *const PluginInterface points to 'static plugin data. Once registered, the data is never
 // mutated. The pointer remains valid for the lifetime of the loaded library. Aliasing is safe
 // because all access is read-only through PluginVTableGuard.
 unsafe impl Send for VTableSlot {}
@@ -52,8 +52,8 @@ impl PluginVTableGuard {
             _not_send: core::marker::PhantomData,
         }
     }
-    /// Returns the raw vtable pointer. The pointer is valid as long as this guard is alive.
-    pub fn vtable(&self) -> *const PluginVTable {
+    /// Returns the raw interface pointer. The pointer is valid as long as this guard is alive.
+    pub fn vtable(&self) -> *const PluginInterface {
         self.slot.0
     }
 }
@@ -148,15 +148,15 @@ impl Registry {
             .push(library);
     }
 
-    /// Register a plugin vtable.
+    /// Register a plugin interface.
     ///
     /// # Safety
     ///
-    /// `vtable_ptr` must be a valid pointer to a `'static` `PluginVTable` that remains valid
+    /// `interface_ptr` must be a valid pointer to a `'static` `PluginInterface` that remains valid
     /// for the entire lifetime of the `Registry`. The caller must ensure the backing library
     /// is not unloaded while this registry holds the pointer.
     //
-    //  The contract_id is read directly from the vtable pointer.
+    //  The contract_id is read directly from the interface pointer.
     //
     //  Returns Err if:
     //  - contract_id is already registered to a DIFFERENT contract_name (hash collision)
@@ -166,13 +166,13 @@ impl Registry {
     pub unsafe fn register(
         &self,
         descriptor: PluginDescriptor,
-        vtable_ptr: *const PluginVTable,
+        interface_ptr: *const PluginInterface,
         contract_name: String,
         bundle_id: u64,
     ) -> Result<PluginHandle, RegistryError> {
-        // SAFETY: vtable_ptr is a valid 'static PluginVTable supplied by the caller.
+        // SAFETY: interface_ptr is a valid 'static PluginInterface supplied by the caller.
         // The ABI contract requires the pointer to remain valid for the library lifetime.
-        let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
+        let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
 
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
             self.data.write().unwrap_or_else(|e| e.into_inner());
@@ -225,7 +225,7 @@ impl Registry {
             contract_name,
             bundle_id,
         });
-        slot.vtable = Some(ArcSwap::new(Arc::new(VTableSlot(vtable_ptr))));
+        slot.vtable = Some(ArcSwap::new(Arc::new(VTableSlot(interface_ptr))));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
         data.contract_index
@@ -297,7 +297,7 @@ impl Registry {
                 && let Some(ref arc_vtable) = slot.vtable
             {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 points to 'static PluginVTable, valid for Registry lifetime.
+                // SAFETY: VTableSlot.0 points to 'static PluginInterface, valid for Registry lifetime.
                 // The pointer is written once at registration and never mutated.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
@@ -339,9 +339,9 @@ impl Registry {
             && let Some(ref arc_vtable) = slot.vtable
         {
             let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-            // SAFETY: VTableSlot.0 is 'static PluginVTable valid for Registry lifetime.
+            // SAFETY: VTableSlot.0 is 'static PluginInterface valid for Registry lifetime.
             // Written once at registration, never mutated.
-            let vtable_ref: &PluginVTable = unsafe { &*guard.0 };
+            let vtable_ref: &PluginInterface = unsafe { &*guard.0 };
             if entry.bundle_id == bundle_id
                 && vtable_ref.contract_id == contract_id
                 && vtable_ref.contract_version >= min_version
@@ -386,7 +386,7 @@ impl Registry {
                 && let Some(ref arc_vtable) = slot.vtable
             {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static valid for Registry lifetime.
+                // SAFETY: VTableSlot.0 is 'static PluginInterface valid for Registry lifetime.
                 // Read-only access after registration.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
@@ -436,7 +436,7 @@ impl Registry {
                 && let Some(ref arc_vtable) = slot.vtable
             {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static valid for Registry lifetime.
+                // SAFETY: VTableSlot.0 is 'static PluginInterface valid for Registry lifetime.
                 // Read-only access after registration.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
@@ -499,11 +499,11 @@ impl Registry {
         self.find_by_contract(contract_id, min_version)
     }
 
-    /// Validate a PluginHandle and return its vtable pointer.
+    /// Validate a PluginHandle and return its interface pointer.
     //
     //  Delegates to resolve_guard(). Kept for API compatibility.
     //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
-    pub fn resolve(&self, handle: PluginHandle) -> Result<*const PluginVTable, RegistryError> {
+    pub fn resolve(&self, handle: PluginHandle) -> Result<*const PluginInterface, RegistryError> {
         let guard: PluginVTableGuard = self.resolve_guard(handle)?;
         Ok(guard.vtable())
     }
@@ -574,7 +574,7 @@ impl Registry {
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
         let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
         let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
-        // SAFETY: VTableSlot.0 is a valid 'static PluginVTable written at registration.
+        // SAFETY: VTableSlot.0 is a valid 'static PluginInterface written at registration.
         Some(unsafe { (*guard.0).contract_id })
     }
 
@@ -615,16 +615,23 @@ impl Default for Registry {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use polyplug_abi::PluginDescriptor;
-    use polyplug_abi::StringView;
+    use polyplug_abi::{
+        DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, StringView,
+    };
 
     const MOCK_FNS: [*const (); 0] = [];
 
-    static MOCK_VTABLE: PluginVTable = PluginVTable {
+    static MOCK_INTERFACE: PluginInterface = PluginInterface {
+        rt_ctx: core::ptr::null(),
         contract_id: 0x1234_5678_9ABC_DEF0,
-        contract_version: (1 << 16), // minor=1, patch=0
+        contract_version: (1 << 16),
         function_count: 0,
-        functions: MOCK_FNS.as_ptr(),
+        dispatch_type: DispatchType::Native,
+        dispatch: PluginDispatch {
+            native: NativeDispatch {
+                functions: MOCK_FNS.as_ptr(),
+            },
+        },
     };
 
     fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
@@ -641,12 +648,12 @@ mod tests {
     fn register_and_find() {
         let registry: Registry = Registry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "image.decode");
-        // contract_id comes from MOCK_VTABLE.contract_id (0x1234_5678_9ABC_DEF0)
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // contract_id comes from MOCK_INTERFACE.contract_id (0x1234_5678_9ABC_DEF0)
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_VTABLE,
+                &MOCK_INTERFACE,
                 "image.decode".to_owned(),
                 0u64, // bundle_id
             )
@@ -665,14 +672,14 @@ mod tests {
         let registry: Registry = Registry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "audio.decode");
 
-        // We need a vtable whose contract_id differs from MOCK_VTABLE to avoid collision
+        // We need an interface whose contract_id differs from MOCK_INTERFACE to avoid collision
         // with the image.decode test. Use a separate static with same contract_id here
         // since each test gets its own Registry instance.
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_VTABLE,
+                &MOCK_INTERFACE,
                 "image.decode".to_owned(),
                 1u64, // bundle_id
             )
@@ -684,7 +691,7 @@ mod tests {
             index: handle.index,
             generation: handle.generation + 1,
         };
-        let result: Result<*const PluginVTable, RegistryError> = registry.resolve(stale);
+        let result: Result<*const PluginInterface, RegistryError> = registry.resolve(stale);
         assert!(
             matches!(result, Err(RegistryError::StaleHandle { .. })),
             "expected StaleHandle error"
@@ -699,16 +706,16 @@ mod tests {
         // Same bundle_id = duplicate provider (same bundle can't register same contract twice)
         let bundle_id: u64 = 0u64;
 
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register(d1, &MOCK_VTABLE, "image.decode".to_owned(), bundle_id)
+                .register(d1, &MOCK_INTERFACE, "image.decode".to_owned(), bundle_id)
                 .expect("first registration should succeed");
         }
 
         let result: Result<PluginHandle, RegistryError> =
-            // SAFETY: MOCK_VTABLE is 'static, pointer is valid.
-            unsafe { registry.register(d2, &MOCK_VTABLE, "image.decode".to_owned(), bundle_id) };
+            // SAFETY: MOCK_INTERFACE is 'static, pointer is valid.
+            unsafe { registry.register(d2, &MOCK_INTERFACE, "image.decode".to_owned(), bundle_id) };
         assert!(
             matches!(result, Err(RegistryError::DuplicateProvider { .. })),
             "expected DuplicateProvider error"
@@ -721,21 +728,21 @@ mod tests {
         let d1: PluginDescriptor = make_descriptor("plugin_a", "contract.a");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
         // Different bundle_ids: collision is about hash collision on contract_id (same id, different name)
-        // MOCK_VTABLE.contract_id will be read, so we register with the same vtable but
+        // MOCK_INTERFACE.contract_id will be read, so we register with the same interface but
         // different contract_name strings — this simulates a hash collision scenario.
         let bundle_id_a: u64 = 10u64;
         let bundle_id_b: u64 = 20u64;
 
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register(d1, &MOCK_VTABLE, "contract.a".to_owned(), bundle_id_a)
+                .register(d1, &MOCK_INTERFACE, "contract.a".to_owned(), bundle_id_a)
                 .expect("first registration should succeed");
         }
 
         let result: Result<PluginHandle, RegistryError> =
-            // SAFETY: MOCK_VTABLE is 'static, pointer is valid.
-            unsafe { registry.register(d2, &MOCK_VTABLE, "contract.b".to_owned(), bundle_id_b) };
+            // SAFETY: MOCK_INTERFACE is 'static, pointer is valid.
+            unsafe { registry.register(d2, &MOCK_INTERFACE, "contract.b".to_owned(), bundle_id_b) };
         assert!(
             matches!(result, Err(RegistryError::ContractIdCollision { .. })),
             "expected ContractIdCollision error"
@@ -743,55 +750,67 @@ mod tests {
     }
 
     #[test]
-    fn resolve_returns_vtable_pointer() {
+    fn resolve_returns_interface_pointer() {
         let registry: Registry = Registry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "test.contract");
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_VTABLE,
-                "image.decode".to_owned(), // must match MOCK_VTABLE's implied contract name
+                &MOCK_INTERFACE,
+                "image.decode".to_owned(), // must match MOCK_INTERFACE's implied contract name
                 2u64,                      // bundle_id
             )
         }
         .expect("registration should succeed");
 
-        let vtable_ptr: *const PluginVTable =
+        let interface_ptr: *const PluginInterface =
             registry.resolve(handle).expect("resolve should succeed");
-        // SAFETY: vtable_ptr points to MOCK_VTABLE which is 'static.
-        let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
-        assert_eq!(contract_id, MOCK_VTABLE.contract_id);
+        // SAFETY: interface_ptr points to MOCK_INTERFACE which is 'static.
+        let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
+        assert_eq!(contract_id, MOCK_INTERFACE.contract_id);
     }
 
     #[test]
     fn multi_impl_different_bundles() {
         // Two different bundles may register the same contract_id.
         // Both should succeed; find_all_by_contract should return both.
-        static VTABLE_A: PluginVTable = PluginVTable {
+        static INTERFACE_A: PluginInterface = PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD,
             contract_version: (1 << 16),
             function_count: 0,
-            functions: MOCK_FNS.as_ptr(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FNS.as_ptr(),
+                },
+            },
         };
-        static VTABLE_B: PluginVTable = PluginVTable {
+        static INTERFACE_B: PluginInterface = PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD,
             contract_version: (2 << 16),
             function_count: 0,
-            functions: MOCK_FNS.as_ptr(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FNS.as_ptr(),
+                },
+            },
         };
 
         let registry: Registry = Registry::new();
         let d1: PluginDescriptor = make_descriptor("bundle_a_plugin", "multi.contract");
         let d2: PluginDescriptor = make_descriptor("bundle_b_plugin", "multi.contract");
 
-        // SAFETY: VTABLE_A is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: INTERFACE_A is 'static, pointer is valid for Registry lifetime.
         let handle_a: PluginHandle =
-            unsafe { registry.register(d1, &VTABLE_A, "multi.contract".to_owned(), 100u64) }
+            unsafe { registry.register(d1, &INTERFACE_A, "multi.contract".to_owned(), 100u64) }
                 .expect("bundle_a registration should succeed");
-        // SAFETY: VTABLE_B is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: INTERFACE_B is 'static, pointer is valid for Registry lifetime.
         let handle_b: PluginHandle =
-            unsafe { registry.register(d2, &VTABLE_B, "multi.contract".to_owned(), 200u64) }
+            unsafe { registry.register(d2, &INTERFACE_B, "multi.contract".to_owned(), 200u64) }
                 .expect("bundle_b registration should succeed");
 
         assert_ne!(
@@ -829,31 +848,42 @@ mod tests {
     }
     #[test]
     fn swap_vtable_returns_old_arc_and_bumps_generation() {
-        static NEW_VTABLE: PluginVTable = PluginVTable {
+        static NEW_INTERFACE: PluginInterface = PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id: 0x1234_5678_9ABC_DEF0,
             contract_version: (2 << 16),
             function_count: 0,
-            functions: MOCK_FNS.as_ptr(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FNS.as_ptr(),
+                },
+            },
         };
 
         let registry: Registry = Registry::new();
         let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.contract");
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
-            registry.register(descriptor, &MOCK_VTABLE, "swap.contract".to_owned(), 50u64)
+            registry.register(
+                descriptor,
+                &MOCK_INTERFACE,
+                "swap.contract".to_owned(),
+                50u64,
+            )
         }
         .expect("registration should succeed");
 
         let gen_before: u32 = handle.generation;
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_VTABLE));
+        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_INTERFACE));
         let old_arc: Arc<VTableSlot> = registry
             .swap_vtable(handle.index, new_arc)
             .expect("swap_vtable should succeed");
 
-        // old_arc should point to the original MOCK_VTABLE
-        // SAFETY: old_arc.0 is MOCK_VTABLE which is 'static.
+        // old_arc should point to the original MOCK_INTERFACE
+        // SAFETY: old_arc.0 is MOCK_INTERFACE which is 'static.
         let old_contract_id: u64 = unsafe { (*old_arc.0).contract_id };
-        assert_eq!(old_contract_id, MOCK_VTABLE.contract_id);
+        assert_eq!(old_contract_id, MOCK_INTERFACE.contract_id);
 
         // Verify generation was bumped
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
@@ -866,17 +896,29 @@ mod tests {
 
     #[test]
     fn find_slots_by_bundle_returns_all_slots() {
-        static VTABLE_X: PluginVTable = PluginVTable {
+        static INTERFACE_X: PluginInterface = PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id: 0xDEAD_BEEF_0000_0001,
             contract_version: (1 << 16),
             function_count: 0,
-            functions: MOCK_FNS.as_ptr(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FNS.as_ptr(),
+                },
+            },
         };
-        static VTABLE_Y: PluginVTable = PluginVTable {
+        static INTERFACE_Y: PluginInterface = PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id: 0xDEAD_BEEF_0000_0002,
             contract_version: (1 << 16),
             function_count: 0,
-            functions: MOCK_FNS.as_ptr(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FNS.as_ptr(),
+                },
+            },
         };
 
         let registry: Registry = Registry::new();
@@ -884,13 +926,13 @@ mod tests {
         let d1: PluginDescriptor = make_descriptor("bundle_plugin_x", "bundle.contract.x");
         let d2: PluginDescriptor = make_descriptor("bundle_plugin_y", "bundle.contract.y");
 
-        // SAFETY: VTABLE_X and VTABLE_Y are 'static, pointers are valid for Registry lifetime.
+        // SAFETY: INTERFACE_X and INTERFACE_Y are 'static, pointers are valid for Registry lifetime.
         unsafe {
             registry
-                .register(d1, &VTABLE_X, "bundle.contract.x".to_owned(), bundle_id)
+                .register(d1, &INTERFACE_X, "bundle.contract.x".to_owned(), bundle_id)
                 .expect("first registration should succeed");
             registry
-                .register(d2, &VTABLE_Y, "bundle.contract.y".to_owned(), bundle_id)
+                .register(d2, &INTERFACE_Y, "bundle.contract.y".to_owned(), bundle_id)
                 .expect("second registration should succeed");
         }
 
@@ -903,11 +945,11 @@ mod tests {
         let registry: Registry = Registry::new();
         let descriptor: PluginDescriptor =
             make_descriptor("concurrent_test", "concurrent.contract");
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_VTABLE,
+                &MOCK_INTERFACE,
                 "concurrent.contract".to_owned(),
                 999u64,
             )
@@ -933,31 +975,37 @@ mod tests {
     fn generation_increment_during_swap() {
         let registry: Registry = Registry::new();
         let descriptor: PluginDescriptor = make_descriptor("swap_test", "swap.test.contract");
-        // SAFETY: MOCK_VTABLE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_VTABLE,
+                &MOCK_INTERFACE,
                 "swap.test.contract".to_owned(),
                 888u64,
             )
         }
         .expect("registration should succeed");
 
-        static NEW_VTABLE: PluginVTable = PluginVTable {
+        static NEW_INTERFACE: PluginInterface = PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id: 0x1234_5678_9ABC_DEF0,
             contract_version: (3 << 16),
             function_count: 0,
-            functions: MOCK_FNS.as_ptr(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: MOCK_FNS.as_ptr(),
+                },
+            },
         };
 
         let original_gen: u32 = handle.generation;
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_VTABLE));
+        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_INTERFACE));
         let _: Arc<VTableSlot> = registry
             .swap_vtable(handle.index, new_arc)
             .expect("swap_vtable should succeed");
 
-        let result: Result<*const PluginVTable, RegistryError> = registry.resolve(handle);
+        let result: Result<*const PluginInterface, RegistryError> = registry.resolve(handle);
         assert!(
             matches!(result, Err(RegistryError::StaleHandle { .. })),
             "old handle should be stale after generation bump"

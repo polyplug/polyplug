@@ -7,11 +7,11 @@ use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -117,7 +117,7 @@ fn integration_dotnet_add() {
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
     // SAFETY: fn_ptr is function 0 (add). args/out are correctly typed for the add function.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: cast to generic dispatch signature; arg types enforced by test (AddArgs matches).
         unsafe { core::mem::transmute(fn_ptr) };
@@ -148,7 +148,7 @@ fn integration_dotnet_add_primitive() {
     let args: AddArgs = AddArgs { a: 10, b: 20 };
     let mut out: u32 = 0_u32;
     // SAFETY: fn_ptr is function 1 (add_primitive). args/out are correctly typed.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(1) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: same dispatch signature as add; arg types enforced by test.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -178,7 +178,7 @@ fn integration_dotnet_version_string() {
     // function index 2 = version() -> StringView (no args, pass null)
     let mut out_view: StringView = StringView::null();
     // SAFETY: fn_ptr is function 2 (version). No arg input needed; pass null.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(2) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: same dispatch signature; version takes no args (null input accepted by C# side).
         unsafe { core::mem::transmute(fn_ptr) };
@@ -209,7 +209,7 @@ fn integration_dotnet_reset() {
     );
     // function index 3 = reset() — no args, no meaningful output
     // SAFETY: fn_ptr is function 3 (reset). No args; dummy out is acceptable.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(3) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: same dispatch signature; reset ignores both args and out.
         unsafe { core::mem::transmute(fn_ptr) };

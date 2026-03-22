@@ -319,7 +319,11 @@ impl RuntimeBuilder {
                 .map_err(|e: GraphError| RuntimeError::Graph(e))?;
 
             // Phase 2.5: Validate version compatibility
-            validate_bundle_compatibility(&discovered, self.compatibility, runtime.warning_cb.as_ref())?;
+            validate_bundle_compatibility(
+                &discovered,
+                self.compatibility,
+                runtime.warning_cb.as_ref(),
+            )?;
 
             // Phase 3: Get topological load order (providers first)
             let load_order: Vec<String> = graph
@@ -364,15 +368,15 @@ impl RuntimeBuilder {
                     bundle_path.clone()
                 };
 
-                loader.load(&effective_path, &runtime).map_err(
-                    |e: PolyplugError| match e {
+                loader
+                    .load(&effective_path, &runtime)
+                    .map_err(|e: PolyplugError| match e {
                         PolyplugError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: effective_path.display().to_string(),
                             error: other.to_string(),
                         }),
-                    },
-                )?;
+                    })?;
             }
         }
 
@@ -1202,11 +1206,18 @@ mod tests {
         contract_id: u64,
         bundle_id: u64,
     ) -> PluginHandle {
-        let vtable: &'static PluginVTable = Box::leak(Box::new(PluginVTable {
+        use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
+        let vtable: &'static PluginInterface = Box::leak(Box::new(PluginInterface {
+            rt_ctx: core::ptr::null(),
             contract_id,
             contract_version: 0_u32,
             function_count: 0_u32,
-            functions: core::ptr::null(),
+            dispatch_type: DispatchType::Native,
+            dispatch: PluginDispatch {
+                native: NativeDispatch {
+                    functions: core::ptr::null(),
+                },
+            },
         }));
         let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
             name: polyplug_abi::StringView::from_static(b"stub"),
@@ -1234,7 +1245,11 @@ mod tests {
             "enforce"
         }
 
-        fn load(&self, _path: &Path, _runtime: &Runtime) -> Result<(), crate::error::PolyplugError> {
+        fn load(
+            &self,
+            _path: &Path,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::PolyplugError> {
             Err(RuntimeError::UndeclaredDependency {
                 bundle_id: self.error_bundle_id,
                 contract_id: self.contract_id,
@@ -1251,7 +1266,11 @@ mod tests {
             "probe"
         }
 
-        fn load(&self, _path: &Path, _runtime: &Runtime) -> Result<(), crate::error::PolyplugError> {
+        fn load(
+            &self,
+            _path: &Path,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::PolyplugError> {
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
             {
                 Ok(g) => g,
@@ -1269,7 +1288,11 @@ mod tests {
             "panic"
         }
 
-        fn load(&self, _path: &Path, _runtime: &Runtime) -> Result<(), crate::error::PolyplugError> {
+        fn load(
+            &self,
+            _path: &Path,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::PolyplugError> {
             panic!("intentional panic in PanicLoader");
         }
     }
@@ -1289,7 +1312,11 @@ mod tests {
             "reentrant"
         }
 
-        fn load(&self, _path: &Path, _runtime: &Runtime) -> Result<(), crate::error::PolyplugError> {
+        fn load(
+            &self,
+            _path: &Path,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::PolyplugError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
@@ -1341,7 +1368,11 @@ mod tests {
             "lazy"
         }
 
-        fn load(&self, _path: &Path, _runtime: &Runtime) -> Result<(), crate::error::PolyplugError> {
+        fn load(
+            &self,
+            _path: &Path,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::PolyplugError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),

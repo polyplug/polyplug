@@ -1,0 +1,41 @@
+{
+  "name": "@polyplug/loaders-lua",
+  "version": "0.1.0",
+  "description": "Lua loader for polyplug - loads LuaJIT plugins. Native libraries for Linux, macOS, and Windows are embedded.",
+  "main": "mod.ts",
+  "types": "mod.d.ts",
+  "files": [
+    "mod.ts",
+    "mod.d.ts",
+    "_native/"
+  ],
+  "scripts": {
+    "test": "deno test --allow-ffi --allow-env mod.test.ts"
+  },
+  "keywords": [
+    "polyplug",
+    "plugin",
+    "loader",
+    "lua",
+    "luajit",
+    "deno",
+    "ffi"
+  ],
+  "author": "polyplug",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/polyplug/polyplug.git",
+    "directory": "host-libs/js-deno/loaders/@polyplug/loaders-lua"
+  },
+  "bugs": {
+    "url": "https://github.com/polyplug/polyplug/issues"
+  },
+  "homepage": "https://github.com/polyplug/polyplug#readme",
+  "engines": {
+    "deno": ">=1.38.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

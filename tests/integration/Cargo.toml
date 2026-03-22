@@ -14,7 +14,6 @@ polyplug_dotnet = { workspace = true }
 polyplug_python = { workspace = true }
 polyplug_lua = { workspace = true }
 polyplug_js = { workspace = true }
-polyplug_js_deno = { workspace = true }
 tempfile = { workspace = true }
 libloading = { workspace = true }
 toml = { workspace = true }

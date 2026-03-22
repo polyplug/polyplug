@@ -7,17 +7,17 @@
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
 use polyplug::registry::Registry;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -65,7 +65,7 @@ fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
 unsafe extern "C" fn registry_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     if descriptor.is_null() || vtable.is_null() {
         return AbiError {
@@ -77,7 +77,7 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
+    let vt: &PluginInterface = unsafe { &*vtable };
 
     // Extract contract name from StringView.
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
@@ -161,7 +161,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 unsafe extern "C" fn noop_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 
@@ -350,14 +350,14 @@ fn test_cpp_plugin_dispatch() {
             .expect("test.add must be registered after polyplug_init")
     });
 
-    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let vtable_ptr: *const PluginInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
             .expect("vtable must be resolvable from handle")
     });
 
     // SAFETY: vtable_ptr is valid — plugin is loaded and library is not yet dropped.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(
         vtable.function_count, 1_u32,
@@ -367,7 +367,7 @@ fn test_cpp_plugin_dispatch() {
     // ── 6. Get function pointer from vtable.functions[0] ─────────────────────
     // SAFETY: functions[0] is the cpp_test_add ABI wrapper with signature
     //   extern "C" AbiError(const void* args, void* out).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
 
     // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
     // types are enforced: AddArgs matches what cpp_test_add expects.
@@ -468,14 +468,14 @@ fn test_cpp_host_loads_rust_plugin() {
             .expect("test.add must be registered from Rust plugin")
     });
 
-    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let vtable_ptr: *const PluginInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
             .expect("vtable must be resolvable")
     });
 
     // SAFETY: vtable_ptr is valid — plugin is loaded
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.function_count, 1_u32,
         "test.add vtable must have 1 function"
@@ -486,7 +486,7 @@ fn test_cpp_host_loads_rust_plugin() {
 
     // SAFETY: functions[0] is the first ABI wrapper with signature
     //   extern "C" fn(*const (), *mut ()) -> AbiError
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -582,17 +582,17 @@ fn test_exception_isolation_cpp() {
             .expect("test.add registered from throwing plugin")
     });
 
-    let vtable_ptr: *const PluginVTable = CPP_DISPATCH_REGISTRY
+    let vtable_ptr: *const PluginInterface = CPP_DISPATCH_REGISTRY
         .with(|cell| cell.borrow().resolve(handle).expect("vtable resolvable"));
 
     // SAFETY: vtable_ptr is valid — plugin is loaded
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     let args: AddArgs = AddArgs { a: 0_u32, b: 0_u32 };
     let mut out: u32 = 0_u32;
 
     // SAFETY: functions[0] is the cpp_throw_abi with noexcept wrapper
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };

@@ -485,7 +485,10 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     // Shared imports
     out.push_str("use std::sync::OnceLock;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
-    out.push_str("use polyplug_guest::PluginVTable;\n");
+    out.push_str("use polyplug_guest::PluginInterface;\n");
+    out.push_str("use polyplug_guest::DispatchType;\n");
+    out.push_str("use polyplug_guest::NativeDispatch;\n");
+    out.push_str("use polyplug_guest::PluginDispatch;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("#[allow(unused_imports)]\n");
     out.push_str("use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};\n");
@@ -592,20 +595,26 @@ fn generate_guest_contract_vtable(
     }
     out.push_str("];\n\n");
 
-    // Static PluginVTable
+    // Static PluginInterface
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
-        "pub(crate) static {upper}_VTABLE: PluginVTable = PluginVTable {{\n"
+        "pub(crate) static {upper}_VTABLE: PluginInterface = PluginInterface {{\n"
     ));
+    out.push_str("    rt_ctx: core::ptr::null(),\n");
     out.push_str(&format!("    contract_id: {upper}_CONTRACT_ID,\n"));
     out.push_str(&format!(
         "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
     ));
     out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
+    out.push_str("    dispatch_type: DispatchType::Native,\n");
+    out.push_str("    dispatch: PluginDispatch {\n");
+    out.push_str("        native: NativeDispatch {\n");
     out.push_str(&format!(
-        "    functions: {upper}_FNS.as_ptr() as *const *const (),\n"
+        "            functions: {upper}_FNS.as_ptr() as *const *const (),\n"
     ));
+    out.push_str("        },\n");
+    out.push_str("    },\n");
     out.push_str("};\n\n");
 
     Ok(())
@@ -671,16 +680,22 @@ fn generate_guest_plugin_vtable(
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
-        "pub static {plugin_upper}_VTABLE: PluginVTable = PluginVTable {{\n"
+        "pub static {plugin_upper}_VTABLE: PluginInterface = PluginInterface {{\n"
     ));
+    out.push_str("    rt_ctx: core::ptr::null(),\n");
     out.push_str(&format!("    contract_id: {plugin_upper}_CONTRACT_ID,\n"));
     out.push_str(&format!(
         "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
     ));
     out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
+    out.push_str("    dispatch_type: DispatchType::Native,\n");
+    out.push_str("    dispatch: PluginDispatch {\n");
+    out.push_str("        native: NativeDispatch {\n");
     out.push_str(&format!(
-        "    functions: {plugin_upper}_FNS.as_ptr() as *const *const (),\n"
+        "            functions: {plugin_upper}_FNS.as_ptr() as *const *const (),\n"
     ));
+    out.push_str("        },\n");
+    out.push_str("    },\n");
     out.push_str("};\n\n");
 
     Ok(())
@@ -1164,7 +1179,7 @@ fn generate_host_fn_caller(
     out.push_str("                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }\n");
     out.push_str("            } else {\n");
     out.push_str(&format!(
-        "                let fn_ptr: *const () = *vtable.functions.add({fn_id}_usize);\n"
+        "                let fn_ptr: *const () = *vtable.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
     out.push_str("                let dispatch_fn: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
     out.push_str("                dispatch_fn(args_ptr, out_ptr)\n");

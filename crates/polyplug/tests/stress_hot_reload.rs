@@ -21,7 +21,7 @@ use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -32,32 +32,56 @@ const RELOAD_V2_DIR: &str = env!("RELOAD_PLUGIN_V2_DIR");
 
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
-static VTABLE_MEM_A: PluginVTable = PluginVTable {
+static VTABLE_MEM_A: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0xDEAD_BEEF_0000_0001_u64,
     contract_version: (1_u32 << 16),
     function_count: 0_u32,
-    functions: MOCK_FNS_EMPTY.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FNS_EMPTY.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_MEM_B: PluginVTable = PluginVTable {
+static VTABLE_MEM_B: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0xDEAD_BEEF_0000_0001_u64,
     contract_version: (2_u32 << 16),
     function_count: 0_u32,
-    functions: MOCK_FNS_EMPTY.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FNS_EMPTY.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_QU_A: PluginVTable = PluginVTable {
+static VTABLE_QU_A: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0xCAFE_BABE_0000_0001_u64,
     contract_version: (1_u32 << 16),
     function_count: 0_u32,
-    functions: MOCK_FNS_EMPTY.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FNS_EMPTY.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_QU_B: PluginVTable = PluginVTable {
+static VTABLE_QU_B: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0xCAFE_BABE_0000_0001_u64,
     contract_version: (2_u32 << 16),
     function_count: 0_u32,
-    functions: MOCK_FNS_EMPTY.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FNS_EMPTY.as_ptr(),
+        },
+    },
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -72,11 +96,11 @@ fn v2_so_path() -> PathBuf {
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable_ptr: *const PluginVTable = rt.resolve_plugin(handle).ok()?;
+    let vtable_ptr: *const PluginInterface = rt.resolve_plugin(handle).ok()?;
     // SAFETY: vtable_ptr is from resolve_plugin and points to a valid vtable while
     // the library is loaded; slot 0 is a compatible extern "C" fn in the fixture.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
-        let fns: *const *const () = (*vtable_ptr).functions;
+        let fns: *const *const () = (*vtable_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
     };
     Some(fn_ptr)
@@ -169,7 +193,7 @@ fn stress_memory_vtable_slot_released_after_reload() {
     };
 
     for cycle in 0_usize..CYCLES {
-        let new_vtable: &'static PluginVTable = if cycle % 2_usize == 0_usize {
+        let new_vtable: &'static PluginInterface = if cycle % 2_usize == 0_usize {
             &VTABLE_MEM_B
         } else {
             &VTABLE_MEM_A
@@ -266,7 +290,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
     std::thread::sleep(Duration::from_millis(20_u64));
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static PluginVTable = if round % 2_usize == 0_usize {
+        let new_vtable: &'static PluginInterface = if round % 2_usize == 0_usize {
             &VTABLE_QU_B
         } else {
             &VTABLE_QU_A
@@ -335,14 +359,14 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
                 > = rt_clone.find_by_contract(contract_id, 0_u32);
 
                 if let Ok(plugin_handle) = handle_result {
-                    let vt_result: Result<*const PluginVTable, polyplug::error::RegistryError> =
+                    let vt_result: Result<*const PluginInterface, polyplug::error::RegistryError> =
                         rt_clone.resolve_plugin(plugin_handle);
 
                     if let Ok(vt_ptr) = vt_result {
                         // SAFETY: vt_ptr is from resolve_plugin and points to a valid vtable
                         // while the library is loaded; slot 0 is a compatible extern "C" fn.
                         let version: u32 = unsafe {
-                            let fn_ptr: *const () = *(*vt_ptr).functions;
+                            let fn_ptr: *const () = *(*vt_ptr).dispatch.native.functions;
                             let version_fn: extern "C" fn() -> u32 = core::mem::transmute(fn_ptr);
                             version_fn()
                         };

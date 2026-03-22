@@ -6,12 +6,12 @@ use polyplug::error::RegistryError;
 use polyplug::loader::BundleLoader;
 use polyplug::registry::Registry;
 use polyplug::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -148,7 +148,7 @@ fn integration_lua_add() {
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
     // SAFETY: fn_ptr is function 0 (add). args/out are correctly typed for the add function.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: cast to generic dispatch signature; arg types enforced by test (AddArgs matches).
         unsafe { core::mem::transmute(fn_ptr) };
@@ -179,7 +179,7 @@ fn integration_lua_add_primitive() {
     let args: AddArgs = AddArgs { a: 10, b: 20 };
     let mut out: u32 = 0_u32;
     // SAFETY: fn_ptr is function 1 (add_primitive). args/out are correctly typed.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(1) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: same dispatch signature as add; arg types enforced by test.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -209,7 +209,7 @@ fn integration_lua_version_string() {
     );
     let mut out_view: StringView = StringView::null();
     // SAFETY: fn_ptr is function 2 (version). No arg input needed; pass null.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(2) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: same dispatch signature; version takes no args (null input accepted by Lua side).
         unsafe { core::mem::transmute(fn_ptr) };
@@ -241,7 +241,7 @@ fn integration_lua_reset() {
         "test.add vtable must have at least 4 functions"
     );
     // SAFETY: fn_ptr is function 3 (reset). vtable.functions is valid (non-null, in-bounds).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(3) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: same dispatch signature; reset has void args and void out.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -284,7 +284,7 @@ fn integration_lua_utf8_roundtrip() {
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: fn_ptr is function 2 (version). vtable.functions is valid (non-null, in-bounds).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(2) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: cast to generic dispatch signature; arg types enforced by test.
         unsafe { core::mem::transmute(fn_ptr) };

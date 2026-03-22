@@ -72,8 +72,13 @@ impl TestAddContract {
                     code: polyplug_abi::ABI_FUNCTION_NOT_AVAIL,
                     message: polyplug_abi::StringView::null(),
                 }
+            } else if vtable.dispatch_type != polyplug_abi::DispatchType::Native {
+                AbiError {
+                    code: polyplug_abi::ABI_ERROR_GENERIC,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
-                let fn_ptr: *const () = *vtable.functions.add(0_usize);
+                let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0_usize) };
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)

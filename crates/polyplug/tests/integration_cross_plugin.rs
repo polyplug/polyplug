@@ -9,23 +9,29 @@
 //!            is `pub(crate)` and cannot be accessed from an external crate.
 //!
 
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
+use polyplug_abi::{
+    DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginInterface, StringView,
+};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Allocate a `'static` `PluginVTable` with the given contract_id.
+/// Allocate a `'static` `PluginInterface` with the given contract_id.
 ///
 /// Intentional leak — test vtables are pointer-sized and tests are short-lived.
 /// The vtable must be `'static` because `Registry::register` stores a raw pointer
 /// that must remain valid for the registry's lifetime.
-fn make_static_vtable(cid: u64) -> &'static PluginVTable {
-    Box::leak(Box::new(PluginVTable {
+fn make_static_vtable(cid: u64) -> &'static PluginInterface {
+    Box::leak(Box::new(PluginInterface {
+        rt_ctx: core::ptr::null(),
         contract_id: cid,
         contract_version: 0,
         function_count: 0,
-        functions: core::ptr::null(),
+        dispatch_type: DispatchType::Native,
+        dispatch: PluginDispatch {
+            native: NativeDispatch {
+                functions: core::ptr::null(),
+            },
+        },
     }))
 }
 

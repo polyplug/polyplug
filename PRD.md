@@ -423,7 +423,7 @@ Lua     host-libs/lua/     →  polyplug LuaRocks rock / release archive
                                register_*_loader() functions (one per loader)
                                Performance: JIT-inlined C calls, near-native or faster
 
-JS/TS   host-libs/js/      →  @polyplug/core JSR package
+JS/TS   host-libs/js-deno/ →  @polyplug/core JSR package
                                Deno.dlopen host lib, Runtime class, TypeScript types
                                register*Loader() functions (one per loader)
                                Requires --allow-ffi at runtime
@@ -431,7 +431,7 @@ JS/TS   host-libs/js/      →  @polyplug/core JSR package
 ```
 
 Note: `polyplug_loaders_dotnet`, `polyplug_loaders_python`, `polyplug_loaders_lua`,
-`polyplug_loaders_js`, `polyplug_loaders_js_deno` are **loader packages** — they teach
+`polyplug_loaders_js` are **loader packages** — they teach
 the runtime how to load plugins written in those languages. They are distinct from the
 host lib for a given language. A C# host app uses `host-libs/csharp/` (`Polyplug` NuGet)
 to drive the runtime. It additionally installs `Polyplug.Loaders.Python` only if it
@@ -447,7 +447,6 @@ use polyplug_dotnet::DotnetLoader;
 use polyplug_python::PythonLoader;
 use polyplug_lua::LuaLoader;
 use polyplug_js::JsLoader;
-use polyplug_js_deno::JsDenoLoader;
 
 let runtime = PluginRuntime::new()
     .plugin_dirs(["./plugins"])
@@ -455,7 +454,6 @@ let runtime = PluginRuntime::new()
     .loader(PythonLoader::new())
     .loader(LuaLoader::new())
     .loader(JsLoader::new())
-    .loader(JsDenoLoader::new())
     .init()?;
 ```
 
@@ -469,7 +467,6 @@ polyplug::register_dotnet_loader(rt, { .min_framework = "10.0" });
 polyplug::register_python_loader(rt, { .min_version = "3.11" });
 polyplug::register_lua_loader(rt);
 polyplug::register_js_loader(rt);
-polyplug::register_js_deno_loader(rt);
 rt.load_bundle("./plugins/my_plugin");
 ```
 
@@ -480,7 +477,6 @@ rt.RegisterDotnetLoader("10.0");
 rt.RegisterPythonLoader("3.11");
 rt.RegisterLuaLoader();
 rt.RegisterJsLoader();
-rt.RegisterJsDenoLoader();
 rt.LoadBundle("./plugins/my_plugin");
 ```
 
@@ -494,7 +490,6 @@ loaders.register_dotnet_loader(rt, min_framework="10.0")
 loaders.register_python_loader(rt, min_version="3.11")
 loaders.register_lua_loader(rt)
 loaders.register_js_loader(rt)
-loaders.register_js_deno_loader(rt)
 rt.load_bundle("./plugins/my_plugin")
 ```
 
@@ -507,20 +502,18 @@ polyplug.register_dotnet_loader(rt, { min_framework = "10.0" })
 polyplug.register_python_loader(rt, { min_version = "3.11" })
 polyplug.register_lua_loader(rt)
 polyplug.register_js_loader(rt)
-polyplug.register_js_deno_loader(rt)
 polyplug.load_bundle(rt, "./plugins/my_plugin")
 ```
 
 ```typescript
 // Deno — Deno.dlopen into libpolyplug.so + libpolyplug_*.so
-import * as polyplug from "./host-libs/js/polyplug.ts";
+import * as polyplug from "./host-libs/js-deno/polyplug.ts";
 
 const rt = polyplug.runtimeNew();
 await polyplug.registerDotnetLoader(rt, { minFramework: "10.0" });
 await polyplug.registerPythonLoader(rt, { minVersion: "3.11" });
 await polyplug.registerLuaLoader(rt);
 await polyplug.registerJsLoader(rt);
-await polyplug.registerJsDenoLoader(rt);
 polyplug.loadBundle(rt, "./plugins/my_plugin");
 ```
 
@@ -567,7 +560,6 @@ Language runtime adapters are separate crates that teach `polyplug` how to load 
 - If `polyplug-python` is not in your `Cargo.toml`, Python support is not compiled into your binary
 - If `polyplug-lua` is not in your `Cargo.toml`, Lua support is not compiled into your binary
 - If `polyplug-js` is not in your `Cargo.toml`, QuickJS JS support is not compiled into your binary
-- If `polyplug-js-deno` is not in your `Cargo.toml`, V8/Deno JS support is not compiled into your binary
 
 This is not a feature flag. It is a missing dependency. True zero cost.
 
@@ -592,7 +584,6 @@ PluginRuntime::new()
     .loader(PythonLoader::new())              // from polyplug-python
     .loader(LuaLoader::new())                 // from polyplug-lua
     .loader(JsLoader::new(JsConfig {}))       // from polyplug-js (QuickJS)
-    .loader(JsDenoLoader::new(JsDenoConfig {})) // from polyplug-js-deno (V8)
     .init()?;
 ```
 
@@ -917,131 +908,10 @@ Plugin developer needs: `npm i -g rolldown`. No other toolchain required.
 
 Pure-logic npm packages (lodash, zod, date-fns, etc.) work perfectly — bundled by Rolldown.
 Node.js API packages (`fs`, `http`, `net`, `crypto`) do NOT work — QuickJS has no Node APIs.
-`rolldown-plugin-node-polyfills` is NOT recommended — polyfills for I/O APIs throw at runtime,
-producing confusing errors. Plugin developers needing Node.js APIs must use `polyplug-js-deno`.
+Plugin developers needing Node.js APIs should write native plugins or use a different runtime.
 
 **Performance:** JS value boxing/unboxing only — ~50-200ns per cross-plugin call.
 Same performance tier as Lua. No channel, no thread hop, no IPC.
-
----
-
-### polyplug-js-deno
-
-Enables loading of JavaScript and TypeScript plugins via embedded V8 (deno_core).
-Runtime value: `js-deno`.
-
-**Embedding model:** V8 is embedded in-process via `deno_core`. Each bundle gets
-one dedicated `std::thread` with a `smol::LocalExecutor` (required by V8's
-thread-pinning constraint — V8 isolates are `!Send`). All calls are in-process
-via deno_core's `#[op2(fast)]` op system. No subprocess. No IPC.
-
-**Cargo dependencies:**
-
-```toml
-deno_core    = "0.311.0"
-smol         = "2.0.0"       # LocalExecutor satisfies V8 thread-pinning
-futures-lite = "2.3.0"
-# tokio is NOT used — smol is lighter and explicitly supported by deno_core
-```
-
-**Configuration:**
-
-```rust
-JsDenoLoader::new(JsDenoConfig {})  // no fields — V8 is fully embedded, no system deps
-```
-
-**Loading model:**
-
-```
-Host process
-├── std::thread::spawn (one per bundle — V8 isolate is thread-pinned)
-│   ├── smol::LocalExecutor::new()    ← thread-local, never moves
-│   ├── futures_lite::future::block_on(ex.run(async {
-│   │     set thread_local HostVTable*
-│   │     deno_core::JsRuntime::new(extensions: [polyplug_ops])
-│   │     polyplug_ops registers all HostVTable fns as #[op2(fast)] ops:
-│   │       op_find_by_contract(contract_id: u64, min_ver: u32) → u64
-│   │       op_find_by_bundle(bundle_id: u64, contract_id: u64, min_ver: u32) → u64
-│   │       op_find_all_by_contract(contract_id: u64, min_ver: u32) → Vec<u64>
-│   │       op_resolve_plugin(handle: u64) → u64
-│   │       op_get_extension(extension_id: u32) → u64
-│   │       op_register_vtable(contract_id: u64, vtable: VtableDesc)
-│   │       op_alloc(size: u32) → u64
-│   │       op_free(ptr: u64)
-│   │     load_main_es_module("index.ts" or "bundle.js")
-│   │     run_event_loop() → plugin runs, calls Deno.core.ops.op_register_vtable
-│   │     thread parks on mpsc Receiver — waiting for vtable call requests
-│   └── }))
-└── vtable registered via op_register_vtable → sent to loader via oneshot channel
-```
-
-**TypeScript support:** deno_core loads `.ts` natively via `TsModuleLoader`.
-No separate transpilation step required. Plugin developer ships `index.ts` directly.
-Rolldown is optional — use it only to bundle npm dependencies.
-
-**Bundle format:**
-
-```
-my_plugin/
-├── manifest.toml    (runtime = "js-deno")
-└── index.ts         (TypeScript — loaded natively by deno_core)
-  # OR
-└── bundle.js        (if npm deps bundled via rolldown)
-```
-
-**npm ecosystem support:**
-
-Broad npm ecosystem support via V8 + Node.js compatibility layer in deno_core.
-`fs`, `http`, `crypto`, and most Node.js built-ins available.
-Native addons (`.node` files) are still impossible — only pure-JS packages.
-
-**Performance:**
-
-deno_core `#[op2(fast)]` path: ~50-200ns per op call (direct in-process function call).
-Channel roundtrip for vtable calls: ~1-5μs (send to JS thread + receive result).
-Total cross-plugin call overhead: ~50-200ns + ~1-5μs ≈ ~1-5μs.
-~5-30x slower than `js-quickjs` for cross-plugin calls. Still fully in-process,
-no OS context switch, no serialization. Acceptable for plugins where npm ecosystem
-access matters more than per-call latency.
-
-V8 startup: ~50-200ms one-time cost at first `js-deno` bundle load.
-Binary size: +~30MB for embedded V8.
-
----
-
-### When to pick js-quickjs vs js-deno
-
-```
-js-quickjs — pick this when:
-  ✓ Plugin logic is self-contained (validation, transformation, formatting)
-  ✓ npm dependencies are pure JS (lodash, zod, date-fns, etc.)
-  ✓ You want smallest possible binary footprint (+~1MB)
-  ✓ You want fastest startup (<300μs) and lowest per-call overhead (~50-200ns)
-  ✓ You want zero system dependencies — fully embedded, no installs required
-  ✗ Plugin needs Node.js APIs (fs, http, crypto, net)
-  ✗ Plugin needs native npm addons
-
-js-deno — pick this when:
-  ✓ Plugin needs Node.js-compatible APIs (fs, http, crypto, etc.)
-  ✓ npm packages depend on Node.js built-ins
-  ✓ You want first-class TypeScript without a separate compile step
-  ✓ npm ecosystem breadth matters more than per-call latency
-  ✗ You need the absolute lowest cross-plugin call overhead
-  ✗ Binary size is a constraint (+~30MB for V8)
-  ✗ You cannot afford 1 dedicated thread per js-deno bundle
-```
-
-Both adapters can be registered simultaneously. App developer registers one or both:
-
-```rust
-PluginRuntime::new()
-    .loader(JsLoader::new(JsConfig {}))          // enables js-quickjs
-    .loader(JsDenoLoader::new(JsDenoConfig {}))  // enables js-deno
-    .init()?;
-```
-
-Plugin developer picks their runtime by setting `runtime = "js-quickjs"` or
-`runtime = "js-deno"` in `bundle.toml`. The runtime dispatches automatically.
 
 ---
 
@@ -1815,11 +1685,11 @@ C#          host + guest    NativeAOT (native) or standard .NET (polyplug_dotnet
 Python      host + guest    host: ctypes; guest: polyplug_python adapter
 Lua         host + guest    host: LuaJIT FFI; guest: polyplug_lua adapter
 JavaScript  host: Deno only (Deno.dlopen)
-            guest: QuickJS (polyplug_js) or Deno/V8 (polyplug_js_deno)
+            guest: QuickJS (polyplug_js)
 TypeScript  same as JS
 ```
 
-**6 host languages. 7 guest runtime types.**
+**6 host languages. 6 guest runtime types.**
 
 QuickJS cannot be a host — it is an embedded VM with no standalone executable,
 no FFI mechanism to load external shared libraries. Only Deno (which has
@@ -1833,16 +1703,15 @@ NativeAOT       runtime = "native"    native loader, no adapter needed
 standard .NET   runtime = "dotnet"    polyplug_dotnet required, CLR via hostfxr
 ```
 
-**JS/TS — two guest runtime variants, one host:**
+**JS/TS — one guest runtime, one host:**
 
 ```
 js-quickjs    QuickJS embedded in-process    guest only   ~50-200ns/call, +~1MB
-js-deno       V8 embedded in-process         host + guest ~1-5μs/call,   +~30MB
 Deno          standalone executable          host only    Deno.dlopen
 ```
 
-Plugin developer picks variant in `bundle.toml`.
-App developer registers one or both adapters via loader registration FFI.
+Plugin developer sets `runtime = "js-quickjs"` in `bundle.toml`.
+App developer registers the adapter via loader registration FFI.
 
 ---
 
@@ -1866,7 +1735,7 @@ The native shared library extension is platform-specific:
 
 ### Package count
 
-5 loaders × 6 host languages = 30 loader packages total. This sounds large but each is
+4 loaders × 6 host languages = 24 loader packages total. This sounds large but each is
 trivial to maintain — they change only when the underlying loader's config API changes,
 which is rare. The precedent is strong: SQLite, libsodium, libzmq all follow the same
 pattern across all language ecosystems with no complaints about package count.
@@ -1884,7 +1753,6 @@ polyplug_loaders_dotnet    .NET loader
 polyplug_loaders_python    Python loader
 polyplug_loaders_lua       Lua loader
 polyplug_loaders_js        QuickJS loader  (runtime = "js-quickjs")
-polyplug_loaders_js_deno   Deno/V8 loader  (runtime = "js-deno")
 ```
 
 Rust app developer example — C# host wanting Python + Lua guests:
@@ -1904,7 +1772,6 @@ polyplug-loaders-dotnet   .NET loader header + native binary
 polyplug-loaders-python   Python loader header + native binary
 polyplug-loaders-lua      Lua loader header + native binary
 polyplug-loaders-js       QuickJS loader header + native binary
-polyplug-loaders-js-deno  Deno loader header + native binary
 ```
 
 C++ app developer example — wanting Python + Lua guests:
@@ -1933,7 +1800,6 @@ Polyplug.Loaders.Dotnet   .NET loader + native binary (runtimes/*/native/)
 Polyplug.Loaders.Python   Python loader + native binary
 Polyplug.Loaders.Lua      Lua loader + native binary
 Polyplug.Loaders.Js       QuickJS loader + native binary
-Polyplug.Loaders.JsDeno   Deno loader + native binary
 ```
 
 NuGet bundles native binaries via the `runtimes/<rid>/native/` convention.
@@ -1960,7 +1826,6 @@ polyplug-loaders-dotnet   .NET loader + native binary (wheel)
 polyplug-loaders-python   Python loader + native binary
 polyplug-loaders-lua      Lua loader + native binary
 polyplug-loaders-js       QuickJS loader + native binary
-polyplug-loaders-js-deno  Deno loader + native binary
 ```
 
 Python wheels bundle native binaries directly. `ctypes.CDLL` resolves them
@@ -1989,7 +1854,6 @@ polyplug-loaders-dotnet   .NET loader + native binary
 polyplug-loaders-python   Python loader + native binary
 polyplug-loaders-lua      Lua loader + native binary
 polyplug-loaders-js       QuickJS loader + native binary
-polyplug-loaders-js-deno  Deno loader + native binary
 ```
 
 Lua app developer example — wanting Python + Lua guests:
@@ -2009,12 +1873,11 @@ polyplug.register_lua_loader(rt)
 
 ```
 @polyplug/core            Deno.dlopen host lib (polyplug.ts)
-@polyplug/guest           shared guest lib (js-quickjs and js-deno)
+@polyplug/guest           shared guest lib (js-quickjs)
 @polyplug/loaders-dotnet  .NET loader registration + native binary setup
 @polyplug/loaders-python  Python loader registration + native binary setup
 @polyplug/loaders-lua     Lua loader registration + native binary setup
 @polyplug/loaders-js      QuickJS loader registration + native binary setup
-@polyplug/loaders-js-deno Deno loader registration + native binary setup
 ```
 
 Deno packages (JSR) contain the TypeScript wrapper. Native binaries are downloaded
@@ -2064,14 +1927,14 @@ polyplug_runtime_register_loader(rt, loader_ptr) → u32  (0 = ok)
 Non-Rust host libs call create → register in two steps. The language-specific
 wrapper in each loader package reduces this to a single idiomatic function call.
 
-NOTE: `host-libs/js/` targets Deno as the host runtime (Deno.dlopen into libpolyplug).
+NOTE: `host-libs/js-deno/` targets Deno as the host runtime (Deno.dlopen into libpolyplug).
 QuickJS cannot be a standalone host — it is an embedded VM that runs inside a Rust process.
 
 ---
 
 ## 25. C Facade — Stable Host API for FFI Consumers
 
-`host-libs/lua/` and `host-libs/js/` both call into `libpolyplug.so` via FFI (LuaJIT FFI and `Deno.dlopen` respectively). They cannot use the Rust-native API surface. A thin stable `extern "C"` facade is therefore added to `crates/polyplug/src/ffi/mod.rs` and exported from `lib.rs`.
+`host-libs/lua/` and `host-libs/js-deno/` both call into `libpolyplug.so` via FFI (LuaJIT FFI and `Deno.dlopen` respectively). They cannot use the Rust-native API surface. A thin stable `extern "C"` facade is therefore added to `crates/polyplug/src/ffi/mod.rs` and exported from `lib.rs`.
 
 **Design rules:**
 - All symbols prefixed `polyplug_`

@@ -671,7 +671,7 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
         }
 
         out.push_str(&format!(
-            "        const fnPtr = vtable.functions[{}];\n",
+            "        const fnPtr = vtable.dispatch.native.functions[{}];\n",
             func.function_id
         ));
         out.push_str("        if (!fnPtr) throw new Error('function not available');\n");

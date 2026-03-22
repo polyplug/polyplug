@@ -12,19 +12,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use polyplug::registry::Registry;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::tracking::TrackingAllocator;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::tracking::TrackingAllocator;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 
@@ -171,7 +171,7 @@ unsafe extern "C" fn stub_free(
 unsafe extern "C" fn registry_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     if descriptor.is_null() || vtable.is_null() {
         return AbiError {
@@ -183,7 +183,7 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
+    let vt: &PluginInterface = unsafe { &*vtable };
 
     // Extract contract name from StringView.
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
@@ -233,7 +233,7 @@ fn load_memory_plugin() -> libloading::Library {
 
 /// Initialise the memory_plugin and store vtable into the thread-local registry.
 /// Returns the vtable pointer.
-fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTable {
+fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInterface {
     // Reset registry before each use.
     STRESS_REGISTRY.with(|cell| {
         *cell.borrow_mut() = Registry::new();
@@ -298,10 +298,10 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginVTab
 #[test]
 fn stress_large_buffer_fill_and_read() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginVTable = init_memory_plugin_vtable(&library);
+    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     // Allocate 1 MiB buffer via the host allocator.
     const BUFFER_SIZE: usize = 1024 * 1024;
@@ -323,7 +323,7 @@ fn stress_large_buffer_fill_and_read() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are enforced
         // by the test (FillArgs matches what memory_plugin fn 0 expects).
@@ -368,10 +368,10 @@ fn stress_large_buffer_fill_and_read() {
 #[test]
 fn stress_string_view_non_ascii_utf8() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginVTable = init_memory_plugin_vtable(&library);
+    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     // Non-ASCII UTF-8: "café" encoded as bytes.
     let input_bytes: &[u8] = b"caf\xc3\xa9";
@@ -383,7 +383,7 @@ fn stress_string_view_non_ascii_utf8() {
     let mut out_sv: StringView = StringView::null();
 
     // SAFETY: fn_ptr is function 2 in the vtable (memory_echo_string_view).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(2) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (StringView matches what memory_plugin fn 2 expects).
@@ -427,10 +427,10 @@ fn stress_string_view_non_ascii_utf8() {
 #[test]
 fn stress_zero_length_buffer_and_string_view() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginVTable = init_memory_plugin_vtable(&library);
+    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     // Zero-length Buffer and StringView.
     let zero_buf: Buffer = Buffer {
@@ -452,7 +452,7 @@ fn stress_zero_length_buffer_and_string_view() {
     };
 
     // SAFETY: fn_ptr is function 3 in the vtable (memory_zero_length_roundtrip).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(3) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (ZeroArgs/ZeroResult match what memory_plugin fn 3 expects).
@@ -489,11 +489,11 @@ fn stress_zero_length_buffer_and_string_view() {
 #[test]
 fn stress_concurrent_8_threads_no_shared_memory() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginVTable = init_memory_plugin_vtable(&library);
+    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
     // PluginVTable is Send+Sync per its unsafe impls in the plugin.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     const THREAD_COUNT: usize = 8;
     const THREAD_BUFFER_SIZE: usize = 4096;
@@ -517,7 +517,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
 
                 // Get function 0 (memory_fill_preallocated_buffer) from vtable.
                 // SAFETY: vtable.functions is valid for function_count (4) entries.
-                let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+                let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     // SAFETY: fn_ptr is the fill function with compatible signature.
                     unsafe { core::mem::transmute(fn_ptr) };
@@ -591,10 +591,10 @@ fn stress_concurrent_8_threads_no_shared_memory() {
 #[test]
 fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginVTable = init_memory_plugin_vtable(&library);
+    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     // Set up a tracking allocator and build a HostVTable that uses wrapper functions.
     let tracker: TrackingAllocator = TrackingAllocator::new();
@@ -655,7 +655,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     // SAFETY: fn_ptr is function 1 in the vtable (memory_alloc_buffer_via_host).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(1) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (AllocArgs/Buffer match what memory_plugin fn 1 expects).
@@ -717,10 +717,10 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 #[test]
 fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginVTable = init_memory_plugin_vtable(&library);
+    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     // Use the tracking allocator for the caller-side allocation.
     let tracker: TrackingAllocator = TrackingAllocator::new();
@@ -747,7 +747,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (FillArgs matches what memory_plugin fn 0 expects).

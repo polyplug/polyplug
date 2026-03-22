@@ -10,5 +10,8 @@ publish          = false
 name       = "memory_plugin"
 crate-type = ["cdylib"]
 
+[dependencies]
+polyplug_abi = { workspace = true }
+
 [lints]
 workspace = true

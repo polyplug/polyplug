@@ -55,17 +55,18 @@ inline StringView string_view(const std::string& s) {
     return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
 }
 
-/// Call a plugin function by vtable index.
-/// @param vtable Plugin vtable pointer
+/// Call a plugin function by vtable index (native dispatch only).
+/// @param vtable Plugin interface pointer
 /// @param func_idx Function index (0-based)
 /// @param input Input string
 /// @return Output string from plugin
-inline std::string call_plugin_fn(const PluginVTable* vtable, uint32_t func_idx, std::string_view input) {
+inline std::string call_plugin_fn(const PluginInterface* vtable, uint32_t func_idx, std::string_view input) {
     if (!vtable || func_idx >= vtable->function_count) {
         throw std::runtime_error("invalid function index");
     }
     
-    auto funcs = reinterpret_cast<void**>(vtable->functions);
+    // Native dispatch: access via dispatch.native.functions[func_idx]
+    auto funcs = reinterpret_cast<void**>(vtable->dispatch.native.functions);
     auto func_ptr = reinterpret_cast<uint32_t (*)(const void*, void*)>(funcs[func_idx]);
     
     StringView input_sv = string_view(input);

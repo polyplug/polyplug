@@ -77,7 +77,7 @@ impl PipelineDecoderContract {
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
-                let fn_ptr: *const () = *vtable.functions.add(0_usize);
+                let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
@@ -132,7 +132,7 @@ impl DataTransformerContract {
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
-                let fn_ptr: *const () = *vtable.functions.add(0_usize);
+                let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
@@ -187,7 +187,7 @@ impl PipelineEncoderContract {
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
-                let fn_ptr: *const () = *vtable.functions.add(0_usize);
+                let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
@@ -242,7 +242,7 @@ impl DataReporterContract {
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
-                let fn_ptr: *const () = *vtable.functions.add(0_usize);
+                let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)
@@ -297,7 +297,7 @@ impl PipelineValidatorContract {
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
-                let fn_ptr: *const () = *vtable.functions.add(0_usize);
+                let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)

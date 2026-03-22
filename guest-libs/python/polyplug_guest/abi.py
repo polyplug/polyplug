@@ -94,13 +94,21 @@ class PluginHandle(ctypes.Structure):
 
 
 class PluginVTable(ctypes.Structure):
-    """contract_id(8) + contract_version(4) + function_count(4) + functions(8) = 24 bytes."""
+    """Plugin interface (alias: PluginVTable for backward compatibility).
+    rt_ctx(8) + contract_id(8) + contract_version(4) + function_count(4) + dispatch_type(4) + _pad(4) + dispatch(16) = 48 bytes."""
 
     _fields_: ClassVar = [
+        ("rt_ctx", ctypes.c_void_p),  # *const HostContext
         ("contract_id", ctypes.c_uint64),
         ("contract_version", ctypes.c_uint32),
         ("function_count", ctypes.c_uint32),
-        ("functions", ctypes.c_void_p),  # *const *const ()
+        ("dispatch_type", ctypes.c_uint32),  # 0=Native, 1=VirtualMachine
+        ("_pad", ctypes.c_uint32),  # alignment padding
+        ("dispatch_functions", ctypes.c_void_p),  # dispatch.native.functions
+        (
+            "dispatch_loader_data",
+            ctypes.c_void_p,
+        ),  # dispatch.native.loader_data (or vm.call/loader_data)
     ]
 
 

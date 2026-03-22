@@ -5,15 +5,15 @@
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
 use polyplug::registry::Registry;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -28,7 +28,7 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 unsafe extern "C" fn registry_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     if descriptor.is_null() || vtable.is_null() {
         return AbiError {
@@ -40,7 +40,7 @@ unsafe extern "C" fn registry_register_callback(
     // SAFETY: descriptor and vtable are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
+    let vt: &PluginInterface = unsafe { &*vtable };
 
     // Extract contract name from StringView.
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
@@ -125,7 +125,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 unsafe extern "C" fn noop_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 
@@ -213,11 +213,11 @@ fn test_dispatch_add_function() {
     });
 
     // Resolve the vtable.
-    let vtable_ptr: *const PluginVTable =
+    let vtable_ptr: *const PluginInterface =
         DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(
         vtable.function_count, 1,
@@ -230,7 +230,7 @@ fn test_dispatch_add_function() {
 
     // SAFETY: fn_ptr is function 0 in the vtable. args and out are correctly typed.
     // The function has signature: extern "C" fn(*const (), *mut ()) -> AbiError
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (AddArgs matches what test_plugin expects).
@@ -309,11 +309,11 @@ fn test_dispatch_add_with_zero() {
             .find(contract_id, 0)
             .expect("test.add must be registered")
     });
-    let vtable_ptr: *const PluginVTable =
+    let vtable_ptr: *const PluginInterface =
         DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
 
     // SAFETY: vtable_ptr is valid.
-    let fn_ptr: *const () = unsafe { *(*vtable_ptr).functions.add(0) };
+    let fn_ptr: *const () = unsafe { *(*vtable_ptr).dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is the add function with compatible signature.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -392,11 +392,11 @@ fn test_dispatch_add_wrapping_overflow() {
             .find(contract_id, 0)
             .expect("test.add must be registered")
     });
-    let vtable_ptr: *const PluginVTable =
+    let vtable_ptr: *const PluginInterface =
         DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
 
     // SAFETY: vtable_ptr is valid.
-    let fn_ptr: *const () = unsafe { *(*vtable_ptr).functions.add(0) };
+    let fn_ptr: *const () = unsafe { *(*vtable_ptr).dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is the add function with compatible signature.
         unsafe { core::mem::transmute(fn_ptr) };

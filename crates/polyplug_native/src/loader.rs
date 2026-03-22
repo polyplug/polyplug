@@ -5,8 +5,8 @@ use std::path::Path;
 use crate::config::NativeConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 
 pub struct NativeLoader {

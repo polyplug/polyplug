@@ -17,6 +17,7 @@
 
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -24,7 +25,6 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -209,21 +209,35 @@ fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginVTable {
 
 /// Dispatch add(3, 5) and verify the result equals 8.
 fn dispatch_add_and_verify(vtable_ptr: *const PluginVTable) {
+    use polyplug_abi::DispatchType;
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr is valid for the call.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args valid AddArgs; out valid u32 location.
-    let result: AbiError = unsafe {
-        dispatch_fn(
-            &args as *const AddArgs as *const (),
-            &mut out as *mut u32 as *mut (),
-        )
+
+    let result: AbiError = if vtable.dispatch_type == DispatchType::Native {
+        // SAFETY: functions[0] is the add wrapper.
+        let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+        // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
+        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+            unsafe { core::mem::transmute(fn_ptr) };
+        // SAFETY: args valid AddArgs; out valid u32 location.
+        unsafe {
+            dispatch_fn(
+                &args as *const AddArgs as *const (),
+                &mut out as *mut u32 as *mut (),
+            )
+        }
+    } else {
+        // SAFETY: dispatch_type is VirtualMachine, so .vm is valid.
+        unsafe {
+            (vtable.dispatch.vm.call)(
+                vtable.dispatch.vm.loader_data,
+                0, // fn_id = 0 for add
+                &args as *const AddArgs as *const (),
+                &mut out as *mut u32 as *mut (),
+            )
+        }
     };
     assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
@@ -296,7 +310,7 @@ fn test_rust_host_rust_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper with signature extern "C" fn(*const (), *mut ()) -> AbiError.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to generic dispatch signature; AddArgs matches the add function.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -375,7 +389,7 @@ fn test_cpp_host_rust_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -454,7 +468,7 @@ fn test_csharp_host_rust_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -533,7 +547,7 @@ fn test_python_host_rust_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -612,7 +626,7 @@ fn test_lua_host_rust_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -691,7 +705,7 @@ fn test_js_host_rust_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -776,7 +790,7 @@ fn test_rust_host_cpp_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches cpp_test_add.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -855,7 +869,7 @@ fn test_cpp_host_cpp_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -934,7 +948,7 @@ fn test_csharp_host_cpp_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1013,7 +1027,7 @@ fn test_python_host_cpp_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1092,7 +1106,7 @@ fn test_lua_host_cpp_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1171,7 +1185,7 @@ fn test_js_host_cpp_guest() {
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1283,7 +1297,7 @@ fn test_csharp_host_csharp_guest() {
     // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };

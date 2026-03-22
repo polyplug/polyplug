@@ -13,10 +13,10 @@ use polyplug::error::RegistryError;
 use polyplug::registry::PluginVTableGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
-use polyplug_abi::StringView;
+use polyplug_abi::{
+    DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
+    StringView,
+};
 
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
 const VERSION_V1: u32 = 1_u32 << 16;
@@ -33,116 +33,212 @@ const CONTRACT_ID_LAST: u64 = 0x5151_0000_0000_0301_u64;
 
 const MOCK_FUNCTIONS: [*const (); 0] = [];
 
-static VTABLE_RACE_1_V1: PluginVTable = PluginVTable {
+static VTABLE_RACE_1_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_RACE_1,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_RACE_1_V2: PluginVTable = PluginVTable {
+static VTABLE_RACE_1_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_RACE_1,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_RACE_2_V1: PluginVTable = PluginVTable {
+static VTABLE_RACE_2_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_RACE_2,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_RACE_2_V2: PluginVTable = PluginVTable {
+static VTABLE_RACE_2_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_RACE_2,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_TIMEOUT_V1: PluginVTable = PluginVTable {
+static VTABLE_TIMEOUT_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_TIMEOUT,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_TIMEOUT_V2: PluginVTable = PluginVTable {
+static VTABLE_TIMEOUT_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_TIMEOUT,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_SLOT0_V1: PluginVTable = PluginVTable {
+static VTABLE_SLOT0_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_SLOT_0,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_SLOT0_V2: PluginVTable = PluginVTable {
+static VTABLE_SLOT0_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_SLOT_0,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_SLOT1_V1: PluginVTable = PluginVTable {
+static VTABLE_SLOT1_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_SLOT_1,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_SLOT1_V2: PluginVTable = PluginVTable {
+static VTABLE_SLOT1_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_SLOT_1,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_SLOT2_V1: PluginVTable = PluginVTable {
+static VTABLE_SLOT2_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_SLOT_2,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_SLOT2_V2: PluginVTable = PluginVTable {
+static VTABLE_SLOT2_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_SLOT_2,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_CONC_A: PluginVTable = PluginVTable {
+static VTABLE_CONC_A: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_CONC,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_CONC_B: PluginVTable = PluginVTable {
+static VTABLE_CONC_B: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_CONC,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_LAST_V1: PluginVTable = PluginVTable {
+static VTABLE_LAST_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_LAST,
     contract_version: VERSION_V1,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_LAST_V2: PluginVTable = PluginVTable {
+static VTABLE_LAST_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: CONTRACT_ID_LAST,
     contract_version: VERSION_V2,
     function_count: 0_u32,
-    functions: MOCK_FUNCTIONS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FUNCTIONS.as_ptr(),
+        },
+    },
 };
 
 fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
@@ -460,7 +556,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
     std::thread::sleep(Duration::from_millis(20_u64));
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static PluginVTable = if round % 2_usize == 0_usize {
+        let new_vtable: &'static PluginInterface = if round % 2_usize == 0_usize {
             &VTABLE_CONC_B
         } else {
             &VTABLE_CONC_A

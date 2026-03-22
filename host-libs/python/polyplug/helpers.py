@@ -98,12 +98,49 @@ def str_as_view_owned(s: str) -> StringView:
 
 
 # Module-level cached types for hot path performance
-class _VTableStruct(ctypes.Structure):
+class _DispatchType(ctypes.c_uint32):
+    """Dispatch mechanism type enum."""
+
+    NATIVE = 0
+    VIRTUAL_MACHINE = 1
+
+
+class _NativeDispatch(ctypes.Structure):
+    """Native dispatch data — direct function pointer array."""
+
     _fields_ = [
+        ("functions", ctypes.c_void_p),  # void** (array of function pointers)
+    ]
+
+
+class _VmDispatch(ctypes.Structure):
+    """VM dispatch data — call through a dispatch function."""
+
+    _fields_ = [
+        ("call", ctypes.c_void_p),  # Dispatch function pointer
+        ("loader_data", ctypes.c_void_p),  # Loader-specific data
+    ]
+
+
+class _PluginDispatch(ctypes.Union):
+    """Union of dispatch mechanisms."""
+
+    _fields_ = [
+        ("native", _NativeDispatch),
+        ("vm", _VmDispatch),
+    ]
+
+
+class _PluginInterface(ctypes.Structure):
+    """Plugin interface — one per contract implemented by a plugin."""
+
+    _fields_ = [
+        ("rt_ctx", ctypes.c_void_p),  # Pointer to host context
         ("contract_id", ctypes.c_uint64),
         ("contract_version", ctypes.c_uint32),
         ("function_count", ctypes.c_uint32),
-        ("functions", ctypes.c_void_p),
+        ("dispatch_type", _DispatchType),
+        ("dispatch", _PluginDispatch),
     ]
 
 
@@ -123,11 +160,14 @@ _func_cache: dict[int, ctypes._CFuncPtr] = {}
 def call_plugin_fn(lib: ctypes.CDLL, vtable_ptr: int, func_idx: int, input: str) -> str:
     from polyplug.abi import StringView, polyplug_host_free
 
-    vtable = _VTableStruct.from_address(vtable_ptr)
+    vtable = _PluginInterface.from_address(vtable_ptr)
     if func_idx >= vtable.function_count:
         raise RuntimeError(f"function index {func_idx} out of bounds")
 
-    funcs = ctypes.cast(vtable.functions, ctypes.POINTER(ctypes.c_void_p))
+    # Native dispatch: access via dispatch.native.functions[func_idx]
+    funcs = ctypes.cast(
+        vtable.dispatch.native.functions, ctypes.POINTER(ctypes.c_void_p)
+    )
     func_ptr = funcs[func_idx]
 
     if func_ptr not in _func_cache:

@@ -8,8 +8,8 @@
 //! Tests requiring native plugin loading are in tests/integration/ffi_native.rs.
 
 use polyplug::ffi::{
-    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
-    polyplug_runtime_last_error, polyplug_runtime_load_bundle, OpaqueRuntime,
+    OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
+    polyplug_runtime_error_message_len, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
 };
 
 fn read_last_error(rt: *const OpaqueRuntime) -> String {

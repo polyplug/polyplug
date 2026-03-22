@@ -112,12 +112,6 @@ fn main() {
         fixtures_dir.join("test_plugin_js").display()
     );
 
-    // TEST_JS_DENO_PLUGIN — Deno plugin directory
-    println!(
-        "cargo:rustc-env=TEST_JS_DENO_PLUGIN={}",
-        fixtures_dir.join("test_plugin_js_deno").display()
-    );
-
     // RELOAD_PLUGIN_V1_DIR, RELOAD_PLUGIN_V2_DIR — reload test plugin directories
     println!(
         "cargo:rustc-env=RELOAD_PLUGIN_V1_DIR={}",

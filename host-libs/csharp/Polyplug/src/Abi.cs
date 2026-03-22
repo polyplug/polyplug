@@ -84,13 +84,60 @@ public struct PluginHandle
     }
 }
 
+/// Dispatch mechanism type — determines how function calls are routed.
+public enum DispatchType : uint
+{
+    Native = 0,           // Direct function pointer calls (zero overhead)
+    VirtualMachine = 1    // Call through dispatch function with loader_data
+}
+
+/// Native dispatch data — direct function pointer array.
 [StructLayout(LayoutKind.Sequential)]
+public struct NativeDispatch
+{
+    public nint Functions;  // void** → nint (array of function pointers)
+}
+
+/// VM dispatch data — call through a dispatch function.
+[StructLayout(LayoutKind.Sequential)]
+public struct VmDispatch
+{
+    public nint Call;        // Dispatch function pointer
+    public nint LoaderData;  // Loader-specific data (opaque to host)
+}
+
+/// Union of dispatch mechanisms — use based on dispatch_type.
+[StructLayout(LayoutKind.Explicit)]
+public struct PluginDispatch
+{
+    [FieldOffset(0)]
+    public NativeDispatch Native;
+    
+    [FieldOffset(0)]
+    public VmDispatch Vm;
+}
+
+/// Plugin interface — one per contract implemented by a plugin.
+[StructLayout(LayoutKind.Sequential)]
+public struct PluginInterface
+{
+    public nint RtCtx;           // Pointer to host context (runtime + bundle_id)
+    public ulong ContractId;     // FNV-1a hash of "name@major"
+    public uint ContractVersion; // (minor << 16 | patch)
+    public uint FunctionCount;   // entries in dispatch array
+    public DispatchType DispatchType; // Dispatch mechanism type
+    public PluginDispatch Dispatch;   // Union of dispatch mechanisms
+}
+
+/// Backward-compatible alias for PluginInterface.
 public struct PluginVTable
 {
+    public nint RtCtx;
     public ulong ContractId;
     public uint ContractVersion;
     public uint FunctionCount;
-    public nint FunctionsPtr;     // void** → nint
+    public DispatchType DispatchType;
+    public PluginDispatch Dispatch;
 }
 
 [StructLayout(LayoutKind.Sequential)]

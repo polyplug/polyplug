@@ -23,16 +23,16 @@ use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
-use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
 // ── Process-global serialization ────────────────────────────────────────────
 //
-// The LuaJIT VM uses process-global state (LUA_VM, FUNCTION_REGISTRY).
+// The LuaJIT VM uses process-global state (LUA_VM).
 // Without serialization, parallel test threads would race on the shared
 // `_G.polyplug_init` / `_G._polyplug_handlers` globals.
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -442,23 +442,24 @@ fn vtable_function_dispatch_returns_abi_ok() {
         vtable.function_count >= 1,
         "vtable must have at least one function"
     );
-    // SAFETY: vtable.functions is a non-null static array with function_count entries.
-    // We index slot 0, which is valid because function_count >= 1.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
-    assert!(
-        !fn_ptr.is_null(),
-        "trampoline function pointer must be non-null"
+
+    // With VM dispatch, we call through the dispatch.vm.call function.
+    assert_eq!(
+        vtable.dispatch_type,
+        polyplug_abi::DispatchType::VirtualMachine,
+        "Lua loader must use VM dispatch"
     );
 
-    // Cast to the generic dispatch signature used by all trampolines.
-    // SAFETY: all LuaLoader trampolines use `extern "C" fn(*const (), *mut ()) -> AbiError`.
-    let dispatch: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        unsafe { core::mem::transmute(fn_ptr) };
-
-    // The noop function ignores both pointers — pass null for both.
-    // SAFETY: the Lua noop function does not dereference args_ptr or out_ptr.
-    let result: AbiError =
-        unsafe { dispatch(core::ptr::null::<()>(), core::ptr::null_mut::<()>()) };
+    // SAFETY: dispatch.vm.call is a valid function pointer, loader_data is valid,
+    // and we pass null pointers for args/out which the noop function ignores.
+    let result: AbiError = unsafe {
+        (vtable.dispatch.vm.call)(
+            vtable.dispatch.vm.loader_data,
+            0, // fn_id = 0 (first function)
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+        )
+    };
     assert_eq!(
         result.code, ABI_OK,
         "noop function must return ABI_OK, got code={}",

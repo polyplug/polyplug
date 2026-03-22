@@ -8,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -15,8 +16,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
-use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -401,7 +401,7 @@ fn test_rust_codegen_compile_and_run() {
 
     // SAFETY: functions[0] is the `add` ABI wrapper with signature
     //   extern "C" fn(*const (), *mut ()) -> AbiError.
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
     // types are enforced by the test: AddArgs matches what the generated wrapper expects.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =

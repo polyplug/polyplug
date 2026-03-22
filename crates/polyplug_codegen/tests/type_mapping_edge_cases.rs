@@ -3,16 +3,15 @@
 //! Tests uncovered edge cases only — cases that are NOT exercised by the
 //! existing unit tests inside the generator source files:
 //!
-//! 1. U64 / I64 map to `bigint` in the Deno (V8) TypeScript generator.
-//! 2. U64 / I64 map to `{ lo: number; hi: number }` in the QuickJS generator.
-//! 3. C++ struct emitter maps U64 fields to `uint64_t` with no alignment
+//! 1. U64 / I64 map to `{ lo: number; hi: number }` in the QuickJS generator.
+//! 2. C++ struct emitter maps U64 fields to `uint64_t` with no alignment
 //!    specifier (current behaviour — generator does not emit `alignas`).
-//! 4. C# user-type emitter always emits `StructLayout(LayoutKind.Sequential)`,
+//! 3. C# user-type emitter always emits `StructLayout(LayoutKind.Sequential)`,
 //!    never `LayoutKind.Explicit`.
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
 use std::io::Write as _;
 
 // ─── TOML helpers ─────────────────────────────────────────────────────────────
@@ -84,99 +83,7 @@ fn find_file<'a>(
         .unwrap_or_else(|| panic!("generated file ending with '{suffix}' not found"))
 }
 
-// ─── 1. Deno / V8 BigInt mapping ──────────────────────────────────────────────
-
-/// `u64` fields and parameters must map to `bigint` in Deno TypeScript output.
-#[test]
-#[ignore] // TODO: Update test for new generator structure
-fn deno_u64_field_maps_to_bigint() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
-    let types_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
-    let content: &str = &types_ts.content;
-
-    // The struct `TimestampPair` contains a u64 field `start_ns`.
-    // In Deno TypeScript the field must carry `bigint`, not `number`.
-    assert!(
-        content.contains("readonly start_ns: bigint"),
-        "u64 field 'start_ns' must be 'bigint' in Deno TS output, got:\n{content}"
-    );
-}
-
-/// `i64` fields and parameters must map to `bigint` in Deno TypeScript output.
-#[test]
-#[ignore] // TODO: Update test for new generator structure
-fn deno_i64_field_maps_to_bigint() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
-    let types_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
-    let content: &str = &types_ts.content;
-
-    // `end_ns` is declared as `i64` in the TOML.
-    assert!(
-        content.contains("readonly end_ns: bigint"),
-        "i64 field 'end_ns' must be 'bigint' in Deno TS output, got:\n{content}"
-    );
-}
-
-/// `u64` function parameters must map to `bigint` in Deno contract output.
-#[test]
-#[ignore] // TODO: Update test for new generator structure
-fn deno_u64_param_maps_to_bigint() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
-    let contracts_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
-    let content: &str = &contracts_ts.content;
-
-    // `elapsed(start: bigint)` — the u64 param must be typed as `bigint`.
-    assert!(
-        content.contains("start: bigint"),
-        "u64 param 'start' must be 'bigint' in Deno contracts.ts, got:\n{content}"
-    );
-}
-
-/// `i64` function return values must map to `bigint` in Deno contract output.
-#[test]
-#[ignore] // TODO: Update for host-side generation
-fn deno_i64_return_maps_to_bigint() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
-    let contracts_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
-    let content: &str = &contracts_ts.content;
-
-    // `abstract elapsed(...): bigint` — i64 return must be typed as `bigint`.
-    assert!(
-        content.contains("): bigint"),
-        "i64 return of 'elapsed' must be 'bigint' in Deno contracts.ts, got:\n{content}"
-    );
-}
-
-/// `u64` must NOT map to `number` in Deno TypeScript (it maps to `bigint`).
-/// This is the key correctness guard: wrong mapping would cause silent data loss
-/// because JavaScript `number` is f64 and cannot represent all u64 values.
-#[test]
-#[ignore] // TODO: Update test for new generator structure
-fn deno_u64_never_maps_to_number() {
-    let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
-    // Check all generated files — no u64/i64 field should appear typed as `number`.
-    for file in &files {
-        let content: &str = &file.content;
-        // Neither `start_ns: number` nor `end_ns: number` should appear.
-        assert!(
-            !content.contains("start_ns: number"),
-            "u64 field 'start_ns' must NOT be 'number' in Deno output (file: {:?})",
-            file.path
-        );
-        assert!(
-            !content.contains("end_ns: number"),
-            "i64 field 'end_ns' must NOT be 'number' in Deno output (file: {:?})",
-            file.path
-        );
-    }
-}
-
-// ─── 2. QuickJS lo/hi u32-pair mapping ────────────────────────────────────────
+// ─── 1. QuickJS lo/hi u32-pair mapping ────────────────────────────────────────
 
 /// `u64` fields must map to `{ lo: number; hi: number }` in QuickJS TypeScript.
 ///
@@ -186,7 +93,7 @@ fn deno_u64_never_maps_to_number() {
 #[ignore] // TODO: Update test for new generator structure
 fn quickjs_u64_field_maps_to_lo_hi_pair() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
+        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
     let types_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
     let content: &str = &types_ts.content;
 
@@ -202,7 +109,7 @@ fn quickjs_u64_field_maps_to_lo_hi_pair() {
 #[ignore] // TODO: Update test for new generator structure
 fn quickjs_i64_field_maps_to_lo_hi_pair() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
+        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
     let types_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
     let content: &str = &types_ts.content;
 
@@ -218,7 +125,7 @@ fn quickjs_i64_field_maps_to_lo_hi_pair() {
 #[ignore] // TODO: Update test for new generator structure
 fn quickjs_u64_param_maps_to_lo_hi_pair() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
+        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
     let contracts_ts: &polyplug_codegen::GeneratedFile = find_file(&files, "types.ts");
     let content: &str = &contracts_ts.content;
 
@@ -234,7 +141,7 @@ fn quickjs_u64_param_maps_to_lo_hi_pair() {
 #[ignore] // TODO: Update test for new generator structure
 fn quickjs_u64_never_maps_to_bigint() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
-        run_generate(U64_I64_API_TOML, Lang::JsDeno, Side::Host);
+        run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
     for file in &files {
         let content: &str = &file.content;
         assert!(
@@ -250,7 +157,7 @@ fn quickjs_u64_never_maps_to_bigint() {
     }
 }
 
-// ─── 3. C++ struct emitter — alignment for SIMD-typed fields ──────────────────
+// ─── 2. C++ struct emitter — alignment for SIMD-typed fields ──────────────────
 
 /// C++ struct emitter maps `u64` fields to `uint64_t` (the correct ABI type).
 ///

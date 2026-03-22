@@ -54,14 +54,48 @@ struct PluginHandle {
     uint32_t generation;
 };
 
-/// Plugin VTable — one per contract implemented.
-/// OWNERSHIP: Must be 'static (never freed while runtime lives).
-struct PluginVTable {
-    uint64_t      contract_id;      ///< FNV-1a hash of "name@major"
-    uint32_t      contract_version; ///< (minor << 16 | patch)
-    uint32_t      function_count;   ///< entries in functions array
-    void* const*  functions;        ///< static array of fn ptrs, indexed by function_id
+/// Dispatch mechanism type — determines how function calls are routed.
+enum class DispatchType : uint32_t {
+    Native = 0,           ///< Direct function pointer calls (zero overhead)
+    VirtualMachine = 1    ///< Call through dispatch function with loader_data
 };
+
+/// Native dispatch data — direct function pointer array.
+/// Used when dispatch_type == DispatchType::Native.
+struct NativeDispatch {
+    void* const* functions;  ///< static array of function pointers, indexed by function_id
+};
+
+/// VM dispatch data — call through a dispatch function.
+/// Used when dispatch_type == DispatchType::VirtualMachine.
+struct VmDispatch {
+    void* call;         ///< Dispatch function pointer
+    void* loader_data;  ///< Loader-specific data (opaque to host)
+};
+
+/// Union of dispatch mechanisms — use based on dispatch_type.
+union PluginDispatch {
+    NativeDispatch native;
+    VmDispatch     vm;
+};
+
+/// Plugin interface — one per contract implemented by a plugin.
+/// OWNERSHIP: Must be 'static (never freed while runtime lives).
+///
+/// Dispatch:
+/// - dispatch_type == Native: Call via dispatch.native.functions[fn_id]
+/// - dispatch_type == VirtualMachine: Call via dispatch.vm.call(...)
+struct PluginInterface {
+    const void*     rt_ctx;           ///< Pointer to host context (runtime + bundle_id)
+    uint64_t        contract_id;      ///< FNV-1a hash of "name@major"
+    uint32_t        contract_version; ///< (minor << 16 | patch)
+    uint32_t        function_count;   ///< entries in dispatch array
+    DispatchType    dispatch_type;    ///< Dispatch mechanism type
+    PluginDispatch  dispatch;         ///< Union of dispatch mechanisms
+};
+
+/// Backward-compatible alias for PluginInterface.
+using PluginVTable = PluginInterface;
 
 /// Host capabilities passed to every plugin at init time.
 /// OWNERSHIP: 'static, lives as long as the runtime.

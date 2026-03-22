@@ -108,6 +108,24 @@ pub use polyplug_abi::PluginHandle;
 /// OWNERSHIP: Must be `'static` or intentionally leaked.
 pub use polyplug_abi::PluginVTable;
 
+/// Plugin interface — the new vtable structure with dispatch mechanism.
+pub use polyplug_abi::PluginInterface;
+
+/// Host context passed to plugins.
+pub use polyplug_abi::HostContext;
+
+/// Dispatch type for plugin interfaces.
+pub use polyplug_abi::DispatchType;
+
+/// Native dispatch mechanism.
+pub use polyplug_abi::NativeDispatch;
+
+/// VM dispatch mechanism.
+pub use polyplug_abi::VmDispatch;
+
+/// Union of dispatch mechanisms.
+pub use polyplug_abi::PluginDispatch;
+
 /// Host capabilities passed to every plugin at init time.
 ///
 /// Accessed via `PluginRegistrar::host`. Provides allocation, plugin lookup,

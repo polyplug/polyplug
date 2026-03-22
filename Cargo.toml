@@ -32,7 +32,6 @@ polyplugc = { version = "0.1.0", path = "crates/polyplugc" }
 polyplug_codegen = { version = "0.1.0", path = "crates/polyplug_codegen" }
 polyplug_dotnet = { version = "0.1.0", path = "crates/polyplug_dotnet" }
 polyplug_js = { version = "0.1.0", path = "crates/polyplug_js" }
-polyplug_js_deno = { version = "0.1.0", path = "crates/polyplug_js_deno" }
 polyplug_lua = { version = "0.1.0", path = "crates/polyplug_lua" }
 polyplug_python = { version = "0.1.0", path = "crates/polyplug_python" }
 polyplug_native = { version = "0.1.0", path = "crates/polyplug_native" }
@@ -73,11 +72,6 @@ once_cell = { version = "1.21" }
 
 # JavaScript (QuickJS)
 rquickjs = { version = "0.11" }
-
-# JavaScript (Deno)
-deno_core = { version = "0.391" }
-deno_error = { version = "=0.7.1" }
-tokio = { version = "1" }
 
 # Lua
 mlua = { version = "0.11" }

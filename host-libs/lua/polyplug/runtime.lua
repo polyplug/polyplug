@@ -23,10 +23,16 @@ ffi.cdef([[
     typedef struct { const uint8_t* ptr; size_t len; } StringView;
 
     typedef struct {
+        const void* rt_ctx;
         uint64_t contract_id;
         uint32_t contract_version;
         uint32_t function_count;
-        const void* functions;
+        uint32_t dispatch_type;
+        uint32_t _pad;
+        struct {
+            const void* functions;
+            const void* loader_data;
+        } dispatch;
     } PluginVTable;
 
     typedef struct {
@@ -250,7 +256,7 @@ function M.Guard:call(func_idx, input)
         error("function index " .. func_idx .. " out of bounds")
     end
 
-    local funcs = ffi.cast("const void* const*", vtable.functions)
+    local funcs = ffi.cast("const void* const*", vtable.dispatch.functions)
     local func_ptr = funcs[func_idx]
     local func = func_cache[func_ptr]
     if func == nil then

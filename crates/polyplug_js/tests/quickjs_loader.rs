@@ -1,7 +1,7 @@
 //! Integration tests for the QuickJS bundle loader.
 //!
 //! Covers: runtime initialisation, bundle evaluation (valid / syntax error /
-//! runtime error), vtable registration, trampoline dispatch, memory management
+//! runtime error), vtable registration, VM dispatch, memory management
 //! helpers, and thread-safety of the shared QuickJS runtime.
 
 #![allow(clippy::expect_used)]
@@ -12,6 +12,7 @@ use std::sync::Mutex;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_js::JsConfig;
@@ -19,15 +20,23 @@ use polyplug_js::JsLoader;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Build a minimal bundle JS string that calls registerVtable with the given
-/// contract_id and vtable_ptr.  fn_count controls `function_count`.
-fn make_bundle_js(contract_id: u64, vtable_ptr: usize, fn_count: u32) -> String {
+/// Build a minimal bundle JS string that creates a global _VTABLE object.
+fn make_bundle_js(contract_id: u64, fn_count: u32, contract_name: &str) -> String {
     let contract_lo: u32 = contract_id as u32;
     let contract_hi: u32 = (contract_id >> 32) as u32;
-    let vtable_lo: u32 = vtable_ptr as u32;
-    let vtable_hi: u32 = (vtable_ptr >> 32) as u32;
     format!(
-        "polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, {fn_count}, \"test.contract\");"
+        r#"
+globalThis.TEST_VTABLE = {{
+    contractLo: {contract_lo},
+    contractHi: {contract_hi},
+    fnCount: {fn_count},
+    contractName: "{contract_name}",
+    functions: [
+        // Stub functions that just return success
+        function(args, out) {{ return 0; }}
+    ]
+}};
+"#
     )
 }
 
@@ -89,19 +98,7 @@ fn runtime_name_is_js_quickjs() {
 fn load_valid_bundle_registers_vtable() {
     let contract_id: u64 = polyplug_abi::contract_id("test.noop", 1);
 
-    // Build a static vtable pointer to pass through JS (non-null, non-zero).
-    // We leak a Box so the pointer is 'static and the JS side gets a stable address.
-    let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: 0,
-        // SAFETY: Box::into_raw produces a valid aligned pointer.
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-
-    let bundle: String = make_bundle_js(contract_id, vtable_ptr, 0);
+    let bundle: String = make_bundle_js(contract_id, 1, "test.noop");
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Runtime = make_runtime();
@@ -123,16 +120,25 @@ fn load_bundle_with_functions_registers_correct_count() {
     let contract_id: u64 = polyplug_abi::contract_id("test.math", 1);
     let fn_count: u32 = 3;
 
-    let dummy_fn_array: Box<[*const ()]> = vec![core::ptr::null(); fn_count as usize].into();
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: fn_count,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-
-    let bundle: String = make_bundle_js(contract_id, vtable_ptr, fn_count);
+    // Bundle with 3 functions
+    let bundle: String = format!(
+        r#"
+globalThis.TEST_VTABLE = {{
+    contractLo: {},
+    contractHi: {},
+    fnCount: {},
+    contractName: "test.math",
+    functions: [
+        function(args, out) {{ return 0; }},
+        function(args, out) {{ return 0; }},
+        function(args, out) {{ return 0; }}
+    ]
+}};
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32,
+        fn_count
+    );
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Runtime = make_runtime();
@@ -147,6 +153,15 @@ fn load_bundle_with_functions_registers_correct_count() {
         .find(contract_id, 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
+
+    // Verify function_count
+    let vtable_ptr: *const PluginVTable = runtime
+        .registry()
+        .resolve(handle)
+        .expect("resolve must succeed");
+    // SAFETY: vtable_ptr is a valid pointer returned by resolve.
+    let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
+    assert_eq!(vtable_ref.function_count, fn_count);
 }
 
 // ── Directory path fallback ───────────────────────────────────────────────────
@@ -155,16 +170,7 @@ fn load_bundle_with_functions_registers_correct_count() {
 fn load_accepts_directory_path() {
     let contract_id: u64 = polyplug_abi::contract_id("test.dir", 1);
 
-    let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: 0,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-
-    let bundle: String = make_bundle_js(contract_id, vtable_ptr, 0);
+    let bundle: String = make_bundle_js(contract_id, 1, "test.dir");
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("bundle.js"), &bundle).expect("write bundle.js");
 
@@ -243,11 +249,11 @@ fn load_runtime_error_returns_error() {
     );
 }
 
-// ── Missing registerVtable call ───────────────────────────────────────────────
+// ── Missing _VTABLE global ───────────────────────────────────────────────────
 
 #[test]
-fn load_bundle_without_register_vtable_returns_error() {
-    // Valid JS that does not call registerVtable.
+fn load_bundle_without_vtable_returns_error() {
+    // Valid JS that does not create a _VTABLE global.
     let bundle: &str = "var x = 1 + 2;";
     let (_dir, path) = write_temp_bundle(bundle);
 
@@ -255,46 +261,14 @@ fn load_bundle_without_register_vtable_returns_error() {
     let loader: JsLoader = make_loader();
 
     let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
-    assert!(
-        result.is_err(),
-        "bundle without registerVtable must return Err"
-    );
+    assert!(result.is_err(), "bundle without _VTABLE must return Err");
 
     let err_str: String = result
-        .expect_err("bundle without registerVtable must return Err")
+        .expect_err("bundle without _VTABLE must return Err")
         .to_string();
     assert!(
-        err_str.contains("registerVtable"),
-        "error must mention registerVtable: {err_str}"
-    );
-}
-
-// ── Null vtable pointer ───────────────────────────────────────────────────────
-
-#[test]
-fn load_bundle_null_vtable_pointer_returns_error() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.null_vtable", 1);
-    let contract_lo: u32 = contract_id as u32;
-    let contract_hi: u32 = (contract_id >> 32) as u32;
-
-    // Pass vtable_lo=0, vtable_hi=0 → null pointer.
-    let bundle: String = format!(
-        "polyplug.registerVtable({contract_lo}, {contract_hi}, 0, 0, 1, \"test.contract\");"
-    );
-    let (_dir, path) = write_temp_bundle(&bundle);
-
-    let runtime: Runtime = make_runtime();
-    let loader: JsLoader = make_loader();
-
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
-    assert!(result.is_err(), "null vtable pointer must return Err");
-
-    let err_str: String = result
-        .expect_err("null vtable pointer must return Err")
-        .to_string();
-    assert!(
-        err_str.contains("null vtable"),
-        "error must mention null vtable: {err_str}"
+        err_str.contains("_VTABLE") || err_str.contains("vtable"),
+        "error must mention vtable: {err_str}"
     );
 }
 
@@ -317,22 +291,7 @@ fn load_nonexistent_file_returns_error() {
 #[test]
 fn bundle_path_global_is_injected() {
     // The loader injects `globalThis.bundlePath` before evaluating the bundle.
-    // This test verifies the injection does not cause an error and that the
-    // bundle can read the value.
     let contract_id: u64 = polyplug_abi::contract_id("test.bundlepath", 1);
-
-    let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: 0,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-    let contract_lo: u32 = contract_id as u32;
-    let contract_hi: u32 = (contract_id >> 32) as u32;
-    let vtable_lo: u32 = vtable_ptr as u32;
-    let vtable_hi: u32 = (vtable_ptr >> 32) as u32;
 
     // Bundle reads bundlePath; if it is undefined the throw will surface as Err.
     let bundle: String = format!(
@@ -340,8 +299,16 @@ fn bundle_path_global_is_injected() {
 if (typeof globalThis.bundlePath !== 'string') {{
     throw new Error('bundlePath not injected');
 }}
-polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0, "test.contract");
-"#
+globalThis.TEST_VTABLE = {{
+    contractLo: {},
+    contractHi: {},
+    fnCount: 1,
+    contractName: "test.bundlepath",
+    functions: [function(args, out) {{ return 0; }}]
+}};
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
@@ -362,19 +329,6 @@ fn polyplug_object_has_expected_methods() {
     // Verify all expected host methods are present on the polyplug global.
     let contract_id: u64 = polyplug_abi::contract_id("test.methods", 1);
 
-    let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: 0,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-    let contract_lo: u32 = contract_id as u32;
-    let contract_hi: u32 = (contract_id >> 32) as u32;
-    let vtable_lo: u32 = vtable_ptr as u32;
-    let vtable_hi: u32 = (vtable_ptr >> 32) as u32;
-
     let bundle: String = format!(
         r#"
 var methods = ['findByContract', 'findByBundle', 'findAllByContract',
@@ -384,8 +338,16 @@ for (var i = 0; i < methods.length; i++) {{
         throw new Error('missing method: ' + methods[i]);
     }}
 }}
-polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0, "test.contract");
-"#
+globalThis.TEST_VTABLE = {{
+    contractLo: {},
+    contractHi: {},
+    fnCount: 1,
+    contractName: "test.methods",
+    functions: [function(args, out) {{ return 0; }}]
+}};
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
@@ -406,15 +368,7 @@ fn vtable_contract_id_roundtrip() {
     // Use a well-known FNV-1a contract — contract_id("image.decode", 1).
     let contract_id: u64 = polyplug_abi::contract_id("image.decode", 1);
 
-    let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: 0,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-    let bundle: String = make_bundle_js(contract_id, vtable_ptr, 0);
+    let bundle: String = make_bundle_js(contract_id, 1, "image.decode");
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Runtime = make_runtime();
@@ -429,22 +383,30 @@ fn vtable_contract_id_roundtrip() {
     assert!(!handle.is_null(), "handle must be valid");
 }
 
-// ── Trampoline dispatch ───────────────────────────────────────────────────────
+// ── VM dispatch verification ──────────────────────────────────────────────────
 
 #[test]
-fn trampoline_fn_pointers_are_non_null_and_callable() {
-    let contract_id: u64 = polyplug_abi::contract_id("test.trampoline", 1);
+fn vtable_uses_vm_dispatch() {
+    let contract_id: u64 = polyplug_abi::contract_id("test.vm_dispatch", 1);
     let fn_count: u32 = 2;
 
-    let dummy_fn_array: Box<[*const ()]> = vec![core::ptr::null(); fn_count as usize].into();
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: fn_count,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-    let bundle: String = make_bundle_js(contract_id, vtable_ptr, fn_count);
+    let bundle: String = format!(
+        r#"
+globalThis.TEST_VTABLE = {{
+    contractLo: {},
+    contractHi: {},
+    fnCount: {},
+    contractName: "test.vm_dispatch",
+    functions: [
+        function(args, out) {{ return 0; }},
+        function(args, out) {{ return 0; }}
+    ]
+}};
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32,
+        fn_count
+    );
     let (_dir, path) = write_temp_bundle(&bundle);
 
     let runtime: Runtime = make_runtime();
@@ -468,26 +430,10 @@ fn trampoline_fn_pointers_are_non_null_and_callable() {
     let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
 
     assert_eq!(vtable_ref.function_count, fn_count);
-    assert!(!vtable_ref.functions.is_null());
-
-    for slot in 0..fn_count as usize {
-        // SAFETY: functions is a valid pointer to function_count entries.
-        let fn_ptr: *const () = unsafe { *vtable_ref.functions.add(slot) };
-        assert!(!fn_ptr.is_null(), "trampoline[{slot}] must be non-null");
-
-        // Call the trampoline — it is a stub that returns ABI_OK.
-        let dispatch: unsafe extern "C" fn(*const (), *mut ()) -> polyplug_abi::AbiError =
-            // SAFETY: fn_ptr is a valid extern "C" trampoline generated by make_trampoline!.
-            unsafe { core::mem::transmute(fn_ptr) };
-        // SAFETY: null args/out pointers are safe because the stub ignores them.
-        let result: polyplug_abi::AbiError =
-            unsafe { dispatch(core::ptr::null(), core::ptr::null_mut()) };
-        assert_eq!(
-            result.code,
-            polyplug_abi::ABI_OK,
-            "trampoline[{slot}] must return ABI_OK"
-        );
-    }
+    assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
+    // SAFETY: dispatch_type is VirtualMachine, so accessing .vm is valid.
+    // The dispatch function pointer is always non-null (it's js_dispatch).
+    assert!(!unsafe { vtable_ref.dispatch.vm.loader_data }.is_null());
 }
 
 // ── Memory management helpers ─────────────────────────────────────────────────
@@ -496,28 +442,26 @@ fn trampoline_fn_pointers_are_non_null_and_callable() {
 fn js_alloc_and_free_calls_host_vtable() {
     let contract_id: u64 = polyplug_abi::contract_id("test.memory", 1);
 
-    let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-    let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-        contract_id,
-        contract_version: 0,
-        function_count: 0,
-        functions: Box::into_raw(dummy_fn_array) as *const *const (),
-    });
-    let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-    let contract_lo: u32 = contract_id as u32;
-    let contract_hi: u32 = (contract_id >> 32) as u32;
-    let vtable_lo: u32 = vtable_ptr as u32;
-    let vtable_hi: u32 = (vtable_ptr >> 32) as u32;
-
     // Bundle calls alloc then free.
+    // alloc returns [ptr_lo, ptr_hi] tuple; free takes (ptr_lo, ptr_hi)
     let bundle: String = format!(
         r#"
-var ptr = polyplug.alloc(64);
-if (ptr !== 0) {{
-    polyplug.free(ptr);
+var result = polyplug.alloc(64);
+var ptr_lo = result[0];
+var ptr_hi = result[1];
+if (ptr_lo !== 0 || ptr_hi !== 0) {{
+    polyplug.free(ptr_lo, ptr_hi);
 }}
-polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 0, "test.contract");
-"#
+globalThis.TEST_VTABLE = {{
+    contractLo: {},
+    contractHi: {},
+    fnCount: 1,
+    contractName: "test.memory",
+    functions: [function(args, out) {{ return 0; }}]
+}};
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32
     );
     let (_dir, path) = write_temp_bundle(&bundle);
 
@@ -536,7 +480,7 @@ polyplug.registerVtable({contract_lo}, {contract_hi}, {vtable_lo}, {vtable_hi}, 
 #[test]
 fn concurrent_loads_do_not_panic() {
     // Spawn multiple threads each loading a different bundle concurrently.
-    // All bundles call registerVtable so load() succeeds.
+    // All bundles create _VTABLE globals so load() succeeds.
     // Tests that the shared QJS_RUNTIME and per-Context eval are thread-safe.
     let thread_count: usize = 4;
     let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -548,15 +492,8 @@ fn concurrent_loads_do_not_panic() {
                 let contract_id: u64 =
                     polyplug_abi::contract_id(&format!("test.concurrent.{i}"), 1);
 
-                let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-                let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-                    contract_id,
-                    contract_version: 0,
-                    function_count: 0,
-                    functions: Box::into_raw(dummy_fn_array) as *const *const (),
-                });
-                let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-                let bundle: String = make_bundle_js(contract_id, vtable_ptr, 0);
+                let bundle: String =
+                    make_bundle_js(contract_id, 1, &format!("test.concurrent.{i}"));
                 let (_dir, path) = write_temp_bundle(&bundle);
 
                 let runtime: Runtime = RuntimeBuilder::new()
@@ -595,15 +532,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
     for i in 0..4_u32 {
         let contract_id: u64 = polyplug_abi::contract_id(&format!("test.sequential.{i}"), 1);
 
-        let dummy_fn_array: Box<[*const ()]> = Box::new([]);
-        let dummy_vtable: Box<PluginVTable> = Box::new(PluginVTable {
-            contract_id,
-            contract_version: 0,
-            function_count: 0,
-            functions: Box::into_raw(dummy_fn_array) as *const *const (),
-        });
-        let vtable_ptr: usize = Box::into_raw(dummy_vtable) as usize;
-        let bundle: String = make_bundle_js(contract_id, vtable_ptr, 0);
+        let bundle: String = make_bundle_js(contract_id, 1, &format!("test.sequential.{i}"));
         let (_dir, path) = write_temp_bundle(&bundle);
 
         let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
@@ -612,4 +541,55 @@ fn sequential_loads_of_different_contracts_all_succeed() {
             "sequential load {i} must succeed: {result:?}"
         );
     }
+}
+
+// ── VM Dispatch Call Tests ─────────────────────────────────────────────────────
+
+#[test]
+fn dispatch_vm_call_works_correctly() {
+    // This test actually invokes dispatch.vm.call to verify the JS function
+    // can be called through the ABI dispatch mechanism.
+    use polyplug_abi::{AbiError, ABI_OK};
+
+    let contract_id: u64 = polyplug_abi::contract_id("test.dispatch.call", 1);
+    let bundle: String = make_bundle_js(contract_id, 1, "test.dispatch.call");
+    let (_dir, path) = write_temp_bundle(&bundle);
+
+    let runtime: Runtime = make_runtime();
+    let loader: JsLoader = JsLoader::new(JsConfig {});
+
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&path, &runtime);
+    assert!(result.is_ok(), "load must succeed: {result:?}");
+
+    let handle: PluginHandle = runtime
+        .registry()
+        .find(contract_id, 0)
+        .expect("plugin must be registered");
+
+    let vtable_ptr: *const PluginVTable = runtime
+        .registry()
+        .resolve(handle)
+        .expect("resolve must succeed");
+
+    // SAFETY: vtable_ptr is a valid pointer returned by resolve.
+    let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
+
+    assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
+
+    // SAFETY: dispatch_type is VirtualMachine, so accessing .vm is valid.
+    // dispatch.vm.call is js_dispatch, loader_data is valid.
+    let call_result: AbiError = unsafe {
+        (vtable_ref.dispatch.vm.call)(
+            vtable_ref.dispatch.vm.loader_data,
+            0, // fn_id = 0 (first function)
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+        )
+    };
+
+    assert_eq!(
+        call_result.code, ABI_OK,
+        "dispatch.vm.call must return ABI_OK, got code={}",
+        call_result.code
+    );
 }

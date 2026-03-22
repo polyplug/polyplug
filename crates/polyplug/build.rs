@@ -642,17 +642,32 @@ fn main() {
 struct StringView { const uint8_t* ptr; size_t len; };
 struct AbiError { uint32_t code; StringView message; };
 struct PluginHandle { uint32_t index; uint32_t generation; };
-struct PluginVTable { uint64_t contract_id; uint32_t contract_version; uint32_t function_count; void* const* functions; };
+struct HostContext { void* runtime; uint64_t bundle_id; };
+enum class DispatchType : uint32_t { Native = 0, VirtualMachine = 1 };
+struct NativeDispatch { void* const* functions; };
+struct VmDispatch {
+    AbiError (*call)(void* loader_data, uint32_t fn_id, const void* args, void* out);
+    void* loader_data;
+};
+union PluginDispatch { NativeDispatch native; VmDispatch vm; };
+struct PluginInterface {
+    const HostContext* rt_ctx;
+    uint64_t contract_id;
+    uint32_t contract_version;
+    uint32_t function_count;
+    DispatchType dispatch_type;
+    PluginDispatch dispatch;
+};
 struct PluginDescriptor { StringView name; StringView contract_name; uint32_t version_major; uint32_t version_minor; uint32_t version_patch; };
 struct PluginContext { StringView bundle_path; uint32_t host_abi_version; uint64_t bundle_id; };
 struct HostVTable {
-    AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginVTable*);
+    AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginInterface*);
     void* (*alloc)(void* rt_ctx, size_t size, size_t align);
     void (*free)(void* rt_ctx, void* ptr, size_t size, size_t align);
     PluginHandle (*find_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
     PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
-    const PluginVTable* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
+    const PluginInterface* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
     const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
 };
 constexpr uint32_t ABI_OK = 0;
@@ -672,7 +687,14 @@ extern "C" AbiError cpp_test_add(const void* args, void* out) {
 }
 
 static void* const CPP_TEST_ADD_FNS[] = { reinterpret_cast<void*>(cpp_test_add) };
-static PluginVTable CPP_TEST_ADD_VTABLE = { TEST_ADD_CONTRACT_ID, 1U << 16, 1, CPP_TEST_ADD_FNS };
+static PluginInterface CPP_TEST_ADD_INTERFACE = {
+    nullptr,
+    TEST_ADD_CONTRACT_ID,
+    1U << 16,
+    1,
+    DispatchType::Native,
+    { { CPP_TEST_ADD_FNS } }
+};
 static PluginDescriptor CPP_TEST_ADD_DESC = {
     { (const uint8_t*)"cpp_test_adder", 14 },
     { (const uint8_t*)"test.add", 8 },
@@ -682,7 +704,7 @@ static PluginDescriptor CPP_TEST_ADD_DESC = {
 extern "C" uint32_t polyplug_abi_version() { return 1; }
 extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, const PluginContext* ctx) {
     (void)ctx;
-    return host_vtable->register_plugin(rt_ctx, &CPP_TEST_ADD_DESC, &CPP_TEST_ADD_VTABLE);
+    return host_vtable->register_plugin(rt_ctx, &CPP_TEST_ADD_DESC, &CPP_TEST_ADD_INTERFACE);
 }
 "#;
 
@@ -727,17 +749,32 @@ extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, c
 struct StringView { const uint8_t* ptr; size_t len; };
 struct AbiError { uint32_t code; StringView message; };
 struct PluginHandle { uint32_t index; uint32_t generation; };
-struct PluginVTable { uint64_t contract_id; uint32_t contract_version; uint32_t function_count; void* const* functions; };
+struct HostContext { void* runtime; uint64_t bundle_id; };
+enum class DispatchType : uint32_t { Native = 0, VirtualMachine = 1 };
+struct NativeDispatch { void* const* functions; };
+struct VmDispatch {
+    AbiError (*call)(void* loader_data, uint32_t fn_id, const void* args, void* out);
+    void* loader_data;
+};
+union PluginDispatch { NativeDispatch native; VmDispatch vm; };
+struct PluginInterface {
+    const HostContext* rt_ctx;
+    uint64_t contract_id;
+    uint32_t contract_version;
+    uint32_t function_count;
+    DispatchType dispatch_type;
+    PluginDispatch dispatch;
+};
 struct PluginDescriptor { StringView name; StringView contract_name; uint32_t version_major; uint32_t version_minor; uint32_t version_patch; };
 struct PluginContext { StringView bundle_path; uint32_t host_abi_version; uint64_t bundle_id; };
 struct HostVTable {
-    AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginVTable*);
+    AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginInterface*);
     void* (*alloc)(void* rt_ctx, size_t size, size_t align);
     void (*free)(void* rt_ctx, void* ptr, size_t size, size_t align);
     PluginHandle (*find_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
     PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
-    const PluginVTable* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
+    const PluginInterface* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
     const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
 };
 constexpr uint32_t ABI_OK = 0;
@@ -767,7 +804,14 @@ extern "C" AbiError cpp_throw_abi(const void* args, void* out) noexcept {
 }
 
 static void* const CPP_THROW_FNS[] = { reinterpret_cast<void*>(cpp_throw_abi) };
-static PluginVTable CPP_THROW_VTABLE = { TEST_ADD_CONTRACT_ID, 1U << 16, 1, CPP_THROW_FNS };
+static PluginInterface CPP_THROW_INTERFACE = {
+    nullptr,
+    TEST_ADD_CONTRACT_ID,
+    1U << 16,
+    1,
+    DispatchType::Native,
+    { { CPP_THROW_FNS } }
+};
 static PluginDescriptor CPP_THROW_DESC = {
     { (const uint8_t*)"cpp_throw_plugin", 16 },
     { (const uint8_t*)"test.add", 8 },
@@ -776,7 +820,7 @@ static PluginDescriptor CPP_THROW_DESC = {
 extern "C" uint32_t polyplug_abi_version() { return 1; }
 extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, const PluginContext* ctx) {
     (void)ctx;
-    return host_vtable->register_plugin(rt_ctx, &CPP_THROW_DESC, &CPP_THROW_VTABLE);
+    return host_vtable->register_plugin(rt_ctx, &CPP_THROW_DESC, &CPP_THROW_INTERFACE);
 }
 "#;
 
@@ -924,16 +968,5 @@ extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, c
     println!(
         "cargo:rustc-env=TEST_JS_PLUGIN={}",
         fixtures_dir.join("test_plugin_js").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        fixtures_dir
-            .join("test_plugin_js_deno")
-            .join("index.ts")
-            .display()
-    );
-    println!(
-        "cargo:rustc-env=TEST_JS_DENO_PLUGIN={}",
-        fixtures_dir.join("test_plugin_js_deno").display()
     );
 }

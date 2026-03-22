@@ -10,18 +10,18 @@
 //! - Stale handles are detected after replacement
 
 use polyplug::registry::Registry;
-use polyplug_abi::contract_id;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::contract_id;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -36,7 +36,7 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 unsafe extern "C" fn graph_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     if descriptor.is_null() || vtable.is_null() {
         return AbiError {
@@ -48,7 +48,7 @@ unsafe extern "C" fn graph_register_callback(
     // SAFETY: descriptor and vtable are valid for this call.
     let desc: &PluginDescriptor = unsafe { &*descriptor };
     // SAFETY: vtable is valid for this call.
-    let vt: &PluginVTable = unsafe { &*vtable };
+    let vt: &PluginInterface = unsafe { &*vtable };
 
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
     // &'static str contract name — guaranteed valid UTF-8 by construction.
@@ -130,7 +130,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 unsafe extern "C" fn noop_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 
@@ -218,14 +218,14 @@ fn test_single_contract_registration_and_lookup() {
     assert!(!handle.is_null(), "handle must not be null");
 
     // Resolve the vtable.
-    let vtable_ptr: *const PluginVTable = GRAPH_REGISTRY.with(|cell| {
+    let vtable_ptr: *const PluginInterface = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
             .expect("handle must resolve to vtable")
     });
 
     // SAFETY: vtable_ptr is valid — library is alive (not yet forgotten).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.contract_id, test_add_id,
         "vtable contract_id must match"
@@ -264,11 +264,17 @@ fn test_duplicate_registration_is_rejected() {
 
     // Build a fake vtable for the duplicate attempt.
     // function_count=0, so the functions pointer is never dereferenced.
-    let fake_vtable: PluginVTable = PluginVTable {
-        contract_id: 0xCC4232FAB0410D2B, // test.add@1
-        contract_version: 1_u32 << 16,
-        function_count: 0,
-        functions: core::ptr::null::<*const ()>(),
+    let fake_vtable: PluginInterface = PluginInterface {
+        rt_ctx: core::ptr::null(),
+        contract_id: test_add_id,
+        contract_version: 0_u32,
+        function_count: 0_u32,
+        dispatch_type: polyplug_abi::DispatchType::Native,
+        dispatch: polyplug_abi::PluginDispatch {
+            native: polyplug_abi::NativeDispatch {
+                functions: core::ptr::null(),
+            },
+        },
     };
     let fake_descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"duplicate_adder"),
@@ -282,7 +288,7 @@ fn test_duplicate_registration_is_rejected() {
     let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
         cell.borrow().register(
             fake_descriptor,
-            &fake_vtable as *const PluginVTable,
+            &fake_vtable as *const PluginInterface,
             "test.add".to_owned(),
             test_add_id,
         )
@@ -315,7 +321,7 @@ fn test_stale_handle_detected_after_explicit_construction() {
         generation: handle.generation + 1,
     };
 
-    let result: Result<*const PluginVTable, _> =
+    let result: Result<*const PluginInterface, _> =
         GRAPH_REGISTRY.with(|cell| cell.borrow().resolve(stale));
 
     assert!(result.is_err(), "stale handle must return Err");

@@ -203,11 +203,6 @@ fn generate_lang_alias_js_quickjs_accepted() {
     assert_lang_alias_accepted("js-quickjs");
 }
 
-#[test]
-fn generate_lang_alias_js_deno_accepted() {
-    assert_lang_alias_accepted("js-deno");
-}
-
 // ─── generate: conflicting --api and --bundle ─────────────────────────────────
 
 #[test]

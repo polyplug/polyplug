@@ -6,12 +6,12 @@
 //! These tests exercise `polyplug_runtime_last_error` and `polyplug_runtime_error_message_len`
 //! with per-runtime error storage.
 
+use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_error_message_len;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::ffi::OpaqueRuntime;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 

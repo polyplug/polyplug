@@ -1012,7 +1012,7 @@ fn generate_cpp_host_function(
 
     if is_void_return {
         out.push_str(&format!(
-            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->functions[{}U]);\n",
+            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[{}U]);\n",
             fn_id
         ));
         out.push_str("        AbiError err = fn_(args_ptr, nullptr);\n");
@@ -1025,7 +1025,7 @@ fn generate_cpp_host_function(
             fn_id
         ));
         out.push_str(&format!(
-            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->functions[{}U]);\n",
+            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[{}U]);\n",
             fn_id
         ));
         out.push_str("        AbiError err = fn_(args_ptr, out_ptr);\n");
@@ -1203,10 +1203,12 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(files
-            .files
-            .iter()
-            .any(|f| f.content.contains("AUTO-GENERATED")));
+        assert!(
+            files
+                .files
+                .iter()
+                .any(|f| f.content.contains("AUTO-GENERATED"))
+        );
     }
 
     #[test]

@@ -32,8 +32,8 @@ sed -i 's/<Version>0.1.0</<Version>0.2.0</g' host-libs/csharp/Polyplug/Polyplug.
 sed -i 's/<Version>0.1.0</<Version>0.2.0</g' host-libs/csharp/Loaders/*/*.csproj
 sed -i 's/version = "0.1.0"/version = "0.2.0"/g' host-libs/python/pyproject.toml
 sed -i 's/version = "0.1.0"/version = "0.2.0"/g' host-libs/python/loaders/*/pyproject.toml
-sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' host-libs/js/package.json
-sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' host-libs/js/loaders/@polyplug/*/package.json
+sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' host-libs/js-deno/package.json
+sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' host-libs/js-deno/loaders/@polyplug/*/package.json
 sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' guest-libs/js/package.json
 sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' guest-libs/python/pyproject.toml
 
@@ -44,7 +44,7 @@ sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' host-libs/lua/loaders/*/*.r
 sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' guest-libs/lua/*.rockspec
 mv host-libs/lua/polyplug-0.1.0-1.rockspec host-libs/lua/polyplug-0.2.0-1.rockspec
 mv guest-libs/lua/polyplug-guest-0.1.0-1.rockspec guest-libs/lua/polyplug-guest-0.2.0-1.rockspec
-for loader in native python lua js js-deno dotnet; do
+for loader in native python lua js dotnet; do
   mv host-libs/lua/loaders/polyplug-loaders-$loader/polyplug-loaders-$loader-0.1.0-1.rockspec \
      host-libs/lua/loaders/polyplug-loaders-$loader/polyplug-loaders-$loader-0.2.0-1.rockspec 2>/dev/null || true
 done
@@ -63,7 +63,7 @@ git push origin main --tags
 
 When you push a tag starting with `v`, the `release.yml` workflow automatically:
 
-1. **Builds native libraries** for all platforms (6 libraries × 4 platforms):
+1. **Builds native libraries** for all platforms (5 libraries × 4 platforms):
    - `libpolyplug.so/.dylib/.dll` - Core runtime
    - `libpolyplug_native.so/.dylib/.dll` - Native loader
    - `libpolyplug_python.so/.dylib/.dll` - Python loader
@@ -71,17 +71,17 @@ When you push a tag starting with `v`, the `release.yml` workflow automatically:
    - `libpolyplug_js.so/.dylib/.dll` - JS/QuickJS loader
    - `libpolyplug_dotnet.so/.dylib/.dll` - .NET loader
 
-2. **Builds CLI tool** (`polyplugc`) for all platforms
+   2. **Builds CLI tool** (`polyplugc`) for all platforms
 
-3. **Tests native library loading** on each platform (Python, Deno, Lua, C#)
+   3. **Tests native library loading** on each platform (Python, Deno, Lua, C#)
 
-4. **Builds and publishes packages**:
-   - **Rust crates** (crates.io): `polyplug_abi`, `polyplug`, `polyplug_guest`, `polyplug_codegen`, `polyplugc`, 6 loader crates
-   - **Python** (PyPI): `polyplug`, `polyplug-guest`, 6 loader packages
-   - **NuGet**: `Polyplug`, `Polyplug.Guest`, 6 loader packages
-   - **npm** (npmjs.com): `@polyplug/runtime`, `@polyplug/guest`, 6 loader packages
+   4. **Builds and publishes packages**:
+   - **Rust crates** (crates.io): `polyplug_abi`, `polyplug`, `polyplug_guest`, `polyplug_codegen`, `polyplugc`, 5 loader crates
+   - **Python** (PyPI): `polyplug`, `polyplug-guest`, 5 loader packages
+   - **NuGet**: `Polyplug`, `Polyplug.Guest`, 5 loader packages
+   - **npm** (npmjs.com): `@polyplug/runtime`, `@polyplug/guest`, 5 loader packages
    - **jsr.io**: `@polyplug/runtime`, `@polyplug/guest`
-   - **LuaRocks**: `polyplug`, `polyplug-guest`, 6 loader packages
+   - **LuaRocks**: `polyplug`, `polyplug-guest`, 5 loader packages
 
 5. **Creates GitHub Release** with all artifacts
 
@@ -190,7 +190,6 @@ pip install polyplug-loaders-native      # Native .so/.dll plugins
 pip install polyplug-loaders-python      # Python plugins
 pip install polyplug-loaders-lua         # LuaJIT plugins
 pip install polyplug-loaders-js          # QuickJS plugins
-pip install polyplug-loaders-js-deno     # Deno/TypeScript plugins
 pip install polyplug-loaders-dotnet      # .NET plugins
 ```
 
@@ -207,7 +206,6 @@ dotnet add package Polyplug.Loaders.Native
 dotnet add package Polyplug.Loaders.Python
 dotnet add package Polyplug.Loaders.Lua
 dotnet add package Polyplug.Loaders.Js
-dotnet add package Polyplug.Loaders.JsDeno
 dotnet add package Polyplug.Loaders.Dotnet
 ```
 
@@ -226,7 +224,6 @@ npm install @polyplug/loaders-native
 npm install @polyplug/loaders-python
 npm install @polyplug/loaders-lua
 npm install @polyplug/loaders-js
-npm install @polyplug/loaders-js-deno
 npm install @polyplug/loaders-dotnet
 ```
 
@@ -253,7 +250,6 @@ polyplug_native = "0.2.0"    # Native .so/.dll plugins
 polyplug_python = "0.2.0"    # Python plugins
 polyplug_lua = "0.2.0"       # LuaJIT plugins
 polyplug_js = "0.2.0"        # QuickJS plugins
-polyplug_js_deno = "0.2.0"   # Deno/TypeScript plugins
 polyplug_dotnet = "0.2.0"    # .NET plugins
 ```
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use clap::Subcommand;
 
-use polyplug_codegen::{GenerateConfig, Lang, PackConfig, Side, generate, pack};
+use polyplug_codegen::{generate, pack, GenerateConfig, Lang, PackConfig, Side};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]
@@ -29,7 +29,7 @@ enum Command {
         #[arg(long, conflicts_with = "api")]
         bundle: Option<PathBuf>,
 
-        /// Target language: rust, cpp, csharp, python, lua, js-quickjs, js-deno.
+        /// Target language: rust, cpp, csharp, python, lua, js-quickjs.
         #[arg(long, short = 'l')]
         lang: String,
 
@@ -57,7 +57,7 @@ enum Command {
         /// Path to the bundle.toml file
         #[arg(short, long)]
         bundle: Option<PathBuf>,
-        /// Target language (rust, cpp, csharp, python, lua, js-quickjs, js-deno)
+        /// Target language (rust, cpp, csharp, python, lua, js-quickjs)
         #[arg(short, long)]
         lang: String,
         /// Output directory for scaffold files
@@ -157,10 +157,9 @@ fn parse_lang(lang: &str) -> Result<Lang, polyplug_codegen::PolyplugcError> {
         "python" | "py" => Ok(Lang::Python),
         "lua" => Ok(Lang::Lua),
         "js-quickjs" => Ok(Lang::JsQuickJs),
-        "js-deno" => Ok(Lang::JsDeno),
         other => Err(polyplug_codegen::PolyplugcError::ValidationFailed {
             message: format!(
-                "Unknown language: `{other}`. Supported: rust, cpp, csharp, python, lua, js-quickjs, js-deno"
+                "Unknown language: `{other}`. Supported: rust, cpp, csharp, python, lua, js-quickjs"
             ),
         }),
     }

@@ -11,24 +11,39 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use polyplug::registry::{PluginVTableGuard, Registry, VTableSlot};
-use polyplug_abi::{PluginDescriptor, PluginHandle, PluginVTable, StringView};
+use polyplug_abi::{
+    DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
+    StringView,
+};
 
 // ─── Static vtables for testing ──────────────────────────────────────────────
 
 const MOCK_FNS: [*const (); 0] = [];
 
-static VTABLE_V1: PluginVTable = PluginVTable {
+static VTABLE_V1: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0xDEAD_BEEF_0000_0001_u64,
     contract_version: (1_u32 << 16),
     function_count: 0_u32,
-    functions: MOCK_FNS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FNS.as_ptr(),
+        },
+    },
 };
 
-static VTABLE_V2: PluginVTable = PluginVTable {
+static VTABLE_V2: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0xDEAD_BEEF_0000_0001_u64,
     contract_version: (2_u32 << 16),
     function_count: 0_u32,
-    functions: MOCK_FNS.as_ptr(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: MOCK_FNS.as_ptr(),
+        },
+    },
 };
 
 // ─── Helper functions ────────────────────────────────────────────────────────
@@ -70,7 +85,7 @@ fn test_vtable_swap_while_call_in_progress() {
         .expect("resolve_guard should succeed for valid handle");
 
     // Get the vtable pointer from the guard — this is what an in-flight call would use.
-    let vtable_ptr_before: *const PluginVTable = guard.vtable();
+    let vtable_ptr_before: *const PluginInterface = guard.vtable();
 
     // Now swap the vtable while the guard is still held.
     let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&VTABLE_V2));

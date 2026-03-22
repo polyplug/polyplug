@@ -8,7 +8,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{Lang, PackConfig, pack};
+use polyplug_codegen::{pack, Lang, PackConfig};
 use std::fs;
 use std::path::PathBuf;
 
@@ -419,49 +419,7 @@ fn js_quickjs_package_json_contains_name_version_and_dep() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 7. JS-Deno scaffold
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[test]
-fn js_deno_scaffold_file_structure() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-    let out_dir: PathBuf = tmp.path().join("out");
-    let manifest_dir: PathBuf = tmp.path().join("manifest");
-    fs::create_dir_all(&out_dir).expect("create out dir");
-
-    let config: PackConfig = make_config(BUNDLE_TOML, Lang::JsDeno, &out_dir, &manifest_dir);
-    pack(config).expect("pack js-deno succeeded");
-
-    assert!(out_dir.join("index.ts").exists(), "index.ts must exist");
-    assert!(out_dir.join("deno.json").exists(), "deno.json must exist");
-    assert!(out_dir.join("README.md").exists(), "README.md must exist");
-}
-
-#[test]
-fn js_deno_json_contains_name_and_version() {
-    let tmp: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
-    let out_dir: PathBuf = tmp.path().join("out");
-    let manifest_dir: PathBuf = tmp.path().join("manifest");
-    fs::create_dir_all(&out_dir).expect("create out dir");
-
-    let config: PackConfig = make_config(BUNDLE_TOML, Lang::JsDeno, &out_dir, &manifest_dir);
-    pack(config).expect("pack js-deno succeeded");
-
-    let deno_json: String = read_file(&out_dir, "deno.json");
-    assert_contains(
-        &deno_json,
-        "\"my-plugin\"",
-        "deno.json must contain bundle name",
-    );
-    assert_contains(
-        &deno_json,
-        "\"1.2.3\"",
-        "deno.json must contain bundle version",
-    );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 8. Version fallback (no bundle section → defaults)
+// 7. Version fallback (no bundle section → defaults)
 // ═══════════════════════════════════════════════════════════════════════════
 
 #[test]

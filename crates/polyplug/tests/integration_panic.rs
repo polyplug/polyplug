@@ -10,16 +10,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_ERROR_PANIC;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_ERROR_PANIC;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
@@ -28,7 +28,7 @@ use polyplug_abi::POLYPLUG_ABI_VERSION;
 /// # Safety
 /// Only written by `capture_register_callback` which is called once during
 /// `polyplug_init`, before the vtable pointer is read in the test.
-static mut CAPTURED_VTABLE_PTR: *const PluginVTable = core::ptr::null();
+static mut CAPTURED_VTABLE_PTR: *const PluginInterface = core::ptr::null();
 
 /// A register_plugin callback that captures the vtable pointer.
 ///
@@ -37,7 +37,7 @@ static mut CAPTURED_VTABLE_PTR: *const PluginVTable = core::ptr::null();
 unsafe extern "C" fn capture_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     // SAFETY: CAPTURED_VTABLE_PTR is only written here, during polyplug_init,
     // before the test reads it. Single-threaded test execution ensures no data race.
@@ -107,7 +107,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 unsafe extern "C" fn noop_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: polyplug_abi::PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 
@@ -355,11 +355,11 @@ fn test_panic_returns_abi_error_panic() {
 
     // SAFETY: CAPTURED_VTABLE_PTR was written by capture_register_callback above.
     // Single-threaded; no race condition.
-    let vtable_ptr: *const PluginVTable = unsafe { CAPTURED_VTABLE_PTR };
+    let vtable_ptr: *const PluginInterface = unsafe { CAPTURED_VTABLE_PTR };
     assert!(!vtable_ptr.is_null(), "vtable pointer must be non-null");
 
     // SAFETY: vtable_ptr is valid (plugin library is loaded, not yet dropped).
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(
         vtable.function_count, 1_u32,
@@ -371,7 +371,7 @@ fn test_panic_returns_abi_error_panic() {
     // caught inside the extern "C" boundary. The host sees AbiError { code: 3 }.
 
     // SAFETY: fn_ptr is function 0 in the vtable (do_panic).
-    let fn_ptr: *const () = unsafe { *vtable.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is the do_panic ABI wrapper — extern "C" with no
         // meaningful args/out (void, no params). The catch_unwind wrapper
