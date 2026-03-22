@@ -1,13 +1,12 @@
 //! QuickJS in-process plugin loader implementation.
 //!
 //! Loads JS plugin bundles via the embedded QuickJS VM (rquickjs).
-//! One shared QuickJS Runtime per process. Each bundle gets a cached Context
-//! for fast dispatch without per-call Context creation overhead.
+//! Each bundle gets its own QuickJS Runtime and Context for complete isolation
+//! between bundles and between polyplug Runtime instances.
 //! Uses VM dispatch to call JS functions through the QuickJS API.
 
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use rquickjs::Array;
 use rquickjs::Context;
@@ -37,10 +36,6 @@ use polyplug_abi::ABI_OK;
 
 use crate::config::JsConfig;
 
-// ─── Process-global QuickJS Runtime ──────────────────────────────────────────
-
-static QJS_RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
-
 // ─── JS Loader Data for VM Dispatch ───────────────────────────────────────────
 
 /// Type alias for a persistent JS function stored across scope boundaries.
@@ -51,10 +46,11 @@ type VtableData = (u64, u32, usize, String, Vec<PersistentFunction>);
 
 /// Loader-specific data for JS plugin dispatch.
 ///
-/// Stores a cached Context for reuse across dispatch calls, avoiding the overhead
-/// of creating a fresh Context for each call. The Context is `Clone` and `Send + Sync`
-/// with the `parallel` feature, making it safe for concurrent dispatch.
+/// Each bundle gets its own QuickJS Runtime and Context, ensuring complete
+/// isolation between bundles and between polyplug Runtime instances.
+/// The Context is cached for fast dispatch without per-call creation overhead.
 pub struct JsLoaderData {
+    pub _runtime: Runtime,
     pub ctx: Context,
     pub functions: Vec<PersistentFunction>,
 }
@@ -93,31 +89,6 @@ unsafe extern "C" fn js_dispatch(
     let out_hi: u32 = (out_usize >> 32) as u32;
 
     let call_result: Result<(), rquickjs::Error> = data.ctx.with(|ctx| {
-        // Set up minimal polyplug object with readI32/writeI32 for memory access.
-        let polyplug_obj: Object<'_> = Object::new(ctx.clone())?;
-        let read_i32_fn: Function<'_> = Function::new(ctx.clone(), |lo: u32, hi: u32| -> i32 {
-            let ptr: *const i32 = ((hi as u64) << 32 | lo as u64) as usize as *const i32;
-            if ptr.is_null() {
-                return 0;
-            }
-            // SAFETY: ptr is a valid pointer provided by the host for reading.
-            unsafe { *ptr }
-        })?;
-        polyplug_obj.set("readI32", read_i32_fn)?;
-        let write_i32_fn: Function<'_> =
-            Function::new(ctx.clone(), |lo: u32, hi: u32, value: i32| {
-                let ptr: *mut i32 = ((hi as u64) << 32 | lo as u64) as usize as *mut i32;
-                if ptr.is_null() {
-                    return;
-                }
-                // SAFETY: ptr is a valid pointer provided by the host for writing.
-                unsafe {
-                    *ptr = value;
-                }
-            })?;
-        polyplug_obj.set("writeI32", write_i32_fn)?;
-        ctx.globals().set("polyplug", polyplug_obj)?;
-
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
         js_fn.call::<(u32, u32, u32, u32), ()>((args_lo, args_hi, out_lo, out_hi))
     });
@@ -557,19 +528,13 @@ impl BundleLoader for JsLoader {
                 })
             })?;
 
-        let qjs_runtime: &Runtime = QJS_RUNTIME
-            .get_or_init(|| {
-                Runtime::new()
-                    .map_err(|e: rquickjs::Error| format!("QuickJS runtime init failed: {e}"))
+        let qjs_runtime: Runtime = Runtime::new().map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimeInitFailed {
+                reason: format!("QuickJS runtime init failed: {e}"),
             })
-            .as_ref()
-            .map_err(|reason: &String| {
-                PolyplugError::Loader(LoaderError::JsRuntimeInitFailed {
-                    reason: reason.clone(),
-                })
-            })?;
+        })?;
 
-        let ctx: Context = Context::full(qjs_runtime).map_err(|e: rquickjs::Error| {
+        let ctx: Context = Context::full(&qjs_runtime).map_err(|e: rquickjs::Error| {
             PolyplugError::Loader(LoaderError::JsRuntimePanic {
                 runtime: "js-quickjs".to_owned(),
                 message: format!("context creation failed: {e}"),
@@ -693,6 +658,7 @@ impl BundleLoader for JsLoader {
             eval_result?;
 
         let loader_data: Box<JsLoaderData> = Box::new(JsLoaderData {
+            _runtime: qjs_runtime,
             ctx,
             functions: js_functions,
         });
