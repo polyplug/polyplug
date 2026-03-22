@@ -1,0 +1,18 @@
+<Solution>
+  <Folder Name="/abi/">
+    <Project Path="abi\Polyplug.Abi.csproj" />
+  </Folder>
+  <Folder Name="/host/">
+    <Project Path="host\Polyplug.Host.csproj" />
+  </Folder>
+  <Folder Name="/guest/">
+    <Project Path="guest\Polyplug.Guest.csproj" />
+  </Folder>
+  <Folder Name="/loaders/">
+    <Project Path="loaders\Native\Polyplug.Loaders.Native.csproj" />
+    <Project Path="loaders\Python\Polyplug.Loaders.Python.csproj" />
+    <Project Path="loaders\Lua\Polyplug.Loaders.Lua.csproj" />
+    <Project Path="loaders\Js\Polyplug.Loaders.Js.csproj" />
+    <Project Path="loaders\Dotnet\Polyplug.Loaders.Dotnet.csproj" />
+  </Folder>
+</Solution>

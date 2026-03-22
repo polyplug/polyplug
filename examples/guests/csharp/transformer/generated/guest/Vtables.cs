@@ -3,5 +3,51 @@
 
 using System.Runtime.CompilerServices;
 using Polyplug.Guest;
+using Polyplug.Abi;
 using System.Runtime.InteropServices;
+
+// Plugin: transformer
+public static class TransformerVtables {
+    public const ulong TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFUL;
+    private static IDataTransformerPlugin? _impl_transformer;
+    public static void SetTransformerImpl(IDataTransformerPlugin impl) { _impl_transformer = impl; }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static AbiError transformer_transform_abi(IntPtr argsPtr, IntPtr outPtr) {
+        try {
+            var impl = _impl_transformer ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, "not initialized");
+            // call impl
+            return new AbiError { Code = 0 };
+        } catch (Polyplug.Guest.PluginException ex) {
+            return new AbiError { Code = ex.Code };
+        } catch {
+            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };
+        }
+    }
+
+    private static readonly IntPtr[] TRANSFORMER_FNS;
+    private static System.Runtime.InteropServices.GCHandle _TRANSFORMER_pin_handle;
+    public static PluginInterface TRANSFORMER_VTABLE;
+
+    static TransformerVtables() {
+        unsafe {
+            TRANSFORMER_FNS = new IntPtr[] {
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&transformer_transform_abi,
+            };
+        }
+        _TRANSFORMER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(TRANSFORMER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+        TRANSFORMER_VTABLE = new PluginInterface {
+            RtCtx = IntPtr.Zero,
+            ContractId = TRANSFORMER_CONTRACT_ID,
+            ContractVersion = 0u << 16 | 0u,
+            FunctionCount = 1u,
+            DispatchType = DispatchType.Native,
+            Dispatch = new PluginDispatch {
+                Native = new NativeDispatch {
+                    Functions = _TRANSFORMER_pin_handle.AddrOfPinnedObject(),
+                },
+            },
+        };
+    }
+}
 

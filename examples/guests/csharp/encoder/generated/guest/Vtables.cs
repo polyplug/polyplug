@@ -3,5 +3,51 @@
 
 using System.Runtime.CompilerServices;
 using Polyplug.Guest;
+using Polyplug.Abi;
 using System.Runtime.InteropServices;
+
+// Plugin: encoder
+public static class EncoderVtables {
+    public const ulong ENCODER_CONTRACT_ID = 0x127D1703C6EFB432UL;
+    private static IPipelineEncoderPlugin? _impl_encoder;
+    public static void SetEncoderImpl(IPipelineEncoderPlugin impl) { _impl_encoder = impl; }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static AbiError encoder_encode_abi(IntPtr argsPtr, IntPtr outPtr) {
+        try {
+            var impl = _impl_encoder ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, "not initialized");
+            // call impl
+            return new AbiError { Code = 0 };
+        } catch (Polyplug.Guest.PluginException ex) {
+            return new AbiError { Code = ex.Code };
+        } catch {
+            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };
+        }
+    }
+
+    private static readonly IntPtr[] ENCODER_FNS;
+    private static System.Runtime.InteropServices.GCHandle _ENCODER_pin_handle;
+    public static PluginInterface ENCODER_VTABLE;
+
+    static EncoderVtables() {
+        unsafe {
+            ENCODER_FNS = new IntPtr[] {
+                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&encoder_encode_abi,
+            };
+        }
+        _ENCODER_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc(ENCODER_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);
+        ENCODER_VTABLE = new PluginInterface {
+            RtCtx = IntPtr.Zero,
+            ContractId = ENCODER_CONTRACT_ID,
+            ContractVersion = 0u << 16 | 0u,
+            FunctionCount = 1u,
+            DispatchType = DispatchType.Native,
+            Dispatch = new PluginDispatch {
+                Native = new NativeDispatch {
+                    Functions = _ENCODER_pin_handle.AddrOfPinnedObject(),
+                },
+            },
+        };
+    }
+}
 

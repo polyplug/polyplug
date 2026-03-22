@@ -7,7 +7,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../host-libs/csharp/Polyplug/Polyplug.csproj" />
-    <ProjectReference Include="../../../guest-libs/csharp/Polyplug.Guest.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/host/Polyplug.Host.csproj" />
+    <ProjectReference Include="../../../sdks/csharp/guest/Polyplug.Guest.csproj" />
   </ItemGroup>
 </Project>

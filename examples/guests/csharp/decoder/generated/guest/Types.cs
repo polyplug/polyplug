@@ -2,5 +2,6 @@
 // Re-generate with: polyplugc generate --api api.toml --lang csharp --out <dir>
 
 using Polyplug.Guest;
+using Polyplug.Abi;
 using System.Runtime.InteropServices;
 

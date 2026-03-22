@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using Polyplug;
+using Polyplug.Host;
 using Polyplug.Guest;
+using Polyplug.Abi;
 using Polyplug.Generated;
 
 class Program
@@ -53,7 +54,7 @@ class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
-        Runtime.SetConfig(new RuntimeConfig
+        Runtime.SetConfig(new HostRuntimeConfig
         {
             HotReloadMaxRetries = 5,
             HotReloadRetryIntervalMs = 200,
@@ -117,7 +118,7 @@ class Program
             using (var input = new PinnedStringView(inputStr))
             {
                 var result = decoder.Decode(input.View);
-                Console.WriteLine($"[decoder] decode(\"{inputStr}\") = \"{(string)result}\"");
+                Console.WriteLine($"[decoder] decode(\"{inputStr}\") = \"{StringHelpers.ToString(result)}\"");
             }
         }
 
@@ -128,7 +129,7 @@ class Program
             using (var input = new PinnedStringView(decoded))
             {
                 var result = transformer.Transform(input.View);
-                Console.WriteLine($"[transformer] transform(\"{decoded}\") = \"{(string)result}\"");
+                Console.WriteLine($"[transformer] transform(\"{decoded}\") = \"{StringHelpers.ToString(result)}\"");
             }
         }
 
@@ -139,7 +140,7 @@ class Program
             using (var input = new PinnedStringView(transformed))
             {
                 var result = encoder.Encode(input.View);
-                Console.WriteLine($"[encoder] encode(\"{transformed}\") = \"{(string)result}\"");
+                Console.WriteLine($"[encoder] encode(\"{transformed}\") = \"{StringHelpers.ToString(result)}\"");
             }
         }
 
@@ -149,7 +150,7 @@ class Program
             using (var input = new PinnedStringView(transformed))
             {
                 var result = reporter.Report(input.View);
-                Console.WriteLine($"[reporter] report(\"{transformed}\") = \"{(string)result}\"");
+                Console.WriteLine($"[reporter] report(\"{transformed}\") = \"{StringHelpers.ToString(result)}\"");
             }
         }
 
@@ -159,7 +160,7 @@ class Program
             using (var input = new PinnedStringView(decoded))
             {
                 var result = validator.Validate(input.View);
-                Console.WriteLine($"[validator] validate(\"{decoded}\") = \"{(string)result}\"");
+                Console.WriteLine($"[validator] validate(\"{decoded}\") = \"{StringHelpers.ToString(result)}\"");
             }
         }
 

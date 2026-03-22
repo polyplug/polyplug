@@ -42,8 +42,8 @@ fn cs_type_name(ty: &ResolvedTypeRef) -> String {
             PrimitiveType::Bool => "byte".to_owned(), // bool is not blittable in ABI structs
         },
         ResolvedTypeRef::AbiType(abi) => match abi {
-            AbiBuiltin::StringView => "Polyplug.Guest.StringView".to_owned(),
-            AbiBuiltin::Buffer => "Polyplug.Guest.Buffer".to_owned(),
+            AbiBuiltin::StringView => "Polyplug.Abi.StringView".to_owned(),
+            AbiBuiltin::Buffer => "Polyplug.Abi.Buffer".to_owned(),
             AbiBuiltin::Ptr => "IntPtr".to_owned(),
             AbiBuiltin::Void => "void".to_owned(),
         },
@@ -144,11 +144,12 @@ fn cs_return_type(func: &ResolvedFunction) -> String {
     }
 }
 
-/// Generate the `Types.cs` file content for guest (uses Polyplug.Guest).
+/// Generate the `Types.cs` file content for guest (uses Polyplug.Guest and Polyplug.Abi).
 fn generate_cs_types_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Guest;\n");
+    out.push_str("using Polyplug.Abi;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
 
     // Emit enums before struct types
@@ -177,11 +178,12 @@ fn generate_cs_types_file(ir: &ValidatedIr) -> String {
     out
 }
 
-/// Generate the `Types.cs` file content for host (uses Polyplug namespace).
+/// Generate the `Types.cs` file content for host (uses Polyplug.Host namespace).
 fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug;\n");
+    out.push_str("using Polyplug.Host;\n");
+    out.push_str("using Polyplug.Abi;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
     out.push_str("namespace Polyplug.Generated;\n\n");
     out.push_str("public static class ContractIds {\n");
@@ -215,7 +217,8 @@ fn generate_cs_host_types_file(ir: &ValidatedIr) -> String {
 fn generate_cs_guest_contracts(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug.Guest;\n\n");
+    out.push_str("using Polyplug.Guest;\n");
+    out.push_str("using Polyplug.Abi;\n\n");
 
     for contract in &ir.contracts {
         let iface_name: String = contract_name_to_cs_interface(&contract.name);
@@ -267,6 +270,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using Polyplug.Guest;\n");
+    out.push_str("using Polyplug.Abi;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
 
     if let Some(bundle) = &ir.bundle {
@@ -319,7 +323,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                     "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n"
                 ));
                 out.push_str("            // call impl\n");
-                out.push_str("            return AbiError.Ok;\n");
+                out.push_str("            return new AbiError { Code = 0 };\n");
                 out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
                 out.push_str("            return new AbiError { Code = ex.Code };\n");
                 out.push_str("        } catch {\n");
@@ -340,7 +344,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
             ));
             out.push_str(&format!(
-                "    public static PluginVTable {upper}_VTABLE;\n\n"
+                "    public static PluginInterface {upper}_VTABLE;\n\n"
             ));
             // Static constructor instead of Init method
             out.push_str(&format!("    static {class_name}Vtables() {{\n"));
@@ -358,15 +362,23 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
-            out.push_str(&format!("        {upper}_VTABLE = new PluginVTable {{\n"));
+            out.push_str(&format!(
+                "        {upper}_VTABLE = new PluginInterface {{\n"
+            ));
+            out.push_str("            RtCtx = IntPtr.Zero,\n");
             out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
             out.push_str(&format!(
                 "            ContractVersion = {minor}u << 16 | {patch}u,\n"
             ));
             out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+            out.push_str("            DispatchType = DispatchType.Native,\n");
+            out.push_str("            Dispatch = new PluginDispatch {\n");
+            out.push_str("                Native = new NativeDispatch {\n");
             out.push_str(&format!(
-                "            FunctionsPtr = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
+                "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
             ));
+            out.push_str("                },\n");
+            out.push_str("            },\n");
             out.push_str("        };\n");
             out.push_str("    }\n");
             out.push_str("}\n\n");
@@ -436,7 +448,7 @@ fn generate_cs_guest_plugin_vtables(
             lower = plugin_lower
         ));
         out.push_str("            // call impl\n");
-        out.push_str("            return AbiError.Ok;\n");
+        out.push_str("            return new AbiError { Code = 0 };\n");
         out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
         out.push_str("            return new AbiError { Code = ex.Code };\n");
         out.push_str("        } catch {\n");
@@ -457,7 +469,7 @@ fn generate_cs_guest_plugin_vtables(
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "    public static PluginVTable {upper}_VTABLE;\n\n",
+        "    public static PluginInterface {upper}_VTABLE;\n\n",
         upper = plugin_upper
     ));
     // Static constructor instead of Init method
@@ -484,9 +496,10 @@ fn generate_cs_guest_plugin_vtables(
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "        {upper}_VTABLE = new PluginVTable {{\n",
+        "        {upper}_VTABLE = new PluginInterface {{\n",
         upper = plugin_upper
     ));
+    out.push_str("            RtCtx = IntPtr.Zero,\n");
     out.push_str(&format!(
         "            ContractId = {upper}_CONTRACT_ID,\n",
         upper = plugin_upper
@@ -495,10 +508,15 @@ fn generate_cs_guest_plugin_vtables(
         "            ContractVersion = {minor}u << 16 | {patch}u,\n"
     ));
     out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+    out.push_str("            DispatchType = DispatchType.Native,\n");
+    out.push_str("            Dispatch = new PluginDispatch {\n");
+    out.push_str("                Native = new NativeDispatch {\n");
     out.push_str(&format!(
-        "            FunctionsPtr = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
+        "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
         upper = plugin_upper
     ));
+    out.push_str("                },\n");
+    out.push_str("            },\n");
     out.push_str("        };\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
@@ -518,7 +536,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n");
-    out.push_str("using Polyplug.Guest;\n\n");
+    out.push_str("using Polyplug.Guest;\n");
+    out.push_str("using Polyplug.Abi;\n\n");
 
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
@@ -586,22 +605,22 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                         "            var contractHandle_{plugin_lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{plugin_lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
                     ));
                     out.push_str("            try {\n");
-                    out.push_str(&format!("            fixed (PluginVTable* vtablePtr_{plugin_lower} = &{}Vtables.{plugin_upper}_VTABLE) {{\n", plugin_pascal));
+                    out.push_str(&format!("            fixed (PluginInterface* vtablePtr_{plugin_lower} = &{}Vtables.{plugin_upper}_VTABLE) {{\n", plugin_pascal));
                     out.push_str(&format!(
                         "                var desc_{plugin_lower} = new PluginDescriptor {{\n"
                     ));
                     out.push_str(&format!(
-                        "                    Name = new StringView {{ Ptr = nameHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (ulong)plugin_name_{plugin_lower}.Length }},\n"
+                        "                    Name = new StringView {{ Ptr = nameHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (nuint)plugin_name_{plugin_lower}.Length }},\n"
                     ));
                     out.push_str(&format!(
-                        "                    ContractName = new StringView {{ Ptr = contractHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (ulong)contract_name_{plugin_lower}.Length }},\n"
+                        "                    ContractName = new StringView {{ Ptr = contractHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (nuint)contract_name_{plugin_lower}.Length }},\n"
                     ));
                     out.push_str(&format!("                    VersionMajor = {major}u,\n"));
                     out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
                     out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
                     out.push_str("                };\n");
                     out.push_str("                var host = (HostVTable*)hostPtr;\n");
-                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginVTable*, AbiError>)host->RegisterPluginPtr;\n");
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;\n");
                     out.push_str(&format!(
                         "                var err_{plugin_lower} = registerFn(rtCtx, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
                     ));
@@ -645,22 +664,22 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                 "            var contractHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
             out.push_str("            try {\n");
-            out.push_str(&format!("            fixed (PluginVTable* vtablePtr_{lower} = &{class_name}Vtables.{upper}_VTABLE) {{\n"));
+            out.push_str(&format!("            fixed (PluginInterface* vtablePtr_{lower} = &{class_name}Vtables.{upper}_VTABLE) {{\n"));
             out.push_str(&format!(
                 "                var desc_{lower} = new PluginDescriptor {{\n"
             ));
             out.push_str(&format!(
-                "                    Name = new StringView {{ Ptr = nameHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)plugin_name_{lower}.Length }},\n"
+                "                    Name = new StringView {{ Ptr = nameHandle_{lower}.AddrOfPinnedObject(), Len = (nuint)plugin_name_{lower}.Length }},\n"
             ));
             out.push_str(&format!(
-                "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (ulong)contract_name_{lower}.Length }},\n"
+                "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (nuint)contract_name_{lower}.Length }},\n"
             ));
             out.push_str(&format!("                    VersionMajor = {major}u,\n"));
             out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
             out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
             out.push_str("                };\n");
             out.push_str("                var host = (HostVTable*)hostPtr;\n");
-            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginVTable*, AbiError>)host->RegisterPluginPtr;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;\n");
             out.push_str(&format!(
                 "                var err_{lower} = registerFn(rtCtx, &desc_{lower}, vtablePtr_{lower});\n"
             ));
@@ -689,7 +708,8 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
-    out.push_str("using Polyplug;\n");
+    out.push_str("using Polyplug.Host;\n");
+    out.push_str("using Polyplug.Abi;\n");
     out.push_str("using System;\n");
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
@@ -790,12 +810,14 @@ fn generate_host_fn_caller(
     out.push_str("        unsafe {\n");
     out.push_str(&format!(
         "            nint funcsArray = *(nint*)(vtablePtr + {offset});\n",
-        offset = 16
+        offset = 32
     ));
     out.push_str(&format!(
         "            nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<nint, nint, AbiError>)funcPtr;\n");
+    // On x86-64 System V ABI, AbiError (24 bytes) is returned via hidden pointer parameter.
+    // The function signature is: void dispatch(AbiError* ret, void* args, void* out)
+    out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;\n");
 
     if func.params.is_empty() {
         out.push_str("            nint argsPtr = nint.Zero;\n");
@@ -831,7 +853,8 @@ fn generate_host_fn_caller(
         out.push_str("            nint outPtr = nint.Zero;\n");
     }
 
-    out.push_str("            AbiError err = dispatch(argsPtr, outPtr);\n");
+    out.push_str("            AbiError err = default;\n");
+    out.push_str("            dispatch(&err, argsPtr, outPtr);\n");
     out.push_str("            if (err.Code != 0u) {\n");
     out.push_str("                throw new InvalidOperationException($\"plugin call failed: code={err.Code}\");\n");
     out.push_str("            }\n");

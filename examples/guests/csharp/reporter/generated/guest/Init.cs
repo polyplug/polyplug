@@ -4,14 +4,38 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Polyplug.Guest;
+using Polyplug.Abi;
 
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
-    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {
-        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
+    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {
+        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
+            // Register reporter (data.Reporter@1)
+            var plugin_name_reporter = System.Text.Encoding.UTF8.GetBytes("reporter");
+            var contract_name_reporter = System.Text.Encoding.UTF8.GetBytes("data.Reporter@1");
+            var nameHandle_reporter = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_reporter, System.Runtime.InteropServices.GCHandleType.Pinned);
+            var contractHandle_reporter = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_reporter, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+            fixed (PluginInterface* vtablePtr_reporter = &ReporterVtables.REPORTER_VTABLE) {
+                var desc_reporter = new PluginDescriptor {
+                    Name = new StringView { Ptr = nameHandle_reporter.AddrOfPinnedObject(), Len = (nuint)plugin_name_reporter.Length },
+                    ContractName = new StringView { Ptr = contractHandle_reporter.AddrOfPinnedObject(), Len = (nuint)contract_name_reporter.Length },
+                    VersionMajor = 1u,
+                    VersionMinor = 0u,
+                    VersionPatch = 0u,
+                };
+                var host = (HostVTable*)hostPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;
+                var err_reporter = registerFn(rtCtx, &desc_reporter, vtablePtr_reporter);
+                if (err_reporter.Code != AbiConstants.ABI_OK) return err_reporter.Code;
+            }
+            } finally {
+                nameHandle_reporter.Free();
+                contractHandle_reporter.Free();
+            }
             return AbiConstants.ABI_OK;
         } // unsafe
         } catch {

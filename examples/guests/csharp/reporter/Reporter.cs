@@ -1,5 +1,6 @@
 using System;
-using PolyplugGuest;
+using Polyplug.Guest;
+using Polyplug.Abi;
 
 namespace Reporter;
 

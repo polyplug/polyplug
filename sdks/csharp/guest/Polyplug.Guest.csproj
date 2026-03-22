@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Polyplug.Guest</AssemblyName>
+    <RootNamespace>Polyplug.Guest</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>Polyplug.Guest</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Guest library for writing polyplug plugins in .NET</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\abi\Polyplug.Abi.csproj" />
+  </ItemGroup>
+</Project>

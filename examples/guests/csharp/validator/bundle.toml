@@ -3,7 +3,7 @@ name = "csharp_validator"
 version = "1.0.0"
 api = "../../../api.toml"
 runtime = "csharp"
-file = "validator.cs"
+file = "decoder.dll"
 
 [[plugin]]
 name = "validator"

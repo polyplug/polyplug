@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Assembly and namespace -->
+    <AssemblyName>Polyplug.Abi</AssemblyName>
+    <RootNamespace>Polyplug.Abi</RootNamespace>
+    
+    <!-- NuGet package metadata -->
+    <IsPackable>true</IsPackable>
+    <PackageId>Polyplug.Abi</PackageId>
+    <Version>0.1.0</Version>
+    <Description>ABI definitions for polyplug - auto-generated from Rust ABI types</Description>
+    <PackageTags>polyplug;plugin;abi;ffi</PackageTags>
+  </PropertyGroup>
+</Project>

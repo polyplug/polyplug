@@ -4,14 +4,38 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Polyplug.Guest;
+using Polyplug.Abi;
 
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
-    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {
-        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
+    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {
+        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
+            // Register decoder (pipeline.Decoder@1)
+            var plugin_name_decoder = System.Text.Encoding.UTF8.GetBytes("decoder");
+            var contract_name_decoder = System.Text.Encoding.UTF8.GetBytes("pipeline.Decoder@1");
+            var nameHandle_decoder = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_decoder, System.Runtime.InteropServices.GCHandleType.Pinned);
+            var contractHandle_decoder = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_decoder, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+            fixed (PluginInterface* vtablePtr_decoder = &DecoderVtables.DECODER_VTABLE) {
+                var desc_decoder = new PluginDescriptor {
+                    Name = new StringView { Ptr = nameHandle_decoder.AddrOfPinnedObject(), Len = (nuint)plugin_name_decoder.Length },
+                    ContractName = new StringView { Ptr = contractHandle_decoder.AddrOfPinnedObject(), Len = (nuint)contract_name_decoder.Length },
+                    VersionMajor = 1u,
+                    VersionMinor = 0u,
+                    VersionPatch = 0u,
+                };
+                var host = (HostVTable*)hostPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;
+                var err_decoder = registerFn(rtCtx, &desc_decoder, vtablePtr_decoder);
+                if (err_decoder.Code != AbiConstants.ABI_OK) return err_decoder.Code;
+            }
+            } finally {
+                nameHandle_decoder.Free();
+                contractHandle_decoder.Free();
+            }
             return AbiConstants.ABI_OK;
         } // unsafe
         } catch {

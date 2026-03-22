@@ -3,7 +3,7 @@ name = "csharp_reporter"
 version = "1.0.0"
 api = "../../../api.toml"
 runtime = "csharp"
-file = "reporter.cs"
+file = "decoder.dll"
 
 [[plugin]]
 name = "reporter"

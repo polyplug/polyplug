@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Assembly and namespace -->
+    <AssemblyName>Polyplug.Host</AssemblyName>
+    <RootNamespace>Polyplug.Host</RootNamespace>
+    
+    <!-- NuGet package metadata -->
+    <IsPackable>true</IsPackable>
+    <PackageId>Polyplug.Host</PackageId>
+    <Version>0.1.0</Version>
+    <Description>.NET host library for the polyplug plugin runtime. Native libraries for Linux, macOS, and Windows are embedded in the package.</Description>
+    <PackageTags>polyplug;plugin;runtime;ffi;cross-platform</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\abi\Polyplug.Abi.csproj" />
+  </ItemGroup>
+</Project>

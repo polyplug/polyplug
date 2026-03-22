@@ -4,14 +4,38 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Polyplug.Guest;
+using Polyplug.Abi;
 
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
-    public static uint PolyplugInit(IntPtr registrarPtr, IntPtr ctxPtr) {
-        if (registrarPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
+    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {
+        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
+            // Register transformer (data.Transformer@1)
+            var plugin_name_transformer = System.Text.Encoding.UTF8.GetBytes("transformer");
+            var contract_name_transformer = System.Text.Encoding.UTF8.GetBytes("data.Transformer@1");
+            var nameHandle_transformer = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_transformer, System.Runtime.InteropServices.GCHandleType.Pinned);
+            var contractHandle_transformer = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_transformer, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+            fixed (PluginInterface* vtablePtr_transformer = &TransformerVtables.TRANSFORMER_VTABLE) {
+                var desc_transformer = new PluginDescriptor {
+                    Name = new StringView { Ptr = nameHandle_transformer.AddrOfPinnedObject(), Len = (nuint)plugin_name_transformer.Length },
+                    ContractName = new StringView { Ptr = contractHandle_transformer.AddrOfPinnedObject(), Len = (nuint)contract_name_transformer.Length },
+                    VersionMajor = 1u,
+                    VersionMinor = 0u,
+                    VersionPatch = 0u,
+                };
+                var host = (HostVTable*)hostPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;
+                var err_transformer = registerFn(rtCtx, &desc_transformer, vtablePtr_transformer);
+                if (err_transformer.Code != AbiConstants.ABI_OK) return err_transformer.Code;
+            }
+            } finally {
+                nameHandle_transformer.Free();
+                contractHandle_transformer.Free();
+            }
             return AbiConstants.ABI_OK;
         } // unsafe
         } catch {
