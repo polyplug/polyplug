@@ -997,55 +997,55 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-41-e2e-lua.log
   ```
 
-- [ ] 42. Create JavaScript AbiGenerator implementation
+- [x] 42. Create JavaScript AbiGenerator implementation
 
   **What to do**: Create `crates/polyplug_abi/build/js.rs`, generate TypeScript/JavaScript with BigInt for 64-bit values.
 
   **Recommended Agent Profile**: `deep`
 
-- [ ] 43. Create sdks/js/ folder structure
+- [x] 43. Create sdks/js/ folder structure
 
   **What to do**: Create `sdks/js/` with `abi/`, `host/`, `guest/`, `loaders/`. Create package.json and deno.json.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 44. Create generated polyplug_abi.js + .d.ts
+- [x] 44. Create generated polyplug_abi.js + .d.ts
 
   **What to do**: Generate `abi.ts` with all types, constants, FNV-1a. Use BigInt for u64. Generate `.d.ts` type declarations.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 45. Migrate JS host to sdks/js/host/
+- [x] 45. Migrate JS host to sdks/js/host/
 
   **What to do**: Migrate `host-libs/js-deno/polyplug/`. Remove PluginVTable.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 46. Migrate JS guest to sdks/js/guest/
+- [x] 46. Migrate JS guest to sdks/js/guest/
 
   **What to do**: Migrate `guest-libs/js/polyplug-guest.js`. Remove PluginVTable.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 47. Migrate JS loaders to sdks/js/loaders/
+- [x] 47. Migrate JS loaders to sdks/js/loaders/
 
   **What to do**: Migrate `host-libs/js-deno/loaders/`.
 
   **Recommended Agent Profile**: `unspecified-high`
 
-- [ ] 48. Remove PluginVTable from JS code
+- [x] 48. Remove PluginVTable from JS code
 
   **What to do**: All TypeScript interfaces use PluginInterface only.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 49. Add string helpers to JS ABI library
+- [x] 49. Add string helpers to JS ABI library
 
   **What to do**: Add native `stripPrefix`, `startsWith`, `split` functions to `sdks/js/abi/polyplug_abi.ts`. Native TypeScript (no FFI) for zero overhead. Available to both host and guest.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 50. E2E test JS SDK with examples
+- [x] 50. E2E test JS SDK with examples
 
   **What to do**: Run all JavaScript examples with Deno.
 

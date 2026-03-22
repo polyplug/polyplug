@@ -6,12 +6,14 @@
 
 mod cpp;
 mod csharp;
+mod js;
 mod lua;
 mod parser;
 mod python;
 
 pub use cpp::CppGenerator;
 pub use csharp::CSharpGenerator;
+pub use js::JsGenerator;
 pub use lua::LuaGenerator;
 pub use parser::{AbiParser, ParseError};
 pub use python::PythonGenerator;

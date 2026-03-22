@@ -1,0 +1,5 @@
+{
+    "name": "@polyplug/loaders-python",
+    "version": "0.1.0",
+    "exports": "./mod.ts"
+}

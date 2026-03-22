@@ -1,0 +1,37 @@
+{
+  "name": "@polyplug/sdk",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./mod.ts",
+    "./abi": "./abi/polyplug_abi.ts",
+    "./host": "./host/mod.js",
+    "./guest": "./guest/polyplug_guest.js"
+  },
+  "compilerOptions": {
+    "lib": ["deno.unstable", "deno.ns", "deno.worker"],
+    "strict": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "tasks": {
+    "check": "deno check **/*.ts",
+    "test": "deno test --allow-ffi --allow-env --allow-read --allow-write"
+  },
+  "fmt": {
+    "useTabs": false,
+    "lineWidth": 100,
+    "indentWidth": 4,
+    "semiColons": true,
+    "singleQuote": false,
+    "proseWrap": "preserve"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "exclude": ["no-explicit-any"]
+    }
+  }
+}
