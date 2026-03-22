@@ -549,12 +549,26 @@ impl Runtime {
 
     /// Load a single plugin bundle explicitly with options.
     pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), PolyplugError> {
-        // Require bundle path to be a directory
-        if !path.is_dir() {
-            return Err(PolyplugError::Loader(LoaderError::BundleNotADirectory {
-                path: path.to_path_buf(),
-            }));
+        // Handle file-based loaders (Python, Lua, .NET, JS) differently from directory-based (native).
+        if path.is_file() || !path.exists() {
+            // Find a file-based loader by extension
+            let ext: &str = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let loader: &dyn BundleLoader = self
+                .loaders
+                .values()
+                .map(Box::as_ref)
+                .find(|l| {
+                    l.is_file_loader() && Self::loader_matches_extension(l.runtime_name(), ext)
+                })
+                .ok_or_else(|| {
+                    PolyplugError::Loader(LoaderError::NoLoaderForRuntime {
+                        bundle: path.display().to_string(),
+                        runtime_name: ext.to_owned(),
+                    })
+                })?;
+            return loader.load(path, self);
         }
+        // Directory-based bundle: require manifest.toml
         let manifest_path: PathBuf = path.join("manifest.toml");
         if !manifest_path.exists() {
             return Err(PolyplugError::Loader(LoaderError::ManifestParse {
@@ -631,6 +645,17 @@ impl Runtime {
             manifests.insert(bundle_name, manifest);
         }
         result
+    }
+
+    fn loader_matches_extension(runtime_name: &str, ext: &str) -> bool {
+        matches!(
+            (runtime_name, ext),
+            ("lua", "lua")
+                | ("python", "py")
+                | ("dotnet", "dll")
+                | ("js" | "deno", "js")
+                | ("quickjs", "js")
+        )
     }
 }
 

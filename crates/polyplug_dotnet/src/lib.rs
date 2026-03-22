@@ -98,7 +98,18 @@ impl BundleLoader for DotnetLoader {
         "dotnet"
     }
 
+    fn is_file_loader(&self) -> bool {
+        true
+    }
+
     fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
+        // Check file existence first, before any other operations.
+        if !path.exists() {
+            return Err(PolyplugError::Loader(LoaderError::AssemblyNotFound {
+                path: path.to_string_lossy().into_owned(),
+            }));
+        }
+
         let tfm: String = crate::version::read_target_framework(path)?;
         check_version_compatibility(&tfm, &self.config.min_framework)?;
 

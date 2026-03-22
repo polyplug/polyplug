@@ -62,7 +62,21 @@ impl BundleLoader for PythonLoader {
         "python"
     }
 
+    fn is_file_loader(&self) -> bool {
+        true
+    }
+
     fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
+        // Step 0: Check file exists before any other operations.
+        if !path.exists() {
+            return Err(PolyplugError::Loader(
+                LoaderError::PythonModuleImportFailed {
+                    path: path.to_string_lossy().into_owned(),
+                    reason: "file does not exist".to_owned(),
+                },
+            ));
+        }
+
         // Step 1: Initialize (or verify already initialized) CPython.
         ensure_python_initialized(&self.config)?;
 

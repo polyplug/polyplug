@@ -49,6 +49,17 @@ pub trait BundleLoader: Send + Sync {
         vec![self.runtime_name().to_owned()]
     }
 
+    /// Whether this loader expects a file path (not a directory).
+    ///
+    /// File-based loaders (Python, Lua, .NET, JS) receive the plugin file directly.
+    /// Directory-based loaders (native) receive a bundle directory containing
+    /// manifest.toml and the shared library.
+    ///
+    /// Defaults to `false` (directory-based).
+    fn is_file_loader(&self) -> bool {
+        false
+    }
+
     /// Load a bundle at `path`.
     ///
     /// # Errors

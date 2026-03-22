@@ -155,7 +155,19 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
+    fn is_file_loader(&self) -> bool {
+        true
+    }
+
     fn load(&self, path: &Path, runtime: &Runtime) -> Result<(), PolyplugError> {
+        // Check file existence BEFORE any other operations.
+        if !path.exists() {
+            return Err(PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
+                path: path.display().to_string(),
+                reason: "file does not exist".to_owned(),
+            }));
+        }
+
         let lua: &Lua = ensure_lua_initialized(&self.config)?;
 
         // Clear globals from any previous load to ensure isolation.
