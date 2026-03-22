@@ -1,63 +1,189 @@
 //! Benchmark for .NET dispatch overhead.
 //!
 //! Measures the performance characteristics of the .NET dispatch path:
-//! 1. Native function pointer call overhead (via netcorehost)
+//! 1. Real CLR dispatch through [UnmanagedCallersOnly] function pointers
 //! 2. Native baseline for comparison
 //!
-//! NOTE: .NET uses native dispatch (function pointers via [UnmanagedCallersOnly]).
-//! The overhead is minimal (~5-10 ns) since it's a direct function pointer call.
-//!
-//! IMPORTANT: This benchmark does NOT initialize the CLR because:
-//! 1. CLR initialization is slow (~100+ ms) and happens once per process
-//! 2. The dispatch overhead is just a function pointer call
-//! 3. We measure the native function pointer call directly
+//! This benchmark initializes the CLR and loads a real .NET assembly to measure
+//! actual dispatch overhead through the CLR.
 
 #![allow(clippy::expect_used)]
 
 use core::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
+use std::path::PathBuf;
+use std::sync::Mutex;
 
-/// Benchmark native function pointer call overhead.
-///
-/// .NET plugins use [UnmanagedCallersOnly] which exposes a native function pointer.
-/// The dispatch overhead is just a function pointer call (~5-10 ns).
-fn bench_native_dispatch(c: &mut Criterion) {
-    let mut group = c.benchmark_group("native_dispatch");
+use netcorehost::hostfxr::HostfxrContext;
+use netcorehost::hostfxr::InitializedForRuntimeConfig;
+use netcorehost::pdcstring::PdCString;
 
-    // Simulate the .NET dispatch signature:
-    // unsafe extern "system" fn(*mut c_void, *const HostVTable, *const PluginContext) -> u32
-    type DotnetInitFn = unsafe extern "system" fn(
-        *mut core::ffi::c_void,
-        *const core::ffi::c_void,
-        *const core::ffi::c_void,
-    ) -> u32;
+type InitFn = unsafe extern "system" fn(
+    *mut core::ffi::c_void,
+    *const core::ffi::c_void,
+    *const core::ffi::c_void,
+) -> u32;
 
-    unsafe extern "system" fn mock_init(
-        _rt_ctx: *mut core::ffi::c_void,
-        _host_vtable: *const core::ffi::c_void,
-        _ctx: *const core::ffi::c_void,
-    ) -> u32 {
-        0 // ABI_OK
+static CLR_INIT_FN: Mutex<Option<InitFn>> = Mutex::new(None);
+
+fn find_hostfxr() -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+
+    if let Some(val) = std::env::var_os("DOTNET_ROOT") {
+        roots.push(PathBuf::from(val));
     }
 
-    let func_ptr: DotnetInitFn = mock_init;
+    if let Some(path_val) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_val) {
+            let candidate: PathBuf = dir.join("dotnet");
+            if candidate.exists() {
+                roots.push(dir);
+            }
+        }
+    }
 
-    group.bench_function("native_function_pointer_call", |b| {
+    roots.push(PathBuf::from("/usr/share/dotnet"));
+    roots.push(PathBuf::from("/usr/lib/dotnet"));
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join(".dotnet"));
+    }
+
+    for root in &roots {
+        if let Some(fxr_path) = highest_version_hostfxr(root) {
+            return Some(fxr_path);
+        }
+    }
+
+    None
+}
+
+fn highest_version_hostfxr(dotnet_root: &std::path::Path) -> Option<PathBuf> {
+    let fxr_dir: PathBuf = dotnet_root.join("host").join("fxr");
+    if !fxr_dir.is_dir() {
+        return None;
+    }
+
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = Vec::new();
+    let entries: std::fs::ReadDir = std::fs::read_dir(&fxr_dir).ok()?;
+    for entry in entries.flatten() {
+        let path: PathBuf = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name: String = path.file_name()?.to_string_lossy().into_owned();
+        let parts: Vec<u64> = name
+            .split('.')
+            .map(|s| s.parse::<u64>().unwrap_or(0))
+            .collect();
+        if parts.is_empty() {
+            continue;
+        }
+        versions.push((parts, path));
+    }
+
+    if versions.is_empty() {
+        return None;
+    }
+
+    versions.sort_by(|a, b| b.0.cmp(&a.0));
+
+    #[cfg(target_os = "windows")]
+    let lib_name: &str = "hostfxr.dll";
+    #[cfg(target_os = "macos")]
+    let lib_name: &str = "libhostfxr.dylib";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let lib_name: &str = "libhostfxr.so";
+
+    let best_path: PathBuf = versions[0].1.join(lib_name);
+    if best_path.exists() {
+        Some(best_path)
+    } else {
+        None
+    }
+}
+
+fn init_clr() -> Option<InitFn> {
+    let dll_path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|root| {
+            root.join("tests")
+                .join("fixtures")
+                .join("csharp_plugin")
+                .join("bin")
+                .join("Debug")
+                .join("net10.0")
+                .join("CsharpPlugin.dll")
+        })?;
+
+    if !dll_path.exists() {
+        return None;
+    }
+
+    let fxr_path: PathBuf = find_hostfxr()?;
+    let hostfxr: netcorehost::hostfxr::Hostfxr =
+        netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).ok()?;
+
+    let json: String = r#"{"runtimeOptions":{"tfm":"net10.0","framework":{"name":"Microsoft.NETCore.App","version":"10.0.0"}}}"#.to_owned();
+    let mut tmp: tempfile::NamedTempFile =
+        tempfile::Builder::new().suffix(".json").tempfile().ok()?;
+    std::io::Write::write_all(&mut tmp, json.as_bytes()).ok()?;
+    std::io::Write::flush(&mut tmp).ok()?;
+    let temp_path: PathBuf = tmp.path().to_path_buf();
+
+    let pdcpath: PdCString = PdCString::from_os_str(temp_path.as_os_str()).ok()?;
+    let context: HostfxrContext<InitializedForRuntimeConfig> =
+        hostfxr.initialize_for_runtime_config(&pdcpath).ok()?;
+
+    let asm_pdc: PdCString = PdCString::from_os_str(dll_path.as_os_str()).ok()?;
+    let loader = context.get_delegate_loader_for_assembly(asm_pdc).ok()?;
+
+    let type_name: PdCString =
+        PdCString::from_os_str(std::ffi::OsStr::new("CsharpPlugin.Plugin, CsharpPlugin")).ok()?;
+    let method_name: PdCString =
+        PdCString::from_os_str(std::ffi::OsStr::new("PolyplugInit")).ok()?;
+
+    let init_fn: netcorehost::hostfxr::ManagedFunction<InitFn> = loader
+        .get_function_with_unmanaged_callers_only::<InitFn>(&type_name, &method_name)
+        .ok()?;
+
+    std::mem::forget(context);
+
+    Some(*init_fn)
+}
+
+fn get_init_fn() -> Option<InitFn> {
+    let mut guard = CLR_INIT_FN.lock().unwrap();
+    if guard.is_none() {
+        *guard = init_clr();
+    }
+    *guard
+}
+
+fn bench_clr_dispatch(c: &mut Criterion) {
+    let init_fn = match get_init_fn() {
+        Some(f) => f,
+        None => {
+            eprintln!("CLR fixture not available, skipping CLR dispatch benchmark");
+            return;
+        }
+    };
+
+    let mut group = c.benchmark_group("clr_dispatch");
+
+    group.bench_function("clr_init_call", |b| {
         b.iter(|| {
-            // SAFETY: mock_init is a safe function, just returns 0.
             let result: u32 =
-                unsafe { func_ptr(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+                unsafe { init_fn(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
             black_box(result)
         })
     });
 
-    // Measure 10 calls to amortize benchmark overhead.
-    group.bench_function("native_function_pointer_10_calls", |b| {
+    group.bench_function("clr_init_10_calls", |b| {
         b.iter(|| {
             for _ in 0..10 {
-                // SAFETY: mock_init is a safe function, just returns 0.
                 let result: u32 =
-                    unsafe { func_ptr(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+                    unsafe { init_fn(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
                 black_box(result);
             }
             black_box(())
@@ -67,9 +193,6 @@ fn bench_native_dispatch(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark native function call baseline.
-///
-/// Provides a reference point for the minimum possible dispatch overhead.
 fn bench_native_baseline(c: &mut Criterion) {
     let mut group = c.benchmark_group("native_baseline");
 
@@ -96,14 +219,9 @@ fn bench_native_baseline(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark the dispatch function signature used by .NET.
-///
-/// Measures the overhead of calling through a function pointer with
-/// the exact signature used by polyplug_dotnet.
 fn bench_dispatch_signature(c: &mut Criterion) {
     let mut group = c.benchmark_group("dispatch_signature");
 
-    // Exact signature from polyplug_dotnet::context::InitFn
     type InitFn = unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *const core::ffi::c_void,
@@ -120,23 +238,19 @@ fn bench_dispatch_signature(c: &mut Criterion) {
 
     let init_fn: InitFn = noop_init;
 
-    // Null pointers (fastest case).
     group.bench_function("dispatch_with_null_pointers", |b| {
         b.iter(|| {
-            // SAFETY: noop_init is safe to call with null pointers.
             let result: u32 =
                 unsafe { init_fn(std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
             black_box(result)
         })
     });
 
-    // Stack-allocated context (realistic case).
     group.bench_function("dispatch_with_stack_context", |b| {
         b.iter(|| {
             let mut rt_ctx: u64 = 0;
             let host_vtable: u64 = 0;
             let ctx: u64 = 0;
-            // SAFETY: noop_init is safe to call with any pointers.
             let result: u32 = unsafe {
                 init_fn(
                     &mut rt_ctx as *mut u64 as *mut core::ffi::c_void,
@@ -151,10 +265,6 @@ fn bench_dispatch_signature(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark computation through function pointer.
-///
-/// Measures the overhead of a function that does actual work,
-/// to compare against the no-op dispatch baseline.
 fn bench_computation_dispatch(c: &mut Criterion) {
     let mut group = c.benchmark_group("computation_dispatch");
 
@@ -172,7 +282,6 @@ fn bench_computation_dispatch(c: &mut Criterion) {
 
     group.bench_function("computation_100_iterations", |b| {
         b.iter(|| {
-            // SAFETY: compute_sum is safe to call with any values.
             let result: i64 = unsafe { compute_fn(0, 0) };
             black_box(result)
         })
@@ -183,7 +292,7 @@ fn bench_computation_dispatch(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_native_dispatch,
+    bench_clr_dispatch,
     bench_native_baseline,
     bench_dispatch_signature,
     bench_computation_dispatch
