@@ -1061,7 +1061,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
     Evidence: .sisyphus/evidence/task-50-e2e-js.log
   ```
 
-- [ ] 51. Remove old host-libs/ directory
+- [x] 51. Remove old host-libs/ directory
 
   **What to do**: Delete `host-libs/` directory after confirming all migration complete.
 
@@ -1069,13 +1069,13 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
 
   **Must NOT do**: Delete before all SDKs verified working.
 
-- [ ] 52. Remove old guest-libs/ directory
+- [x] 52. Remove old guest-libs/ directory
 
   **What to do**: Delete `guest-libs/` directory after confirming all migration complete.
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 53. Remove scripts/ directory (duplicates docs/)
+- [x] 53. Remove scripts/ directory (duplicates docs/)
 
   **What to do**: 
   - Delete `scripts/` directory entirely
@@ -1084,7 +1084,7 @@ Max Concurrent: 4 (Waves 4-7 can overlap for different languages)
 
   **Recommended Agent Profile**: `quick`
 
-- [ ] 54. Update Cargo.toml workspace members
+- [x] 54. Update Cargo.toml workspace members
 
   **What to do**: Update root `Cargo.toml` to reflect new structure. Remove old paths, add new ones if needed.
 
