@@ -284,17 +284,17 @@ QuickJS guest plugins use a cached Context architecture for minimal dispatch ove
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
 │   Bundle Load (one-time):                                        │
-│   1. Create QuickJS Runtime (process-global, OnceLock)          │
+│   1. Create QuickJS Runtime (per-bundle, owned by JsLoaderData) │
 │   2. Create Context for this bundle                             │
 │   3. Evaluate bundle JS, extract vtable                         │
-│   4. Store Context + Persistent<Function> in JsLoaderData       │
+│   4. Store Runtime + Context + Persistent<Function> in LoaderData│
 │                                                                  │
 │   Dispatch Call (hot path):                                      │
 │   1. data.ctx.with(|ctx| { ... })     // Reuse cached Context   │
 │   2. func.clone().restore(&ctx)       // ~10-50 ns              │
 │   3. func.call(args)                  // JS execution           │
 │                                                                  │
-│   Total overhead: ~77 ns (excluding JS execution time)          │
+│   Total overhead: ~75 ns (excluding JS execution time)          │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -303,16 +303,16 @@ QuickJS guest plugins use a cached Context architecture for minimal dispatch ove
 
 | Benchmark | Time | Description |
 |-----------|------|-------------|
-| `cached_context_single_call` | **77 ns** | Single dispatch with cached Context |
-| `cached_context_10_calls` | 676 ns | 10 calls (~67 ns/call) |
+| `cached_context_single_call` | **75 ns** | Single dispatch with cached Context |
+| `cached_context_10_calls` | 656 ns | 10 calls (~66 ns/call) |
 | `old_fresh_context_per_call` | ~~124 µs~~ | OLD: Context created each call |
-| `new_cached_context_reuse` | **77 ns** | NEW: Context cached and reused |
+| `new_cached_context_reuse` | **75 ns** | NEW: Context cached and reused |
 
-**Speedup: 1,624x faster** than creating Context per call.
+**Speedup: 1,659x faster** than creating Context per call.
 
 #### Why This Is Minimal Overhead
 
-The ~77 ns overhead is the theoretical minimum for QuickJS dispatch:
+The ~75 ns overhead is the theoretical minimum for QuickJS dispatch:
 
 | Component | Time | Description |
 |-----------|------|-------------|
@@ -327,20 +327,29 @@ This overhead cannot be eliminated because:
 2. `Persistent<Function>` must be restored to the current context
 3. The JS function call itself has minimal QuickJS overhead
 
+#### Per-Bundle Runtime Isolation
+
+Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
+- Complete isolation between bundles
+- Complete isolation between polyplug Runtime instances
+- Tests can run in parallel without state pollution
+- No shared global state between different plugin bundles
+
 #### Comparison with Other VM Loaders
 
 | Loader | Dispatch Overhead | Architecture |
 |--------|-------------------|--------------|
 | **Native** | ~1 ns | Direct function pointer |
+| **QuickJS** | **~75 ns** | Per-bundle Runtime + Cached Context |
 | **Lua** | ~1-5 µs | mlua Function call |
-| **QuickJS** | **~77 ns** | Cached Context + Persistent |
 | **Python** | ~1-5 µs | PyO3 GIL + callable |
 | **.NET** | ~1-5 µs | CLR function pointer |
 
 QuickJS is the fastest VM loader due to:
-1. Cached Context (no per-call creation)
-2. `Persistent<Function>` for direct function reference
-3. Minimal QuickJS runtime overhead
+1. Per-bundle Runtime (complete isolation)
+2. Cached Context (no per-call creation)
+3. `Persistent<Function>` for direct function reference
+4. Minimal QuickJS runtime overhead
 
 ---
 
