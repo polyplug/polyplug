@@ -8,3 +8,8 @@ description = "ABI type definitions for the polyplug plugin runtime"
 
 [lints]
 workspace = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+thiserror = { workspace = true }

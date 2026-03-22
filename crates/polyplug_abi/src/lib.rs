@@ -12,6 +12,7 @@
 
 //! ABI — `#[repr(C)]` types, constants, and FNV-1a hashing for the polyplug ABI boundary.
 
+pub mod build;
 pub mod ffi;
 pub mod tracking;
 
