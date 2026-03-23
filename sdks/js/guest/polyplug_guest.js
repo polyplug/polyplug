@@ -198,8 +198,64 @@ export default {
     EXT_TRACE_ID,
     DependencyNotFoundError,
     StringViewHelper,
-    getExtension
+    getExtension,
+    readBytes,
+    writeBytes,
+    allocString,
+    toStr
 };
+
+/**
+ * Read bytes from host memory.
+ * 
+ * @param {bigint} ptr - Pointer to memory (as BigInt)
+ * @param {number} len - Number of bytes to read
+ * @returns {Uint8Array} Bytes read from host memory
+ * 
+ * @example
+ * const bytes = readBytes(0x1234n, 10);
+ */
+export function readBytes(ptr, len) {
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = globalThis.polyplug.readByte(ptr + BigInt(i));
+    }
+    return bytes;
+}
+
+/**
+ * Write bytes to host memory.
+ * 
+ * @param {bigint} ptr - Pointer to memory (as BigInt)
+ * @param {Uint8Array} data - Bytes to write
+ * @returns {void}
+ * 
+ * @example
+ * writeBytes(0x1234n, new TextEncoder().encode("hello"));
+ */
+export function writeBytes(ptr, data) {
+    for (let i = 0; i < data.length; i++) {
+        globalThis.polyplug.writeByte(ptr + BigInt(i), data[i]);
+    }
+}
+
+/**
+ * Allocate a string in host memory.
+ * 
+ * @param {string} str - JavaScript string to allocate
+ * @returns {{ ptr: bigint, len: number }} Pointer and length of allocated string
+ * 
+ * @example
+ * const { ptr, len } = allocString("hello");
+ */
+export function allocString(str) {
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(str);
+    const ptrArr = globalThis.polyplug.alloc(bytes.length);
+    const ptr = (BigInt(ptrArr[1]) << 32n) + BigInt(ptrArr[0]);
+    writeBytes(ptr, bytes);
+    return { ptr, len: bytes.length };
+}
 
 /**
  * Convert a StringView to a JavaScript string.
@@ -211,21 +267,25 @@ export default {
  * const s = toStr(stringView);
  */
 export function toStr(sv) {
-    if (!sv || !sv.ptr || sv.len === 0) {
+    if (!sv || sv.len === 0) {
         return '';
     }
     // QuickJS: ptr is split into ptr_lo/ptr_hi
     // Deno: ptr is a bigint
+    let ptr;
     if (typeof sv.ptr === 'bigint') {
         // Deno FFI
-        const ptr = Number(sv.ptr);
-        return new Deno.UnsafePointerView(ptr).getUtf8String(sv.len);
+        ptr = sv.ptr;
+        const ptrNum = Number(ptr);
+        return new Deno.UnsafePointerView(ptrNum).getUtf8String(sv.len);
     } else {
-        // QuickJS
-        const ptr = (sv.ptr_hi << 16) + sv.ptr_lo;
-        // Host runtime provides memory view
-        return globalThis.__polyplug_read_string(ptr, sv.len) || '';
+        // QuickJS: reconstruct 64-bit pointer from hi/lo split
+        ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);
     }
+    // Read bytes and decode as UTF-8
+    const bytes = readBytes(ptr, sv.len);
+    const decoder = new TextDecoder();
+    return decoder.decode(bytes);
 }
 
 

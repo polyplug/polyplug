@@ -358,8 +358,6 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
             out.push_str(",\n");
         }
         out.push_str(&format!("    {plugin_var}_VTABLE"));
-        out.push_str(",\n");
-        out.push_str(&format!("    {plugin_var}_DESCRIPTOR"));
     }
     out.push_str("\n} from './contracts';\n\n");
 
@@ -376,22 +374,12 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("    message: { ptr: number; len: number } | null;\n");
     out.push_str("}\n\n");
 
-    out.push_str("interface HostVTable {\n");
-    out.push_str("    register_plugin: (\n");
-    out.push_str("        rt_ctx: number,\n");
-    out.push_str("        desc_lo: number, desc_hi: number,\n");
-    out.push_str("        vtable_lo: number, vtable_hi: number\n");
-    out.push_str("    ) => AbiError;\n");
-    out.push_str("    get_extension: (ext_id: number) => number;\n");
-    out.push_str("}\n\n");
-
-    out.push_str("let _host: HostVTable | null = null;\n\n");
-
     out.push_str("export function polyplug_init(\n");
     out.push_str("    rt_ctx_lo: number, rt_ctx_hi: number,\n");
     out.push_str("    host_lo: number, host_hi: number,\n");
     out.push_str("    ctx_lo: number, ctx_hi: number\n");
     out.push_str("): AbiError {\n");
+    out.push_str("    // Validate parameters\n");
     out.push_str("    if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {\n");
     out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
     out.push_str("    }\n");
@@ -402,23 +390,25 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
     out.push_str("    }\n\n");
 
-    out.push_str("    const rt_ctx = rt_ctx_lo + (rt_ctx_hi * 0x100000000);\n");
-    out.push_str("    const host_ptr = host_lo + (host_hi * 0x100000000);\n");
-    out.push_str("    _host = host_ptr as unknown as HostVTable;\n\n");
+    out.push_str("    // Get polyplug host interface from globalThis\n");
+    out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("    if (!polyplug || !polyplug.registerVtable) {\n");
+    out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
+    out.push_str("    }\n\n");
 
     for plugin in &bundle.plugins {
         let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
         out.push_str(&format!(
-            "    const err_{plugin_var} = _host.register_plugin(\n"
+            "    // Register plugin: {plugin_name}\n",
+            plugin_name = plugin.name
         ));
-        out.push_str("        rt_ctx,\n");
-        out.push_str(&format!(
-            "        {plugin_var}_DESCRIPTOR, {plugin_var}_VTABLE\n"
-        ));
-        out.push_str("    );\n");
-        out.push_str(&format!("    if (err_{plugin_var}.code !== ABI_OK) {{\n"));
-        out.push_str(&format!("        return err_{plugin_var};\n"));
-        out.push_str("    }\n\n");
+        out.push_str(&format!("    polyplug.registerVtable(\n"));
+        out.push_str(&format!("        {plugin_var}_VTABLE.contractLo,\n"));
+        out.push_str(&format!("        {plugin_var}_VTABLE.contractHi,\n"));
+        out.push_str(&format!("        {plugin_var}_VTABLE,\n"));
+        out.push_str(&format!("        {plugin_var}_VTABLE.fnCount,\n"));
+        out.push_str(&format!("        {plugin_var}_VTABLE.contractName\n"));
+        out.push_str("    );\n\n");
     }
 
     out.push_str("    return { code: ABI_OK, message: null };\n");

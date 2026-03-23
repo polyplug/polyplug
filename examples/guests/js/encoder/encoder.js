@@ -1,12 +1,21 @@
-import { allocString } from 'polyplug-guest';
-import { stripPrefix } from 'polyplug-abi';
-
-export function encode(input) {
-    let s = stripPrefix(input, 'TRANSFORMED:');
-    return allocString(s.replace(/\|/g, ','));
+function encode(args, out) {
+    return 0;
 }
 
-export function polyplug_init(registrar, context) {
-    setJsEncoderImpl({ encode });
-    return { code: 0 };
+function polyplug_init(rt_ctx, host_vtable, ctx) {
+    var vtable = {
+        contractLo: 0x9A8B7D2E,
+        contractHi: 0x12F3C106,
+        fnCount: 1,
+        contractName: "pipeline.Encoder@1",
+        functions: [encode]
+    };
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+    return { code: 0, message: null };
 }

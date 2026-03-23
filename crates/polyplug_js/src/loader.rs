@@ -19,30 +19,45 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
+use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginDispatch;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::config::JsConfig;
+
+// ─── Thread-local storage for registration data ─────────────────────────────────
+
+use core::cell::RefCell;
+
+thread_local! {
+    static REGISTRATION_DATA: RefCell<Option<RegistrationData>> = const { RefCell::new(None) };
+}
+
+struct RegistrationData {
+    contract_id: u64,
+    contract_version: u32,
+    fn_count: usize,
+    contract_name: String,
+    functions: Vec<PersistentFunction>,
+}
 
 // ─── JS Loader Data for VM Dispatch ───────────────────────────────────────────
 
 /// Type alias for a persistent JS function stored across scope boundaries.
 type PersistentFunction = Persistent<Function<'static>>;
-
-/// Vtable data extracted from a JS bundle: (contract_id, version, fn_count, contract_name, functions).
-type VtableData = (u64, u32, usize, String, Vec<PersistentFunction>);
 
 /// Loader-specific data for JS plugin dispatch.
 ///
@@ -338,12 +353,44 @@ fn register_host_functions<'js>(
 
     let register_vtable_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |_contract_lo: u32,
-         _contract_hi: u32,
-         _vtable_lo: u32,
-         _vtable_hi: u32,
-         _fn_count: u32,
-         _contract_name: String| {},
+        |ctx: Ctx<'js>,
+         contract_lo: u32,
+         contract_hi: u32,
+         vtable_obj: Object<'js>,
+         fn_count: u32,
+         contract_name: String| {
+            let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
+            let fn_count_usize: usize = fn_count as usize;
+
+            let mut functions: Vec<PersistentFunction> = Vec::with_capacity(fn_count_usize);
+            let functions_array: Object<'js> =
+                match vtable_obj.get::<&str, Object<'js>>("functions") {
+                    Ok(arr) => arr,
+                    Err(_) => return,
+                };
+
+            for i in 0..fn_count_usize {
+                let func: Function<'js> = match functions_array.get::<u32, Function<'js>>(i as u32)
+                {
+                    Ok(f) => f,
+                    Err(_) => return,
+                };
+                let func_persistent: PersistentFunction = Persistent::save(&ctx, func);
+                functions.push(func_persistent);
+            }
+
+            let data: RegistrationData = RegistrationData {
+                contract_id,
+                contract_version: 0,
+                fn_count: fn_count_usize,
+                contract_name,
+                functions,
+            };
+
+            REGISTRATION_DATA.with(|cell| {
+                *cell.borrow_mut() = Some(data);
+            });
+        },
     )
     .map_err(|e: rquickjs::Error| {
         PolyplugError::Loader(LoaderError::JsRuntimePanic {
@@ -618,7 +665,12 @@ impl BundleLoader for JsLoader {
 
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
 
-        let eval_result: Result<VtableData, PolyplugError> = ctx.with(|ctx_ref: Ctx<'_>| {
+        // Clear any stale registration data from previous loads.
+        REGISTRATION_DATA.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+
+        ctx.with(|ctx_ref: Ctx<'_>| {
             let globals: Object<'_> = ctx_ref.globals();
             let polyplug_obj: Object<'_> =
                 Object::new(ctx_ref.clone()).map_err(|e: rquickjs::Error| {
@@ -661,83 +713,98 @@ impl BundleLoader for JsLoader {
                     })
                 })?;
 
-            // Scan global variables for vtable objects (ending with _VTABLE).
-            let global_obj: Object<'_> = ctx_ref.globals();
-            let mut found_vtable: Option<VtableData> = None;
+            let init_fn: Function<'_> = ctx_ref
+                .globals()
+                .get::<&str, Function<'_>>("polyplug_init")
+                .map_err(|_| {
+                    PolyplugError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: bundle_dir_str.clone(),
+                    })
+                })?;
 
-            for key_result in global_obj.keys::<String>() {
-                let key: String = match key_result {
-                    Ok(k) => k,
-                    Err(_) => continue,
-                };
+            // SAFETY: Intentionally leaked; bundle_path_static outlives this call.
+            let bundle_path_static: &'static str =
+                Box::leak(bundle_dir_str.clone().into_boxed_str());
+            let ctx: PluginContext = PluginContext {
+                bundle_path: StringView {
+                    ptr: bundle_path_static.as_ptr(),
+                    len: bundle_path_static.len(),
+                },
+                host_abi_version: POLYPLUG_ABI_VERSION,
+                bundle_id,
+            };
 
-                if !key.ends_with("_VTABLE") {
-                    continue;
-                }
+            let rt_ctx_i64: i64 = rt_ctx as usize as i64;
+            let host_vtable_i64: i64 = host_vtable as *const HostVTable as usize as i64;
+            let ctx_ptr_i64: i64 = &ctx as *const PluginContext as i64;
 
-                let vtable_obj: Object<'_> = match global_obj.get::<String, Object<'_>>(key) {
-                    Ok(obj) => obj,
-                    Err(_) => continue,
-                };
+            let rt_ctx_bigint: rquickjs::BigInt<'_> =
+                rquickjs::BigInt::from_i64(ctx_ref.clone(), rt_ctx_i64).map_err(
+                    |e: rquickjs::Error| {
+                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                            runtime: "js-quickjs".to_owned(),
+                            message: format!("rt_ctx BigInt creation failed: {e}"),
+                        })
+                    },
+                )?;
+            let host_vtable_bigint: rquickjs::BigInt<'_> =
+                rquickjs::BigInt::from_i64(ctx_ref.clone(), host_vtable_i64).map_err(
+                    |e: rquickjs::Error| {
+                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                            runtime: "js-quickjs".to_owned(),
+                            message: format!("host_vtable BigInt creation failed: {e}"),
+                        })
+                    },
+                )?;
+            let ctx_ptr_bigint: rquickjs::BigInt<'_> =
+                rquickjs::BigInt::from_i64(ctx_ref.clone(), ctx_ptr_i64).map_err(
+                    |e: rquickjs::Error| {
+                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                            runtime: "js-quickjs".to_owned(),
+                            message: format!("ctx_ptr BigInt creation failed: {e}"),
+                        })
+                    },
+                )?;
 
-                let contract_lo: u32 = vtable_obj.get::<&str, u32>("contractLo").unwrap_or(0);
-                let contract_hi: u32 = vtable_obj.get::<&str, u32>("contractHi").unwrap_or(0);
-                let contract_id: u64 = (contract_hi as u64) << 32 | contract_lo as u64;
-                let fn_count: usize = vtable_obj.get::<&str, u32>("fnCount").unwrap_or(0) as usize;
-                let contract_name: String = vtable_obj
-                    .get::<&str, String>("contractName")
-                    .unwrap_or_else(|_| "unknown".to_owned());
+            init_fn
+                .call::<(
+                    rquickjs::BigInt<'_>,
+                    rquickjs::BigInt<'_>,
+                    rquickjs::BigInt<'_>,
+                ), ()>((rt_ctx_bigint, host_vtable_bigint, ctx_ptr_bigint))
+                .map_err(|e: rquickjs::Error| {
+                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                        runtime: "js-quickjs".to_owned(),
+                        message: format!("polyplug_init call failed: {e}"),
+                    })
+                })?;
 
-                let functions_array: Object<'_> =
-                    match vtable_obj.get::<&str, Object<'_>>("functions") {
-                        Ok(arr) => arr,
-                        Err(_) => continue,
-                    };
+            Ok::<(), PolyplugError>(())
+        })?;
 
-                let mut functions: Vec<PersistentFunction> = Vec::with_capacity(fn_count);
-                for i in 0..fn_count {
-                    let func: Function<'_> = functions_array
-                        .get::<u32, Function<'_>>(i as u32)
-                        .map_err(|e| {
-                            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                                runtime: "js-quickjs".to_owned(),
-                                message: format!("failed to get function at index {}: {}", i, e),
-                            })
-                        })?;
-                    // Use Persistent to safely store the function across scope boundaries.
-                    let func_persistent: PersistentFunction = Persistent::save(&ctx_ref, func);
-                    functions.push(func_persistent);
-                }
-
-                found_vtable = Some((contract_id, 0_u32, fn_count, contract_name, functions));
-                break;
-            }
-
-            found_vtable.ok_or_else(|| {
+        // Read the registration data stored by registerVtable.
+        let registration_data: RegistrationData = REGISTRATION_DATA
+            .with(|cell| cell.borrow_mut().take())
+            .ok_or_else(|| {
                 PolyplugError::Loader(LoaderError::JsRuntimePanic {
                     runtime: "js-quickjs".to_owned(),
-                    message: "no vtable found in bundle (expected global ending with _VTABLE)"
-                        .to_owned(),
+                    message: "polyplug_init did not call registerVtable".to_owned(),
                 })
-            })
-        });
-
-        let (contract_id_val, contract_version, fn_count, contract_name_str, js_functions) =
-            eval_result?;
+            })?;
 
         let loader_data: Box<JsLoaderData> = Box::new(JsLoaderData {
             _runtime: qjs_runtime,
             ctx,
-            functions: js_functions,
+            functions: registration_data.functions,
         });
 
         let loader_data_ptr: *mut JsLoaderData = Box::into_raw(loader_data);
 
         let plugin_interface: PluginInterface = PluginInterface {
             rt_ctx: core::ptr::null(),
-            contract_id: contract_id_val,
-            contract_version,
-            function_count: fn_count as u32,
+            contract_id: registration_data.contract_id,
+            contract_version: registration_data.contract_version,
+            function_count: registration_data.fn_count as u32,
             dispatch_type: DispatchType::VirtualMachine,
             dispatch: PluginDispatch {
                 vm: VmDispatch {
@@ -749,15 +816,16 @@ impl BundleLoader for JsLoader {
 
         let static_interface: *const PluginInterface = Box::into_raw(Box::new(plugin_interface));
 
-        let contract_name_leaked: &'static str = Box::leak(contract_name_str.into_boxed_str());
+        let contract_name_leaked: &'static str =
+            Box::leak(registration_data.contract_name.into_boxed_str());
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"js-quickjs-plugin"),
             contract_name: StringView {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version_major: contract_version >> 16,
-            version_minor: contract_version & 0xFFFF,
+            version_major: registration_data.contract_version >> 16,
+            version_minor: registration_data.contract_version & 0xFFFF,
             version_patch: 0_u32,
         };
 

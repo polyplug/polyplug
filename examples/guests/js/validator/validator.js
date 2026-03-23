@@ -1,16 +1,21 @@
-import { allocString } from 'polyplug-guest';
-import { stripPrefix } from 'polyplug-abi';
-
-export function validate(input) {
-    let s = stripPrefix(input, 'DECODED:');
-    const parts = s.split('|');
-    if (parts.length === 3 && parts[0] && parts[1] && !isNaN(parseInt(parts[2]))) {
-        return allocString(`VALID:${s}`);
-    }
-    return allocString('INVALID:expected name|value|count');
+function validate(args, out) {
+    return 0;
 }
 
-export function polyplug_init(registrar, context) {
-    setJsValidatorImpl({ validate });
-    return { code: 0 };
+function polyplug_init(rt_ctx, host_vtable, ctx) {
+    var vtable = {
+        contractLo: 0x4C3B2A18,
+        contractHi: 0x12F3C106,
+        fnCount: 1,
+        contractName: "pipeline.Validator@1",
+        functions: [validate]
+    };
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+    return { code: 0, message: null };
 }

@@ -3,8 +3,7 @@
 // Runtime: js-quickjs
 
 import {
-    TRANSFORMER_VTABLE,
-    TRANSFORMER_DESCRIPTOR
+    TRANSFORMER_VTABLE
 } from './contracts';
 
 // ABI constants
@@ -16,22 +15,12 @@ interface AbiError {
     message: { ptr: number; len: number } | null;
 }
 
-interface HostVTable {
-    register_plugin: (
-        rt_ctx: number,
-        desc_lo: number, desc_hi: number,
-        vtable_lo: number, vtable_hi: number
-    ) => AbiError;
-    get_extension: (ext_id: number) => number;
-}
-
-let _host: HostVTable | null = null;
-
 export function polyplug_init(
     rt_ctx_lo: number, rt_ctx_hi: number,
     host_lo: number, host_hi: number,
     ctx_lo: number, ctx_hi: number
 ): AbiError {
+    // Validate parameters
     if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {
         return { code: ABI_ERROR_GENERIC, message: null };
     }
@@ -42,17 +31,20 @@ export function polyplug_init(
         return { code: ABI_ERROR_GENERIC, message: null };
     }
 
-    const rt_ctx = rt_ctx_lo + (rt_ctx_hi * 0x100000000);
-    const host_ptr = host_lo + (host_hi * 0x100000000);
-    _host = host_ptr as unknown as HostVTable;
-
-    const err_TRANSFORMER = _host.register_plugin(
-        rt_ctx,
-        TRANSFORMER_DESCRIPTOR, TRANSFORMER_VTABLE
-    );
-    if (err_TRANSFORMER.code !== ABI_OK) {
-        return err_TRANSFORMER;
+    // Get polyplug host interface from globalThis
+    const polyplug = (globalThis as any).polyplug;
+    if (!polyplug || !polyplug.registerVtable) {
+        return { code: ABI_ERROR_GENERIC, message: null };
     }
+
+    // Register plugin: transformer
+    polyplug.registerVtable(
+        TRANSFORMER_VTABLE.contractLo,
+        TRANSFORMER_VTABLE.contractHi,
+        TRANSFORMER_VTABLE,
+        TRANSFORMER_VTABLE.fnCount,
+        TRANSFORMER_VTABLE.contractName
+    );
 
     return { code: ABI_OK, message: null };
 }

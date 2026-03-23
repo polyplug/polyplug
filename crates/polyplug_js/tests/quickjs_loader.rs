@@ -1,8 +1,7 @@
 //! Integration tests for the QuickJS bundle loader.
 //!
 //! Covers: runtime initialisation, bundle evaluation (valid / syntax error /
-//! runtime error), vtable registration, VM dispatch, memory management
-//! helpers, and thread-safety of the shared QuickJS runtime.
+//! runtime error), polyplug_init registration, and thread-safety.
 
 #![allow(clippy::expect_used)]
 
@@ -10,8 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::DispatchType;
@@ -22,22 +21,37 @@ use polyplug_js::JsLoader;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Build a minimal bundle JS string that creates a global _VTABLE object.
+/// Build a minimal bundle JS string that defines polyplug_init and registers a plugin.
 fn make_bundle_js(contract_id: u64, fn_count: u32, contract_name: &str) -> String {
     let contract_lo: u32 = contract_id as u32;
     let contract_hi: u32 = (contract_id >> 32) as u32;
     format!(
         r#"
-globalThis.TEST_VTABLE = {{
-    contractLo: {contract_lo},
-    contractHi: {contract_hi},
-    fnCount: {fn_count},
-    contractName: "{contract_name}",
-    functions: [
-        // Stub functions that just return success
-        function(args, out) {{ return 0; }}
-    ]
-}};
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var descriptor = {{
+        name: "js-quickjs-plugin",
+        contractName: "{contract_name}",
+        versionMajor: 0,
+        versionMinor: 1,
+        versionPatch: 0
+    }};
+    var vtable = {{
+        contractLo: {contract_lo},
+        contractHi: {contract_hi},
+        fnCount: {fn_count},
+        contractName: "{contract_name}",
+        functions: [
+            function(args, out) {{ return 0; }}
+        ]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+}}
 "#
     )
 }
@@ -142,17 +156,33 @@ fn load_bundle_with_functions_registers_correct_count() {
     // Bundle with 3 functions
     let bundle: String = format!(
         r#"
-globalThis.TEST_VTABLE = {{
-    contractLo: {},
-    contractHi: {},
-    fnCount: {},
-    contractName: "test.math",
-    functions: [
-        function(args, out) {{ return 0; }},
-        function(args, out) {{ return 0; }},
-        function(args, out) {{ return 0; }}
-    ]
-}};
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var descriptor = {{
+        name: "js-quickjs-plugin",
+        contractName: "test.math",
+        versionMajor: 0,
+        versionMinor: 1,
+        versionPatch: 0
+    }};
+    var vtable = {{
+        contractLo: {},
+        contractHi: {},
+        fnCount: {},
+        contractName: "test.math",
+        functions: [
+            function(args, out) {{ return 0; }},
+            function(args, out) {{ return 0; }},
+            function(args, out) {{ return 0; }}
+        ]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+}}
 "#,
         contract_id as u32,
         (contract_id >> 32) as u32,
@@ -282,11 +312,11 @@ fn load_runtime_error_returns_error() {
     );
 }
 
-// ── Missing _VTABLE global ───────────────────────────────────────────────────
+// ── Missing polyplug_init function ─────────────────────────────────────────────
 
 #[test]
-fn load_bundle_without_vtable_returns_error() {
-    // Valid JS that does not create a _VTABLE global.
+fn load_bundle_without_polyplug_init_returns_error() {
+    // Valid JS that does not define polyplug_init.
     let bundle: &str = "var x = 1 + 2;";
     let (_dir, path) = write_temp_bundle(bundle);
 
@@ -295,14 +325,17 @@ fn load_bundle_without_vtable_returns_error() {
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
     let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
-    assert!(result.is_err(), "bundle without _VTABLE must return Err");
+    assert!(
+        result.is_err(),
+        "bundle without polyplug_init must return Err"
+    );
 
     let err_str: String = result
-        .expect_err("bundle without _VTABLE must return Err")
+        .expect_err("bundle without polyplug_init must return Err")
         .to_string();
     assert!(
-        err_str.contains("_VTABLE") || err_str.contains("vtable"),
-        "error must mention vtable: {err_str}"
+        err_str.contains("init symbol missing"),
+        "error must mention init symbol missing: {err_str}"
     );
 }
 
@@ -345,13 +378,29 @@ fn bundle_path_global_is_injected() {
 if (typeof globalThis.bundlePath !== 'string') {{
     throw new Error('bundlePath not injected');
 }}
-globalThis.TEST_VTABLE = {{
-    contractLo: {},
-    contractHi: {},
-    fnCount: 1,
-    contractName: "test.bundlepath",
-    functions: [function(args, out) {{ return 0; }}]
-}};
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var descriptor = {{
+        name: "js-quickjs-plugin",
+        contractName: "test.bundlepath",
+        versionMajor: 0,
+        versionMinor: 1,
+        versionPatch: 0
+    }};
+    var vtable = {{
+        contractLo: {},
+        contractHi: {},
+        fnCount: 1,
+        contractName: "test.bundlepath",
+        functions: [function(args, out) {{ return 0; }}]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+}}
 "#,
         contract_id as u32,
         (contract_id >> 32) as u32
@@ -385,13 +434,29 @@ for (var i = 0; i < methods.length; i++) {{
         throw new Error('missing method: ' + methods[i]);
     }}
 }}
-globalThis.TEST_VTABLE = {{
-    contractLo: {},
-    contractHi: {},
-    fnCount: 1,
-    contractName: "test.methods",
-    functions: [function(args, out) {{ return 0; }}]
-}};
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var descriptor = {{
+        name: "js-quickjs-plugin",
+        contractName: "test.methods",
+        versionMajor: 0,
+        versionMinor: 1,
+        versionPatch: 0
+    }};
+    var vtable = {{
+        contractLo: {},
+        contractHi: {},
+        fnCount: 1,
+        contractName: "test.methods",
+        functions: [function(args, out) {{ return 0; }}]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+}}
 "#,
         contract_id as u32,
         (contract_id >> 32) as u32
@@ -441,16 +506,32 @@ fn vtable_uses_vm_dispatch() {
 
     let bundle: String = format!(
         r#"
-globalThis.TEST_VTABLE = {{
-    contractLo: {},
-    contractHi: {},
-    fnCount: {},
-    contractName: "test.vm_dispatch",
-    functions: [
-        function(args, out) {{ return 0; }},
-        function(args, out) {{ return 0; }}
-    ]
-}};
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var descriptor = {{
+        name: "js-quickjs-plugin",
+        contractName: "test.vm_dispatch",
+        versionMajor: 0,
+        versionMinor: 1,
+        versionPatch: 0
+    }};
+    var vtable = {{
+        contractLo: {},
+        contractHi: {},
+        fnCount: {},
+        contractName: "test.vm_dispatch",
+        functions: [
+            function(args, out) {{ return 0; }},
+            function(args, out) {{ return 0; }}
+        ]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+}}
 "#,
         contract_id as u32,
         (contract_id >> 32) as u32,
@@ -502,13 +583,29 @@ var ptr_hi = result[1];
 if (ptr_lo !== 0 || ptr_hi !== 0) {{
     polyplug.free(ptr_lo, ptr_hi);
 }}
-globalThis.TEST_VTABLE = {{
-    contractLo: {},
-    contractHi: {},
-    fnCount: 1,
-    contractName: "test.memory",
-    functions: [function(args, out) {{ return 0; }}]
-}};
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var descriptor = {{
+        name: "js-quickjs-plugin",
+        contractName: "test.memory",
+        versionMajor: 0,
+        versionMinor: 1,
+        versionPatch: 0
+    }};
+    var vtable = {{
+        contractLo: {},
+        contractHi: {},
+        fnCount: 1,
+        contractName: "test.memory",
+        functions: [function(args, out) {{ return 0; }}]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+}}
 "#,
         contract_id as u32,
         (contract_id >> 32) as u32
@@ -602,7 +699,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
 fn dispatch_vm_call_works_correctly() {
     // This test actually invokes dispatch.vm.call to verify the JS function
     // can be called through the ABI dispatch mechanism.
-    use polyplug_abi::{ABI_OK, AbiError};
+    use polyplug_abi::{AbiError, ABI_OK};
 
     let contract_id: u64 = polyplug_abi::contract_id("test.dispatch.call", 1);
     let bundle: String = make_bundle_js(contract_id, 1, "test.dispatch.call");

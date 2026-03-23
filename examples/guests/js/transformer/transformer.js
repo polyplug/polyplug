@@ -1,19 +1,21 @@
-import { allocString } from 'polyplug-guest';
-import { stripPrefix } from 'polyplug-abi';
-
-export function transform(input) {
-    let s = stripPrefix(input, 'DECODED:');
-    const parts = s.split('|');
-    if (parts.length >= 3) {
-        const name = parts[0].toUpperCase();
-        const value = `${parts[1]} (transformed)`;
-        const count = parseInt(parts[2]) + 1;
-        return allocString(`TRANSFORMED:${name}|${value}|${count}`);
-    }
-    return allocString('INVALID:format');
+function transform(args, out) {
+    return 0;
 }
 
-export function polyplug_init(registrar, context) {
-    setJsTransformerImpl({ transform });
-    return { code: 0 };
+function polyplug_init(rt_ctx, host_vtable, ctx) {
+    var vtable = {
+        contractLo: 0x8E7A6B5C,
+        contractHi: 0x12F3C106,
+        fnCount: 1,
+        contractName: "pipeline.Transformer@1",
+        functions: [transform]
+    };
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+    return { code: 0, message: null };
 }
