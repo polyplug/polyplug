@@ -5,14 +5,13 @@
 #![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_lua::LuaLoader;

@@ -230,7 +230,10 @@ unsafe extern "C" fn stub_free(
     size: usize,
     align: usize,
 ) {
-    polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
+    // SAFETY: This is an unsafe extern "C" function. The caller ensures ptr is valid.
+    unsafe {
+        polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
+    }
 }
 
 unsafe extern "C" fn stub_find_by_contract(

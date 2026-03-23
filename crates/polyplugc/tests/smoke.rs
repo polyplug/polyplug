@@ -10,7 +10,6 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -18,6 +17,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -228,7 +228,10 @@ unsafe extern "C" fn stub_free(
     size: usize,
     align: usize,
 ) {
-    polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
+    // SAFETY: This is an unsafe extern "C" function. The caller ensures ptr is valid.
+    unsafe {
+        polyplug_abi::ffi::polyplug_host_free(ptr, size, align);
+    }
 }
 
 unsafe extern "C" fn stub_find_by_contract(

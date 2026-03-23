@@ -5,10 +5,10 @@ use std::sync::Mutex;
 
 use polyplug::registry::PluginVTableGuard;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
+use polyplug_abi::ABI_OK;
 use polyplug_native::NativeLoader;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -78,7 +78,7 @@ impl TestAddContract {
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
-                let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0_usize) };
+                let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     core::mem::transmute(fn_ptr);
                 dispatch_fn(args_ptr, out_ptr)

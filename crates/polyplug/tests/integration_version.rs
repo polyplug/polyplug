@@ -6,13 +6,12 @@ use std::collections::HashMap;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::manifest::RawManifestDependency;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::version::Compatibility;
 use std::fs;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -41,6 +40,7 @@ fn shared_warning_sink() -> Arc<Mutex<Vec<String>>> {
     Arc::clone(WARNING_SINK.get_or_init(|| Arc::new(Mutex::new(Vec::new()))))
 }
 
+#[allow(dead_code)]
 fn ensure_warning_registered() {
     static REGISTER: OnceLock<()> = OnceLock::new();
     REGISTER.get_or_init(|| {

@@ -12,7 +12,6 @@ use polyplug_abi::StringView;
 use polyplug_abi::ABI_OK;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
-use std::io::Write;
 
 const PYTHON_PLUGIN: &str = env!("TEST_PYTHON_PLUGIN");
 const SKIP_PYTHON: bool = {

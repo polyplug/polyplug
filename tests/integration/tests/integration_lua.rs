@@ -64,7 +64,9 @@ unsafe fn call_vm_function(
         DispatchType::VirtualMachine,
         "expected VM dispatch type"
     );
-    (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, fn_id, args, out)
+    // SAFETY: Caller ensures vtable is valid and has VM dispatch type.
+    // We access the vm union variant which is safe when dispatch_type == VirtualMachine.
+    unsafe { (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, fn_id, args, out) }
 }
 
 #[test]
