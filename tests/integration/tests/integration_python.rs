@@ -5,11 +5,11 @@ use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
 use std::io::Write;
@@ -179,25 +179,42 @@ fn integration_python_version_string() {
 #[test]
 fn integration_python_exception_returns_abi_error() {
     skip_if_no_python!();
-    let mut tmp: tempfile::NamedTempFile = tempfile::Builder::new()
-        .suffix(".py")
-        .tempfile_in(".")
-        .expect("tempfile must be created");
-    let contents: &str = r#"def polyplug_abi_version():
+    // Create a temp bundle directory with manifest.toml and a Python script that raises an exception.
+    let tmp_dir: std::path::PathBuf = std::env::temp_dir().join("exception_test_bundle");
+    std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+
+    // Write manifest.toml
+    let manifest_content = r#"
+name = "exception_test"
+id = 8888888888888
+version = "1.0.0"
+runtime = "python"
+file = "plugin.py"
+provides = ["test.exception@1"]
+
+[function_count]
+"test.exception@1" = 1
+"#;
+    std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
+
+    // Write Python script that raises an exception in polyplug_init
+    let plugin_content = r#"def polyplug_abi_version():
     return 1
 
 def polyplug_init(registrar_addr):
     raise ValueError("test exception from polyplug_init")
 "#;
-    tmp.write_all(contents.as_bytes())
-        .expect("tempfile write must succeed");
+    std::fs::write(tmp_dir.join("plugin.py"), plugin_content).expect("write plugin.py");
+
     let rt: Runtime = create_runtime();
-    let path: &std::path::Path = tmp.path();
-    let result: Result<(), PolyplugError> = rt.load_bundle(path);
+    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_dir);
     match result {
         Err(PolyplugError::Loader(LoaderError::PythonInitRaisedException { .. })) => {}
         other => panic!("expected PythonInitRaisedException, got: {other:?}"),
     }
+
+    // Cleanup
+    std::fs::remove_dir_all(&tmp_dir).ok();
 }
 
 #[test]
@@ -239,17 +256,39 @@ fn integration_python_utf8_roundtrip() {
 
 #[test]
 fn integration_python_version_too_old() {
+    // Create a temp bundle directory to test version mismatch
+    let tmp_dir: std::path::PathBuf = std::env::temp_dir().join("version_test_bundle");
+    std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+
+    // Write manifest.toml
+    let manifest_content = r#"
+name = "version_test"
+id = 7777777777777
+version = "1.0.0"
+runtime = "python"
+file = "plugin.py"
+provides = ["test.version@1"]
+
+[function_count]
+"test.version@1" = 1
+"#;
+    std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
+    std::fs::write(tmp_dir.join("plugin.py"), b"# empty plugin").expect("write plugin.py");
+
     let rt: Runtime = Runtime::builder()
         .loader(PythonLoader::new(PythonConfig {
             min_version: (99, 0),
         }))
         .build()
         .expect("failed to build runtime");
-    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new("dummy.py"));
+    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_dir);
     match result {
         Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch for Python 99.0, got: {other:?}"),
     }
+
+    // Cleanup
+    std::fs::remove_dir_all(&tmp_dir).ok();
 }
 
 #[test]

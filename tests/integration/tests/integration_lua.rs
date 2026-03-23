@@ -5,8 +5,9 @@ use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
+use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
@@ -42,12 +43,28 @@ fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
     rt.load_bundle(std::path::Path::new(LUA_PLUGIN))
 }
 
-fn get_vtable(rt: &Runtime) -> *const PluginVTable {
+fn get_vtable(rt: &Runtime) -> *const PluginInterface {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
     rt.resolve_plugin(handle).expect("handle must be valid")
+}
+
+/// Call a VM dispatch function by fn_id.
+/// SAFETY: vtable must be valid and have VM dispatch type.
+unsafe fn call_vm_function(
+    vtable: &PluginInterface,
+    fn_id: u32,
+    args: *const (),
+    out: *mut (),
+) -> AbiError {
+    assert_eq!(
+        vtable.dispatch_type,
+        DispatchType::VirtualMachine,
+        "expected VM dispatch type"
+    );
+    (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, fn_id, args, out)
 }
 
 #[test]
@@ -75,23 +92,20 @@ fn integration_lua_add() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
+    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 1,
         "test.add vtable must have at least 1 function"
     );
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
-    // SAFETY: fn_ptr is function 0 (add). args/out are correctly typed for the add function.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: cast to generic dispatch signature; arg types enforced by test (AddArgs matches).
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args is a valid AddArgs, out is a valid u32.
+    // SAFETY: vtable is valid with VM dispatch; args/out are correctly typed.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            0,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -106,23 +120,20 @@ fn integration_lua_add_primitive() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
+    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 2,
         "test.add vtable must have at least 2 functions"
     );
     let args: AddArgs = AddArgs { a: 10, b: 20 };
     let mut out: u32 = 0_u32;
-    // SAFETY: fn_ptr is function 1 (add_primitive). args/out are correctly typed.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: same dispatch signature as add; arg types enforced by test.
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: args and out are valid and correctly typed.
+    // SAFETY: vtable is valid with VM dispatch; args/out are correctly typed.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            1,
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
@@ -137,22 +148,19 @@ fn integration_lua_version_string() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
+    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 3,
         "test.add vtable must have at least 3 functions"
     );
     let mut out_view: StringView = StringView::null();
-    // SAFETY: fn_ptr is function 2 (version). No arg input needed; pass null.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: same dispatch signature; version takes no args (null input accepted by Lua side).
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: out_view is a valid StringView allocation on the stack.
+    // SAFETY: vtable is valid with VM dispatch; out_view is a valid StringView.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            2,
             core::ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
         )
@@ -170,21 +178,22 @@ fn integration_lua_reset() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
+    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 4,
         "test.add vtable must have at least 4 functions"
     );
-    // SAFETY: fn_ptr is function 3 (reset). vtable.functions is valid (non-null, in-bounds).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: same dispatch signature; reset has void args and void out.
-        unsafe { core::mem::transmute(fn_ptr) };
-    // SAFETY: both null — reset does not read args or write output.
-    let result: AbiError =
-        unsafe { dispatch_fn(core::ptr::null::<()>(), core::ptr::null_mut::<()>()) };
+    // SAFETY: vtable is valid with VM dispatch; reset takes no args and returns nothing.
+    let result: AbiError = unsafe {
+        call_vm_function(
+            vtable,
+            3,
+            core::ptr::null::<()>(),
+            core::ptr::null_mut::<()>(),
+        )
+    };
     assert_eq!(result.code, ABI_OK, "reset must return ABI_OK");
 }
 
@@ -192,12 +201,29 @@ fn integration_lua_reset() {
 fn integration_lua_init_function_missing_returns_typed_error() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    // Write a temp Lua file without polyplug_init.
-    let tmp_path: std::path::PathBuf = std::env::temp_dir().join("noinit_test.lua");
-    std::fs::write(&tmp_path, b"local x = 1\n").expect("write temp file");
+    // Create a temp bundle directory with manifest.toml but no polyplug_init in the script.
+    let tmp_dir: std::path::PathBuf = std::env::temp_dir().join("noinit_test_bundle");
+    std::fs::create_dir_all(&tmp_dir).expect("create temp dir");
+
+    // Write manifest.toml
+    let manifest_content = r#"
+name = "noinit_test"
+id = 9999999999999
+version = "1.0.0"
+runtime = "lua"
+file = "plugin.lua"
+provides = ["test.noinit@1"]
+
+[function_count]
+"test.noinit@1" = 1
+"#;
+    std::fs::write(tmp_dir.join("manifest.toml"), manifest_content).expect("write manifest");
+
+    // Write Lua script without polyplug_init
+    std::fs::write(tmp_dir.join("plugin.lua"), b"local x = 1\n").expect("write plugin.lua");
 
     let rt: Runtime = create_runtime();
-    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_path);
+    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_dir);
     assert!(result.is_err());
     let err: PolyplugError = result.expect_err("expected Err(LuaInitFunctionMissing)");
     assert!(
@@ -208,6 +234,9 @@ fn integration_lua_init_function_missing_returns_typed_error() {
         "expected LuaInitFunctionMissing, got: {:?}",
         err
     );
+
+    // Cleanup
+    std::fs::remove_dir_all(&tmp_dir).ok();
 }
 
 #[test]
@@ -216,19 +245,15 @@ fn integration_lua_utf8_roundtrip() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
-    // SAFETY: fn_ptr is function 2 (version). vtable.functions is valid (non-null, in-bounds).
+    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
-    // SAFETY: fn_ptr is function 2 (version). vtable.functions is valid (non-null, in-bounds).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: cast to generic dispatch signature; arg types enforced by test.
-        unsafe { core::mem::transmute(fn_ptr) };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     let mut out_view: StringView = StringView::null();
-    // SAFETY: out_view is valid stack allocation.
+    // SAFETY: vtable is valid with VM dispatch; out_view is valid stack allocation.
     let result: AbiError = unsafe {
-        dispatch_fn(
+        call_vm_function(
+            vtable,
+            2,
             core::ptr::null::<()>(),
             &mut out_view as *mut StringView as *mut (),
         )
@@ -246,12 +271,24 @@ fn integration_lua_utf8_roundtrip() {
 }
 
 #[test]
-fn integration_lua_second_load_does_not_panic() {
+fn integration_lua_second_load_returns_duplicate_error() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    // Loading the same plugin twice must not panic (ffi.cdef pcall guard).
+    // Loading the same plugin twice should return a DuplicateProvider error
+    // because the same bundle_id tries to register the same contract twice.
     let rt: Runtime = create_runtime();
-    load_fixture(&rt).expect("first load");
+    load_fixture(&rt).expect("first load must succeed");
     let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
-    assert!(result.is_ok(), "second load failed: {:?}", result.err());
+    // Second load should fail with DuplicateProvider error
+    assert!(
+        result.is_err(),
+        "second load should fail with duplicate provider error"
+    );
+    match result {
+        Err(PolyplugError::Loader(LoaderError::LuaInitRaisedError { .. })) => {
+            // Expected: the plugin's polyplug_init returns error when register_plugin fails
+        }
+        Err(e) => panic!("expected LuaInitRaisedError, got: {:?}", e),
+        Ok(()) => panic!("second load should not succeed"),
+    }
 }

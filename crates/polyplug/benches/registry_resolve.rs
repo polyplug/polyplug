@@ -8,25 +8,34 @@
 
 use core::hint::black_box;
 
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use criterion::criterion_group;
-use criterion::criterion_main;
 
 use polyplug::registry::Registry;
+use polyplug_abi::DispatchType;
+use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
+use polyplug_abi::PluginDispatch;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 
 // ─── Mock vtable for benchmarking ────────────────────────────────────────────
 
-static BENCH_VTABLE: PluginVTable = PluginVTable {
+static BENCH_VTABLE: PluginInterface = PluginInterface {
+    rt_ctx: core::ptr::null(),
     contract_id: 0x0000_0000_0000_0001_u64,
     contract_version: (1 << 16),
     function_count: 0,
-    functions: core::ptr::null(),
+    dispatch_type: DispatchType::Native,
+    dispatch: PluginDispatch {
+        native: NativeDispatch {
+            functions: core::ptr::null(),
+        },
+    },
 };
 
 fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
@@ -73,19 +82,25 @@ fn bench_registry_resolve_guard_multiple_slots(c: &mut Criterion) {
     let registry: Registry = Registry::new();
 
     // Use leaked Box to get 'static vtables
-    let vtables: Vec<Box<PluginVTable>> = (0..100_u64)
+    let vtables: Vec<Box<PluginInterface>> = (0..100_u64)
         .map(|i| {
-            Box::new(PluginVTable {
+            Box::new(PluginInterface {
+                rt_ctx: core::ptr::null(),
                 contract_id: 0x1000_0000_0000_0000_u64 + i,
                 contract_version: (1 << 16),
                 function_count: 0,
-                functions: core::ptr::null(),
+                dispatch_type: DispatchType::Native,
+                dispatch: PluginDispatch {
+                    native: NativeDispatch {
+                        functions: core::ptr::null(),
+                    },
+                },
             })
         })
         .collect();
 
     // Leak the vtables to make them 'static
-    let vtable_refs: Vec<&'static PluginVTable> =
+    let vtable_refs: Vec<&'static PluginInterface> =
         vtables.into_iter().map(|b| &*Box::leak(b)).collect();
 
     for (i, vtable) in vtable_refs.iter().enumerate() {
