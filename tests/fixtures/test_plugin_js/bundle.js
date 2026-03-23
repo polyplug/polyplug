@@ -1,6 +1,3 @@
-// Test plugin for JS/QuickJS loader
-// Contract: test.add@1 (contract_id = 0xCC4232FAB0410D2B)
-
 function add(argsPtr, outPtr) {
     try {
         var a = polyplug.readI32(argsPtr);
@@ -46,10 +43,20 @@ function divide(argsPtr, outPtr) {
     }
 }
 
-globalThis.TEST_ADD_VTABLE = {
-    contractLo: 0xB0410D2B >>> 0,
-    contractHi: 0xCC4232FA >>> 0,
-    fnCount: 4,
-    contractName: "test.add",
-    functions: [add, subtract, multiply, divide]
-};
+function polyplug_init(rt_ctx, host_vtable, ctx) {
+    var vtable = {
+        contractLo: 0xB0410D2B >>> 0,
+        contractHi: 0xCC4232FA >>> 0,
+        fnCount: 4,
+        contractName: "test.add",
+        functions: [add, subtract, multiply, divide]
+    };
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+    return { code: 0, message: null };
+}
