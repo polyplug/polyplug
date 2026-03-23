@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Add guest-libs to path for this fixture
 _REPO_ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "guest-libs" / "python"))
+sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "guest"))
 
 from polyplug_guest.abi import (
     ABI_OK,

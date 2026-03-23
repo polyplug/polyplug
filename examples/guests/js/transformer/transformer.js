@@ -1,8 +1,8 @@
-import { toStr, allocString } from 'polyplug-guest';
+import { allocString } from 'polyplug-guest';
+import { stripPrefix } from 'polyplug-abi';
 
 export function transform(input) {
-    let s = toStr(input);
-    if (s.startsWith('DECODED:')) s = s.slice(8);
+    let s = stripPrefix(input, 'DECODED:');
     const parts = s.split('|');
     if (parts.length >= 3) {
         const name = parts[0].toUpperCase();

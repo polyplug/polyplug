@@ -2,16 +2,13 @@
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::error::RegistryError;
 use polyplug::loader::BundleLoader;
-use polyplug::registry::Registry;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -30,61 +27,6 @@ struct AddArgs {
     b: u32,
 }
 
-// Thread-local registry for test isolation.
-std::thread_local! {
-    static LUA_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
-}
-
-/// Registration callback passed to LuaLoader via PluginRegistrar.
-/// Writes the registered plugin into the thread-local LUA_REGISTRY.
-unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: *mut core::ffi::c_void,
-    descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
-) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
-        return AbiError {
-            code: 1,
-            message: StringView::null(),
-        };
-    }
-    // SAFETY: descriptor and vtable are valid for this call (ABI contract).
-    let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginVTable = unsafe { &*vtable };
-    // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
-    let contract_name: &str = unsafe {
-        let bytes: &[u8] =
-            core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
-        core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
-    };
-    // SAFETY: vtable pointer is 'static — extracted from a Lua VM that outlives registry.
-    let result: Result<PluginHandle, RegistryError> = LUA_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
-        // SAFETY: vtable pointer is 'static — extracted from a Lua VM that outlives registry.
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
-    });
-    match result {
-        Ok(_) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
-        Err(RegistryError::DuplicateProvider { .. }) => {
-            // Second load of the same plugin — already registered, treat as success.
-            AbiError {
-                code: ABI_OK,
-                message: StringView::null(),
-            }
-        }
-        Err(_) => AbiError {
-            code: 1,
-            message: StringView::null(),
-        },
-    }
-}
-
 fn make_loader() -> LuaLoader {
     LuaLoader::new(LuaConfig::default())
 }
@@ -97,20 +39,15 @@ fn create_runtime() -> Runtime {
 }
 
 fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
-    LUA_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
     rt.load_bundle(std::path::Path::new(LUA_PLUGIN))
 }
 
-fn get_vtable() -> *const PluginVTable {
+fn get_vtable(rt: &Runtime) -> *const PluginVTable {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = LUA_REGISTRY.with(|cell| {
-        cell.borrow()
-            .find(contract_id, 0)
-            .expect("test.add must be registered after load_fixture()")
-    });
-    LUA_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"))
+    let handle: PluginHandle = rt
+        .find_by_contract(contract_id, 0)
+        .expect("test.add must be registered after load_fixture()");
+    rt.resolve_plugin(handle).expect("handle must be valid")
 }
 
 #[test]
@@ -138,7 +75,7 @@ fn integration_lua_add() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -169,7 +106,7 @@ fn integration_lua_add_primitive() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -200,7 +137,7 @@ fn integration_lua_version_string() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -233,7 +170,7 @@ fn integration_lua_reset() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };
     assert!(
@@ -279,7 +216,7 @@ fn integration_lua_utf8_roundtrip() {
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginVTable = get_vtable();
+    let vtable_ptr: *const PluginVTable = get_vtable(&rt);
     // SAFETY: fn_ptr is function 2 (version). vtable.functions is valid (non-null, in-bounds).
     // SAFETY: vtable_ptr is valid; the Lua VM stays alive for process lifetime.
     let vtable: &PluginVTable = unsafe { &*vtable_ptr };

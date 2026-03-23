@@ -7,16 +7,21 @@ import ctypes
 import sys
 from pathlib import Path
 
-# Add guest-libs to path for this fixture
+# Add guest-libs and abi to path for this fixture
 _REPO_ROOT = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(_REPO_ROOT / "guest-libs" / "python"))
+sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "guest"))
+sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "polyplug_abi"))
 
-from polyplug_guest.abi import (
+from polyplug_guest import (
     ABI_OK,
     AbiError,
     PluginDescriptor,
-    PluginVTable,
+    PluginInterface,
     StringView,
+)
+from polyplug_abi import (
+    PluginDispatch,
+    NativeDispatch,
 )
 
 # ── Contract constants ────────────────────────────────────────────────────────
@@ -59,11 +64,14 @@ def _py_add_primitive(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> Ab
 
 
 _VERSION_BYTES: bytes = b"1.0.0-python"
+_VERSION_PTR: ctypes.c_void_p = ctypes.cast(
+    ctypes.c_char_p(_VERSION_BYTES), ctypes.c_void_p
+)
 
 
 def _py_version(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> AbiError:
     sv_ptr = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
-    sv_ptr[0].ptr = _VERSION_BYTES
+    sv_ptr[0].ptr = _VERSION_PTR
     sv_ptr[0].len = len(_VERSION_BYTES)
     return AbiError(code=ABI_OK)
 
@@ -140,28 +148,38 @@ _REGISTER_PLUGIN_FN_TYPE = ctypes.CFUNCTYPE(
     ctypes.POINTER(AbiError),  # sret: hidden pointer where caller expects AbiError
     ctypes.c_void_p,  # rt_ctx
     ctypes.POINTER(PluginDescriptor),  # descriptor
-    ctypes.POINTER(PluginVTable),  # vtable
+    ctypes.POINTER(PluginInterface),  # vtable
 )
 
 # ── Plugin interface (vtable) ──────────────────────────────────────────────────
 
-_VTABLE = PluginVTable(
+# Create native dispatch with function pointer array
+_native_dispatch = NativeDispatch(
+    functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p)
+)
+_dispatch = PluginDispatch(native=_native_dispatch)
+
+_VTABLE = PluginInterface(
     rt_ctx=None,  # Will be set by host during registration
     contract_id=_TEST_ADD_CONTRACT_ID,
     contract_version=(0 << 16) | 0,  # minor=0, patch=0
     function_count=4,
-    dispatch_type=0,  # DispatchType::Native
-    _pad=0,
-    dispatch_functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p),
-    dispatch_loader_data=None,
+    dispatch_type=0,  # DispatchType.Native
+    dispatch=_dispatch,
 )
 
-_PLUGIN_NAME_BYTES = b"python_test_adder"
-_CONTRACT_NAME_BYTES = b"test.add"
+_PLUGIN_NAME_BYTES: bytes = b"python_test_adder"
+_CONTRACT_NAME_BYTES: bytes = b"test.add"
+_PLUGIN_NAME_PTR: ctypes.c_void_p = ctypes.cast(
+    ctypes.c_char_p(_PLUGIN_NAME_BYTES), ctypes.c_void_p
+)
+_CONTRACT_NAME_PTR: ctypes.c_void_p = ctypes.cast(
+    ctypes.c_char_p(_CONTRACT_NAME_BYTES), ctypes.c_void_p
+)
 
 _DESCRIPTOR = PluginDescriptor(
-    name=StringView(ptr=_PLUGIN_NAME_BYTES, len=len(_PLUGIN_NAME_BYTES)),
-    contract_name=StringView(ptr=_CONTRACT_NAME_BYTES, len=len(_CONTRACT_NAME_BYTES)),
+    name=StringView(ptr=_PLUGIN_NAME_PTR, len=len(_PLUGIN_NAME_BYTES)),
+    contract_name=StringView(ptr=_CONTRACT_NAME_PTR, len=len(_CONTRACT_NAME_BYTES)),
     version_major=1,
     version_minor=0,
     version_patch=0,

@@ -15,21 +15,24 @@ use mlua::Value;
 use crate::config::LuaConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::contract_id;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
-use polyplug_abi::contract_id;
+use polyplug_abi::ABI_OK;
 
 /// The path to the guest-libs/lua/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
+
+/// The path to the abi/lua/ directory, set at compile time by build.rs.
+const ABI_LUA_DIR: &str = env!("POLYPLUG_ABI_LUA_DIR");
 
 // ─── Lua Loader Data for VM Dispatch ───────────────────────────────────────────
 
@@ -149,6 +152,17 @@ impl BundleLoader for LuaLoader {
                     reason: format!("failed to set guest package.path: {}", e),
                 })
             })?;
+
+        // Set package.path so that require("polyplug_abi") resolves correctly.
+        let abi_path_code: String = format!(
+            "package.path = package.path .. ';' .. '{}/?.lua'",
+            ABI_LUA_DIR.replace('\\', "/")
+        );
+        lua.load(&abi_path_code).exec().map_err(|e: mlua::Error| {
+            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
+                reason: format!("failed to set abi package.path: {}", e),
+            })
+        })?;
 
         // Read the plugin script source.
         let source: String =

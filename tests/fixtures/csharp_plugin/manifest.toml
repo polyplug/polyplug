@@ -1,0 +1,12 @@
+# C# test plugin manifest for polyplug integration tests
+name = "csharp_test_adder"
+id = 9876543210123456789
+bundle_name = "csharp_plugin"
+version = "1.0.0"
+runtime = "dotnet"
+file = "CsharpPlugin.dll"
+provides = ["test.add@1"]
+needs_reinit_on_dep_reload = false
+
+[function_count]
+"test.add@1" = 4

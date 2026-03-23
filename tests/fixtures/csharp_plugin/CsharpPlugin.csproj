@@ -8,4 +8,10 @@
     <PublishAot>false</PublishAot>
   </PropertyGroup>
 
+  <ItemGroup>
+    <None Update="manifest.toml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

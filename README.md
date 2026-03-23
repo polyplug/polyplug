@@ -1,10 +1,10 @@
 # polyplug
 
-**High-performance zero-overhead cross-language cross-platform plugin runtime**
+**High-performance zero/minimal-overhead cross-language cross-platform plugin runtime**
 
 ## Overview
 
-polyplug is a plugin runtime that enables seamless cross-language plugin development. Write plugins in Rust, Python, C#, Lua, JavaScript, or C++ — and load them all from a single host application with zero-overhead FFI dispatch.
+polyplug is a plugin runtime that enables seamless cross-language plugin development. Write plugins in Rust, Python, C#, Lua, JavaScript, or C++ — and load them all from a single host application with zero/minimal-overhead FFI dispatch.
 
 **Just add polyplug as a dependency and it works on Linux, macOS, and Windows.** No manual downloads, no build-from-source requirements, no obstacles.
 
@@ -13,7 +13,7 @@ polyplug is a plugin runtime that enables seamless cross-language plugin develop
 - **Cross-Language** — Write plugins in Rust, Python, C#, Lua, JavaScript/Deno, or C++
 - **Cross-Platform** — Works on Linux (x64), macOS (x64/ARM64), and Windows (x64) with zero setup
 - **Hot Reload** — Reload plugins at runtime with notification system for seamless updates
-- **Zero-Overhead FFI** — Direct function pointer dispatch with no runtime overhead
+- **Zero/Minimal-Overhead FFI** — Direct function pointer dispatch with no runtime overhead for native languages, minimal overhead for VM-based languages
 - **Type-Safe Code Generation** — The `polyplugc` CLI generates type-safe bindings for all languages
 - **Factory Method Pattern** — Safe instance management with host-controlled lifecycles
 - **Multiple Loader Types** — Native, Python, Lua, JavaScript, Deno, and .NET loaders

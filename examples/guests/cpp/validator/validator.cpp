@@ -8,8 +8,8 @@ namespace polyplug_plugin {
 class ValidatorImpl : public PipelineValidatorPlugin {
 public:
     StringView validate(StringView input) override {
-        std::string s = polyplug::guest::to_string(input);
-        if (s.find("DECODED:") == 0) s = s.substr(8);
+        std::string_view sv = polyplug::abi::strip_prefix(input, "DECODED:");
+        std::string s(sv);
         std::istringstream iss(s);
         std::string name, value, count_str;
         if (std::getline(iss, name, '|') && std::getline(iss, value, '|') && std::getline(iss, count_str, '|') && !name.empty() && !value.empty()) {

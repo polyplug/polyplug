@@ -1,8 +1,8 @@
-import { toStr, allocString } from 'polyplug-guest';
+import { allocString } from 'polyplug-guest';
+import { stripPrefix } from 'polyplug-abi';
 
 export function encode(input) {
-    let s = toStr(input);
-    if (s.startsWith('TRANSFORMED:')) s = s.slice(12);
+    let s = stripPrefix(input, 'TRANSFORMED:');
     return allocString(s.replace(/\|/g, ','));
 }
 

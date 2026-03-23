@@ -885,6 +885,35 @@ extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host_vtable, c
         if !dotnet_status.success() {
             panic!("dotnet build failed for CsharpPlugin.csproj");
         }
+
+        // Generate manifest.toml for the C# plugin
+        fn fnv1a_64(s: &str) -> u64 {
+            let mut hash: u64 = 0xcbf29ce484222325;
+            for byte in s.bytes() {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            hash
+        }
+        let csharp_manifest: ManifestBuilder = ManifestBuilder {
+            id: fnv1a_64("csharp_plugin"),
+            name: "csharp_plugin".to_owned(),
+            version: "1.0".to_owned(),
+            runtime: "dotnet".to_owned(),
+            file: "CsharpPlugin.dll".to_owned(),
+            provides: vec!["test.add".to_owned()],
+            function_count: vec![("test.add@1".to_owned(), 4)],
+            needs_reinit_on_dep_reload: false,
+            dependencies: Vec::new(),
+        };
+        fs::write(
+            csharp_out_dir.join("manifest.toml"),
+            csharp_manifest.to_toml(),
+        )
+        .unwrap_or_else(|e: std::io::Error| {
+            panic!("failed to write csharp_plugin manifest.toml: {}", e)
+        });
+
         println!(
             "cargo:rustc-env=TEST_CSHARP_PLUGIN_DLL={}",
             csharp_out_dir.join("CsharpPlugin.dll").display()

@@ -8,8 +8,7 @@ public static class Plugin
 {
     public static StringView Transform(StringView input)
     {
-        var s = StringHelpers.ToString(input);
-        if (s.StartsWith("DECODED:")) s = s[8..];
+        var s = StringHelpers.StripPrefix(input, "DECODED:");
         var parts = s.Split('|');
         if (parts.Length >= 3 && int.TryParse(parts[2], out var count))
         {

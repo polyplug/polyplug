@@ -1,101 +1,211 @@
 // C# test plugin for polyplug benchmarks and integration tests.
 // Exposes a simple "test.add" contract with add, add_primitive, version, and reset functions.
+//
+// ABI types use LayoutKind.Explicit with FieldOffset for exact byte-level compatibility
+// with Rust's #[repr(C)] layout.
 
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace CsharpPlugin;
 
 // ABI types - must match polyplug_abi layout exactly
-[StructLayout(LayoutKind.Sequential)]
+
+/// <summary>
+/// Non-owning UTF-8 string view (16 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 16)]
 public struct StringView
 {
+    [FieldOffset(0)]
     public nint Ptr;
+
+    [FieldOffset(8)]
     public nuint Len;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// ABI error result (24 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 24)]
 public struct AbiError
 {
+    [FieldOffset(0)]
     public uint Code;
-    private uint _pad;
+
+    [FieldOffset(8)]
     public StringView Message;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Opaque plugin handle (8 bytes, align 4).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 8)]
 public struct PluginHandle
 {
+    [FieldOffset(0)]
     public uint Index;
+
+    [FieldOffset(4)]
     public uint Generation;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Host context passed to plugin functions (16 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 16)]
 public struct HostContext
 {
+    [FieldOffset(0)]
     public nint Runtime;
+
+    [FieldOffset(8)]
     public ulong BundleId;
 }
 
+/// <summary>
+/// Dispatch mechanism type (4 bytes, align 4).
+/// </summary>
 public enum DispatchType : uint
 {
     Native = 0,
     VirtualMachine = 1
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Native dispatch data (8 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 8)]
 public struct NativeDispatch
 {
+    [FieldOffset(0)]
     public nint Functions;
 }
 
-[StructLayout(LayoutKind.Explicit)]
+/// <summary>
+/// VM dispatch data (16 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 16)]
+public struct VmDispatch
+{
+    [FieldOffset(0)]
+    public nint Call;
+
+    [FieldOffset(8)]
+    public nint LoaderData;
+}
+
+/// <summary>
+/// Union of dispatch mechanisms (16 bytes, align 8).
+/// Access based on dispatch_type in PluginInterface.
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 16)]
 public struct PluginDispatch
 {
     [FieldOffset(0)]
     public NativeDispatch Native;
+
+    [FieldOffset(0)]
+    public VmDispatch Vm;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Plugin interface (48 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 48)]
 public struct PluginInterface
 {
+    [FieldOffset(0)]
     public nint RtCtx;
+
+    [FieldOffset(8)]
     public ulong ContractId;
+
+    [FieldOffset(16)]
     public uint ContractVersion;
+
+    [FieldOffset(20)]
     public uint FunctionCount;
+
+    [FieldOffset(24)]
     public DispatchType DispatchType;
-    private uint _pad;
+
+    // Offset 28-31: padding (4 bytes)
+
+    [FieldOffset(32)]
     public PluginDispatch Dispatch;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Plugin descriptor (48 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 48)]
 public struct PluginDescriptor
 {
+    [FieldOffset(0)]
     public StringView Name;
+
+    [FieldOffset(16)]
     public StringView ContractName;
+
+    [FieldOffset(32)]
     public uint VersionMajor;
+
+    [FieldOffset(36)]
     public uint VersionMinor;
+
+    [FieldOffset(40)]
     public uint VersionPatch;
-    private readonly uint _pad;
+
+    // Offset 44-47: padding (4 bytes)
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Context passed to polyplug_init (32 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 32)]
 public struct PluginContext
 {
+    [FieldOffset(0)]
     public StringView BundlePath;
+
+    [FieldOffset(16)]
     public uint HostAbiVersion;
-    private uint _pad;
+
+    // Offset 20-23: padding (4 bytes)
+
+    [FieldOffset(24)]
     public ulong BundleId;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+/// <summary>
+/// Host vtable (64 bytes, align 8).
+/// </summary>
+[StructLayout(LayoutKind.Explicit, Size = 64)]
 public struct HostVTable
 {
+    [FieldOffset(0)]
     public nint RegisterPluginPtr;
+
+    [FieldOffset(8)]
     public nint AllocPtr;
+
+    [FieldOffset(16)]
     public nint FreePtr;
+
+    [FieldOffset(24)]
     public nint FindByContractPtr;
+
+    [FieldOffset(32)]
     public nint FindByBundlePtr;
+
+    [FieldOffset(40)]
     public nint FindAllByContractPtr;
+
+    [FieldOffset(48)]
     public nint ResolvePluginPtr;
+
+    [FieldOffset(56)]
     public nint GetExtensionPtr;
 }
 
@@ -106,21 +216,27 @@ internal static class Constants
     public const uint ABI_OK = 0;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Explicit, Size = 8)]
 public struct AddArgs
 {
+    [FieldOffset(0)]
     public uint A;
+
+    [FieldOffset(4)]
     public uint B;
 }
 
 public static class Plugin
 {
+    // Track which runtimes we've registered with (CLR is singleton, but each test creates new Runtime)
+    private static readonly HashSet<nint> s_registeredRuntimes = new();
     private static readonly nint[] s_functions = new nint[4];
-    private static readonly PluginInterface s_interface;
+    private static PluginInterface s_interface;
     private static readonly byte[] s_versionBytes = System.Text.Encoding.UTF8.GetBytes("1.0");
     private static readonly byte[] s_nameBytes = System.Text.Encoding.UTF8.GetBytes("csharp_test_adder");
     private static readonly byte[] s_contractBytes = System.Text.Encoding.UTF8.GetBytes("test.add");
     private static readonly PluginDescriptor s_descriptor;
+    private static readonly nint s_functionsPtr;
 
     static Plugin()
     {
@@ -132,7 +248,7 @@ public static class Plugin
             s_functions[3] = (IntPtr)(delegate* unmanaged<nint, nint, AbiError>)&Reset;
 
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(s_functions, GCHandleType.Pinned);
-            var functionsPtr = handle.AddrOfPinnedObject();
+            s_functionsPtr = handle.AddrOfPinnedObject();
 
             s_interface = new PluginInterface
             {
@@ -143,7 +259,7 @@ public static class Plugin
                 DispatchType = DispatchType.Native,
                 Dispatch = new PluginDispatch
                 {
-                    Native = new NativeDispatch { Functions = functionsPtr }
+                    Native = new NativeDispatch { Functions = s_functionsPtr }
                 }
             };
 
@@ -209,21 +325,32 @@ public static class Plugin
     [UnmanagedCallersOnly(EntryPoint = "PolyplugInit")]
     public static uint PolyplugInit(nint rtCtx, nint hostVTablePtr, nint ctxPtr)
     {
-        if (hostVTablePtr == nint.Zero)
-            return 1;
-
         unsafe
         {
-            var hostVTable = (HostVTable*)hostVTablePtr;
-            var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, PluginInterface*, AbiError>)hostVTable->RegisterPluginPtr;
+            var hostCtx = (HostContext*)rtCtx;
+            var runtimePtr = hostCtx->Runtime;
 
-            var iface = s_interface;
-            iface.RtCtx = rtCtx;
-
-            fixed (PluginDescriptor* descPtr = &s_descriptor)
+            lock (s_registeredRuntimes)
             {
-                var result = registerPlugin(rtCtx, descPtr, &iface);
-                return result.Code;
+                if (s_registeredRuntimes.Contains(runtimePtr))
+                    return 0;
+
+                if (hostVTablePtr == nint.Zero)
+                    return 1;
+
+                var hostVTable = (HostVTable*)hostVTablePtr;
+                var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, PluginInterface*, AbiError>)hostVTable->RegisterPluginPtr;
+
+                s_interface.RtCtx = rtCtx;
+
+                fixed (PluginDescriptor* descPtr = &s_descriptor)
+                fixed (PluginInterface* ifacePtr = &s_interface)
+                {
+                    var result = registerPlugin(rtCtx, descPtr, ifacePtr);
+                    if (result.Code == Constants.ABI_OK)
+                        s_registeredRuntimes.Add(runtimePtr);
+                    return result.Code;
+                }
             }
         }
     }

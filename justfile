@@ -451,14 +451,106 @@ run-example-rust: build-examples
 # Cleaning
 # ============================================================================
 
-# Clean all build artifacts
+# Clean all build artifacts (Rust + all language SDKs)
 clean:
-    @echo "=== Cleaning Build Artifacts ==="
-    cargo clean
-    rm -rf {{dist_dir}}
-    rm -rf examples/plugins/*
-    rm -rf {{marker_dir}}
-    @echo "Clean complete"
+    @echo "=== Cleaning All Build Artifacts ==="
+    @just _clean-rust
+    @just _clean-csharp
+    @just _clean-python
+    @just _clean-lua
+    @just _clean-js
+    @just _clean-cpp
+    @just _clean-general
+    @echo "=== Clean Complete ==="
+
+# Clean Rust build artifacts
+_clean-rust:
+    @echo "  [rust] Running cargo clean..."
+    @cargo clean
+
+# Clean C# build artifacts (SDKs + examples)
+_clean-csharp:
+    @echo "  [csharp] Cleaning SDK projects..."
+    @if command -v dotnet >/dev/null 2>&1; then \
+        for proj in sdks/csharp/abi/Polyplug.Abi.csproj \
+                    sdks/csharp/host/Polyplug.Host.csproj \
+                    sdks/csharp/guest/Polyplug.Guest.csproj \
+                    sdks/csharp/loaders/Native/Polyplug.Loaders.Native.csproj \
+                    sdks/csharp/loaders/Python/Polyplug.Loaders.Python.csproj \
+                    sdks/csharp/loaders/Lua/Polyplug.Loaders.Lua.csproj \
+                    sdks/csharp/loaders/Js/Polyplug.Loaders.Js.csproj \
+                    sdks/csharp/loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj; do \
+            if [ -f "$$proj" ]; then \
+                dotnet clean "$$proj" 2>/dev/null || true; \
+            fi; \
+        done; \
+        echo "  [csharp] Cleaning example projects..."; \
+        for proj in examples/hosts/csharp/Host.csproj \
+                    examples/guests/csharp/decoder/Decoder.csproj \
+                    examples/guests/csharp/encoder/Encoder.csproj \
+                    examples/guests/csharp/reporter/Reporter.csproj \
+                    examples/guests/csharp/transformer/Transformer.csproj \
+                    examples/guests/csharp/validator/Validator.csproj; do \
+            if [ -f "$$proj" ]; then \
+                dotnet clean "$$proj" 2>/dev/null || true; \
+            fi; \
+        done; \
+        echo "  [csharp] ✓ Cleaned"; \
+    else \
+        echo "  [csharp] ⊘ dotnet not installed, skipping"; \
+    fi
+
+# Clean Python build artifacts (SDKs)
+_clean-python:
+    @echo "  [python] Cleaning SDK artifacts..."
+    @find sdks/python -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/python -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/python -type d -name ".venv" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/python -type d -name "build" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/python -type d -name "dist" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/python -name "*.pyc" -delete 2>/dev/null || true
+    @find sdks/python -name "*.pyo" -delete 2>/dev/null || true
+    @echo "  [python] Cleaning example artifacts..."
+    @find examples -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    @find examples -name "*.pyc" -delete 2>/dev/null || true
+    @echo "  [python] ✓ Cleaned"
+
+# Clean Lua build artifacts
+_clean-lua:
+    @echo "  [lua] Cleaning artifacts..."
+    @find sdks/lua -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/lua -name "*.luac" -delete 2>/dev/null || true
+    @find examples -name "*.luac" -delete 2>/dev/null || true
+    @echo "  [lua] ✓ Cleaned"
+
+# Clean JavaScript/Deno build artifacts
+_clean-js:
+    @echo "  [js] Cleaning artifacts..."
+    @find sdks/js -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
+    @find sdks/js -type d -name ".deno" -exec rm -rf {} + 2>/dev/null || true
+    @find examples -type d -name "node_modules" -exec rm -rf {} + 2>/dev/null || true
+    @echo "  [js] ✓ Cleaned"
+
+# Clean C++ build artifacts
+_clean-cpp:
+    @echo "  [cpp] Cleaning artifacts..."
+    @find sdks/cpp -name "*.o" -delete 2>/dev/null || true
+    @find sdks/cpp -name "*.obj" -delete 2>/dev/null || true
+    @find sdks/cpp -name "*.gch" -delete 2>/dev/null || true
+    @find sdks/cpp -name "*.pch" -delete 2>/dev/null || true
+    @find examples -name "*.o" -delete 2>/dev/null || true
+    @find examples -name "*.obj" -delete 2>/dev/null || true
+    @echo "  [cpp] ✓ Cleaned"
+
+# Clean general artifacts (dist, markers, examples/plugins)
+_clean-general:
+    @echo "  [general] Cleaning dist, markers, and example plugins..."
+    @rm -rf {{dist_dir}}
+    @rm -rf examples/plugins/*
+    @rm -rf {{marker_dir}}
+    @rm -rf tests/fixtures/csharp_plugin/bin 2>/dev/null || true
+    @rm -rf tests/fixtures/csharp_plugin/obj 2>/dev/null || true
+    @echo "  [general] ✓ Cleaned"
 
 # Clean only the failed build markers (to retry failed builds)
 clean-markers:

@@ -1,8 +1,8 @@
-import { toStr, allocString } from 'polyplug-guest';
+import { allocString } from 'polyplug-guest';
+import { stripPrefix } from 'polyplug-abi';
 
 export function report(input) {
-    let s = toStr(input);
-    if (s.startsWith('TRANSFORMED:')) s = s.slice(12);
+    let s = stripPrefix(input, 'TRANSFORMED:');
     const parts = s.split('|');
     if (parts.length >= 3) {
         return allocString(`Report: ${parts[0]} has value '${parts[1]}' with count ${parts[2]}`);

@@ -1,8 +1,8 @@
-import { toStr, allocString } from 'polyplug-guest';
+import { allocString } from 'polyplug-guest';
+import { stripPrefix } from 'polyplug-abi';
 
 export function validate(input) {
-    let s = toStr(input);
-    if (s.startsWith('DECODED:')) s = s.slice(8);
+    let s = stripPrefix(input, 'DECODED:');
     const parts = s.split('|');
     if (parts.length === 3 && parts[0] && parts[1] && !isNaN(parseInt(parts[2]))) {
         return allocString(`VALID:${s}`);

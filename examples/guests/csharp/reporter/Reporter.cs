@@ -8,8 +8,7 @@ public static class Plugin
 {
     public static StringView Report(StringView input)
     {
-        var s = StringHelpers.ToString(input);
-        if (s.StartsWith("TRANSFORMED:")) s = s[12..];
+        var s = StringHelpers.StripPrefix(input, "TRANSFORMED:");
         var parts = s.Split('|');
         if (parts.Length >= 3)
         {

@@ -4,14 +4,13 @@ from generated.guest.contracts import (
     polyplug_abi_version,
     polyplug_init,
 )
-from polyplug_guest import to_str, alloc_string
+from polyplug_guest import alloc_string
+from polyplug_abi.helpers import strip_prefix, split
 
 
 class ValidatorImpl(VALIDATORPipelineValidatorPlugin):
     def validate(self, input):
-        s = to_str(input)
-        if s.startswith("DECODED:"):
-            s = s[8:]
+        s = strip_prefix(input, "DECODED:")
         parts = s.split("|")
         if len(parts) >= 3 and parts[0] and parts[1]:
             try:

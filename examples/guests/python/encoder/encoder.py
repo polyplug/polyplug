@@ -4,14 +4,13 @@ from generated.guest.contracts import (
     polyplug_abi_version,
     polyplug_init,
 )
-from polyplug_guest import to_str, alloc_string
+from polyplug_guest import alloc_string
+from polyplug_abi.helpers import strip_prefix
 
 
 class EncoderImpl(ENCODERPipelineEncoderPlugin):
     def encode(self, input):
-        s = to_str(input)
-        if s.startswith("TRANSFORMED:"):
-            s = s[12:]
+        s = strip_prefix(input, "TRANSFORMED:")
         return alloc_string(s.replace("|", ","))
 
 
