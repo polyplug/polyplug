@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../../sdks/csharp/abi/Polyplug.Abi.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="manifest.toml">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
