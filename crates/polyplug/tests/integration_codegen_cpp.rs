@@ -7,17 +7,17 @@
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -244,7 +244,7 @@ fn test_cpp_codegen_files_exist() {
 
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
-            let host_libs_cpp: PathBuf = workspace_root().join("host-libs").join("cpp");
+            let sdks_cpp_abi: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
             let vtables_hpp: PathBuf = out_dir.join("guest").join("vtables.hpp");
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_vtables.o");
@@ -253,7 +253,7 @@ fn test_cpp_codegen_files_exist() {
                 .arg("-std=c++20")
                 .arg(format!("-I{}", out_dir.join("guest").display()))
                 .arg(format!("-I{}", out_dir.join("host").display()))
-                .arg(format!("-I{}", host_libs_cpp.display()))
+                .arg(format!("-I{}", sdks_cpp_abi.display()))
                 .arg(&vtables_hpp)
                 .arg("-c")
                 .arg("-o")

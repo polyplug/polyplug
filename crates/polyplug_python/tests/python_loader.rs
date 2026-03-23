@@ -11,8 +11,8 @@ use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::PluginHandle;
@@ -92,12 +92,31 @@ class _PluginDescriptor(ctypes.Structure):
         ("version_patch", ctypes.c_uint32),
     ]
 
-class _PluginVTable(ctypes.Structure):
+# New PluginInterface structure matching the current ABI
+class _NativeDispatch(ctypes.Structure):
+    _fields_ = [("functions", ctypes.c_void_p)]
+
+class _VmDispatch(ctypes.Structure):
     _fields_ = [
-        ("contract_id",      ctypes.c_uint64),
+        ("call",        ctypes.c_void_p),
+        ("loader_data", ctypes.c_void_p),
+    ]
+
+class _PluginDispatch(ctypes.Union):
+    _fields_ = [
+        ("native", _NativeDispatch),
+        ("vm",     _VmDispatch),
+    ]
+
+class _PluginInterface(ctypes.Structure):
+    _fields_ = [
+        ("rt_ctx",          ctypes.c_void_p),
+        ("contract_id",     ctypes.c_uint64),
         ("contract_version", ctypes.c_uint32),
-        ("function_count",   ctypes.c_uint32),
-        ("functions",        ctypes.c_void_p),
+        ("function_count",  ctypes.c_uint32),
+        ("dispatch_type",   ctypes.c_uint32),  # 0 = Native, 1 = VM
+        ("_pad",            ctypes.c_uint32),
+        ("dispatch",        _PluginDispatch),
     ]
 
 _NAME_BYTES        = b"test_plugin\x00"
@@ -113,11 +132,14 @@ _DESC.version_major = 1
 _DESC.version_minor = 0
 _DESC.version_patch = 0
 
-_VTABLE = _PluginVTable()
-_VTABLE.contract_id      = 0xDEADBEEFCAFEBABE
-_VTABLE.contract_version = 0
-_VTABLE.function_count   = 0
-_VTABLE.functions        = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
+_INTERFACE = _PluginInterface()
+_INTERFACE.rt_ctx          = None
+_INTERFACE.contract_id     = 0xDEADBEEFCAFEBABE
+_INTERFACE.contract_version = 0
+_INTERFACE.function_count  = 0
+_INTERFACE.dispatch_type   = 0  # Native
+_INTERFACE._pad            = 0
+_INTERFACE.dispatch.native.functions = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
 
 # HostVTable function pointer types
 _RegisterFn = ctypes.CFUNCTYPE(
@@ -151,7 +173,7 @@ def polyplug_init(rt_ctx: int, host_vtable: int, _ctx: int) -> None:
     host.register_plugin(
         ctypes.c_void_p(rt_ctx),
         ctypes.addressof(_DESC),
-        ctypes.addressof(_VTABLE),
+        ctypes.addressof(_INTERFACE),
     )
 "#;
 

@@ -1,4 +1,4 @@
-import { openPolyplug, runtimeNew, NULL_HANDLE } from "../../host-libs/js-deno/polyplug.js";
+import { openPolyplug, runtimeNew, NULL_HANDLE } from "../../sdks/js/host/mod.js";
 
 const POLYPLUG_SO = Deno.env.get("POLYPLUG_SO") ?? "";
 const TEST_PLUGIN_DIR = Deno.env.get("TEST_PLUGIN_DIR") ?? "";

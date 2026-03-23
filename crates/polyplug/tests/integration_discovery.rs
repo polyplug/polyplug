@@ -309,20 +309,19 @@ fn unknown_runtime_fails_build() {
 fn explicit_load_bundle_missing_manifest_errors() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let plain_file: PathBuf = tmp.path().join("not_a_dir.so");
-    fs::write(&plain_file, b"").expect("write plain file");
+    // Create a directory without a manifest.toml
+    let bundle_dir: PathBuf = tmp.path().join("no_manifest_bundle");
+    fs::create_dir_all(&bundle_dir).expect("create bundle dir");
 
     let rt: Runtime = Runtime::builder().build().expect("build should succeed");
 
-    let result: Result<(), PolyplugError> = rt.load_bundle(&plain_file);
+    let result: Result<(), PolyplugError> = rt.load_bundle(&bundle_dir);
     assert!(
         matches!(
             result,
-            Err(PolyplugError::Loader(
-                LoaderError::BundleNotADirectory { .. }
-            ))
+            Err(PolyplugError::Loader(LoaderError::ManifestParse { .. }))
         ),
-        "expected BundleNotADirectory, got {:?}",
+        "expected ManifestParse error, got {:?}",
         result
     );
 }
