@@ -10,8 +10,8 @@ use super::{
 };
 use std::collections::HashSet;
 use syn::{
-    Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn, ItemStruct,
-    ItemUnion, Lit, Visibility, parse_file,
+    parse_file, Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn,
+    ItemStruct, ItemUnion, Lit, Visibility,
 };
 use thiserror::Error;
 
@@ -633,13 +633,11 @@ mod tests {
             .expect("StringView should exist");
 
         assert!(string_view.doc.is_some());
-        assert!(
-            string_view
-                .doc
-                .as_ref()
-                .unwrap()
-                .contains("Non-owning UTF-8 string view")
-        );
+        assert!(string_view
+            .doc
+            .as_ref()
+            .unwrap()
+            .contains("Non-owning UTF-8 string view"));
     }
 
     #[test]

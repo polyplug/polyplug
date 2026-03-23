@@ -271,24 +271,17 @@ fn integration_lua_utf8_roundtrip() {
 }
 
 #[test]
-fn integration_lua_second_load_returns_duplicate_error() {
+fn integration_lua_second_load_succeeds() {
     let _guard: std::sync::MutexGuard<'_, ()> =
         TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    // Loading the same plugin twice should return a DuplicateProvider error
-    // because the same bundle_id tries to register the same contract twice.
+    // Loading the same plugin twice should succeed (multi-impl support)
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("first load must succeed");
     let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
-    // Second load should fail with DuplicateProvider error
+    // Second load should succeed (multi-impl allowed)
     assert!(
-        result.is_err(),
-        "second load should fail with duplicate provider error"
+        result.is_ok(),
+        "second load should succeed (multi-impl allowed): {:?}",
+        result.err()
     );
-    match result {
-        Err(PolyplugError::Loader(LoaderError::LuaInitRaisedError { .. })) => {
-            // Expected: the plugin's polyplug_init returns error when register_plugin fails
-        }
-        Err(e) => panic!("expected LuaInitRaisedError, got: {:?}", e),
-        Ok(()) => panic!("second load should not succeed"),
-    }
 }

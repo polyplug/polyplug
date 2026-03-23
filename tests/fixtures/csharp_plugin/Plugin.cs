@@ -4,7 +4,6 @@
 // ABI types use LayoutKind.Explicit with FieldOffset for exact byte-level compatibility
 // with Rust's #[repr(C)] layout.
 
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace CsharpPlugin;
@@ -228,8 +227,6 @@ public struct AddArgs
 
 public static class Plugin
 {
-    // Track which runtimes we've registered with (CLR is singleton, but each test creates new Runtime)
-    private static readonly HashSet<nint> s_registeredRuntimes = new();
     private static readonly nint[] s_functions = new nint[4];
     private static PluginInterface s_interface;
     private static readonly byte[] s_versionBytes = System.Text.Encoding.UTF8.GetBytes("1.0");
@@ -327,30 +324,19 @@ public static class Plugin
     {
         unsafe
         {
-            var hostCtx = (HostContext*)rtCtx;
-            var runtimePtr = hostCtx->Runtime;
+            if (hostVTablePtr == nint.Zero)
+                return 1;
 
-            lock (s_registeredRuntimes)
+            var hostVTable = (HostVTable*)hostVTablePtr;
+            var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, PluginInterface*, AbiError>)hostVTable->RegisterPluginPtr;
+
+            s_interface.RtCtx = rtCtx;
+
+            fixed (PluginDescriptor* descPtr = &s_descriptor)
+            fixed (PluginInterface* ifacePtr = &s_interface)
             {
-                if (s_registeredRuntimes.Contains(runtimePtr))
-                    return 0;
-
-                if (hostVTablePtr == nint.Zero)
-                    return 1;
-
-                var hostVTable = (HostVTable*)hostVTablePtr;
-                var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, PluginInterface*, AbiError>)hostVTable->RegisterPluginPtr;
-
-                s_interface.RtCtx = rtCtx;
-
-                fixed (PluginDescriptor* descPtr = &s_descriptor)
-                fixed (PluginInterface* ifacePtr = &s_interface)
-                {
-                    var result = registerPlugin(rtCtx, descPtr, ifacePtr);
-                    if (result.Code == Constants.ABI_OK)
-                        s_registeredRuntimes.Add(runtimePtr);
-                    return result.Code;
-                }
+                var result = registerPlugin(rtCtx, descPtr, ifacePtr);
+                return result.Code;
             }
         }
     }

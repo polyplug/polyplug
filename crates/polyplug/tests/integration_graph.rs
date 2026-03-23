@@ -10,18 +10,18 @@
 //! - Stale handles are detected after replacement
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::contract_id;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::contract_id;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -254,15 +254,15 @@ fn test_unknown_contract_returns_not_found() {
 }
 
 #[test]
-fn test_duplicate_registration_is_rejected() {
+fn test_duplicate_registration_allowed() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = Registry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    // Try to manually register the same contract again — must fail.
+    // Try to manually register the same contract again — should succeed (multi-impl).
     let test_add_id: u64 = contract_id("test.add", 1);
 
-    // Build a fake vtable for the duplicate attempt.
+    // Build a fake vtable for the second registration.
     // function_count=0, so the functions pointer is never dereferenced.
     let fake_vtable: PluginInterface = PluginInterface {
         rt_ctx: core::ptr::null(),
@@ -295,8 +295,8 @@ fn test_duplicate_registration_is_rejected() {
     });
 
     assert!(
-        result.is_err(),
-        "second registration of same contract must return DuplicateProvider error"
+        result.is_ok(),
+        "second registration of same contract should succeed (multi-impl allowed)"
     );
 
     core::mem::forget(lib);

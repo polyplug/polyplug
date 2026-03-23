@@ -191,14 +191,8 @@ impl Registry {
                             name_b: contract_name,
                         });
                     }
-                    // Duplicate provider: same bundle_id registering same contract_id again
-                    if existing_entry.bundle_id == bundle_id {
-                        return Err(RegistryError::DuplicateProvider {
-                            contract: contract_name,
-                            existing: existing_entry.contract_name.clone(),
-                        });
-                    }
-                    // Different bundle, same contract — allowed (multi-impl), keep scanning
+                    // Same bundle, same contract — allowed (multi-impl support)
+                    // Different bundle, same contract — also allowed (multi-impl support)
                 }
             }
         }
@@ -700,11 +694,11 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_provider_rejected() {
+    fn duplicate_provider_allowed() {
         let registry: Registry = Registry::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "image.decode");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "image.decode");
-        // Same bundle_id = duplicate provider (same bundle can't register same contract twice)
+        // Same bundle_id can register same contract multiple times (multi-impl support)
         let bundle_id: u64 = 0u64;
 
         // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
@@ -717,9 +711,10 @@ mod tests {
         let result: Result<PluginHandle, RegistryError> =
             // SAFETY: MOCK_INTERFACE is 'static, pointer is valid.
             unsafe { registry.register(d2, &MOCK_INTERFACE, "image.decode".to_owned(), bundle_id) };
+        // Second registration should succeed (multi-impl allowed)
         assert!(
-            matches!(result, Err(RegistryError::DuplicateProvider { .. })),
-            "expected DuplicateProvider error"
+            result.is_ok(),
+            "second registration should succeed (multi-impl allowed)"
         );
     }
 
