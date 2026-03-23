@@ -8,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -16,7 +15,8 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginVTable;
 use polyplug_abi::StringView;
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_abi::ABI_OK;
+use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -291,7 +291,7 @@ fn test_rust_codegen_compile_and_run() {
         .join("tests")
         .join("fixtures")
         .join("test_bundle.toml");
-    let guest_lib_path: PathBuf = workspace_root().join("guest-libs").join("rust");
+    let guest_lib_path: PathBuf = workspace_root().join("crates").join("polyplug_guest");
 
     std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
 

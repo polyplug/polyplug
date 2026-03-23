@@ -45,7 +45,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-polyplug_guest = { path = "../../guest-libs/rust" }
+polyplug_guest = { workspace = true }
 ```
 
 ```rust

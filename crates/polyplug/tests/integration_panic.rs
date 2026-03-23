@@ -10,16 +10,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
@@ -184,7 +184,7 @@ fn test_panic_returns_abi_error_panic() {
     // Only depend on polyplug_guest; polyplug is an indirect dep.
     // We do NOT add polyplug as a direct dep to avoid duplicate
     // `polyplug_abi_version` symbol (it is defined in polyplug/src/lib.rs).
-    let guest_lib_path: PathBuf = workspace_root.join("guest-libs").join("rust");
+    let guest_lib_path: PathBuf = workspace_root.join("crates").join("polyplug_guest");
     let cargo_toml_content: String = format!(
         "[package]\n\
          name = \"panic_plugin\"\n\

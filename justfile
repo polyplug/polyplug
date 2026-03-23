@@ -27,8 +27,8 @@ marker_dir := ".build-markers"
 # Host-libs directory
 host_libs_dir := "host-libs"
 
-# Guest-libs directory
-guest_libs_dir := "guest-libs"
+# SDK directories (guest libs are now in sdks/*/guest/)
+sdks_dir := "sdks"
 
 # Version (read from Cargo.toml)
 version := `grep -m1 '^version =' crates/polyplug/Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/'`
@@ -216,8 +216,8 @@ _build-guest-cpp:
         echo "  [guest-cpp] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if g++ -std=c++17 -fsyntax-only -I{{guest_libs_dir}}/cpp \
-        {{guest_libs_dir}}/cpp/polyplug_guest.hpp 2>/dev/null; then \
+    @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/guest \
+        {{sdks_dir}}/cpp/guest/polyplug_guest.hpp 2>/dev/null; then \
         echo "  [guest-cpp] ✓ Headers valid"; \
     else \
         echo "  [guest-cpp] ✗ Header validation failed"; \
@@ -232,7 +232,7 @@ _build-guest-csharp:
         exit 0; \
     fi
     @if command -v dotnet >/dev/null 2>&1; then \
-        if dotnet build {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release 2>/dev/null; then \
+        if dotnet build {{sdks_dir}}/csharp/guest/Polyplug.Guest.csproj -c Release 2>/dev/null; then \
             echo "  [guest-csharp] ✓ Build succeeded"; \
         else \
             echo "  [guest-csharp] ✗ Build failed"; \
@@ -249,7 +249,7 @@ _build-guest-python:
         echo "  [guest-python] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if python3 -m py_compile {{guest_libs_dir}}/python/polyplug_guest/*.py 2>/dev/null; then \
+    @if python3 -m py_compile {{sdks_dir}}/python/guest/polyplug_guest/*.py 2>/dev/null; then \
         echo "  [guest-python] ✓ Modules valid"; \
     else \
         echo "  [guest-python] ✗ Validation failed"; \
@@ -264,7 +264,7 @@ _build-guest-lua:
         exit 0; \
     fi
     @if command -v luajit >/dev/null 2>&1; then \
-        if luajit -bl {{guest_libs_dir}}/lua/polyplug_guest.lua >/dev/null 2>&1; then \
+        if luajit -bl {{sdks_dir}}/lua/guest/polyplug_guest.lua >/dev/null 2>&1; then \
             echo "  [guest-lua] ✓ Modules valid"; \
         else \
             echo "  [guest-lua] ✗ Validation failed"; \
@@ -772,36 +772,36 @@ _dist-copy-host-libs:
 # Copy guest libraries to dist (library files ONLY - NO build artifacts)
 _dist-copy-guest-libs:
     @echo "Copying guest libraries..."
-    @# Rust (source for crates.io)
+    @# Rust (source for crates.io) - now in crates/polyplug_guest
     @mkdir -p {{dist_dir}}/guest-libs/rust/src
-    @cp -r {{guest_libs_dir}}/rust/src/* {{dist_dir}}/guest-libs/rust/src/
-    @cp {{guest_libs_dir}}/rust/Cargo.toml {{dist_dir}}/guest-libs/rust/
-    @cp {{guest_libs_dir}}/rust/README.md {{dist_dir}}/guest-libs/rust/ 2>/dev/null || true
+    @cp -r crates/polyplug_guest/src/* {{dist_dir}}/guest-libs/rust/src/
+    @cp crates/polyplug_guest/Cargo.toml {{dist_dir}}/guest-libs/rust/
+    @cp crates/polyplug_guest/README.md {{dist_dir}}/guest-libs/rust/ 2>/dev/null || true
     @# C++ (header-only) - ONLY .hpp files
     @mkdir -p {{dist_dir}}/guest-libs/cpp/polyplug
-    @cp {{guest_libs_dir}}/cpp/polyplug/*.hpp {{dist_dir}}/guest-libs/cpp/polyplug/
-    @cp {{guest_libs_dir}}/cpp/polyplug_guest.hpp {{dist_dir}}/guest-libs/cpp/
+    @cp {{sdks_dir}}/cpp/guest/polyplug/*.hpp {{dist_dir}}/guest-libs/cpp/polyplug/
+    @cp {{sdks_dir}}/cpp/guest/polyplug_guest.hpp {{dist_dir}}/guest-libs/cpp/
     @# C# - Build DLL in source location, copy ONLY built DLL to dist
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [dist] Building C# guest library..."; \
-        dotnet build {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/guest/Polyplug.Guest.csproj -c Release 2>/dev/null || true; \
         mkdir -p {{dist_dir}}/guest-libs/csharp; \
-        cp {{guest_libs_dir}}/csharp/bin/Release/net10.0/Polyplug.Guest.dll {{dist_dir}}/guest-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/guest/bin/Release/net10.0/Polyplug.Guest.dll {{dist_dir}}/guest-libs/csharp/ 2>/dev/null || true; \
     fi
     @# Python (pure Python) - ONLY .py files
     @mkdir -p {{dist_dir}}/guest-libs/python/polyplug_guest
-    @cp {{guest_libs_dir}}/python/polyplug_guest/*.py {{dist_dir}}/guest-libs/python/polyplug_guest/
-    @cp {{guest_libs_dir}}/python/polyplug_guest/*.pyi {{dist_dir}}/guest-libs/python/polyplug_guest/ 2>/dev/null || true
-    @cp {{guest_libs_dir}}/python/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true
-    @cp {{guest_libs_dir}}/python/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true
+    @cp {{sdks_dir}}/python/guest/polyplug_guest/*.py {{dist_dir}}/guest-libs/python/polyplug_guest/
+    @cp {{sdks_dir}}/python/guest/polyplug_guest/*.pyi {{dist_dir}}/guest-libs/python/polyplug_guest/ 2>/dev/null || true
+    @cp {{sdks_dir}}/python/guest/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true
+    @cp {{sdks_dir}}/python/guest/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true
     @# Lua (pure Lua) - ONLY .lua files
     @mkdir -p {{dist_dir}}/guest-libs/lua
-    @cp {{guest_libs_dir}}/lua/polyplug_guest.lua {{dist_dir}}/guest-libs/lua/
+    @cp {{sdks_dir}}/lua/guest/polyplug_guest.lua {{dist_dir}}/guest-libs/lua/
     @# JS (TypeScript/JS) - ONLY .js/.d.ts files
     @mkdir -p {{dist_dir}}/guest-libs/js
-    @cp {{guest_libs_dir}}/js/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/
-    @cp {{guest_libs_dir}}/js/polyplug-guest.js {{dist_dir}}/guest-libs/js/
-    @cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true
+    @cp {{sdks_dir}}/js/guest/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/
+    @cp {{sdks_dir}}/js/guest/polyplug-guest.js {{dist_dir}}/guest-libs/js/
+    @cp {{sdks_dir}}/js/guest/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true
 
 # Show dist contents
 _show-dist-contents:
@@ -861,7 +861,7 @@ _prepare-nuget-packages:
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [nuget] Packing core libraries..."; \
         dotnet pack {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
-        dotnet pack {{guest_libs_dir}}/csharp/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/guest/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] Packing loaders..."; \
         dotnet pack {{host_libs_dir}}/csharp/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
@@ -886,8 +886,8 @@ _prepare-pypi-packages:
         cp {{host_libs_dir}}/python/LICENSE {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cd {{dist_dir}}/host-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building guest library..."; \
-        cp {{guest_libs_dir}}/python/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
-        cp {{guest_libs_dir}}/python/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/python/guest/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/python/guest/README.md {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
         cd {{dist_dir}}/guest-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building loaders..."; \
         for loader in native python lua js dotnet; do \
@@ -914,7 +914,7 @@ _prepare-npm-packages:
         cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
         (cd {{dist_dir}}/host-libs/js-deno && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing guest library..."; \
-        cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/js/guest/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
         (cd {{dist_dir}}/guest-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing loaders..."; \
         npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-native 2>/dev/null || true; \
@@ -937,7 +937,7 @@ _prepare-luarocks-packages:
     @if command -v luarocks >/dev/null 2>&1; then \
         echo "  [luarocks] Copying rockspecs for upload..."; \
         cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{guest_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/guest/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-native/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-python/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
@@ -964,10 +964,10 @@ _prepare-jsr-packages:
         (cd {{dist_dir}}/host-libs/js-deno && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing guest library..."; \
         mkdir -p {{dist_dir}}/guest-libs/js; \
-        cp {{guest_libs_dir}}/js/deno.json {{dist_dir}}/guest-libs/js/; \
-        cp {{guest_libs_dir}}/js/package.json {{dist_dir}}/guest-libs/js/; \
-        cp {{guest_libs_dir}}/js/polyplug-guest.js {{dist_dir}}/guest-libs/js/; \
-        cp {{guest_libs_dir}}/js/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/; \
+        cp {{sdks_dir}}/js/guest/deno.json {{dist_dir}}/guest-libs/js/; \
+        cp {{sdks_dir}}/js/guest/package.json {{dist_dir}}/guest-libs/js/; \
+        cp {{sdks_dir}}/js/guest/polyplug-guest.js {{dist_dir}}/guest-libs/js/; \
+        cp {{sdks_dir}}/js/guest/polyplug-guest.d.ts {{dist_dir}}/guest-libs/js/; \
         (cd {{dist_dir}}/guest-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing loaders..."; \
         for loader in native python lua js dotnet; do \
