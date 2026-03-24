@@ -99,12 +99,6 @@ unsafe extern "C" fn js_dispatch(
     let args_usize: usize = args as usize;
     let out_usize: usize = out as usize;
 
-    // Split 64-bit pointers into lo/hi u32 pairs for QuickJS ABI
-    let args_lo: u32 = (args_usize as u64 & 0xFFFFFFFF) as u32;
-    let args_hi: u32 = ((args_usize as u64 >> 32) & 0xFFFFFFFF) as u32;
-    let out_lo: u32 = (out_usize as u64 & 0xFFFFFFFF) as u32;
-    let out_hi: u32 = ((out_usize as u64 >> 32) & 0xFFFFFFFF) as u32;
-
     let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
         eprintln!(
             "[polyplug_js] js_dispatch: calling JS function fn_id={}",
@@ -112,8 +106,14 @@ unsafe extern "C" fn js_dispatch(
         );
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
         eprintln!("[polyplug_js] js_dispatch: function restored");
-        let result: i32 =
-            js_fn.call::<(u32, u32, u32, u32), i32>((args_lo, args_hi, out_lo, out_hi))?;
+
+        let args_bigint: rquickjs::BigInt<'_> =
+            rquickjs::BigInt::from_u64(ctx.clone(), args_usize as u64)?;
+        let out_bigint: rquickjs::BigInt<'_> =
+            rquickjs::BigInt::from_u64(ctx.clone(), out_usize as u64)?;
+
+        let result: i32 = js_fn
+            .call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), i32>((args_bigint, out_bigint))?;
         eprintln!("[polyplug_js] js_dispatch: function returned {}", result);
         Ok(result)
     });
