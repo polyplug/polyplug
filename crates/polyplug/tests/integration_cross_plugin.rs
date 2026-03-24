@@ -55,7 +55,7 @@ mod tests {
     use polyplug::registry::Registry;
     use polyplug_abi::PluginDescriptor;
     use polyplug_abi::PluginHandle;
-    use polyplug_abi::PluginVTable;
+    use polyplug_abi::PluginInterface;
     use polyplug_abi::bundle_id;
     use polyplug_abi::contract_id;
 
@@ -67,7 +67,7 @@ mod tests {
         let registry: Registry = Registry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
         let bid: u64 = bundle_id("audio-engine");
-        let vtable: &'static PluginVTable = make_static_vtable(cid);
+        let vtable: &'static PluginInterface = make_static_vtable(cid);
         let desc: PluginDescriptor = make_desc("decoder", "audio.Decoder");
         // SAFETY: vtable is 'static and valid for the duration of this test.
         unsafe { registry.register(desc, vtable, "audio.Decoder".to_owned(), bid) }
@@ -88,8 +88,8 @@ mod tests {
     fn find_all_returns_two_impls() {
         let registry: Registry = Registry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
-        let vtable_a: &'static PluginVTable = make_static_vtable(cid);
-        let vtable_b: &'static PluginVTable = make_static_vtable(cid);
+        let vtable_a: &'static PluginInterface = make_static_vtable(cid);
+        let vtable_b: &'static PluginInterface = make_static_vtable(cid);
 
         // SAFETY: vtables are 'static.
         unsafe {
@@ -132,8 +132,8 @@ mod tests {
         let cid: u64 = contract_id("audio.Decoder", 0);
         let bid_a: u64 = bundle_id("bundle-a");
         let bid_b: u64 = bundle_id("bundle-b");
-        let vtable_a: &'static PluginVTable = make_static_vtable(cid);
-        let vtable_b: &'static PluginVTable = make_static_vtable(cid);
+        let vtable_a: &'static PluginInterface = make_static_vtable(cid);
+        let vtable_b: &'static PluginInterface = make_static_vtable(cid);
 
         // SAFETY: vtables are 'static.
         unsafe {
@@ -166,10 +166,10 @@ mod tests {
         let guard = registry
             .resolve_guard(found)
             .expect("resolve_guard must succeed for a freshly registered handle");
-        let resolved_ptr: *const PluginVTable = guard.vtable();
+        let resolved_ptr: *const PluginInterface = guard.vtable();
 
         assert_eq!(
-            resolved_ptr, vtable_b as *const PluginVTable,
+            resolved_ptr, vtable_b as *const PluginInterface,
             "resolved vtable must be bundle-b's vtable, not bundle-a's"
         );
     }
@@ -181,7 +181,7 @@ mod tests {
     fn stale_handle_rejected() {
         let registry: Registry = Registry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
-        let vtable: &'static PluginVTable = make_static_vtable(cid);
+        let vtable: &'static PluginInterface = make_static_vtable(cid);
 
         // SAFETY: vtable is 'static.
         unsafe {

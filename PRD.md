@@ -180,7 +180,7 @@ size_t       find_all_by_contract(uint64_t contract_id, uint32_t min_version,
 
 // One-time resolution at init: PluginHandle → arc-swap Guard (opaque)
 // Returned guard keeps vtable alive. Store the guard, use guard->vtable on hot path.
-const PluginInterfaceGuard* resolve_plugin(PluginHandle handle);
+const PluginGuard* resolve_plugin(PluginHandle handle);
 
 // Extension lookup
 const void* get_extension(uint32_t extension_id);
@@ -189,7 +189,7 @@ const void* get_extension(uint32_t extension_id);
 **ID computation — always done by polyplugc, never by developers:**
 
 ```
-contract_id = fnv1a_64("contract.name@major")   e.g. fnv1a_64("image.decode@1") 
+contract_id = fnv1a_64("contract.name@major")   e.g. fnv1a_64("image.decode@1")
 bundle_id   = fnv1a_64("bundle_name")           e.g. fnv1a_64("awesome_filter")
 extension_id = fnv1a_32("extension_name")        e.g. fnv1a_32("trace")
 ```
@@ -230,7 +230,7 @@ typedef struct {
 
 // Opaque — managed by runtime. Holds an arc-swap read guard keeping the
 // vtable pointer alive for exactly one call sequence.
-typedef struct PluginInterfaceGuard PluginInterfaceGuard;
+typedef struct PluginGuard PluginGuard;
 ```
 
 **Dependency enforcement — hard error on undeclared access:**
@@ -268,7 +268,7 @@ Host calls init(registrar, ctx) passing HostVTable ptr and PluginContext
         │
         ▼
 Plugin resolves declared dependencies via find_by_contract / find_by_bundle
-Plugin stores PluginInterfaceGuard for each dependency (arc-swap read guard)
+Plugin stores PluginGuard for each dependency (arc-swap read guard)
         │
         ▼
 Plugin builds PluginInterface (its functions for host to call)
@@ -295,7 +295,7 @@ typedef struct {
     PluginHandle             (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t                   (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version,
                                                       PluginHandle* out, size_t out_cap);
-    const PluginInterfaceGuard* (*resolve_plugin)(PluginHandle handle);
+    const PluginGuard*       (*resolve_plugin)(PluginHandle handle);
     const void*              (*get_extension)(uint32_t extension_id);
 } HostVTable;
 ```

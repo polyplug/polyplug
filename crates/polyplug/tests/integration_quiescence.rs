@@ -52,8 +52,8 @@ fn test_quiescence_timeout() {
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         // Reconstruct handle on this thread.
         let h: polyplug_abi::PluginHandle = polyplug_abi::PluginHandle { index, generation };
-        // Resolve guard HERE — PluginVTableGuard is !Send, must stay on this thread.
-        let guard: polyplug::registry::PluginVTableGuard = registry_arc
+        // Resolve guard HERE — PluginGuard is !Send, must stay on this thread.
+        let guard: polyplug::registry::PluginGuard = registry_arc
             .resolve_guard(h)
             .expect("resolve_guard must succeed for loaded plugin");
         // Hold for 7s — longer than the 5s QUIESCENCE_TIMEOUT.

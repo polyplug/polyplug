@@ -15,7 +15,7 @@ use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 
@@ -205,12 +205,12 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     assert!(!handle.is_null(), "handle must be valid");
 
     // Verify function_count
-    let vtable_ptr: *const PluginVTable = runtime
+    let vtable_ptr: *const PluginInterface = runtime
         .registry()
         .resolve(handle)
         .expect("resolve must succeed");
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
-    let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable_ref: &PluginInterface = unsafe { &*vtable_ptr };
     assert_eq!(vtable_ref.function_count, fn_count);
 }
 
@@ -552,13 +552,13 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 
-    let vtable_ptr: *const PluginVTable = runtime
+    let vtable_ptr: *const PluginInterface = runtime
         .registry()
         .resolve(handle)
         .expect("resolve must succeed");
 
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
-    let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable_ref: &PluginInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(vtable_ref.function_count, fn_count);
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
@@ -717,13 +717,13 @@ fn dispatch_vm_call_works_correctly() {
         .find(contract_id, 0)
         .expect("plugin must be registered");
 
-    let vtable_ptr: *const PluginVTable = runtime
+    let vtable_ptr: *const PluginInterface = runtime
         .registry()
         .resolve(handle)
         .expect("resolve must succeed");
 
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
-    let vtable_ref: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable_ref: &PluginInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
 

@@ -11,7 +11,7 @@ use polyplug_guest::ABI_OK;
 use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::HostVTable;
-use polyplug_guest::PluginVTable;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
 use polyplug_guest::PluginContext;
 use core::ffi::c_void;
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_PIPELINE_DECODER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_PIPELINE_DECODER as *const PluginDescriptor, &PIPELINE_DECODER_VTABLE as *const PluginVTable)
+        (host.register_plugin)(rt_ctx, &desc_PIPELINE_DECODER as *const PluginDescriptor, &PIPELINE_DECODER_VTABLE as *const PluginInterface)
     };
     if err_PIPELINE_DECODER.code != ABI_OK {
         return err_PIPELINE_DECODER;
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_DATA_TRANSFORMER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_DATA_TRANSFORMER as *const PluginDescriptor, &DATA_TRANSFORMER_VTABLE as *const PluginVTable)
+        (host.register_plugin)(rt_ctx, &desc_DATA_TRANSFORMER as *const PluginDescriptor, &DATA_TRANSFORMER_VTABLE as *const PluginInterface)
     };
     if err_DATA_TRANSFORMER.code != ABI_OK {
         return err_DATA_TRANSFORMER;
@@ -102,7 +102,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_PIPELINE_ENCODER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_PIPELINE_ENCODER as *const PluginDescriptor, &PIPELINE_ENCODER_VTABLE as *const PluginVTable)
+        (host.register_plugin)(rt_ctx, &desc_PIPELINE_ENCODER as *const PluginDescriptor, &PIPELINE_ENCODER_VTABLE as *const PluginInterface)
     };
     if err_PIPELINE_ENCODER.code != ABI_OK {
         return err_PIPELINE_ENCODER;
@@ -117,7 +117,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_DATA_REPORTER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_DATA_REPORTER as *const PluginDescriptor, &DATA_REPORTER_VTABLE as *const PluginVTable)
+        (host.register_plugin)(rt_ctx, &desc_DATA_REPORTER as *const PluginDescriptor, &DATA_REPORTER_VTABLE as *const PluginInterface)
     };
     if err_DATA_REPORTER.code != ABI_OK {
         return err_DATA_REPORTER;
@@ -132,7 +132,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_PIPELINE_VALIDATOR: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_PIPELINE_VALIDATOR as *const PluginDescriptor, &PIPELINE_VALIDATOR_VTABLE as *const PluginVTable)
+        (host.register_plugin)(rt_ctx, &desc_PIPELINE_VALIDATOR as *const PluginDescriptor, &PIPELINE_VALIDATOR_VTABLE as *const PluginInterface)
     };
     if err_PIPELINE_VALIDATOR.code != ABI_OK {
         return err_PIPELINE_VALIDATOR;

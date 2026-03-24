@@ -10,7 +10,7 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::PluginVTableGuard;
+use polyplug::registry::PluginGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug_abi::{
@@ -333,7 +333,7 @@ fn stress_quiescence_succeeds_after_guard_released() {
     let reg_clone: Arc<Registry> = Arc::clone(&registry);
     let handle_for_thread: PluginHandle = handle;
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-        let guard: PluginVTableGuard = reg_clone
+        let guard: PluginGuard = reg_clone
             .resolve_guard(handle_for_thread)
             .expect("resolve_guard must succeed before swap");
         ready_tx.send(()).expect("ready signal must send");
@@ -394,7 +394,7 @@ fn stress_quiescence_timeout_fires() {
     let reg_clone: Arc<Registry> = Arc::clone(&registry);
     let handle_for_thread: PluginHandle = handle;
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-        let guard: PluginVTableGuard = reg_clone
+        let guard: PluginGuard = reg_clone
             .resolve_guard(handle_for_thread)
             .expect("resolve_guard must succeed before swap");
         ready_tx.send(()).expect("ready signal must send");
@@ -541,7 +541,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
                 let handle_result: Result<PluginHandle, RegistryError> =
                     reg_clone.find_by_contract(CONTRACT_ID_CONC, 0_u32);
                 if let Ok(resolved_handle) = handle_result {
-                    let guard_result: Result<PluginVTableGuard, RegistryError> =
+                    let guard_result: Result<PluginGuard, RegistryError> =
                         reg_clone.resolve_guard(resolved_handle);
                     if let Ok(guard) = guard_result {
                         std::thread::sleep(Duration::from_millis(HOLD_MILLIS));

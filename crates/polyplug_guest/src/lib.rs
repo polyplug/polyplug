@@ -22,7 +22,7 @@
 //!
 //! // 3. Declare static vtable
 //! static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
-//! static MY_VTABLE: PluginVTable = PluginVTable {
+//! static MY_VTABLE: PluginInterface = PluginInterface {
 //!     contract_id: MY_CONTRACT_ID,
 //!     contract_version: 1 << 16, // minor=1, patch=0
 //!     function_count: 1,
@@ -106,9 +106,6 @@ pub use polyplug_abi::PluginHandle;
 /// Plugin VTable — one per contract implemented by a plugin.
 ///
 /// OWNERSHIP: Must be `'static` or intentionally leaked.
-pub use polyplug_abi::PluginVTable;
-
-/// Plugin interface — the new vtable structure with dispatch mechanism.
 pub use polyplug_abi::PluginInterface;
 
 /// Host context passed to plugins.

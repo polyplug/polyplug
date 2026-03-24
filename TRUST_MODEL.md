@@ -149,25 +149,25 @@ The following table summarizes the sizes and alignments of the core ABI types on
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
 | `HostVTable` | 56 | 8 | 7 function pointers |
-| `PluginVTable` | 24 | 8 | `contract_id`, `functions` ptr |
+| `PluginInterface` | 24 | 8 | `contract_id`, `functions` ptr |
 | `PluginHandle` | 8 | 4 | `index`, `generation` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `Buffer` | 24 | 8 | `ptr`, `len`, `cap` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
 | `PluginDescriptor` | 48 | 8 | `name`, `contract_name`, `version` |
 
-### Rust-only Safety: `PluginVTableGuard`
-While the C ABI deals in raw handles and pointers, the Rust guest and host libraries use `PluginVTableGuard` for safe access.
+### Rust-only Safety: `PluginGuard`
+While the C ABI deals in raw handles and pointers, the Rust guest and host libraries use `PluginGuard` for safe access.
 ```rust
 // The guard ensures the vtable stays valid while we are using it.
 // It is !Send to prevent cross-thread use of a resolved vtable.
-pub struct PluginVTableGuard {
+pub struct PluginGuard {
     pub(crate) slot: Arc<VTableSlot>,
     _not_send: PhantomData<Cell<()>>,
 }
 
-impl PluginVTableGuard {
-    pub fn vtable(&self) -> *const PluginVTable {
+impl PluginGuard {
+    pub fn vtable(&self) -> *const PluginInterface {
         self.slot.0
     }
 }
@@ -223,9 +223,9 @@ Even with trusted plugins, malformed or corrupted plugin binaries are a real sce
 
 `from_utf8_unchecked` is **never** used on data originating from a plugin binary or passed from a plugin across the ABI boundary. Such data always goes through `std::str::from_utf8` with a hard error on failure.
 
-### `PluginVTable` immutability
+### `PluginInterface` immutability
 
-`PluginVTable` pointers are treated as read-only after registration. Casting a `*const PluginVTable` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable in-process. It is a contract that trusted plugins must uphold.
+`PluginInterface` pointers are treated as read-only after registration. Casting a `*const PluginInterface` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable in-process. It is a contract that trusted plugins must uphold.
 
 ## 7. ABI Freeze Notice
 
@@ -234,7 +234,7 @@ The core polyplug ABI is frozen as of Epic 9.7. This freeze ensures that bundles
 ### Frozen Surface Areas
 The following structures have fixed layouts and sizes. Any modification to these (e.g., adding a field or changing field order) is a breaking change.
 - **`HostVTable` (56 bytes)**: Contains 7 function pointers (`alloc`, `free`, `find_by_contract`, `find_by_bundle`, `find_all_by_contract`, `resolve_plugin`, `get_extension`).
-- **`PluginVTable` (24 bytes)**: Fixed header before the function pointer array.
+- **`PluginInterface` (24 bytes)**: Fixed header before the function pointer array.
 - **`PluginHandle` (8 bytes)**: 4-byte index, 4-byte generation.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 - **`Buffer` (24 bytes)**: 8-byte pointer, 8-byte length, 8-byte capacity.
@@ -245,7 +245,7 @@ To support future features without breaking the ABI, the `HostVTable` includes `
 ## Hot-Reload Safety Guarantees
 
 - vtable swaps are atomic at the ArcSwap level — readers always see a consistent VTableSlot
-- old library handles are held alive by Arc reference counting until all in-flight calls release their PluginVTableGuard
+- old library handles are held alive by Arc reference counting until all in-flight calls release their PluginGuard
 - the quiescence spin is bounded to 5 seconds; if the bound is exceeded the reload fails with QuiescenceTimeout without touching the live vtable
 - cascade reload depth is capped at 16 levels; deeper cascades fail with ReloadFailed and leave all plugins in their pre-reload state
 - non-native language bundles (Python, Lua, JS, .NET) are explicitly not reloadable in this version; reload_bundle() returns ReloadFailed with a clear reason string

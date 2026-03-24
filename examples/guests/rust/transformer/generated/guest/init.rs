@@ -11,7 +11,7 @@ use polyplug_guest::ABI_OK;
 use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::HostVTable;
-use polyplug_guest::PluginVTable;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
 use polyplug_guest::PluginContext;
 use core::ffi::c_void;
@@ -64,7 +64,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_TRANSFORMER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_TRANSFORMER as *const PluginDescriptor, &TRANSFORMER_VTABLE as *const PluginVTable)
+        (host.register_plugin)(rt_ctx, &desc_TRANSFORMER as *const PluginDescriptor, &TRANSFORMER_VTABLE as *const PluginInterface)
     };
     if err_TRANSFORMER.code != ABI_OK {
         return err_TRANSFORMER;

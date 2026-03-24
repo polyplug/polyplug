@@ -67,7 +67,7 @@ fn bench_registry_resolve_guard_single(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("resolve_guard", "single_slot"), |b| {
         b.iter(|| {
-            let result: Result<polyplug::registry::PluginVTableGuard, _> =
+            let result: Result<polyplug::registry::PluginGuard, _> =
                 registry.resolve_guard(black_box(handle));
             let _ = black_box(result);
         });
@@ -132,7 +132,7 @@ fn bench_registry_resolve_guard_multiple_slots(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("resolve_guard", "100_slots"), |b| {
         b.iter(|| {
-            let result: Result<polyplug::registry::PluginVTableGuard, _> =
+            let result: Result<polyplug::registry::PluginGuard, _> =
                 registry.resolve_guard(black_box(handle));
             let _ = black_box(result);
         });
@@ -165,7 +165,7 @@ fn bench_registry_resolve_guard_stale(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("resolve_guard", "stale_handle"), |b| {
         b.iter(|| {
-            let result: Result<polyplug::registry::PluginVTableGuard, _> =
+            let result: Result<polyplug::registry::PluginGuard, _> =
                 registry.resolve_guard(black_box(stale_handle));
             let _ = black_box(result);
         });

@@ -20,11 +20,11 @@ use crate::runtime::Runtime;
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
 const MAX_CASCADE_DEPTH: usize = 16_usize;
 
-/// A raw pointer wrapper for PluginVTable that implements Send and Sync.
+/// A raw pointer wrapper for PluginInterface that implements Send and Sync.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct VTablePtr(pub *const polyplug_abi::PluginVTable);
+pub(crate) struct VTablePtr(pub *const polyplug_abi::PluginInterface);
 
-// SAFETY: VTablePtr wraps a raw pointer to a PluginVTable from a loaded library.
+// SAFETY: VTablePtr wraps a raw pointer to a PluginInterface from a loaded library.
 // The vtable remains valid for the lifetime of the loaded library, which is managed
 // by the Runtime. During hot-reload, the old library is kept alive until quiescence
 // is achieved, ensuring the vtable pointers remain valid.
@@ -64,11 +64,11 @@ pub enum ReloadPhase {
 ///
 /// # Safety
 /// - `rt_ctx` must be a valid pointer to a HostContext
-/// - `vtable` must be a valid `PluginVTable` pointer from the reloaded library's init.
+/// - `vtable` must be a valid `PluginInterface` pointer from the reloaded library's init.
 pub(crate) unsafe extern "C" fn reload_register_callback(
     rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const polyplug_abi::PluginDescriptor,
-    vtable: *const polyplug_abi::PluginVTable,
+    vtable: *const polyplug_abi::PluginInterface,
 ) -> polyplug_abi::AbiError {
     if rt_ctx.is_null() || vtable.is_null() {
         return polyplug_abi::AbiError::ok();
@@ -270,7 +270,7 @@ pub(crate) fn reload_bundle_impl(
         .unwrap_or_else(|e| e.into_inner())
         .clone();
 
-    let mut new_vtable_map: HashMap<u64, *const polyplug_abi::PluginVTable> = HashMap::new();
+    let mut new_vtable_map: HashMap<u64, *const polyplug_abi::PluginInterface> = HashMap::new();
     for vt_ptr in &captured_vtables {
         // SAFETY: vt_ptr.0 returned by init() is valid while new_library is alive.
         let contract_id: u64 = unsafe { (*vt_ptr.0).contract_id };
@@ -343,7 +343,7 @@ pub(crate) fn reload_bundle_impl(
             Some(id) => id,
             None => continue,
         };
-        let new_vt_ptr: *const polyplug_abi::PluginVTable = match new_vtable_map.get(&contract_id) {
+        let new_vt_ptr: *const polyplug_abi::PluginInterface = match new_vtable_map.get(&contract_id) {
             Some(&ptr) => ptr,
             None => continue,
         };

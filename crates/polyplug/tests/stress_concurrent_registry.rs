@@ -9,7 +9,7 @@ use std::sync::Barrier;
 use std::time::Instant;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::PluginVTableGuard;
+use polyplug::registry::PluginGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug_abi::{
@@ -148,7 +148,7 @@ fn stress_concurrent_register_find_resolve() {
                 let found: PluginHandle = reg_clone
                     .find_by_contract(CONTRACT_IDS[idx], VERSION_V1)
                     .expect("find_by_contract must succeed");
-                let guard: PluginVTableGuard = reg_clone
+                let guard: PluginGuard = reg_clone
                     .resolve_guard(found)
                     .expect("resolve_guard must succeed");
                 let vtable_ptr: *const PluginInterface = guard.vtable();
@@ -177,7 +177,7 @@ fn stress_concurrent_register_find_resolve() {
         let found: PluginHandle = registry
             .find_by_contract(expected_cid, VERSION_V1)
             .expect("main-thread find must succeed");
-        let guard: PluginVTableGuard = registry
+        let guard: PluginGuard = registry
             .resolve_guard(found)
             .expect("main-thread resolve_guard must succeed");
         let vtable_ptr: *const PluginInterface = guard.vtable();
@@ -220,7 +220,7 @@ fn stress_concurrent_swaps_with_resolvers() {
                 let handle_result: Result<PluginHandle, RegistryError> =
                     reg_clone.find_by_contract(SWAP_CONTRACT_ID, 0_u32);
                 if let Ok(found) = handle_result {
-                    let guard_result: Result<PluginVTableGuard, RegistryError> =
+                    let guard_result: Result<PluginGuard, RegistryError> =
                         reg_clone.resolve_guard(found);
                     if let Ok(guard) = guard_result {
                         let vtable_ptr: *const PluginInterface = guard.vtable();

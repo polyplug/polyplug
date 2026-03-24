@@ -13,7 +13,7 @@ Code generator for polyplug host-side contract callers. Generates type-safe, hot
 
 ## Supported Target Languages
 
-- **Rust** — Native Rust host callers with `PluginVTableGuard`
+- **Rust** — Native Rust host callers with `PluginGuard`
 - **C++** — C++17 classes with `PluginGuard` and `std::optional` factory methods
 - **C#** — .NET classes with `PluginGuard` and nullable factory methods
 - **Python** — Python 3.10+ classes with `PluginGuard` and `Optional` factory methods
@@ -68,14 +68,14 @@ All generated code uses the **factory method pattern** for safe hot-reload handl
 
 ```rust
 pub struct ImageDecodeContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl ImageDecodeContract {
     /// Factory method - creates instance or None if not found
     pub fn create(runtime: &'static Runtime, min_version: u32) -> Option<Self> {
         let handle: PluginHandle = runtime.find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version).ok()?;
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(Self { guard })
     }
     
@@ -86,7 +86,7 @@ impl ImageDecodeContract {
     pub fn reset(&mut self) { /* no-op */ }
     
     pub fn decode(&self, input: &[u8]) -> Result<Vec<u8>, ContractError> {
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // ... ABI call
     }
 }
@@ -134,7 +134,7 @@ public:
     void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
     
     std::string decode(std::string_view input) {
-        const PluginVTable* vt = guard_.vtable();
+        const PluginInterface* vt = guard_.vtable();
         // ... ABI call
     }
     
@@ -386,7 +386,7 @@ class PluginManager:
 
 ```rust
 // Rust example - No explicit tracking needed!
-// PluginVTableGuard uses Arc, so old vtables stay alive until all guards are dropped.
+// PluginGuard uses Arc, so old vtables stay alive until all guards are dropped.
 // Just destroy your contract instances in the Preparing callback.
 static INSTANCES: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>> = ...;
 
@@ -416,7 +416,7 @@ Runtime.OnReload(phase => {
 ## Thread Safety
 
 ### Rust
-- Generated callers are `!Send` due to `PluginVTableGuard` containing `PhantomData<Cell<()>>`
+- Generated callers are `!Send` due to `PluginGuard` containing `PhantomData<Cell<()>>`
 - Each thread must call `create()` independently
 - Prevents cross-thread vtable access during hot-reload
 

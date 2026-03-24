@@ -9,7 +9,7 @@ local M = {}
 
 -- Function pointer type for decoder (pipeline.Decoder@1)
 --   decode(input: StringView) -> StringView
-local DECODER_VTABLE = ffi.new("PluginVTable")
+local DECODER_VTABLE = ffi.new("PluginInterface")
 DECODER_VTABLE.contract_id = 0x12F3C106B0C3DC1E
 DECODER_VTABLE.contract_version = 0
 DECODER_VTABLE.function_count = 1

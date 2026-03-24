@@ -571,7 +571,7 @@ fn generate_guest_plugin_vtable(
     }
 
     out.push_str(&format!(
-        "local {plugin_var}_VTABLE = ffi.new(\"PluginVTable\")\n"
+        "local {plugin_var}_VTABLE = ffi.new(\"PluginInterface\")\n"
     ));
     out.push_str(&format!(
         "{plugin_var}_VTABLE.contract_id = 0x{:016X}\n",

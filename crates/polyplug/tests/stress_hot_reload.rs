@@ -223,7 +223,7 @@ fn stress_memory_vtable_slot_released_after_reload() {
 }
 
 /// Guard quiescence under load: multiple reader threads continuously hold
-/// PluginVTableGuards while the reloader thread fires 50+ vtable swaps.
+/// PluginGuards while the reloader thread fires 50+ vtable swaps.
 /// Every swap must quiesce within the timeout despite the reader contention.
 #[test]
 #[ignore]
@@ -272,7 +272,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
                 > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64, 0_u32);
                 if let Ok(resolved_handle) = find_result {
                     let guard_result: Result<
-                        polyplug::registry::PluginVTableGuard,
+                        polyplug::registry::PluginGuard,
                         polyplug::error::RegistryError,
                     > = reg_clone.resolve_guard(resolved_handle);
                     if let Ok(guard) = guard_result {

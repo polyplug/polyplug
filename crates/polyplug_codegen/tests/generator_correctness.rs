@@ -253,7 +253,7 @@ fn vtable_slots_are_sequential() {
     );
 }
 
-/// Verifies that the `function_count` field emitted in the PluginVTable
+/// Verifies that the `function_count` field emitted in the PluginInterface
 /// initialiser matches the number of functions declared in the contract.
 #[test]
 fn vtable_function_count_matches_contract() {

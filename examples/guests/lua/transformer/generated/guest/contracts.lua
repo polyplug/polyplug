@@ -9,7 +9,7 @@ local M = {}
 
 -- Function pointer type for transformer (data.Transformer@1)
 --   transform(input: StringView) -> StringView
-local TRANSFORMER_VTABLE = ffi.new("PluginVTable")
+local TRANSFORMER_VTABLE = ffi.new("PluginInterface")
 TRANSFORMER_VTABLE.contract_id = 0x3D53C682F3F5A9EF
 TRANSFORMER_VTABLE.contract_version = 0
 TRANSFORMER_VTABLE.function_count = 1

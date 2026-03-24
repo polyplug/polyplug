@@ -10,7 +10,7 @@
 use core::time::Duration;
 use std::sync::Arc;
 
-use polyplug::registry::{PluginVTableGuard, Registry, VTableSlot};
+use polyplug::registry::{PluginGuard, Registry, VTableSlot};
 use polyplug_abi::{
     DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
     StringView,
@@ -80,7 +80,7 @@ fn test_vtable_swap_while_call_in_progress() {
     .expect("registration should succeed");
 
     // Resolve a guard BEFORE the swap — this simulates an in-flight call.
-    let guard: PluginVTableGuard = registry
+    let guard: PluginGuard = registry
         .resolve_guard(handle)
         .expect("resolve_guard should succeed for valid handle");
 
@@ -150,7 +150,7 @@ fn test_generation_increment_on_swap() {
     let generation_before: u32 = handle_before.generation;
 
     // The handle should be valid before the swap.
-    let resolve_result_before: Result<PluginVTableGuard, _> = registry.resolve_guard(handle_before);
+    let resolve_result_before: Result<PluginGuard, _> = registry.resolve_guard(handle_before);
     assert!(
         resolve_result_before.is_ok(),
         "handle should be valid before swap"
@@ -163,7 +163,7 @@ fn test_generation_increment_on_swap() {
         .expect("swap_vtable should succeed");
 
     // The old handle should now be stale (generation mismatch).
-    let resolve_result_after: Result<PluginVTableGuard, polyplug::error::RegistryError> =
+    let resolve_result_after: Result<PluginGuard, polyplug::error::RegistryError> =
         registry.resolve_guard(handle_before);
 
     match resolve_result_after {
@@ -206,7 +206,7 @@ fn test_generation_increment_on_swap() {
     );
 
     // The new handle should be valid.
-    let resolve_new: PluginVTableGuard = registry
+    let resolve_new: PluginGuard = registry
         .resolve_guard(handle_after)
         .expect("new handle should be valid");
 
@@ -250,8 +250,8 @@ fn test_arc_reference_count_during_quiescence() {
     };
 
     let guard_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-        // Resolve the guard on this thread (PluginVTableGuard is !Send).
-        let guard: PluginVTableGuard = registry_clone
+        // Resolve the guard on this thread (PluginGuard is !Send).
+        let guard: PluginGuard = registry_clone
             .resolve_guard(handle_for_thread)
             .expect("resolve_guard should succeed in thread");
 
@@ -298,7 +298,7 @@ fn test_arc_reference_count_during_quiescence() {
         .find_by_contract(0xDEAD_BEEF_0000_0001_u64, 0_u32)
         .expect("find_by_contract should succeed");
 
-    let guard: PluginVTableGuard = registry
+    let guard: PluginGuard = registry
         .resolve_guard(new_handle)
         .expect("resolve_guard should succeed for new handle");
 
@@ -344,8 +344,8 @@ fn test_multiple_guards_keep_arc_alive() {
         };
 
         let guard_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-            // Resolve the guard on this thread (PluginVTableGuard is !Send).
-            let guard: PluginVTableGuard = registry_clone
+            // Resolve the guard on this thread (PluginGuard is !Send).
+            let guard: PluginGuard = registry_clone
                 .resolve_guard(handle_for_thread)
                 .expect("resolve_guard should succeed in thread");
 

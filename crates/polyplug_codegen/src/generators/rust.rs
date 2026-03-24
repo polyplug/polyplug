@@ -116,7 +116,7 @@ impl CodeGenerator for RustGenerator {
 
         callers_out.push_str("use polyplug_abi::ABI_OK;\n");
         callers_out.push_str("use polyplug_abi::AbiError;\n");
-        callers_out.push_str("use polyplug_abi::PluginVTable;\n");
+        callers_out.push_str("use polyplug_abi::PluginInterface;\n");
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::ABI_ERROR_GENERIC;\n");
@@ -124,7 +124,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::ABI_ERROR_STALE_HANDLE;\n");
         callers_out.push_str("use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;\n");
         callers_out.push_str("use polyplug_abi::PluginHandle;\n");
-        callers_out.push_str("use polyplug::registry::PluginVTableGuard;\n");
+        callers_out.push_str("use polyplug::registry::PluginGuard;\n");
         callers_out.push_str("use polyplug::runtime::Runtime;\n");
         callers_out.push_str("use super::types::*;\n\n");
         callers_out.push_str("/// Host-side error type for contract calls.\n");
@@ -867,7 +867,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::ABI_ERROR_GENERIC;\n");
     out.push_str("use polyplug_guest::PluginDescriptor;\n");
     out.push_str("use polyplug_guest::HostVTable;\n");
-    out.push_str("use polyplug_guest::PluginVTable;\n");
+    out.push_str("use polyplug_guest::PluginInterface;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::PluginContext;\n");
     out.push_str("use core::ffi::c_void;\n");
@@ -980,7 +980,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
             out.push_str(&format!(
-                "        (host.register_plugin)(rt_ctx, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const PluginVTable)\n"
+                "        (host.register_plugin)(rt_ctx, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const PluginInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != ABI_OK {{\n"));
@@ -1014,7 +1014,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str("    // SAFETY: desc and vtable are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
-                "        (host.register_plugin)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const PluginVTable)\n"
+                "        (host.register_plugin)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const PluginInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{upper}.code != ABI_OK {{\n"));
@@ -1109,7 +1109,7 @@ fn generate_host_contract_caller(
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("pub struct {struct_name} {{\n"));
-    out.push_str("    guard: PluginVTableGuard,\n");
+    out.push_str("    guard: PluginGuard,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {struct_name} {{\n"));
@@ -1118,7 +1118,7 @@ fn generate_host_contract_caller(
         "    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {\n",
     );
     out.push_str(
-        "        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;\n",
+        "        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;\n",
     );
     out.push_str(&format!("        Some({struct_name} {{ guard }})\n"));
     out.push_str("    }\n\n");
@@ -1189,10 +1189,10 @@ fn generate_host_fn_caller(
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
-    out.push_str("        let vtable_ptr: *const PluginVTable = self.guard.vtable();\n");
+    out.push_str("        let vtable_ptr: *const PluginInterface = self.guard.vtable();\n");
     out.push_str("        // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.\n");
     out.push_str("        let err: AbiError = unsafe {\n");
-    out.push_str("            let vtable: &PluginVTable = &*vtable_ptr;\n");
+    out.push_str("            let vtable: &PluginInterface = &*vtable_ptr;\n");
     out.push_str(&format!(
         "            if {fn_id}_u32 >= vtable.function_count {{\n"
     ));

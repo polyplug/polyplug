@@ -8,7 +8,7 @@
 //! - **BigInt for 64-bit values**: JavaScript `number` is a 64-bit float and loses precision
 //!   for integers above 2^53. We use `bigint` for `u64`, `i64`, and pointer types.
 //! - **TypeScript types**: Generate `.ts` files with proper type annotations.
-//! - **No PluginVTable**: Only `PluginInterface` is generated (per plan requirements).
+//! - **No PluginInterface**: Only `PluginInterface` is generated (per plan requirements).
 //! - **String helpers**: Native TypeScript implementations for zero overhead.
 
 use super::{AbiGenerator, AbiInfo, EnumInfo, StructInfo, UnionInfo};

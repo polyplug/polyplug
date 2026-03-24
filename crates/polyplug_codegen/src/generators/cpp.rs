@@ -1041,7 +1041,7 @@ fn generate_cpp_host_function(
         None | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Void))
     );
 
-    out.push_str("        const PluginVTable* vtable = guard_.vtable();\n");
+    out.push_str("        const PluginInterface* vtable = guard_.vtable();\n");
     out.push_str("        if (!vtable) {\n");
     out.push_str("            polyplug::check_abi_error(AbiError{4, {nullptr, 0}});\n");
     out.push_str("        }\n");

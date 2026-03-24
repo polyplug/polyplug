@@ -3,11 +3,11 @@
 
 use std::sync::Mutex;
 
-use polyplug::registry::PluginVTableGuard;
+use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::ABI_OK;
 use polyplug_native::NativeLoader;
 
@@ -37,7 +37,7 @@ impl ContractError {
 }
 
 pub struct TestAddContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl TestAddContract {
@@ -45,7 +45,7 @@ impl TestAddContract {
         let handle: PluginHandle = runtime
             .find_by_contract(TEST_ADD_CONTRACT_ID, min_version)
             .ok()?;
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(Self { guard })
     }
 
@@ -63,10 +63,10 @@ impl TestAddContract {
         // SAFETY: args_ptr points to a valid AddArgs and out_ptr to a valid u32.
         let args_ptr: *const () = &args as *const AddArgs as *const ();
         let out_ptr: *mut () = &mut out_val as *mut u32 as *mut ();
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call.
         let err: AbiError = unsafe {
-            let vtable: &PluginVTable = &*vtable_ptr;
+            let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: polyplug_abi::ABI_FUNCTION_NOT_AVAIL,

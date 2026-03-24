@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
+from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -52,7 +52,7 @@ VALIDATOR_validator_validate_abi_CFUNC = _DISPATCH_FN_CTYPE(validator_validate_a
 VALIDATOR_FNS = (ctypes.c_void_p * 1) (
     ctypes.cast(VALIDATOR_validator_validate_abi_CFUNC, ctypes.c_void_p),
 )
-VALIDATOR_VTABLE: PluginVTable = PluginVTable(
+VALIDATOR_VTABLE: PluginInterface = PluginInterface(
     contract_id=0xA553FAB5D11C7AF0,
     contract_version=0,
     function_count=1,

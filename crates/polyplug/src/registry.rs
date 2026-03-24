@@ -9,6 +9,8 @@
 //! find_all_by_contract(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice.
 
+use core::cell::Cell;
+use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -29,7 +31,7 @@ pub struct VTableSlot(pub *const PluginInterface);
 
 // SAFETY: *const PluginInterface points to 'static plugin data. Once registered, the data is never
 // mutated. The pointer remains valid for the lifetime of the loaded library. Aliasing is safe
-// because all access is read-only through PluginVTableGuard.
+// because all access is read-only through PluginGuard.
 unsafe impl Send for VTableSlot {}
 // SAFETY: Same reasoning as Send above — read-only access to 'static data.
 unsafe impl Sync for VTableSlot {}
@@ -38,18 +40,18 @@ unsafe impl Sync for VTableSlot {}
 /// This is Rust-only and never crosses the C ABI boundary.
 /// Intentionally NOT Send: the guard must be used on the same thread that called
 /// resolve_guard(), or re-resolved per-call from a new thread.
-pub struct PluginVTableGuard {
+pub struct PluginGuard {
     pub(crate) slot: Arc<VTableSlot>,
-    /// Opt-out of Send. Cell<()> is !Send, so PluginVTableGuard becomes !Send automatically.
-    _not_send: core::marker::PhantomData<core::cell::Cell<()>>,
+    /// Opt-out of Send. Cell<()> is !Send, so PluginGuard becomes !Send automatically.
+    _not_send: PhantomData<Cell<()>>,
 }
 
-impl PluginVTableGuard {
+impl PluginGuard {
     /// Construct a new guard wrapping the given slot.
     pub(crate) fn new(slot: Arc<VTableSlot>) -> Self {
         Self {
             slot,
-            _not_send: core::marker::PhantomData,
+            _not_send: PhantomData,
         }
     }
 
@@ -449,7 +451,7 @@ impl Registry {
     //
     //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
     //  Returns Err(StaleHandle) if the slot is vacant or has no vtable.
-    pub fn resolve_guard(&self, handle: PluginHandle) -> Result<PluginVTableGuard, RegistryError> {
+    pub fn resolve_guard(&self, handle: PluginHandle) -> Result<PluginGuard, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| e.into_inner());
 
@@ -475,7 +477,7 @@ impl Registry {
         match slot.vtable {
             Some(ref arc_vtable) => {
                 let arc: Arc<VTableSlot> = arc_vtable.load_full();
-                Ok(PluginVTableGuard::new(arc))
+                Ok(PluginGuard::new(arc))
             }
             None => Err(RegistryError::StaleHandle {
                 index: handle.index,
@@ -488,7 +490,7 @@ impl Registry {
     /// Find a plugin by contract_id and minimum version.
     //
     //  Delegates to find_by_contract(). Kept for API compatibility.
-    //  min_version encoding: (minor << 16 | patch), same as PluginVTable::contract_version.
+    //  min_version encoding: (minor << 16 | patch), same as PluginInterface::contract_version.
     //  Pass 0 to accept any version.
     pub fn find(&self, contract_id: u64, min_version: u32) -> Result<PluginHandle, RegistryError> {
         self.find_by_contract(contract_id, min_version)
@@ -499,7 +501,7 @@ impl Registry {
     //  Delegates to resolve_guard(). Kept for API compatibility.
     //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
     pub fn resolve(&self, handle: PluginHandle) -> Result<*const PluginInterface, RegistryError> {
-        let guard: PluginVTableGuard = self.resolve_guard(handle)?;
+        let guard: PluginGuard = self.resolve_guard(handle)?;
         Ok(guard.vtable())
     }
 

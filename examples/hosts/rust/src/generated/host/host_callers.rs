@@ -8,7 +8,7 @@
 
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
 use polyplug_abi::ABI_ERROR_GENERIC;
@@ -16,7 +16,7 @@ use polyplug_abi::ABI_ERROR_NOT_FOUND;
 use polyplug_abi::ABI_ERROR_STALE_HANDLE;
 use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
 use polyplug_abi::PluginHandle;
-use polyplug::registry::PluginVTableGuard;
+use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
 use super::types::*;
 
@@ -38,13 +38,13 @@ impl ContractError {
 
 /// Host caller for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
 pub struct PipelineDecoderContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl PipelineDecoderContract {
     /// Factory method - creates instance or None if not found.
     pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(PipelineDecoderContract { guard })
     }
 
@@ -63,10 +63,10 @@ impl PipelineDecoderContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
-            let vtable: &PluginVTable = &*vtable_ptr;
+            let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
@@ -92,13 +92,13 @@ impl PipelineDecoderContract {
 
 /// Host caller for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
 pub struct DataTransformerContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl DataTransformerContract {
     /// Factory method - creates instance or None if not found.
     pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(DataTransformerContract { guard })
     }
 
@@ -117,10 +117,10 @@ impl DataTransformerContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
-            let vtable: &PluginVTable = &*vtable_ptr;
+            let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
@@ -146,13 +146,13 @@ impl DataTransformerContract {
 
 /// Host caller for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
 pub struct PipelineEncoderContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl PipelineEncoderContract {
     /// Factory method - creates instance or None if not found.
     pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(PipelineEncoderContract { guard })
     }
 
@@ -171,10 +171,10 @@ impl PipelineEncoderContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
-            let vtable: &PluginVTable = &*vtable_ptr;
+            let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
@@ -200,13 +200,13 @@ impl PipelineEncoderContract {
 
 /// Host caller for contract `data.Reporter` (id=0x81D41D43E511D297)
 pub struct DataReporterContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl DataReporterContract {
     /// Factory method - creates instance or None if not found.
     pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(DataReporterContract { guard })
     }
 
@@ -225,10 +225,10 @@ impl DataReporterContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
-            let vtable: &PluginVTable = &*vtable_ptr;
+            let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {
@@ -254,13 +254,13 @@ impl DataReporterContract {
 
 /// Host caller for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
 pub struct PipelineValidatorContract {
-    guard: PluginVTableGuard,
+    guard: PluginGuard,
 }
 
 impl PipelineValidatorContract {
     /// Factory method - creates instance or None if not found.
     pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        let guard: PluginVTableGuard = runtime.registry().resolve_guard(handle).ok()?;
+        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(PipelineValidatorContract { guard })
     }
 
@@ -279,10 +279,10 @@ impl PipelineValidatorContract {
         // SAFETY: args_ptr points to a valid StringView and out_ptr to a valid StringView.
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
-        let vtable_ptr: *const PluginVTable = self.guard.vtable();
+        let vtable_ptr: *const PluginInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.
         let err: AbiError = unsafe {
-            let vtable: &PluginVTable = &*vtable_ptr;
+            let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
             } else {

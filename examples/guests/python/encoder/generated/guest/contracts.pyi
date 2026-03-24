@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any
-from polyplug_guest.abi import HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
+from polyplug_guest.abi import HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
 
 POLYPLUG_ABI_VERSION: int
 _DISPATCH_FN_TYPE: Any

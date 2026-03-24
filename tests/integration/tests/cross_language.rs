@@ -21,7 +21,7 @@ use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
@@ -96,7 +96,7 @@ static CROSS_LANG_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // ─── Thread-local for native .so tests ────────────────────────────────────────
 
 std::thread_local! {
-    static CAPTURED_VT: core::cell::Cell<*const PluginVTable> =
+    static CAPTURED_VT: core::cell::Cell<*const PluginInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
@@ -111,7 +111,7 @@ std::thread_local! {
 unsafe extern "C" fn capture_vtable_cb(
     _rt_ctx: *mut core::ffi::c_void,
     _desc: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     CAPTURED_VT.with(|cell| cell.set(vtable));
     AbiError {
@@ -181,7 +181,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 unsafe extern "C" fn stub_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 
@@ -196,7 +196,7 @@ unsafe extern "C" fn stub_get_extension(
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Retrieve vtable for `test.add@1` from a Runtime instance.
-fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginVTable {
+fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginInterface {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
     let handle: PluginHandle = runtime
         .find_by_contract(contract_id, 0)
@@ -207,12 +207,12 @@ fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginVTable {
 }
 
 /// Dispatch add(3, 5) and verify the result equals 8.
-fn dispatch_add_and_verify(vtable_ptr: *const PluginVTable) {
+fn dispatch_add_and_verify(vtable_ptr: *const PluginInterface) {
     use polyplug_abi::DispatchType;
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr is valid for the call.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     let result: AbiError = if vtable.dispatch_type == DispatchType::Native {
         // SAFETY: functions[0] is the add wrapper.
@@ -299,7 +299,7 @@ fn test_rust_host_rust_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -307,7 +307,7 @@ fn test_rust_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper with signature extern "C" fn(*const (), *mut ()) -> AbiError.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to generic dispatch signature; AddArgs matches the add function.
@@ -378,7 +378,7 @@ fn test_cpp_host_rust_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -386,7 +386,7 @@ fn test_cpp_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -457,7 +457,7 @@ fn test_csharp_host_rust_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -465,7 +465,7 @@ fn test_csharp_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -536,7 +536,7 @@ fn test_python_host_rust_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -544,7 +544,7 @@ fn test_python_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -615,7 +615,7 @@ fn test_lua_host_rust_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -623,7 +623,7 @@ fn test_lua_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -694,7 +694,7 @@ fn test_js_host_rust_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -702,7 +702,7 @@ fn test_js_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -779,7 +779,7 @@ fn test_rust_host_cpp_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -787,7 +787,7 @@ fn test_rust_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches cpp_test_add.
@@ -858,7 +858,7 @@ fn test_cpp_host_cpp_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -866,7 +866,7 @@ fn test_cpp_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -937,7 +937,7 @@ fn test_csharp_host_cpp_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -945,7 +945,7 @@ fn test_csharp_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1016,7 +1016,7 @@ fn test_python_host_cpp_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -1024,7 +1024,7 @@ fn test_python_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1095,7 +1095,7 @@ fn test_lua_host_cpp_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -1103,7 +1103,7 @@ fn test_lua_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1174,7 +1174,7 @@ fn test_js_host_cpp_guest() {
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginVTable = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -1182,7 +1182,7 @@ fn test_js_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1229,7 +1229,7 @@ fn test_rust_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1256,7 +1256,7 @@ fn test_cpp_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1287,14 +1287,14 @@ fn test_csharp_host_csharp_guest() {
     let handle: PluginHandle = runtime
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
-    let vtable_ptr: *const PluginVTable = runtime
+    let vtable_ptr: *const PluginInterface = runtime
         .resolve_plugin(handle)
         .expect("handle must be valid");
     assert!(!vtable_ptr.is_null(), "vtable must be non-null");
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1334,7 +1334,7 @@ fn test_python_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1361,7 +1361,7 @@ fn test_lua_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1388,7 +1388,7 @@ fn test_js_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1414,7 +1414,7 @@ fn test_rust_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1435,7 +1435,7 @@ fn test_cpp_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1456,7 +1456,7 @@ fn test_csharp_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1477,7 +1477,7 @@ fn test_python_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1498,7 +1498,7 @@ fn test_lua_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1519,7 +1519,7 @@ fn test_js_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1543,7 +1543,7 @@ fn test_rust_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1562,7 +1562,7 @@ fn test_cpp_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1581,7 +1581,7 @@ fn test_csharp_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1600,7 +1600,7 @@ fn test_python_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1619,7 +1619,7 @@ fn test_lua_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1638,7 +1638,7 @@ fn test_js_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1662,7 +1662,7 @@ fn test_rust_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1681,7 +1681,7 @@ fn test_cpp_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1700,7 +1700,7 @@ fn test_csharp_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1719,7 +1719,7 @@ fn test_python_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1738,7 +1738,7 @@ fn test_lua_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }
 
@@ -1757,6 +1757,6 @@ fn test_js_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginVTable = get_vtable_from_runtime(&runtime);
+    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
     dispatch_add_and_verify(vtable_ptr);
 }

@@ -4,7 +4,7 @@
 
 ## Overview
 
-This document explains the design decisions behind the `PluginInterface` architecture, which replaces the previous `PluginVTable` design. The key goals are:
+This document explains the design decisions behind the `PluginInterface` architecture, which replaces the previous `PluginInterface` design. The key goals are:
 
 1. **Zero overhead for native plugins** - Direct function call, no indirection
 2. **Minimal overhead for VM plugins** - One dispatch call, no global state
@@ -13,14 +13,14 @@ This document explains the design decisions behind the `PluginInterface` archite
 
 ---
 
-## The Problem with PluginVTable
+## The Problem with PluginInterface
 
 ### Previous Architecture
 
 ```rust
-// OLD: PluginVTable forced all loaders into the same pattern
+// OLD: PluginInterface forced all loaders into the same pattern
 #[repr(C)]
-pub struct PluginVTable {
+pub struct PluginInterface {
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
@@ -150,7 +150,7 @@ pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
 │                                                                              │
 │  Total: ~6-18 cycles (~2-5 ns on modern CPU)                                │
 │                                                                              │
-│  This is THE SAME as the old PluginVTable architecture.                     │
+│  This is THE SAME as the old PluginInterface architecture.                     │
 │  Zero additional overhead.                                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -346,7 +346,7 @@ unsafe extern "C" fn deno_dispatch(
 
 ## Summary
 
-| Aspect | Old (PluginVTable) | New (PluginInterface) |
+| Aspect | Old (PluginInterface) | New (PluginInterface) |
 |--------|-------------------|----------------------|
 | Native overhead | ~5 ns | ~5 ns (zero change) |
 | VM overhead | ~100-200 ns | ~60-120 ns (40% faster) |

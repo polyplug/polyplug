@@ -14,7 +14,7 @@ use polyplug_abi::HostVTable;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
@@ -30,7 +30,7 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 unsafe extern "C" fn noop_register(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginVTable,
+    _vtable: *const PluginInterface,
 ) -> AbiError {
     AbiError {
         code: ABI_OK,
@@ -92,7 +92,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 unsafe extern "C" fn noop_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: polyplug_abi::PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 

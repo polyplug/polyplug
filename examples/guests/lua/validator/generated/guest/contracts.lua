@@ -9,7 +9,7 @@ local M = {}
 
 -- Function pointer type for validator (pipeline.Validator@1)
 --   validate(input: StringView) -> StringView
-local VALIDATOR_VTABLE = ffi.new("PluginVTable")
+local VALIDATOR_VTABLE = ffi.new("PluginInterface")
 VALIDATOR_VTABLE.contract_id = 0xA553FAB5D11C7AF0
 VALIDATOR_VTABLE.contract_version = 0
 VALIDATOR_VTABLE.function_count = 1

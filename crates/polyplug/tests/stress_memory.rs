@@ -127,7 +127,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 unsafe extern "C" fn stub_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const polyplug_abi::PluginVTable {
+) -> *const polyplug_abi::PluginInterface {
     core::ptr::null()
 }
 
@@ -492,7 +492,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
     let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
 
     // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    // PluginVTable is Send+Sync per its unsafe impls in the plugin.
+    // PluginInterface is Send+Sync per its unsafe impls in the plugin.
     let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     const THREAD_COUNT: usize = 8;

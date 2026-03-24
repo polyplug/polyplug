@@ -9,7 +9,7 @@ local M = {}
 
 -- Function pointer type for reporter (data.Reporter@1)
 --   report(input: StringView) -> StringView
-local REPORTER_VTABLE = ffi.new("PluginVTable")
+local REPORTER_VTABLE = ffi.new("PluginInterface")
 REPORTER_VTABLE.contract_id = 0x81D41D43E511D297
 REPORTER_VTABLE.contract_version = 0
 REPORTER_VTABLE.function_count = 1

@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
+from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -52,7 +52,7 @@ ENCODER_encoder_encode_abi_CFUNC = _DISPATCH_FN_CTYPE(encoder_encode_abi)
 ENCODER_FNS = (ctypes.c_void_p * 1) (
     ctypes.cast(ENCODER_encoder_encode_abi_CFUNC, ctypes.c_void_p),
 )
-ENCODER_VTABLE: PluginVTable = PluginVTable(
+ENCODER_VTABLE: PluginInterface = PluginInterface(
     contract_id=0x127D1703C6EFB432,
     contract_version=0,
     function_count=1,

@@ -61,7 +61,7 @@ extern "C" fn my_fn(args: *const (), out: *mut ()) -> AbiError {
 
 static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
 
-static MY_VTABLE: PluginVTable = PluginVTable {
+static MY_VTABLE: PluginInterface = PluginInterface {
     contract_id: MY_CONTRACT_ID,
     contract_version: 1 << 16, // major=1, minor=0, patch=0
     function_count: 1,
@@ -187,13 +187,13 @@ AbiError::ok()   // AbiError { code: 0, message: StringView::null() }
 
 ---
 
-### `PluginVTable`
+### `PluginInterface`
 
 One per contract your plugin implements. Must be `'static`.
 
 ```rust
 #[repr(C)]
-pub struct PluginVTable {
+pub struct PluginInterface {
     pub contract_id:      u64,
     pub contract_version: u32,
     pub function_count:   u32,
@@ -232,7 +232,7 @@ pub struct PluginRegistrar {
     pub register_plugin: unsafe extern "C" fn(
         registrar:  *mut PluginRegistrar,
         descriptor: *const PluginDescriptor,
-        vtable:     *const PluginVTable,
+        vtable:     *const PluginInterface,
     ) -> AbiError,
     pub host: *const HostVTable,
 }
@@ -256,7 +256,7 @@ pub struct HostVTable {
     pub find_by_contract:     unsafe extern "C" fn(contract_id: u64, min_version: u32) -> PluginHandle,
     pub find_by_bundle:       unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> PluginHandle,
     pub find_all_by_contract: unsafe extern "C" fn(contract_id: u64, min_version: u32, out: *mut PluginHandle, out_cap: usize) -> usize,
-    pub resolve_plugin:       unsafe extern "C" fn(handle: PluginHandle) -> *const PluginVTable,
+    pub resolve_plugin:       unsafe extern "C" fn(handle: PluginHandle) -> *const PluginInterface,
     pub get_extension:        unsafe extern "C" fn(extension_id: u32) -> *const (),
 }
 ```
@@ -423,7 +423,7 @@ extern "C" fn plugin_transform(args: *const (), out: *mut ()) -> AbiError {
 ```rust
 static TRANSFORM_FNS: [FnPtr; 1] = [FnPtr(plugin_transform as *const ())];
 
-static TRANSFORM_VTABLE: PluginVTable = PluginVTable {
+static TRANSFORM_VTABLE: PluginInterface = PluginInterface {
     contract_id:      TRANSFORMER_CONTRACT_ID,
     contract_version: 1 << 16,
     function_count:   1,

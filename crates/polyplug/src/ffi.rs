@@ -452,7 +452,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
 ///   no hot-reload occurs for this plugin.
 ///
 /// # Returns
-/// - Non-null pointer to `PluginVTable` on success
+/// - Non-null pointer to `PluginInterface` on success
 /// - Null on error (check `polyplug_runtime_last_error` for details)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(

@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
 // Global mutex to serialize tests that share global registry state
@@ -26,7 +26,7 @@ fn create_runtime_with_native() -> Runtime {
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable: *const PluginVTable = rt.resolve_plugin(handle).ok()?;
+    let vtable: *const PluginInterface = rt.resolve_plugin(handle).ok()?;
     // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
@@ -67,7 +67,7 @@ fn test_b_in_flight_safety() {
             let handle_result: Result<polyplug_abi::PluginHandle, polyplug::error::RegistryError> =
                 rt_clone.find_by_contract(contract_id, 0);
             if let Ok(handle) = handle_result {
-                let vt_result: Result<*const PluginVTable, polyplug::error::RegistryError> =
+                let vt_result: Result<*const PluginInterface, polyplug::error::RegistryError> =
                     rt_clone.resolve_plugin(handle);
                 if let Ok(vt) = vt_result {
                     // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
@@ -138,7 +138,7 @@ fn test_e_cascade_reload() {
         let handle: polyplug_abi::PluginHandle = rt
             .find_by_contract(dep_contract_id, 0)
             .expect("find depender");
-        let vt: *const PluginVTable = rt.resolve_plugin(handle).expect("resolve depender");
+        let vt: *const PluginInterface = rt.resolve_plugin(handle).expect("resolve depender");
         // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
             let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).dispatch.native.functions);
@@ -151,7 +151,7 @@ fn test_e_cascade_reload() {
         let handle: polyplug_abi::PluginHandle = rt
             .find_by_contract(dep_contract_id, 0)
             .expect("find depender after reload");
-        let vt: *const PluginVTable = rt
+        let vt: *const PluginInterface = rt
             .resolve_plugin(handle)
             .expect("resolve depender after reload");
         // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.

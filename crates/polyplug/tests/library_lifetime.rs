@@ -16,7 +16,7 @@ use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::bundle_id;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -50,7 +50,7 @@ unsafe extern "C" fn stub_free(
 unsafe extern "C" fn stub_register_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginVTable,
+    _vtable: *const PluginInterface,
 ) -> AbiError {
     AbiError::ok()
 }
@@ -93,7 +93,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 unsafe extern "C" fn stub_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const polyplug_abi::PluginVTable {
+) -> *const polyplug_abi::PluginInterface {
     core::ptr::null()
 }
 

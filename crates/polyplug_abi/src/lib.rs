@@ -359,9 +359,6 @@ unsafe impl Send for PluginInterface {}
 // Concurrent reads are safe — no mutation occurs through shared references.
 unsafe impl Sync for PluginInterface {}
 
-/// Backward-compatible alias for PluginInterface.
-pub type PluginVTable = PluginInterface;
-
 /// Host capabilities passed to every plugin at init time.
 ///
 /// OWNERSHIP: `'static`, lives as long as the runtime.

@@ -35,7 +35,7 @@ use crate::version::Version;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 
 #[cfg(feature = "hot-reload")]
 use core::sync::atomic::Ordering;
@@ -436,7 +436,7 @@ impl Runtime {
     pub fn resolve_plugin(
         &self,
         handle: PluginHandle,
-    ) -> Result<*const PluginVTable, RegistryError> {
+    ) -> Result<*const PluginInterface, RegistryError> {
         self.registry.resolve(handle)
     }
 
@@ -885,11 +885,11 @@ fn parse_manifest_version(v: &str, bundle_name: &str) -> Result<Version, Runtime
 /// # Safety
 /// - rt_ctx must be a valid pointer to a HostContext
 /// - descriptor must point to a valid PluginDescriptor
-/// - vtable must point to a valid PluginVTable that remains valid for the Runtime lifetime
+/// - vtable must point to a valid PluginInterface that remains valid for the Runtime lifetime
 pub(crate) unsafe extern "C" fn host_register_plugin(
     rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> polyplug_abi::AbiError {
     if rt_ctx.is_null() {
         return polyplug_abi::AbiError {
@@ -922,7 +922,7 @@ pub(crate) unsafe extern "C" fn host_register_plugin(
     // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes
     let contract_name: String = unsafe { desc.contract_name.to_string_owned() };
 
-    // SAFETY: vtable is a valid 'static PluginVTable from the plugin binary
+    // SAFETY: vtable is a valid 'static PluginInterface from the plugin binary
     match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
         Ok(_handle) => polyplug_abi::AbiError::ok(),
         Err(e) => {
@@ -1061,7 +1061,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
 pub(crate) unsafe extern "C" fn host_resolve_plugin(
     rt_ctx: *mut core::ffi::c_void,
     handle: PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     if rt_ctx.is_null() {
         return core::ptr::null();
     }

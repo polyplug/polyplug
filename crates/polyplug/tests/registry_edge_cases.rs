@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::PluginVTableGuard;
+use polyplug::registry::PluginGuard;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug_abi::{
@@ -76,7 +76,7 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
             .expect("registration C should succeed")
     };
 
-    let guard_a: PluginVTableGuard = registry
+    let guard_a: PluginGuard = registry
         .resolve_guard(handle_a)
         .expect("resolve_guard for handle_a should succeed");
     let vtable_ptr_a: *const PluginInterface = guard_a.vtable();
@@ -87,7 +87,7 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
         "handle_a should return VTABLE_A"
     );
 
-    let guard_b: PluginVTableGuard = registry
+    let guard_b: PluginGuard = registry
         .resolve_guard(handle_b)
         .expect("resolve_guard for handle_b should succeed");
     let vtable_ptr_b: *const PluginInterface = guard_b.vtable();
@@ -98,7 +98,7 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
         "handle_b should return VTABLE_B"
     );
 
-    let guard_c: PluginVTableGuard = registry
+    let guard_c: PluginGuard = registry
         .resolve_guard(handle_c)
         .expect("resolve_guard for handle_c should succeed");
     let vtable_ptr_c: *const PluginInterface = guard_c.vtable();
@@ -133,7 +133,7 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: 9999_u32,
         generation: 0_u32,
     };
-    let result: Result<PluginVTableGuard, RegistryError> =
+    let result: Result<PluginGuard, RegistryError> =
         registry.resolve_guard(out_of_bounds_handle);
     assert!(
         matches!(result, Err(RegistryError::StaleHandle { .. })),
@@ -145,7 +145,7 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: handle.index,
         generation: handle.generation.wrapping_add(1_u32),
     };
-    let result_stale: Result<PluginVTableGuard, RegistryError> =
+    let result_stale: Result<PluginGuard, RegistryError> =
         registry.resolve_guard(stale_handle);
     assert!(
         matches!(result_stale, Err(RegistryError::StaleHandle { .. })),
@@ -157,7 +157,7 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: 1_u32,
         generation: 0_u32,
     };
-    let result_unused: Result<PluginVTableGuard, RegistryError> =
+    let result_unused: Result<PluginGuard, RegistryError> =
         registry.resolve_guard(unused_slot_handle);
     assert!(
         matches!(result_unused, Err(RegistryError::StaleHandle { .. })),
@@ -251,7 +251,7 @@ fn resolve_guard_concurrent_access_thread_safety() {
             barrier_clone.wait();
 
             for _round in 0_usize..CONCURRENT_ROUNDS {
-                let guard: PluginVTableGuard = registry_clone
+                let guard: PluginGuard = registry_clone
                     .resolve_guard(handle)
                     .expect("resolve_guard should succeed in concurrent context");
                 let vtable_ptr: *const PluginInterface = guard.vtable();
@@ -352,7 +352,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "generation should match first implementation"
     );
 
-    let guard: PluginVTableGuard = registry
+    let guard: PluginGuard = registry
         .resolve_guard(found)
         .expect("resolve_guard should succeed");
     let vtable_ptr: *const PluginInterface = guard.vtable();
@@ -402,7 +402,7 @@ fn swap_vtable_during_active_resolve_guard() {
             .expect("initial registration should succeed")
     };
 
-    let guard_before_swap: PluginVTableGuard = registry
+    let guard_before_swap: PluginGuard = registry
         .resolve_guard(handle_v1)
         .expect("resolve_guard before swap should succeed");
     let vtable_ptr_before: *const PluginInterface = guard_before_swap.vtable();
@@ -429,7 +429,7 @@ fn swap_vtable_during_active_resolve_guard() {
         "old guard should still point to V1 after swap"
     );
 
-    let result_after_swap: Result<PluginVTableGuard, RegistryError> =
+    let result_after_swap: Result<PluginGuard, RegistryError> =
         registry.resolve_guard(handle_v1);
     assert!(
         matches!(result_after_swap, Err(RegistryError::StaleHandle { .. })),
@@ -446,7 +446,7 @@ fn swap_vtable_during_active_resolve_guard() {
         "new handle should have incremented generation"
     );
 
-    let guard_after_swap: PluginVTableGuard = registry
+    let guard_after_swap: PluginGuard = registry
         .resolve_guard(new_handle)
         .expect("resolve_guard with new handle should succeed");
     let vtable_ptr_after: *const PluginInterface = guard_after_swap.vtable();

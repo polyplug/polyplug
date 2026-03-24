@@ -15,7 +15,7 @@ use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::ABI_OK;
 use std::path::Path;
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn polyplug_init(
 
 // Captured vtable pointer from the register_plugin callback, stored in a thread-local.
 std::thread_local! {
-    static CAPTURED_VTABLE: core::cell::Cell<*const PluginVTable> =
+    static CAPTURED_VTABLE: core::cell::Cell<*const PluginInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
@@ -196,7 +196,7 @@ std::thread_local! {
 unsafe extern "C" fn capture_vtable_callback(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    vtable: *const PluginVTable,
+    vtable: *const PluginInterface,
 ) -> AbiError {
     CAPTURED_VTABLE.with(|cell| cell.set(vtable));
     AbiError {
@@ -270,7 +270,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 unsafe extern "C" fn stub_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginVTable {
+) -> *const PluginInterface {
     core::ptr::null()
 }
 
@@ -388,14 +388,14 @@ fn smoke_rust_codegen_dispatch() {
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
 
     // ── 9. Retrieve the captured vtable ──────────────────────────────────────
-    let vtable_ptr: *const PluginVTable = CAPTURED_VTABLE.with(|cell| cell.get());
+    let vtable_ptr: *const PluginInterface = CAPTURED_VTABLE.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable pointer must be non-null after polyplug_init"
     );
 
     // SAFETY: vtable_ptr is valid — plugin is loaded and library is not yet dropped.
-    let vtable: &PluginVTable = unsafe { &*vtable_ptr };
+    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(
         vtable.function_count, 4_u32,

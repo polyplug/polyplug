@@ -10,14 +10,14 @@ use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
-use polyplug_abi::PluginVTable;
+use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable: *const PluginVTable = rt.resolve_plugin(handle).ok()?;
+    let vtable: *const PluginInterface = rt.resolve_plugin(handle).ok()?;
     // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {

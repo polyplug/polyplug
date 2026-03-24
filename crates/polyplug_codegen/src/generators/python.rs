@@ -360,7 +360,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -449,7 +449,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -864,7 +864,7 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
         ));
     }
     out.push_str(")\n");
-    out.push_str(&format!("{upper}_VTABLE: PluginVTable = PluginVTable(\n"));
+    out.push_str(&format!("{upper}_VTABLE: PluginInterface = PluginInterface(\n"));
     out.push_str(&format!(
         "    contract_id=0x{:016X},\n",
         contract.contract_id
@@ -954,7 +954,7 @@ fn generate_guest_plugin_vtable(
     }
     out.push_str(")\n");
     out.push_str(&format!(
-        "{plugin_upper}_VTABLE: PluginVTable = PluginVTable(\n"
+        "{plugin_upper}_VTABLE: PluginInterface = PluginInterface(\n"
     ));
     out.push_str(&format!(
         "    contract_id=0x{:016X},\n",

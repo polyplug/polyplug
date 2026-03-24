@@ -4,6 +4,12 @@
 
 import type { } from './types';
 
+/** Dispatch mechanism type — determines how function calls are routed. */
+const DispatchType = Object.freeze({
+    Native: 0,
+    VirtualMachine: 1,
+} as const);
+
 // Plugin: validator (pipeline.Validator@1)
 //   validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
