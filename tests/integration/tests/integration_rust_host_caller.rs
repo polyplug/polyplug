@@ -5,10 +5,10 @@ use std::sync::Mutex;
 
 use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
-use polyplug_abi::ABI_OK;
 use polyplug_native::NativeLoader;
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());

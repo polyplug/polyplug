@@ -9,9 +9,6 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::PolyplugcError;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -26,6 +23,9 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::resolve_type_ref;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 

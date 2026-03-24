@@ -6,19 +6,19 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::DispatchType;
-use polyplug_abi::StringView;
+use super::types::*;
+use polyplug::registry::PluginGuard;
+use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_ERROR_GENERIC;
 use polyplug_abi::ABI_ERROR_NOT_FOUND;
 use polyplug_abi::ABI_ERROR_STALE_HANDLE;
 use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
-use polyplug::registry::PluginGuard;
-use polyplug::runtime::Runtime;
-use super::types::*;
+use polyplug_abi::PluginInterface;
+use polyplug_abi::StringView;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -32,7 +32,10 @@ pub struct ContractError {
 impl ContractError {
     /// Create a new error with the given code.
     pub fn new(code: u32) -> Self {
-        Self { code, message: String::new() }
+        Self {
+            code,
+            message: String::new(),
+        }
     }
 }
 
@@ -49,10 +52,12 @@ impl PipelineDecoderContract {
     }
 
     /// Check if instance is valid (always true for Rust - guard holds Arc).
-    pub fn is_valid(&self) -> bool { true }
+    pub fn is_valid(&self) -> bool {
+        true
+    }
 
     /// Reset instance (no-op for Rust - guard holds Arc).
-    pub fn reset(&mut self) { }
+    pub fn reset(&mut self) {}
 
     /// Call `decode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -68,26 +73,35 @@ impl PipelineDecoderContract {
         let err: AbiError = unsafe {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
-                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                            core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, 0_u32, args_ptr, out_ptr)
-                    }
+                    DispatchType::VirtualMachine => (vtable.dispatch.vm.call)(
+                        vtable.dispatch.vm.loader_data,
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                    ),
                 }
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
@@ -103,10 +117,12 @@ impl DataTransformerContract {
     }
 
     /// Check if instance is valid (always true for Rust - guard holds Arc).
-    pub fn is_valid(&self) -> bool { true }
+    pub fn is_valid(&self) -> bool {
+        true
+    }
 
     /// Reset instance (no-op for Rust - guard holds Arc).
-    pub fn reset(&mut self) { }
+    pub fn reset(&mut self) {}
 
     /// Call `transform` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -122,26 +138,35 @@ impl DataTransformerContract {
         let err: AbiError = unsafe {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
-                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                            core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, 0_u32, args_ptr, out_ptr)
-                    }
+                    DispatchType::VirtualMachine => (vtable.dispatch.vm.call)(
+                        vtable.dispatch.vm.loader_data,
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                    ),
                 }
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
@@ -157,10 +182,12 @@ impl PipelineEncoderContract {
     }
 
     /// Check if instance is valid (always true for Rust - guard holds Arc).
-    pub fn is_valid(&self) -> bool { true }
+    pub fn is_valid(&self) -> bool {
+        true
+    }
 
     /// Reset instance (no-op for Rust - guard holds Arc).
-    pub fn reset(&mut self) { }
+    pub fn reset(&mut self) {}
 
     /// Call `encode` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -176,26 +203,35 @@ impl PipelineEncoderContract {
         let err: AbiError = unsafe {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
-                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                            core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, 0_u32, args_ptr, out_ptr)
-                    }
+                    DispatchType::VirtualMachine => (vtable.dispatch.vm.call)(
+                        vtable.dispatch.vm.loader_data,
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                    ),
                 }
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `data.Reporter` (id=0x81D41D43E511D297)
@@ -211,10 +247,12 @@ impl DataReporterContract {
     }
 
     /// Check if instance is valid (always true for Rust - guard holds Arc).
-    pub fn is_valid(&self) -> bool { true }
+    pub fn is_valid(&self) -> bool {
+        true
+    }
 
     /// Reset instance (no-op for Rust - guard holds Arc).
-    pub fn reset(&mut self) { }
+    pub fn reset(&mut self) {}
 
     /// Call `report` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -230,26 +268,35 @@ impl DataReporterContract {
         let err: AbiError = unsafe {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
-                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                            core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, 0_u32, args_ptr, out_ptr)
-                    }
+                    DispatchType::VirtualMachine => (vtable.dispatch.vm.call)(
+                        vtable.dispatch.vm.loader_data,
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                    ),
                 }
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
 
 /// Host caller for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
@@ -265,10 +312,12 @@ impl PipelineValidatorContract {
     }
 
     /// Check if instance is valid (always true for Rust - guard holds Arc).
-    pub fn is_valid(&self) -> bool { true }
+    pub fn is_valid(&self) -> bool {
+        true
+    }
 
     /// Reset instance (no-op for Rust - guard holds Arc).
-    pub fn reset(&mut self) { }
+    pub fn reset(&mut self) {}
 
     /// Call `validate` (function_id=0)
     #[allow(clippy::absurd_extreme_comparisons)]
@@ -284,25 +333,33 @@ impl PipelineValidatorContract {
         let err: AbiError = unsafe {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
-                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }
+                AbiError {
+                    code: ABI_FUNCTION_NOT_AVAIL,
+                    message: polyplug_abi::StringView::null(),
+                }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
-                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
+                        let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+                            core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
                     }
-                    DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, 0_u32, args_ptr, out_ptr)
-                    }
+                    DispatchType::VirtualMachine => (vtable.dispatch.vm.call)(
+                        vtable.dispatch.vm.loader_data,
+                        0_u32,
+                        args_ptr,
+                        out_ptr,
+                    ),
                 }
             }
         };
         if err.code != ABI_OK {
-            return Err(ContractError { code: err.code, message: String::new() });
+            return Err(ContractError {
+                code: err.code,
+                message: String::new(),
+            });
         }
         Ok(out_val)
     }
-
 }
-

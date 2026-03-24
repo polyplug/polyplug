@@ -343,10 +343,11 @@ pub(crate) fn reload_bundle_impl(
             Some(id) => id,
             None => continue,
         };
-        let new_vt_ptr: *const polyplug_abi::PluginInterface = match new_vtable_map.get(&contract_id) {
-            Some(&ptr) => ptr,
-            None => continue,
-        };
+        let new_vt_ptr: *const polyplug_abi::PluginInterface =
+            match new_vtable_map.get(&contract_id) {
+                Some(&ptr) => ptr,
+                None => continue,
+            };
         let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(new_vt_ptr));
         let old_arc: Arc<VTableSlot> = runtime
             .registry()

@@ -84,7 +84,8 @@ fn js_quickjs_load_bundle_and_call() {
     let handle: PluginHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
-    let vtable_ptr: *const PluginInterface = rt.resolve_plugin(handle).expect("handle must be valid");
+    let vtable_ptr: *const PluginInterface =
+        rt.resolve_plugin(handle).expect("handle must be valid");
     let vtable: &PluginInterface = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.function_count, 4,

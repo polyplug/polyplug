@@ -19,13 +19,15 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginDispatch;
@@ -33,8 +35,6 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::config::JsConfig;
 

@@ -6,21 +6,21 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use std::sync::OnceLock;
+use super::contracts::DataReporterPlugin;
+use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineDecoderPlugin;
+use super::contracts::PipelineEncoderPlugin;
+use super::contracts::PipelineValidatorPlugin;
+use super::types::*;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};
-use super::types::*;
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineEncoderPlugin;
-use super::contracts::DataReporterPlugin;
-use super::contracts::PipelineValidatorPlugin;
+use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_OK};
+use std::sync::OnceLock;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -38,7 +38,9 @@ pub const TRANSFORMER_CONTRACT_ID: u64 = 0x3D53C682F3F5A9EF;
 pub static TRANSFORMER_IMPL: OnceLock<Box<dyn DataTransformerPlugin>> = OnceLock::new();
 
 pub fn set_transformer_impl(impl_: Box<dyn DataTransformerPlugin>) -> Result<(), &'static str> {
-    TRANSFORMER_IMPL.set(impl_).map_err(|_| "transformer already registered")
+    TRANSFORMER_IMPL
+        .set(impl_)
+        .map_err(|_| "transformer already registered")
 }
 
 /// ABI wrapper for transform (function_id = 0).
@@ -47,17 +49,27 @@ extern "C" fn transformer_transform_abi(args: *const (), out: *mut ()) -> AbiErr
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn DataTransformerPlugin = match TRANSFORMER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
+            None => {
+                return AbiError {
+                    code: ABI_ERROR_GENERIC,
+                    message: StringView::null(),
+                };
+            }
         };
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.transform(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe { std::ptr::write(out as *mut StringView, val); }
+                unsafe {
+                    std::ptr::write(out as *mut StringView, val);
+                }
                 AbiError::ok()
             }
-            Err(e) => AbiError { code: e.code, message: StringView::null() },
+            Err(e) => AbiError {
+                code: e.code,
+                message: StringView::null(),
+            },
         }
     })) {
         Ok(err) => err,
@@ -65,9 +77,7 @@ extern "C" fn transformer_transform_abi(args: *const (), out: *mut ()) -> AbiErr
     }
 }
 
-static TRANSFORMER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(transformer_transform_abi as *const ()),
-];
+static TRANSFORMER_FNS: [FnPtr; 1_usize] = [FnPtr(transformer_transform_abi as *const ())];
 
 pub static TRANSFORMER_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -81,4 +91,3 @@ pub static TRANSFORMER_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
-

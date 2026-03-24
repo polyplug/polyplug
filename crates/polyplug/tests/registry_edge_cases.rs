@@ -133,8 +133,7 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: 9999_u32,
         generation: 0_u32,
     };
-    let result: Result<PluginGuard, RegistryError> =
-        registry.resolve_guard(out_of_bounds_handle);
+    let result: Result<PluginGuard, RegistryError> = registry.resolve_guard(out_of_bounds_handle);
     assert!(
         matches!(result, Err(RegistryError::StaleHandle { .. })),
         "out of bounds handle should return StaleHandle error"
@@ -145,8 +144,7 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: handle.index,
         generation: handle.generation.wrapping_add(1_u32),
     };
-    let result_stale: Result<PluginGuard, RegistryError> =
-        registry.resolve_guard(stale_handle);
+    let result_stale: Result<PluginGuard, RegistryError> = registry.resolve_guard(stale_handle);
     assert!(
         matches!(result_stale, Err(RegistryError::StaleHandle { .. })),
         "wrong generation handle should return StaleHandle error"
@@ -429,8 +427,7 @@ fn swap_vtable_during_active_resolve_guard() {
         "old guard should still point to V1 after swap"
     );
 
-    let result_after_swap: Result<PluginGuard, RegistryError> =
-        registry.resolve_guard(handle_v1);
+    let result_after_swap: Result<PluginGuard, RegistryError> = registry.resolve_guard(handle_v1);
     assert!(
         matches!(result_after_swap, Err(RegistryError::StaleHandle { .. })),
         "old handle should be stale after swap_vtable bumps generation"

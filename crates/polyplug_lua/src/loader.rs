@@ -15,18 +15,18 @@ use mlua::Value;
 use crate::config::LuaConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
-use polyplug_abi::contract_id;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::contract_id;
 
 /// The path to the guest-libs/lua/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");

@@ -760,9 +760,11 @@ mod tests {
         assert_eq!(files.files.len(), 1);
         assert_eq!(files.files[0].path, PathBuf::from("polyplug_abi.ts"));
         assert!(files.files[0].content.contains("export const ABI_OK"));
-        assert!(files.files[0]
-            .content
-            .contains("export interface StringView"));
+        assert!(
+            files.files[0]
+                .content
+                .contains("export interface StringView")
+        );
     }
 
     /// Generate the polyplug_abi.ts file for the SDK.
