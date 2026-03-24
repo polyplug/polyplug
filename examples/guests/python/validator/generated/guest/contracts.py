@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
+from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -57,6 +57,7 @@ VALIDATOR_VTABLE: PluginVTable = PluginVTable(
     contract_version=0,
     function_count=1,
     functions=ctypes.cast(VALIDATOR_FNS, ctypes.c_void_p),
+    dispatch_type=DispatchType.VirtualMachine,
 )
 
 def polyplug_abi_version() -> int:

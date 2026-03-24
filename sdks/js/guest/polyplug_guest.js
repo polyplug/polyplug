@@ -218,7 +218,7 @@ export default {
 export function readBytes(ptr, len) {
     const bytes = new Uint8Array(len);
     for (let i = 0; i < len; i++) {
-        bytes[i] = globalThis.polyplug.readByte(ptr + BigInt(i));
+        bytes[i] = globalThis.polyplug.readByte(ptr + i);
     }
     return bytes;
 }
@@ -274,10 +274,13 @@ export function toStr(sv) {
     // Deno: ptr is a bigint
     let ptr;
     if (typeof sv.ptr === 'bigint') {
-        // Deno FFI
+        // Deno FFI - only use if Deno is available
         ptr = sv.ptr;
-        const ptrNum = Number(ptr);
-        return new Deno.UnsafePointerView(ptrNum).getUtf8String(sv.len);
+        if (typeof Deno !== 'undefined' && Deno.UnsafePointerView) {
+            const ptrNum = Number(ptr);
+            return new Deno.UnsafePointerView(ptrNum).getUtf8String(sv.len);
+        }
+        // Fallback to byte-by-byte read if Deno FFI not available
     } else {
         // QuickJS: reconstruct 64-bit pointer from hi/lo split
         ptr = (BigInt(sv.ptr_hi) << 32n) + BigInt(sv.ptr_lo);

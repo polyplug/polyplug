@@ -99,18 +99,32 @@ unsafe extern "C" fn js_dispatch(
     let args_usize: usize = args as usize;
     let out_usize: usize = out as usize;
 
-    let call_result: Result<(), rquickjs::Error> = data.ctx.with(|ctx| {
+    // Split 64-bit pointers into lo/hi u32 pairs for QuickJS ABI
+    let args_lo: u32 = (args_usize as u64 & 0xFFFFFFFF) as u32;
+    let args_hi: u32 = ((args_usize as u64 >> 32) & 0xFFFFFFFF) as u32;
+    let out_lo: u32 = (out_usize as u64 & 0xFFFFFFFF) as u32;
+    let out_hi: u32 = ((out_usize as u64 >> 32) & 0xFFFFFFFF) as u32;
+
+    let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
+        eprintln!(
+            "[polyplug_js] js_dispatch: calling JS function fn_id={}",
+            fn_id
+        );
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
-        let args_bigint: rquickjs::BigInt<'_> =
-            rquickjs::BigInt::from_i64(ctx.clone(), args_usize as i64)?;
-        let out_bigint: rquickjs::BigInt<'_> =
-            rquickjs::BigInt::from_i64(ctx.clone(), out_usize as i64)?;
-        js_fn.call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), ()>((args_bigint, out_bigint))
+        eprintln!("[polyplug_js] js_dispatch: function restored");
+        let result: i32 =
+            js_fn.call::<(u32, u32, u32, u32), i32>((args_lo, args_hi, out_lo, out_hi))?;
+        eprintln!("[polyplug_js] js_dispatch: function returned {}", result);
+        Ok(result)
     });
 
     match call_result {
-        Ok(()) => AbiError {
+        Ok(0) => AbiError {
             code: ABI_OK,
+            message: StringView::null(),
+        },
+        Ok(code) => AbiError {
+            code: code as u32,
             message: StringView::null(),
         },
         Err(e) => {
@@ -596,6 +610,60 @@ fn register_host_functions<'js>(
             PolyplugError::Loader(LoaderError::JsRuntimePanic {
                 runtime: "js-quickjs".to_owned(),
                 message: format!("writeByte set failed: {e}"),
+            })
+        })?;
+    let read_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> u32 {
+        let ptr_u64: u64 = ptr_num as u64;
+        eprintln!("[polyplug_js] readU32: ptr={:#x}", ptr_u64);
+        let ptr: *const u32 = ptr_u64 as usize as *const u32;
+        if ptr.is_null() {
+            return 0;
+        }
+        // SAFETY: ptr is a valid pointer provided by the host for reading.
+        let value: u32 = unsafe { *ptr };
+        eprintln!("[polyplug_js] readU32: value={:#x}", value);
+        value
+    })
+    .map_err(|e: rquickjs::Error| {
+        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+            runtime: "js-quickjs".to_owned(),
+            message: format!("readU32 function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("readU32", read_u32_fn)
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("readU32 set failed: {e}"),
+            })
+        })?;
+
+    let write_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64, value: u32| {
+        let ptr_u64: u64 = ptr_num as u64;
+        let ptr: *mut u32 = ptr_u64 as usize as *mut u32;
+        if ptr.is_null() {
+            return;
+        }
+        // SAFETY: ptr is a valid pointer provided by the host for writing.
+        unsafe {
+            *ptr = value;
+        }
+    })
+    .map_err(|e: rquickjs::Error| {
+        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+            runtime: "js-quickjs".to_owned(),
+            message: format!("writeU32 function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("writeU32", write_u32_fn)
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("writeU32 set failed: {e}"),
             })
         })?;
 

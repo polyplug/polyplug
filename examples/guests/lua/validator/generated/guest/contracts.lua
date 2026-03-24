@@ -13,6 +13,7 @@ local VALIDATOR_VTABLE = ffi.new("PluginVTable")
 VALIDATOR_VTABLE.contract_id = 0xA553FAB5D11C7AF0
 VALIDATOR_VTABLE.contract_version = 0
 VALIDATOR_VTABLE.function_count = 1
+VALIDATOR_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 VALIDATOR_VTABLE.functions = nil
 
 local VALIDATOR_DESCRIPTOR = ffi.new("PluginDescriptor")

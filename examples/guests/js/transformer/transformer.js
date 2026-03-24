@@ -1,21 +1,31 @@
-function transform(args, out) {
-    return 0;
+import { setTransformerImpl } from './generated/guest/contracts';
+import { polyplug_init } from './generated/guest/init';
+import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
+
+function transform(input) {
+    const s = toStr(input);
+    const data = s.startsWith('DECODED:') ? s.slice(9) : s;
+    const parts = data.split('|');
+    
+    if (parts.length >= 3) {
+        const name = parts[0].toUpperCase();
+        const value = `${parts[1]} (transformed)`;
+        const count = parseInt(parts[2], 10) || 0;
+        const result = allocString(`TRANSFORMED:${name}|${value}|${count + 1}`);
+        
+        const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
+        const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);
+        
+        return {
+            ptr_lo: ptrLo,
+            ptr_hi: ptrHi,
+            len: result.len
+        };
+    }
+    
+    return { ptr_lo: 0, ptr_hi: 0, len: 0 };
 }
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {
-    var vtable = {
-        contractLo: 0x8E7A6B5C,
-        contractHi: 0x12F3C106,
-        fnCount: 1,
-        contractName: "pipeline.Transformer@1",
-        functions: [transform]
-    };
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName
-    );
-    return { code: 0, message: null };
-}
+setTransformerImpl(transform);
+
+export { polyplug_init };

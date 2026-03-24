@@ -13,6 +13,7 @@ local ENCODER_VTABLE = ffi.new("PluginVTable")
 ENCODER_VTABLE.contract_id = 0x127D1703C6EFB432
 ENCODER_VTABLE.contract_version = 0
 ENCODER_VTABLE.function_count = 1
+ENCODER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 ENCODER_VTABLE.functions = nil
 
 local ENCODER_DESCRIPTOR = ffi.new("PluginDescriptor")

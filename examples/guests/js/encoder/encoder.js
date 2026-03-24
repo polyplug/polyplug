@@ -1,21 +1,22 @@
-function encode(args, out) {
-    return 0;
+import { setEncoderImpl } from './generated/guest/contracts';
+import { polyplug_init } from './generated/guest/init';
+import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
+
+function encode(input) {
+    const s = toStr(input);
+    const data = s.startsWith("TRANSFORMED:") ? s.slice("TRANSFORMED:".length) : s;
+    const result = allocString(data.replace(/\|/g, ","));
+    
+    const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
+    const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);
+    
+    return {
+        ptr_lo: ptrLo,
+        ptr_hi: ptrHi,
+        len: result.len
+    };
 }
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {
-    var vtable = {
-        contractLo: 0x9A8B7D2E,
-        contractHi: 0x12F3C106,
-        fnCount: 1,
-        contractName: "pipeline.Encoder@1",
-        functions: [encode]
-    };
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName
-    );
-    return { code: 0, message: null };
-}
+setEncoderImpl(encode);
+
+export { polyplug_init };

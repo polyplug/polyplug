@@ -2,5 +2,7 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
-// Re-export vtables from contracts.ts
+// Main entry point for bundling
+export { polyplug_init } from './init';
 export { REPORTER_VTABLE } from './contracts';
+export { setReporterImpl } from './contracts';

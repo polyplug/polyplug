@@ -7,15 +7,16 @@ import type { } from './types';
 // Plugin: transformer (data.Transformer@1)
 //   transform(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-const TRANSFORMER_VTABLE = {
+export const TRANSFORMER_VTABLE = {
     contractLo: 0xF3F5A9EF,
     contractHi: 0x3D53C682,
     fnCount: 1,
     functions: null as unknown as number[],
-    contractName: "data.Transformer@1"
+    contractName: "data.Transformer@1",
+    dispatchType: DispatchType.VirtualMachine
 };
 
-const TRANSFORMER_DESCRIPTOR = {
+export const TRANSFORMER_DESCRIPTOR = {
     name: "transformer",
     contractName: "data.Transformer@1",
     versionMajor: 1,
@@ -23,6 +24,27 @@ const TRANSFORMER_DESCRIPTOR = {
     versionPatch: 0
 };
 
+function transformer_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    var polyplug = globalThis.polyplug;
+    if (!polyplug) return 1;
+    var impl = TRANSFORMER_IMPL;
+    if (!impl) return 1;
+    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;
+    var input_ptr_lo = polyplug.readU32(args_ptr);
+    var input_ptr_hi = polyplug.readU32(args_ptr + 4);
+    var input_len = polyplug.readU32(args_ptr + 8);
+    var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };
+    var result = impl.fn0(input);
+    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;
+    polyplug.writeU32(out_ptr, result.ptr_lo);
+    polyplug.writeU32(out_ptr + 4, result.ptr_hi);
+    polyplug.writeU32(out_ptr + 8, result.len);
+    return 0;
+}
+
+let TRANSFORMER_IMPL = null;
+
 export function setTransformerImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
-    TRANSFORMER_VTABLE.functions = [fn0];
+    TRANSFORMER_IMPL = { fn0 };
+    TRANSFORMER_VTABLE.functions = [transformer_fn0_abi_wrapper];
 }

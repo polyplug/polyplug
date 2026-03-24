@@ -584,6 +584,9 @@ fn generate_guest_plugin_vtable(
     out.push_str(&format!(
         "{plugin_var}_VTABLE.function_count = {function_count}\n"
     ));
+    out.push_str(&format!(
+        "{plugin_var}_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine\n"
+    ));
     out.push_str(&format!("{plugin_var}_VTABLE.functions = nil\n\n"));
 
     out.push_str(&format!(

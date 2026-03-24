@@ -66,14 +66,25 @@ for lang in $LANGS; do
                 cp "$dir/$plugin.py" "$bundle_dir/"
                 cp -r "$dir/generated" "$bundle_dir/"
                 mkdir -p "$bundle_dir/polyplug_guest"
-                cp "$SCRIPT_DIR/../guest-libs/python/polyplug_guest/"*.py "$bundle_dir/polyplug_guest/"
+                cp "$SCRIPT_DIR/../sdks/python/guest/polyplug_guest/"*.py "$bundle_dir/polyplug_guest/"
                 ;;
             lua)
                 cp "$dir/$plugin.lua" "$bundle_dir/"
                 cp -r "$dir/generated" "$bundle_dir/"
                 ;;
             js-quickjs)
-                cp "$dir/$plugin.js" "$bundle_dir/"
+                # Bundle TypeScript or JavaScript source with rolldown
+                # Both .ts and .js files use ES module syntax and need bundling to IIFE
+                if [[ -f "$dir/$plugin.ts" ]]; then
+                    rolldown "$dir/$plugin.ts" --format iife --platform neutral --file "$bundle_dir/$plugin.js" 2>/dev/null || true
+                elif [[ -f "$dir/$plugin.js" ]]; then
+                    rolldown "$dir/$plugin.js" --format iife --platform neutral --file "$bundle_dir/$plugin.js" 2>/dev/null || true
+                fi
+                # The IIFE wraps everything in an exports object, but the loader expects
+                # polyplug_init to be in the global scope. Replace the IIFE with a named
+                # variable assignment and extract polyplug_init to globalThis.
+                sed -i 's/^(function(exports)/var polyplug_module = (function(exports)/' "$bundle_dir/$plugin.js"
+                sed -i 's/^})({});$/})({});\nglobalThis.polyplug_init = polyplug_module.polyplug_init;/' "$bundle_dir/$plugin.js"
                 ;;
         esac
 

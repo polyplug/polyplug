@@ -13,6 +13,7 @@ local TRANSFORMER_VTABLE = ffi.new("PluginVTable")
 TRANSFORMER_VTABLE.contract_id = 0x3D53C682F3F5A9EF
 TRANSFORMER_VTABLE.contract_version = 0
 TRANSFORMER_VTABLE.function_count = 1
+TRANSFORMER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 TRANSFORMER_VTABLE.functions = nil
 
 local TRANSFORMER_DESCRIPTOR = ffi.new("PluginDescriptor")

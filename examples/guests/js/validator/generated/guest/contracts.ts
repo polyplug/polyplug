@@ -7,15 +7,16 @@ import type { } from './types';
 // Plugin: validator (pipeline.Validator@1)
 //   validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-const VALIDATOR_VTABLE = {
+export const VALIDATOR_VTABLE = {
     contractLo: 0xD11C7AF0,
     contractHi: 0xA553FAB5,
     fnCount: 1,
     functions: null as unknown as number[],
-    contractName: "pipeline.Validator@1"
+    contractName: "pipeline.Validator@1",
+    dispatchType: DispatchType.VirtualMachine
 };
 
-const VALIDATOR_DESCRIPTOR = {
+export const VALIDATOR_DESCRIPTOR = {
     name: "validator",
     contractName: "pipeline.Validator@1",
     versionMajor: 1,
@@ -23,6 +24,27 @@ const VALIDATOR_DESCRIPTOR = {
     versionPatch: 0
 };
 
+function validator_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    var polyplug = globalThis.polyplug;
+    if (!polyplug) return 1;
+    var impl = VALIDATOR_IMPL;
+    if (!impl) return 1;
+    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;
+    var input_ptr_lo = polyplug.readU32(args_ptr);
+    var input_ptr_hi = polyplug.readU32(args_ptr + 4);
+    var input_len = polyplug.readU32(args_ptr + 8);
+    var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };
+    var result = impl.fn0(input);
+    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;
+    polyplug.writeU32(out_ptr, result.ptr_lo);
+    polyplug.writeU32(out_ptr + 4, result.ptr_hi);
+    polyplug.writeU32(out_ptr + 8, result.len);
+    return 0;
+}
+
+let VALIDATOR_IMPL = null;
+
 export function setValidatorImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
-    VALIDATOR_VTABLE.functions = [fn0];
+    VALIDATOR_IMPL = { fn0 };
+    VALIDATOR_VTABLE.functions = [validator_fn0_abi_wrapper];
 }

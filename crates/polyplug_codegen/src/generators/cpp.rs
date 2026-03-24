@@ -5,6 +5,7 @@
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + vtable statics
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
@@ -232,13 +233,19 @@ fn generate_vtables_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_cpp_guest_plugin_vtable(&mut out, &plugin.name, contract)?;
+                    generate_cpp_guest_plugin_vtable(
+                        &mut out,
+                        &plugin.name,
+                        contract,
+                        is_native_runtime(&bundle.runtime),
+                    )?;
                 }
             }
         }
     } else {
+        // When no bundle info, default to native dispatch
         for contract in &ir.contracts {
-            generate_cpp_guest_contract_vtable(&mut out, contract)?;
+            generate_cpp_guest_contract_vtable(&mut out, contract, true)?;
         }
     }
 
@@ -250,6 +257,7 @@ fn generate_cpp_guest_plugin_vtable(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
+    is_native: bool,
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
@@ -301,7 +309,12 @@ fn generate_cpp_guest_plugin_vtable(
     out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
     out.push_str(&format!("    {}U,\n", contract_version));
     out.push_str(&format!("    {}U,\n", fn_count));
-    out.push_str("    DispatchType::Native,\n");
+    let dispatch_type: &str = if is_native {
+        "DispatchType::Native"
+    } else {
+        "DispatchType::VirtualMachine"
+    };
+    out.push_str(&format!("    {},\n", dispatch_type));
     out.push_str(&format!(
         "    PluginDispatch{{ .native = NativeDispatch{{ {}_FNS }} }}\n",
         plugin_upper
@@ -314,6 +327,7 @@ fn generate_cpp_guest_plugin_vtable(
 fn generate_cpp_guest_contract_vtable(
     out: &mut String,
     contract: &ResolvedContract,
+    is_native: bool,
 ) -> Result<(), PolyplugcError> {
     let lower: String = contract_name_to_lower_snake(&contract.name);
     let upper: String = contract_name_to_upper_snake(&contract.name);
@@ -355,7 +369,12 @@ fn generate_cpp_guest_contract_vtable(
         contract_version
     ));
     out.push_str(&format!("    {}U,  // function_count\n", fn_count));
-    out.push_str("    DispatchType::Native,\n");
+    let dispatch_type: &str = if is_native {
+        "DispatchType::Native"
+    } else {
+        "DispatchType::VirtualMachine"
+    };
+    out.push_str(&format!("    {},\n", dispatch_type));
     out.push_str(&format!(
         "    PluginDispatch{{ .native = NativeDispatch{{ {}_FNS }} }}\n",
         upper

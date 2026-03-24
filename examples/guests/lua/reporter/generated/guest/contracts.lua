@@ -13,6 +13,7 @@ local REPORTER_VTABLE = ffi.new("PluginVTable")
 REPORTER_VTABLE.contract_id = 0x81D41D43E511D297
 REPORTER_VTABLE.contract_version = 0
 REPORTER_VTABLE.function_count = 1
+REPORTER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 REPORTER_VTABLE.functions = nil
 
 local REPORTER_DESCRIPTOR = ffi.new("PluginDescriptor")

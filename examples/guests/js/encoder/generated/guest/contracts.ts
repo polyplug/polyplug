@@ -7,15 +7,16 @@ import type { } from './types';
 // Plugin: encoder (pipeline.Encoder@1)
 //   encode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-const ENCODER_VTABLE = {
+export const ENCODER_VTABLE = {
     contractLo: 0xC6EFB432,
     contractHi: 0x127D1703,
     fnCount: 1,
     functions: null as unknown as number[],
-    contractName: "pipeline.Encoder@1"
+    contractName: "pipeline.Encoder@1",
+    dispatchType: DispatchType.VirtualMachine
 };
 
-const ENCODER_DESCRIPTOR = {
+export const ENCODER_DESCRIPTOR = {
     name: "encoder",
     contractName: "pipeline.Encoder@1",
     versionMajor: 1,
@@ -23,6 +24,27 @@ const ENCODER_DESCRIPTOR = {
     versionPatch: 0
 };
 
+function encoder_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    var polyplug = globalThis.polyplug;
+    if (!polyplug) return 1;
+    var impl = ENCODER_IMPL;
+    if (!impl) return 1;
+    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;
+    var input_ptr_lo = polyplug.readU32(args_ptr);
+    var input_ptr_hi = polyplug.readU32(args_ptr + 4);
+    var input_len = polyplug.readU32(args_ptr + 8);
+    var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };
+    var result = impl.fn0(input);
+    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;
+    polyplug.writeU32(out_ptr, result.ptr_lo);
+    polyplug.writeU32(out_ptr + 4, result.ptr_hi);
+    polyplug.writeU32(out_ptr + 8, result.len);
+    return 0;
+}
+
+let ENCODER_IMPL = null;
+
 export function setEncoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
-    ENCODER_VTABLE.functions = [fn0];
+    ENCODER_IMPL = { fn0 };
+    ENCODER_VTABLE.functions = [encoder_fn0_abi_wrapper];
 }

@@ -27,6 +27,11 @@ pub enum ResolvedBundleFile {
     PlatformMap(HashMap<PlatformKey, String>),
 }
 
+/// Check if a runtime is a native runtime.
+pub fn is_native_runtime(runtime: &str) -> bool {
+    runtime.to_lowercase() == "native"
+}
+
 /// Format the manifest file field based on ResolvedBundleFile.
 pub(crate) fn format_manifest_file_field(file: &ResolvedBundleFile) -> String {
     match file {

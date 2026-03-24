@@ -1,21 +1,32 @@
-function decode(args, out) {
-    return 0;
+// decoder.js - Plugin implementation using generated code
+// Bundled with rolldown along with generated code
+
+import { setDecoderImpl } from './generated/guest/contracts';
+import { polyplug_init } from './generated/guest/init';
+import { toStr, allocString } from '../../../../sdks/js/guest/polyplug_guest.js';
+
+/**
+ * Decode function implementation.
+ * Converts comma-separated input to pipe-separated output.
+ * 
+ * @param {{ ptr_lo: number; ptr_hi: number; len: number }} input - StringView input
+ * @returns {{ ptr_lo: number; ptr_hi: number; len: number }} - StringView output
+ */
+function decode(input) {
+    const s = toStr(input);
+    const decoded = s.replace(/,/g, '|');
+    const result = allocString(`DECODED:${decoded}`);
+    
+    const ptrLo = Number(result.ptr & 0xFFFFFFFFn);
+    const ptrHi = Number((result.ptr >> 32n) & 0xFFFFFFFFn);
+    
+    return {
+        ptr_lo: ptrLo,
+        ptr_hi: ptrHi,
+        len: result.len
+    };
 }
 
-function polyplug_init(rt_ctx, host_vtable, ctx) {
-    var vtable = {
-        contractLo: 0xB0C3DC1E,
-        contractHi: 0x12F3C106,
-        fnCount: 1,
-        contractName: "pipeline.Decoder@1",
-        functions: [decode]
-    };
-    polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName
-    );
-    return { code: 0, message: null };
-}
+setDecoderImpl(decode);
+
+export { polyplug_init };

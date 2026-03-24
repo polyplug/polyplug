@@ -5,6 +5,7 @@
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
@@ -116,6 +117,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::ABI_OK;\n");
         callers_out.push_str("use polyplug_abi::AbiError;\n");
         callers_out.push_str("use polyplug_abi::PluginVTable;\n");
+        callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::ABI_ERROR_GENERIC;\n");
         callers_out.push_str("use polyplug_abi::ABI_ERROR_NOT_FOUND;\n");
@@ -523,13 +525,19 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_vtable(out, &plugin.name, contract)?;
+                    generate_guest_plugin_vtable(
+                        out,
+                        &plugin.name,
+                        contract,
+                        is_native_runtime(&bundle.runtime),
+                    )?;
                 }
             }
         }
     } else {
         for contract in &ir.contracts {
-            generate_guest_contract_vtable(out, contract)?;
+            // When no bundle info, default to native dispatch
+            generate_guest_contract_vtable(out, contract, true)?;
         }
     }
 
@@ -540,6 +548,7 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
 fn generate_guest_contract_vtable(
     out: &mut String,
     contract: &ResolvedContract,
+    is_native: bool,
 ) -> Result<(), PolyplugcError> {
     let upper: String = contract_name_to_upper_snake(&contract.name);
     let struct_name: String = contract_name_to_struct(&contract.name);
@@ -607,7 +616,12 @@ fn generate_guest_contract_vtable(
         "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
     ));
     out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
-    out.push_str("    dispatch_type: DispatchType::Native,\n");
+    let dispatch_type: &str = if is_native {
+        "DispatchType::Native"
+    } else {
+        "DispatchType::VirtualMachine"
+    };
+    out.push_str(&format!("    dispatch_type: {dispatch_type},\n"));
     out.push_str("    dispatch: PluginDispatch {\n");
     out.push_str("        native: NativeDispatch {\n");
     out.push_str(&format!(
@@ -625,6 +639,7 @@ fn generate_guest_plugin_vtable(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
+    is_native: bool,
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
@@ -688,7 +703,12 @@ fn generate_guest_plugin_vtable(
         "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
     ));
     out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
-    out.push_str("    dispatch_type: DispatchType::Native,\n");
+    let dispatch_type: &str = if is_native {
+        "DispatchType::Native"
+    } else {
+        "DispatchType::VirtualMachine"
+    };
+    out.push_str(&format!("    dispatch_type: {dispatch_type},\n"));
     out.push_str("    dispatch: PluginDispatch {\n");
     out.push_str("        native: NativeDispatch {\n");
     out.push_str(&format!(
@@ -1178,11 +1198,20 @@ fn generate_host_fn_caller(
     ));
     out.push_str("                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }\n");
     out.push_str("            } else {\n");
+    out.push_str("                match vtable.dispatch_type {\n");
+    out.push_str("                    DispatchType::Native => {\n");
     out.push_str(&format!(
-        "                let fn_ptr: *const () = *vtable.dispatch.native.functions.add({fn_id}_usize);\n"
+        "                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
-    out.push_str("                let dispatch_fn: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
-    out.push_str("                dispatch_fn(args_ptr, out_ptr)\n");
+    out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
+    out.push_str("                        dispatch_fn(args_ptr, out_ptr)\n");
+    out.push_str("                    }\n");
+    out.push_str("                    DispatchType::VirtualMachine => {\n");
+    out.push_str(&format!(
+        "                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, {fn_id}_u32, args_ptr, out_ptr)\n"
+    ));
+    out.push_str("                    }\n");
+    out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
     out.push_str("        if err.code != ABI_OK {\n");

@@ -2,5 +2,7 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
-// Re-export vtables from contracts.ts
+// Main entry point for bundling
+export { polyplug_init } from './init';
 export { TRANSFORMER_VTABLE } from './contracts';
+export { setTransformerImpl } from './contracts';

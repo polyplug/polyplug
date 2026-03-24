@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
@@ -281,7 +282,12 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_cs_guest_plugin_vtables(&mut out, &plugin.name, contract);
+                    generate_cs_guest_plugin_vtables(
+                        &mut out,
+                        &plugin.name,
+                        contract,
+                        is_native_runtime(&bundle.runtime),
+                    );
                 }
             }
         }
@@ -371,7 +377,13 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 "            ContractVersion = {minor}u << 16 | {patch}u,\n"
             ));
             out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
-            out.push_str("            DispatchType = DispatchType.Native,\n");
+            // Default to native dispatch when no bundle info is available
+            let dispatch_type: &str = if true {
+                "DispatchType.Native"
+            } else {
+                "DispatchType.VirtualMachine"
+            };
+            out.push_str(&format!("            DispatchType = {dispatch_type},\n"));
             out.push_str("            Dispatch = new PluginDispatch {\n");
             out.push_str("                Native = new NativeDispatch {\n");
             out.push_str(&format!(
@@ -391,6 +403,7 @@ fn generate_cs_guest_plugin_vtables(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
+    is_native: bool,
 ) {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
@@ -508,7 +521,12 @@ fn generate_cs_guest_plugin_vtables(
         "            ContractVersion = {minor}u << 16 | {patch}u,\n"
     ));
     out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
-    out.push_str("            DispatchType = DispatchType.Native,\n");
+    let dispatch_type: &str = if is_native {
+        "DispatchType.Native"
+    } else {
+        "DispatchType.VirtualMachine"
+    };
+    out.push_str(&format!("            DispatchType = {dispatch_type},\n"));
     out.push_str("            Dispatch = new PluginDispatch {\n");
     out.push_str("                Native = new NativeDispatch {\n");
     out.push_str(&format!(

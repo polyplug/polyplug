@@ -6,21 +6,21 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::contracts::DataReporterPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::PipelineEncoderPlugin;
-use super::contracts::PipelineValidatorPlugin;
-use super::types::*;
+use std::sync::OnceLock;
 use polyplug_guest::AbiError;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_OK};
-use std::sync::OnceLock;
+use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};
+use super::types::*;
+use super::contracts::PipelineDecoderPlugin;
+use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineEncoderPlugin;
+use super::contracts::DataReporterPlugin;
+use super::contracts::PipelineValidatorPlugin;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -38,9 +38,7 @@ pub const REPORTER_CONTRACT_ID: u64 = 0x81D41D43E511D297;
 pub static REPORTER_IMPL: OnceLock<Box<dyn DataReporterPlugin>> = OnceLock::new();
 
 pub fn set_reporter_impl(impl_: Box<dyn DataReporterPlugin>) -> Result<(), &'static str> {
-    REPORTER_IMPL
-        .set(impl_)
-        .map_err(|_| "reporter already registered")
+    REPORTER_IMPL.set(impl_).map_err(|_| "reporter already registered")
 }
 
 /// ABI wrapper for report (function_id = 0).
@@ -49,27 +47,17 @@ extern "C" fn reporter_report_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn DataReporterPlugin = match REPORTER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => {
-                return AbiError {
-                    code: ABI_ERROR_GENERIC,
-                    message: StringView::null(),
-                };
-            }
+            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },
         };
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.report(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe {
-                    std::ptr::write(out as *mut StringView, val);
-                }
+                unsafe { std::ptr::write(out as *mut StringView, val); }
                 AbiError::ok()
             }
-            Err(e) => AbiError {
-                code: e.code,
-                message: StringView::null(),
-            },
+            Err(e) => AbiError { code: e.code, message: StringView::null() },
         }
     })) {
         Ok(err) => err,
@@ -77,7 +65,9 @@ extern "C" fn reporter_report_abi(args: *const (), out: *mut ()) -> AbiError {
     }
 }
 
-static REPORTER_FNS: [FnPtr; 1_usize] = [FnPtr(reporter_report_abi as *const ())];
+static REPORTER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(reporter_report_abi as *const ()),
+];
 
 pub static REPORTER_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -91,3 +81,4 @@ pub static REPORTER_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
+

@@ -4,18 +4,25 @@
 
 import type { } from './types';
 
+/** Dispatch mechanism type — determines how function calls are routed. */
+const DispatchType = Object.freeze({
+    Native: 0,
+    VirtualMachine: 1,
+} as const);
+
 // Plugin: decoder (pipeline.Decoder@1)
 //   decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-const DECODER_VTABLE = {
+export const DECODER_VTABLE = {
     contractLo: 0xB0C3DC1E,
     contractHi: 0x12F3C106,
     fnCount: 1,
     functions: null as unknown as number[],
-    contractName: "pipeline.Decoder@1"
+    contractName: "pipeline.Decoder@1",
+    dispatchType: DispatchType.VirtualMachine
 };
 
-const DECODER_DESCRIPTOR = {
+export const DECODER_DESCRIPTOR = {
     name: "decoder",
     contractName: "pipeline.Decoder@1",
     versionMajor: 1,
@@ -23,6 +30,27 @@ const DECODER_DESCRIPTOR = {
     versionPatch: 0
 };
 
+function decoder_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    var polyplug = globalThis.polyplug;
+    if (!polyplug) return 1;
+    var impl = DECODER_IMPL;
+    if (!impl) return 1;
+    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;
+    var input_ptr_lo = polyplug.readU32(args_ptr);
+    var input_ptr_hi = polyplug.readU32(args_ptr + 4);
+    var input_len = polyplug.readU32(args_ptr + 8);
+    var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };
+    var result = impl.fn0(input);
+    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;
+    polyplug.writeU32(out_ptr, result.ptr_lo);
+    polyplug.writeU32(out_ptr + 4, result.ptr_hi);
+    polyplug.writeU32(out_ptr + 8, result.len);
+    return 0;
+}
+
+let DECODER_IMPL = null;
+
 export function setDecoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
-    DECODER_VTABLE.functions = [fn0];
+    DECODER_IMPL = { fn0 };
+    DECODER_VTABLE.functions = [decoder_fn0_abi_wrapper];
 }

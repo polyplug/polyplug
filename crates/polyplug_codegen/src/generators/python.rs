@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
@@ -359,7 +360,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginVTable, StringView\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -385,14 +386,19 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract);
-                    generate_guest_plugin_vtable(&mut out, &plugin.name, contract);
+                    generate_guest_plugin_vtable(
+                        &mut out,
+                        &plugin.name,
+                        contract,
+                        is_native_runtime(&bundle.runtime),
+                    );
                 }
             }
         }
     } else {
         for contract in &ir.contracts {
             generate_guest_contract_trait(&mut out, contract);
-            generate_guest_contract_vtable(&mut out, contract);
+            generate_guest_contract_vtable(&mut out, contract, true);
         }
     }
 
@@ -791,7 +797,7 @@ fn generate_guest_trait_stub_method(
     ));
 }
 
-fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract) {
+fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract, is_native: bool) {
     let upper: String = contract_name_to_upper_snake(&contract.name);
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -803,6 +809,11 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract)
     let version_minor: u32 = contract.version.minor;
     let version_patch: u32 = contract.version.patch;
     let contract_version: u32 = (version_minor << 16) | version_patch;
+    let dispatch_type: &str = if is_native {
+        "DispatchType.Native"
+    } else {
+        "DispatchType.VirtualMachine"
+    };
 
     out.push_str(&format!(
         "{upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
@@ -863,10 +874,16 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract)
     out.push_str(&format!(
         "    functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"
     ));
+    out.push_str(&format!("    dispatch_type={dispatch_type},\n"));
     out.push_str(")\n\n");
 }
 
-fn generate_guest_plugin_vtable(out: &mut String, plugin_name: &str, contract: &ResolvedContract) {
+fn generate_guest_plugin_vtable(
+    out: &mut String,
+    plugin_name: &str,
+    contract: &ResolvedContract,
+    is_native: bool,
+) {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -877,6 +894,11 @@ fn generate_guest_plugin_vtable(out: &mut String, plugin_name: &str, contract: &
     let version_minor: u32 = contract.version.minor;
     let version_patch: u32 = contract.version.patch;
     let contract_version: u32 = (version_minor << 16) | version_patch;
+    let dispatch_type: &str = if is_native {
+        "DispatchType.Native"
+    } else {
+        "DispatchType.VirtualMachine"
+    };
 
     out.push_str(&format!(
         "{plugin_upper}_PLUGIN_NAME_BYTES: bytes = b\"{plugin_name}\"\n"
@@ -943,6 +965,7 @@ fn generate_guest_plugin_vtable(out: &mut String, plugin_name: &str, contract: &
     out.push_str(&format!(
         "    functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"
     ));
+    out.push_str(&format!("    dispatch_type={dispatch_type},\n"));
     out.push_str(")\n\n");
 }
 

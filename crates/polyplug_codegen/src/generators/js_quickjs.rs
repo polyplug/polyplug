@@ -69,12 +69,17 @@ impl CodeGenerator for JsQuickjsGenerator {
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/vtable.ts"),
-            content: generate_vtable_ts(),
+            content: generate_vtable_ts(ir),
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
             path: PathBuf::from("guest/init.ts"),
             content: generate_init_ts(ir),
+            force_regenerate: false,
+        });
+        files.files.push(GeneratedFile {
+            path: PathBuf::from("guest/index.ts"),
+            content: generate_index_ts(ir),
             force_regenerate: false,
         });
         if ir.bundle.is_some() {
@@ -209,6 +214,11 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
          // Runtime: js-quickjs\n\n",
     );
     out.push_str("import type { } from './types';\n\n");
+    out.push_str("/** Dispatch mechanism type — determines how function calls are routed. */\n");
+    out.push_str("const DispatchType = Object.freeze({\n");
+    out.push_str("    Native: 0,\n");
+    out.push_str("    VirtualMachine: 1,\n");
+    out.push_str("} as const);\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -262,15 +272,16 @@ fn render_plugin_vtable_quickjs(
         ));
     }
 
-    out.push_str(&format!("\nconst {plugin_var}_VTABLE = {{\n"));
+    out.push_str(&format!("\nexport const {plugin_var}_VTABLE = {{\n"));
     out.push_str(&format!("    contractLo: 0x{:08X},\n", contract_lo));
     out.push_str(&format!("    contractHi: 0x{:08X},\n", contract_hi));
     out.push_str(&format!("    fnCount: {function_count},\n"));
     out.push_str("    functions: null as unknown as number[],\n");
-    out.push_str(&format!("    contractName: \"{contract_name_full}\"\n"));
+    out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
+    out.push_str("    dispatchType: DispatchType.VirtualMachine\n");
     out.push_str("};\n");
 
-    out.push_str(&format!("\nconst {plugin_var}_DESCRIPTOR = {{\n"));
+    out.push_str(&format!("\nexport const {plugin_var}_DESCRIPTOR = {{\n"));
     out.push_str(&format!("    name: \"{plugin_name}\",\n"));
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
     out.push_str(&format!("    versionMajor: {version_major},\n"));
@@ -292,6 +303,57 @@ fn render_plugin_vtable_quickjs(
             })
             .collect::<String>()
     );
+
+    // Generate ABI wrapper functions for each contract function
+    // These wrappers handle the raw pointer conversion between the loader and user code
+    let mut abi_wrappers: Vec<String> = Vec::new();
+    for (idx, _func) in contract.functions.iter().enumerate() {
+        let wrapper_name: String = format!("{}_fn{}_abi_wrapper", plugin_var.to_lowercase(), idx);
+
+        // Generate the ABI wrapper function
+        // Note: QuickJS uses lo/hi u32 pairs for 64-bit pointers
+        // We use Number for arithmetic since QuickJS supports it
+        out.push_str("\nfunction ");
+        out.push_str(&wrapper_name);
+        out.push_str("(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {\n");
+        out.push_str("    var polyplug = globalThis.polyplug;\n");
+        out.push_str("    if (!polyplug) return 1;\n");
+        out.push_str("    var impl = ");
+        out.push_str(&plugin_var);
+        out.push_str("_IMPL;\n");
+        out.push_str("    if (!impl) return 1;\n");
+
+        // Read input StringView from args_ptr
+        // StringView is { ptr_lo: u32, ptr_hi: u32, len: u32 } = 12 bytes
+        // Use Number for pointer arithmetic (QuickJS Number can hold 53-bit integers)
+        out.push_str("    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;\n");
+        out.push_str("    var input_ptr_lo = polyplug.readU32(args_ptr);\n");
+        out.push_str("    var input_ptr_hi = polyplug.readU32(args_ptr + 4);\n");
+        out.push_str("    var input_len = polyplug.readU32(args_ptr + 8);\n");
+        out.push_str(
+            "    var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };\n",
+        );
+
+        // Call the implementation
+        out.push_str("    var result = impl.fn");
+        out.push_str(&idx.to_string());
+        out.push_str("(input);\n");
+
+        // Write output StringView to out_ptr
+        out.push_str("    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;\n");
+        out.push_str("    polyplug.writeU32(out_ptr, result.ptr_lo);\n");
+        out.push_str("    polyplug.writeU32(out_ptr + 4, result.ptr_hi);\n");
+        out.push_str("    polyplug.writeU32(out_ptr + 8, result.len);\n");
+        out.push_str("    return 0;\n");
+        out.push_str("}\n");
+
+        abi_wrappers.push(wrapper_name);
+    }
+
+    // Store implementation functions
+    out.push_str("\nlet ");
+    out.push_str(&plugin_var);
+    out.push_str("_IMPL = null;\n");
 
     out.push_str(&format!("\nexport function {set_impl_name}("));
     let impl_params: Vec<String> = contract
@@ -315,7 +377,9 @@ fn render_plugin_vtable_quickjs(
     out.push_str(&impl_params.join(", "));
     out.push_str("): void {\n");
 
-    out.push_str(&format!("    {plugin_var}_VTABLE.functions = ["));
+    out.push_str("    ");
+    out.push_str(&plugin_var);
+    out.push_str("_IMPL = { ");
     let fn_refs: Vec<String> = contract
         .functions
         .iter()
@@ -323,14 +387,94 @@ fn render_plugin_vtable_quickjs(
         .map(|(idx, _)| format!("fn{idx}"))
         .collect();
     out.push_str(&fn_refs.join(", "));
+    out.push_str(" };\n");
+
+    // Store ABI wrappers in vtable
+    out.push_str("    ");
+    out.push_str(&plugin_var);
+    out.push_str("_VTABLE.functions = [");
+    out.push_str(
+        &abi_wrappers
+            .iter()
+            .map(|w| w.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
     out.push_str("];\n");
     out.push_str("}\n");
 
     Ok(())
 }
 
-fn generate_vtable_ts() -> String {
-    String::new()
+fn generate_vtable_ts(ir: &ValidatedIr) -> String {
+    let bundle: Option<&ResolvedBundle> = ir.bundle.as_ref();
+
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs\n\n",
+    );
+
+    if let Some(bundle) = bundle {
+        // Re-export all vtables from contracts.ts
+        out.push_str("// Re-export vtables from contracts.ts\n");
+        for plugin in &bundle.plugins {
+            let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
+            out.push_str(&format!(
+                "export {{ {plugin_var}_VTABLE }} from './contracts';\n"
+            ));
+        }
+    }
+
+    out
+}
+
+fn generate_index_ts(ir: &ValidatedIr) -> String {
+    let bundle: Option<&ResolvedBundle> = ir.bundle.as_ref();
+
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs\n\n",
+    );
+
+    out.push_str("// Main entry point for bundling\n");
+    out.push_str("export { polyplug_init } from './init';\n");
+
+    if let Some(bundle) = bundle {
+        for plugin in &bundle.plugins {
+            let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
+            out.push_str(&format!(
+                "export {{ {plugin_var}_VTABLE }} from './contracts';\n"
+            ));
+        }
+        for plugin in &bundle.plugins {
+            let set_impl_name: String = format!(
+                "set{}Impl",
+                plugin
+                    .name
+                    .replace(['.', '-'], "_")
+                    .split('_')
+                    .map(|s| {
+                        let mut chars = s.chars();
+                        match chars.next() {
+                            None => String::new(),
+                            Some(first) => {
+                                first.to_uppercase().collect::<String>() + chars.as_str()
+                            }
+                        }
+                    })
+                    .collect::<String>()
+            );
+            out.push_str(&format!(
+                "export {{ {set_impl_name} }} from './contracts';\n"
+            ));
+        }
+    }
+
+    out
 }
 
 fn generate_init_ts(ir: &ValidatedIr) -> String {
