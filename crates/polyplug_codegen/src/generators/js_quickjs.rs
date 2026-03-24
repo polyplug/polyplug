@@ -546,7 +546,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
             "    // Register plugin: {plugin_name}\n",
             plugin_name = plugin.name
         ));
-        out.push_str(&format!("    polyplug.registerVtable(\n"));
+        out.push_str("    polyplug.registerVtable(\n");
         out.push_str(&format!("        {plugin_var}_VTABLE.contractLo,\n"));
         out.push_str(&format!("        {plugin_var}_VTABLE.contractHi,\n"));
         out.push_str(&format!("        {plugin_var}_VTABLE,\n"));

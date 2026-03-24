@@ -994,7 +994,3 @@ PipelineDecoder decoder(rt);  // Throws on error? Inconsistent with C++ patterns
 - **No stdout/stderr**: Runtime doesn't force output format
 
 ---
-
-## Implementation Checklist
-
-See `.sisyphus/plans/hot-reload-notification.md` for detailed implementation tasks.
