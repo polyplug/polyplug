@@ -147,7 +147,10 @@ impl Registry {
     pub fn push_library(&self, library: libloading::Library) {
         self.loaded_libraries
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            })
             .push(library);
     }
 
@@ -178,7 +181,10 @@ impl Registry {
         let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
 
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
-            self.data.write().unwrap_or_else(|e| e.into_inner());
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
 
         // Check existing slots for this contract_id
         if let Some(existing_indices) = data.contract_index.get(&contract_id) {
@@ -249,7 +255,10 @@ impl Registry {
         contract_ids: Vec<u64>,
     ) -> Result<(), RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
-            self.data.write().unwrap_or_else(|e| e.into_inner());
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let set: &mut HashSet<u64> = data.declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
             set.insert(cid);
@@ -260,7 +269,10 @@ impl Registry {
     /// Returns true if `bundle_id` has declared `contract_id` as a dependency.
     pub(crate) fn is_dependency_declared(&self, bundle_id: u64, contract_id: u64) -> bool {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         data.declared_deps
             .get(&bundle_id)
             .is_some_and(|s| s.contains(&contract_id))
@@ -276,7 +288,10 @@ impl Registry {
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
 
         let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
@@ -319,7 +334,10 @@ impl Registry {
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
 
         let &slot_idx: &u32 = match data.bundle_index.get(&bundle_id) {
             Some(i) => i,
@@ -363,7 +381,10 @@ impl Registry {
         out: &mut [PluginHandle],
     ) -> usize {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
 
         let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
@@ -413,7 +434,10 @@ impl Registry {
         out: &mut [u64],
     ) -> usize {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
 
         let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
@@ -453,7 +477,10 @@ impl Registry {
     //  Returns Err(StaleHandle) if the slot is vacant or has no vtable.
     pub fn resolve_guard(&self, handle: PluginHandle) -> Result<PluginGuard, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
 
         let slot_idx: usize = handle.index as usize;
         if slot_idx >= data.slots.len() {
@@ -520,7 +547,10 @@ impl Registry {
         new_vtable: Arc<VTableSlot>,
     ) -> Result<Arc<VTableSlot>, RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
-            self.data.write().unwrap_or_else(|e| e.into_inner());
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let slot_idx: usize = slot_index as usize;
         if slot_idx >= data.slots.len() {
             return Err(RegistryError::StaleHandle {
@@ -551,7 +581,10 @@ impl Registry {
     /// Used by `reload_bundle()` to locate every vtable slot to swap.
     pub fn find_slots_by_bundle(&self, bundle_id: u64) -> Vec<u32> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let mut result: Vec<u32> = Vec::new();
         for (i, slot) in data.slots.iter().enumerate() {
             if let Some(ref entry) = slot.entry
@@ -567,7 +600,10 @@ impl Registry {
     /// Returns None if the slot is empty or has no vtable.
     pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<u64> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
         let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
         let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
@@ -579,7 +615,10 @@ impl Registry {
     /// Returns None if the slot is empty or has no vtable.
     pub(crate) fn get_vtable_arc(&self, slot_index: u32) -> Option<Arc<VTableSlot>> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            self.data.read().unwrap_or_else(|e| e.into_inner());
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
         let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
         Some(arc_swap.load_full())
@@ -590,14 +629,20 @@ impl Registry {
     #[cfg(test)]
     pub fn clear_for_test(&self) {
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
-            self.data.write().unwrap_or_else(|e| e.into_inner());
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         data.slots.clear();
         data.contract_index.clear();
         data.bundle_index.clear();
         data.declared_deps.clear();
         self.loaded_libraries
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            })
             .clear();
     }
 }
@@ -885,7 +930,10 @@ mod tests {
 
         // Verify generation was bumped
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            registry.data.read().unwrap_or_else(|e| e.into_inner());
+            registry.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let new_gen: u32 = data.slots[handle.index as usize]
             .generation
             .load(Ordering::Acquire);
@@ -955,7 +1003,10 @@ mod tests {
         .expect("registration should succeed");
 
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            registry.data.read().unwrap_or_else(|e| e.into_inner());
+            registry.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let gen1: u32 = data.slots[handle.index as usize]
             .generation
             .load(Ordering::Acquire);
@@ -1010,7 +1061,10 @@ mod tests {
         );
 
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            registry.data.read().unwrap_or_else(|e| e.into_inner());
+            registry.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let new_gen: u32 = data.slots[handle.index as usize]
             .generation
             .load(Ordering::Acquire);

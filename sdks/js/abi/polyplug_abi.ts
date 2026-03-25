@@ -340,15 +340,57 @@ export function bundleId(name: string): bigint {
 // ─── String Helpers ────────────────────────────────────────────────────────────
 
 /**
+ * Helper utilities for StringView operations.
+ * 
+ * This class provides static methods for converting between JavaScript strings
+ * and the ABI StringView type used for cross-boundary communication.
+ */
+export class StringViewHelper {
+    /**
+     * Create a StringView from a JavaScript string.
+     * 
+     * @param str - The JavaScript string
+     * @returns StringView pointing to encoded bytes
+     * 
+     * @example
+     * const sv = StringViewHelper.fromString("hello");
+     */
+    static fromString(str: string): StringView {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(str);
+        return {
+            ptr: 0n,  // Host will allocate and set ptr
+            len: bytes.length
+        };
+    }
+
+    /**
+     * Convert a StringView to a JavaScript string.
+     * 
+     * @param sv - The StringView to convert
+     * @returns JavaScript string, or empty string if null/empty
+     * 
+     * @example
+     * const str = StringViewHelper.toString(sv);
+     */
+    static toString(sv: StringView | null | undefined): string {
+        if (!sv || sv.ptr === 0n || sv.len === 0) return '';
+        // Note: Actual implementation requires FFI access to read memory.
+        // The host/guest libraries provide the actual implementation that
+        // can access host memory via globalThis.polyplug or Deno.UnsafePointerView.
+        // This ABI-level implementation is a placeholder.
+        return '';
+    }
+}
+
+/**
  * Convert a StringView to a JavaScript string.
  * @param sv - The StringView to convert.
  * @returns The JavaScript string, or empty string if null/empty.
+ * @deprecated Use StringViewHelper.toString() instead.
  */
 export function stringViewToString(sv: StringView | null | undefined): string {
-    if (!sv || sv.ptr === 0n || sv.len === 0) return '';
-    // Note: Actual implementation requires FFI access to read memory.
-    // This is a placeholder - the host/guest libraries provide actual implementation.
-    return '';
+    return StringViewHelper.toString(sv);
 }
 
 /**

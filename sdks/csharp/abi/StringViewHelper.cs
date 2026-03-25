@@ -1,11 +1,11 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using Polyplug.Abi;
 
-namespace Polyplug.Guest;
+namespace Polyplug.Abi;
 
 /// <summary>
-/// Helpers for constructing StringViews at the ABI boundary.
+/// Helpers for constructing and converting StringViews at the ABI boundary.
+/// This is the unified implementation used by both host and guest.
 /// </summary>
 public static class StringViewHelper
 {
@@ -27,7 +27,7 @@ public static class StringViewHelper
     /// The GCHandle must be kept alive while the StringView is in use.
     /// For guest plugins, return strings should use host allocation via registrar.
     /// </summary>
-    public static (StringView, GCHandle) FromStringPinned(string str)
+    public static (StringView View, GCHandle Handle) FromStringPinned(string str)
     {
         if (string.IsNullOrEmpty(str))
             return (new StringView { Ptr = IntPtr.Zero, Len = 0 }, default);

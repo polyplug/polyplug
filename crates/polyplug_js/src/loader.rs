@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use rquickjs::Array;
+use rquickjs::ArrayBuffer;
 use rquickjs::Context;
 use rquickjs::Ctx;
 use rquickjs::Function;
@@ -38,21 +39,38 @@ use polyplug_abi::VmDispatch;
 
 use crate::config::JsConfig;
 
-// ─── Thread-local storage for registration data ─────────────────────────────────
+// ─── Registration data stored in QuickJS runtime userdata ──────────────────────
 
 use core::cell::RefCell;
+use std::rc::Rc;
 
-thread_local! {
-    static REGISTRATION_DATA: RefCell<Option<RegistrationData>> = const { RefCell::new(None) };
-}
+use rquickjs::JsLifetime;
+use rquickjs::runtime::UserDataError;
+use rquickjs::runtime::UserDataGuard;
 
-struct RegistrationData {
+/// Registration data collected from the JS plugin during polyplug_init.
+///
+/// This struct is stored in the QuickJS runtime's userdata to avoid thread-local
+/// storage, ensuring multiple polyplug runtimes can coexist in the same process.
+struct JsRegistrationData {
     contract_id: u64,
     contract_version: u32,
     fn_count: usize,
     contract_name: String,
     functions: Vec<PersistentFunction>,
 }
+
+// SAFETY: JsRegistrationData has no lifetime parameters and contains only 'static
+// data (Persistent<Function<'static>> is 'static). This implementation allows the
+// type to be stored in rquickjs's userdata storage.
+unsafe impl<'js> JsLifetime<'js> for JsRegistrationData {
+    type Changed<'to> = JsRegistrationData;
+}
+
+/// Type alias for the registration slot stored in userdata.
+/// Uses Rc<RefCell<>> to allow shared mutable access from both the loader and
+/// the registerVtable callback.
+type RegistrationSlot = Rc<RefCell<Option<JsRegistrationData>>>;
 
 // ─── JS Loader Data for VM Dispatch ───────────────────────────────────────────
 
@@ -393,7 +411,7 @@ fn register_host_functions<'js>(
                 functions.push(func_persistent);
             }
 
-            let data: RegistrationData = RegistrationData {
+            let data: JsRegistrationData = JsRegistrationData {
                 contract_id,
                 contract_version: 0,
                 fn_count: fn_count_usize,
@@ -401,9 +419,13 @@ fn register_host_functions<'js>(
                 functions,
             };
 
-            REGISTRATION_DATA.with(|cell| {
-                *cell.borrow_mut() = Some(data);
-            });
+            let slot_guard: UserDataGuard<RegistrationSlot> =
+                match ctx.userdata::<RegistrationSlot>() {
+                    Some(guard) => guard,
+                    None => return,
+                };
+            let mut cell: core::cell::RefMut<Option<JsRegistrationData>> = slot_guard.borrow_mut();
+            *cell = Some(data);
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -422,35 +444,36 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let alloc_fn: Function<'js> =
-        Function::new(ctx.clone(), |ctx: Ctx<'js>, size: u32| -> Array<'js> {
+    let alloc_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
             let (hvt, rt_ctx) = match get_host_ctx_from_globals(&ctx) {
                 Some(pair) => pair,
                 None => {
-                    let arr: Array<'js> = Array::new(ctx.clone()).unwrap_or_else(|_| {
-                        Array::new(ctx.clone()).unwrap_or_else(|_| panic!("array creation failed"))
-                    });
+                    let arr: Array<'js> = Array::new(ctx.clone()).map_err(|_| {
+                        rquickjs::Exception::throw_message(&ctx, "array creation failed")
+                    })?;
                     let _ = arr.set(0, 0_u32);
                     let _ = arr.set(1, 0_u32);
-                    return arr;
+                    return Ok(arr);
                 }
             };
             // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
             let ptr: *mut u8 = unsafe { ((*hvt).alloc)(rt_ctx, size as usize, 1) };
             let ptr_usize: usize = ptr as usize;
-            let arr: Array<'js> = Array::new(ctx.clone()).unwrap_or_else(|_| {
-                Array::new(ctx.clone()).unwrap_or_else(|_| panic!("array creation failed"))
-            });
+            let arr: Array<'js> = Array::new(ctx.clone())
+                .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
             let _ = arr.set(0, ptr_usize as u32);
             let _ = arr.set(1, (ptr_usize >> 32) as u32);
-            arr
+            Ok(arr)
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+            runtime: "js-quickjs".to_owned(),
+            message: format!("alloc function creation failed: {e}"),
         })
-        .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("alloc function creation failed: {e}"),
-            })
-        })?;
+    })?;
 
     polyplug_obj
         .set("alloc", alloc_fn)
@@ -612,6 +635,57 @@ fn register_host_functions<'js>(
                 message: format!("writeByte set failed: {e}"),
             })
         })?;
+
+    let read_memory_fn: Function<'js> = Function::new(
+        ctx.clone(),
+        |ctx: Ctx<'js>,
+         ptr_bigint: rquickjs::BigInt<'js>,
+         len: u32|
+         -> Result<ArrayBuffer<'js>, rquickjs::Error> {
+            let ptr_u64: u64 = match ptr_bigint.to_i64() {
+                Ok(v) => v as u64,
+                Err(_) => {
+                    let empty_bytes: Vec<u8> = Vec::new();
+                    return ArrayBuffer::new(ctx.clone(), empty_bytes).map_err(|_| {
+                        rquickjs::Exception::throw_message(&ctx, "ArrayBuffer creation failed")
+                    });
+                }
+            };
+            let ptr: *const u8 = ptr_u64 as usize as *const u8;
+            let len_usize: usize = len as usize;
+
+            if ptr.is_null() || len_usize == 0 {
+                let empty_bytes: Vec<u8> = Vec::new();
+                return ArrayBuffer::new(ctx.clone(), empty_bytes).map_err(|_| {
+                    rquickjs::Exception::throw_message(&ctx, "ArrayBuffer creation failed")
+                });
+            }
+
+            // SAFETY: ptr is a valid pointer provided by the host for reading.
+            // The caller guarantees the memory region [ptr, ptr+len) is valid.
+            let bytes: Vec<u8> = unsafe { core::slice::from_raw_parts(ptr, len_usize).to_vec() };
+
+            ArrayBuffer::new(ctx.clone(), bytes).map_err(|_| {
+                rquickjs::Exception::throw_message(&ctx, "ArrayBuffer creation failed")
+            })
+        },
+    )
+    .map_err(|e: rquickjs::Error| {
+        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+            runtime: "js-quickjs".to_owned(),
+            message: format!("readMemory function creation failed: {e}"),
+        })
+    })?;
+
+    polyplug_obj
+        .set("readMemory", read_memory_fn)
+        .map_err(|e: rquickjs::Error| {
+            PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                runtime: "js-quickjs".to_owned(),
+                message: format!("readMemory set failed: {e}"),
+            })
+        })?;
+
     let read_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> u32 {
         let ptr_u64: u64 = ptr_num as u64;
         eprintln!("[polyplug_js] readU32: ptr={:#x}", ptr_u64);
@@ -733,12 +807,20 @@ impl BundleLoader for JsLoader {
 
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
 
-        // Clear any stale registration data from previous loads.
-        REGISTRATION_DATA.with(|cell| {
-            *cell.borrow_mut() = None;
-        });
+        let registration_slot: RegistrationSlot = Rc::new(RefCell::new(None));
 
         ctx.with(|ctx_ref: Ctx<'_>| {
+            ctx_ref
+                .store_userdata(Rc::clone(&registration_slot))
+                .map_err(
+                    |_: UserDataError<Rc<RefCell<Option<JsRegistrationData>>>>| {
+                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
+                            runtime: "js-quickjs".to_owned(),
+                            message: "failed to store registration slot in userdata".to_owned(),
+                        })
+                    },
+                )?;
+
             let globals: Object<'_> = ctx_ref.globals();
             let polyplug_obj: Object<'_> =
                 Object::new(ctx_ref.clone()).map_err(|e: rquickjs::Error| {
@@ -850,10 +932,8 @@ impl BundleLoader for JsLoader {
             Ok::<(), PolyplugError>(())
         })?;
 
-        // Read the registration data stored by registerVtable.
-        let registration_data: RegistrationData = REGISTRATION_DATA
-            .with(|cell| cell.borrow_mut().take())
-            .ok_or_else(|| {
+        let registration_data: JsRegistrationData =
+            registration_slot.borrow_mut().take().ok_or_else(|| {
                 PolyplugError::Loader(LoaderError::JsRuntimePanic {
                     runtime: "js-quickjs".to_owned(),
                     message: "polyplug_init did not call registerVtable".to_owned(),

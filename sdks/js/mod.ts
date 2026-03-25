@@ -15,7 +15,6 @@ export {
 } from "./host/polyplug/native-loader.ts";
 export {
     DependencyNotFoundError,
-    StringViewHelper,
     getExtension,
     EXT_TRACE_ID,
 } from "./guest/polyplug_guest.js";

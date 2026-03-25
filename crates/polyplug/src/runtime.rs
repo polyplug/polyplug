@@ -468,15 +468,20 @@ impl Runtime {
     /// Set the last error message for FFI error reporting.
     pub(crate) fn set_last_error(&self, msg: impl Into<String>) {
         let mut guard: std::sync::MutexGuard<'_, String> =
-            self.last_error.lock().unwrap_or_else(|e| e.into_inner());
+            self.last_error.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         *guard = msg.into();
     }
 
     /// Get the last error message for FFI error reporting.
     /// Returns the number of bytes written to the buffer.
     pub(crate) fn get_last_error(&self, buf: &mut [u8]) -> usize {
-        let guard: std::sync::MutexGuard<'_, String> =
-            self.last_error.lock().unwrap_or_else(|e| e.into_inner());
+        let guard: std::sync::MutexGuard<'_, String> = self.last_error.lock().unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        });
         let bytes: &[u8] = guard.as_bytes();
         let write_n: usize = bytes.len().min(buf.len());
         if write_n > 0 {
@@ -488,14 +493,19 @@ impl Runtime {
     /// Clear the last error message.
     pub(crate) fn clear_last_error(&self) {
         let mut guard: std::sync::MutexGuard<'_, String> =
-            self.last_error.lock().unwrap_or_else(|e| e.into_inner());
+            self.last_error.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         guard.clear();
     }
 
     /// Get the length of the last error message.
     pub(crate) fn last_error_len(&self) -> usize {
-        let guard: std::sync::MutexGuard<'_, String> =
-            self.last_error.lock().unwrap_or_else(|e| e.into_inner());
+        let guard: std::sync::MutexGuard<'_, String> = self.last_error.lock().unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        });
         guard.len()
     }
 
@@ -604,10 +614,11 @@ impl Runtime {
         let result: Result<(), PolyplugError> = loader.load(&manifest, self);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
-            let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = self
-                .bundle_manifests
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
+                self.bundle_manifests.lock().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
             manifests.insert(bundle_name, manifest);
         }
         result
@@ -687,7 +698,10 @@ impl Runtime {
                     let mut debounce_map: std::sync::MutexGuard<
                         '_,
                         HashMap<PathBuf, std::time::Instant>,
-                    > = debounce_cb.lock().unwrap_or_else(|e| e.into_inner());
+                    > = debounce_cb.lock().unwrap_or_else(|e| {
+                        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                        e.into_inner()
+                    });
                     let last: std::time::Instant =
                         debounce_map.get(path).copied().unwrap_or_else(|| {
                             now.checked_sub(core::time::Duration::from_secs(1_u64))
@@ -740,12 +754,18 @@ impl Runtime {
         self_arc
             .watcher_stop
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
             .replace(stop_flag);
         self_arc
             .watcher_thread
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
             .replace(handle);
         Ok(())
     }

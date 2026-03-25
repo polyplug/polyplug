@@ -515,7 +515,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
 
     out.push_str("interface AbiError {\n");
     out.push_str("    code: number;\n");
-    out.push_str("    message: { ptr: number; len: number } | null;\n");
+    out.push_str("    message: { ptr: number; len: number };\n");
     out.push_str("}\n\n");
 
     out.push_str("export function polyplug_init(\n");
@@ -525,19 +525,19 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("): AbiError {\n");
     out.push_str("    // Validate parameters\n");
     out.push_str("    if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
+    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n");
     out.push_str("    if (host_lo === 0 && host_hi === 0) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
+    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n");
     out.push_str("    if (ctx_lo === 0 && ctx_hi === 0) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
+    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n\n");
 
     out.push_str("    // Get polyplug host interface from globalThis\n");
     out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
     out.push_str("    if (!polyplug || !polyplug.registerVtable) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: null };\n");
+    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n\n");
 
     for plugin in &bundle.plugins {
@@ -555,7 +555,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         out.push_str("    );\n\n");
     }
 
-    out.push_str("    return { code: ABI_OK, message: null };\n");
+    out.push_str("    return { code: ABI_OK, message: { ptr: 0, len: 0 } };\n");
     out.push_str("}\n");
 
     out
@@ -804,6 +804,10 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
             out.push_str("        const argsPtr = args;\n");
         }
 
+        out.push_str(&format!(
+            "        if ({fn_id} >= vtable.functionCount) {{ throw new Error('function not available'); }}\n",
+            fn_id = func.function_id
+        ));
         out.push_str(&format!(
             "        const fnPtr = vtable.dispatch.native.functions[{}];\n",
             func.function_id

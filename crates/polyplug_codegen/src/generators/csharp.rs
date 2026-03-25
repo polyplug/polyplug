@@ -331,11 +331,15 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 out.push_str("            // call impl\n");
                 out.push_str("            return new AbiError { Code = 0 };\n");
                 out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
-                out.push_str("            return new AbiError { Code = ex.Code };\n");
+                out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
+                out.push_str(
+                    "            return new AbiError { Code = ex.Code, Message = msg };\n",
+                );
                 out.push_str("        } catch {\n");
                 out.push_str(
-                    "            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };\n",
+                    "            var msg = StringHelpers.AllocString(\"plugin panicked\");\n",
                 );
+                out.push_str("            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = msg };\n");
                 out.push_str("        }\n");
                 out.push_str("    }\n\n");
             }
@@ -463,9 +467,11 @@ fn generate_cs_guest_plugin_vtables(
         out.push_str("            // call impl\n");
         out.push_str("            return new AbiError { Code = 0 };\n");
         out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
-        out.push_str("            return new AbiError { Code = ex.Code };\n");
+        out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
+        out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
         out.push_str("        } catch {\n");
-        out.push_str("            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC };\n");
+        out.push_str("            var msg = StringHelpers.AllocString(\"plugin panicked\");\n");
+        out.push_str("            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = msg };\n");
         out.push_str("        }\n");
         out.push_str("    }\n\n");
     }
@@ -826,10 +832,15 @@ fn generate_host_fn_caller(
     out.push_str("        }\n\n");
 
     out.push_str("        unsafe {\n");
+    out.push_str("            var pluginInterface = *(PluginInterface*)vtablePtr;\n");
     out.push_str(&format!(
-        "            nint funcsArray = *(nint*)(vtablePtr + {offset});\n",
-        offset = 32
+        "            if ({fn_id}u >= pluginInterface.FunctionCount) {{\n"
     ));
+    out.push_str(
+        "                throw new InvalidOperationException(\"function not available\");\n",
+    );
+    out.push_str("            }\n");
+    out.push_str("            nint funcsArray = pluginInterface.Dispatch.Native.Functions;\n");
     out.push_str(&format!(
         "            nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));

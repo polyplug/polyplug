@@ -36,6 +36,24 @@ impl Version {
         let major: u32 = parse_u32(parts.first().copied().unwrap_or("0"))?;
         let minor: u32 = parse_u32(parts.get(1).copied().unwrap_or("0"))?;
         let patch: u32 = parse_u32(parts.get(2).copied().unwrap_or("0"))?;
+
+        // Validate minor and patch fit in u16 for ABI encoding (minor << 16 | patch)
+        const U16_MAX: u32 = u16::MAX as u32; // 65535
+        if minor > U16_MAX {
+            return Err(PolyplugcError::VersionOverflow {
+                component: "minor".to_owned(),
+                value: minor,
+                version_str: s.to_owned(),
+            });
+        }
+        if patch > U16_MAX {
+            return Err(PolyplugcError::VersionOverflow {
+                component: "patch".to_owned(),
+                value: patch,
+                version_str: s.to_owned(),
+            });
+        }
+
         Ok(Version {
             major,
             minor,
@@ -383,6 +401,34 @@ mod tests {
                 patch: 3
             }
         );
+    }
+
+    #[test]
+    fn version_parse_minor_overflow_returns_error() {
+        let result: Result<Version, PolyplugcError> = Version::parse("1.65536.0");
+        assert!(result.is_err());
+        let err: PolyplugcError = result.expect_err("should error on minor overflow");
+        assert!(
+            matches!(err, PolyplugcError::VersionOverflow { component, .. } if component == "minor")
+        );
+    }
+
+    #[test]
+    fn version_parse_patch_overflow_returns_error() {
+        let result: Result<Version, PolyplugcError> = Version::parse("1.0.65536");
+        assert!(result.is_err());
+        let err: PolyplugcError = result.expect_err("should error on patch overflow");
+        assert!(
+            matches!(err, PolyplugcError::VersionOverflow { component, .. } if component == "patch")
+        );
+    }
+
+    #[test]
+    fn version_parse_max_valid_minor_patch() {
+        let v: Version = Version::parse("1.65535.65535").expect("parse max valid");
+        assert_eq!(v.major, 1);
+        assert_eq!(v.minor, 65535);
+        assert_eq!(v.patch, 65535);
     }
 
     #[test]

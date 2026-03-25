@@ -22,6 +22,7 @@ from polyplug_abi import (
     StringView,
     PluginInterface,
     DispatchType,
+    to_str,
 )
 
 __all__ = [
@@ -44,23 +45,6 @@ __all__ = [
     "to_str",
     "alloc_string",
 ]
-
-
-def to_str(sv: StringView) -> str:
-    """Convert a StringView to a Python str.
-
-    Args:
-        sv: StringView from polyplug ABI
-
-    Returns:
-        Python string (UTF-8 decoded)
-    """
-    if not sv.ptr or sv.len == 0:
-        return ""
-    import ctypes
-
-    data = ctypes.cast(sv.ptr, ctypes.POINTER(ctypes.c_char * sv.len)).contents
-    return bytes(data).decode("utf-8")
 
 
 _host_alloc = None

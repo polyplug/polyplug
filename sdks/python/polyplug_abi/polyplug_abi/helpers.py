@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from polyplug_abi.abi import StringView
 
 
-def _to_str(sv: StringView) -> str:
+def to_str(sv: StringView) -> str:
     """Convert StringView to Python str.
 
     Args:
@@ -34,7 +34,7 @@ def strip_prefix(sv: StringView, prefix: str) -> str:
     Returns:
         String with prefix removed if it was present, otherwise original string
     """
-    s: str = _to_str(sv)
+    s: str = to_str(sv)
     if s.startswith(prefix):
         return s[len(prefix) :]
     return s
@@ -50,7 +50,7 @@ def starts_with(sv: StringView, prefix: str) -> bool:
     Returns:
         True if the string starts with the prefix, False otherwise
     """
-    return _to_str(sv).startswith(prefix)
+    return to_str(sv).startswith(prefix)
 
 
 def split(sv: StringView, delimiter: str) -> list[str]:
@@ -63,4 +63,4 @@ def split(sv: StringView, delimiter: str) -> list[str]:
     Returns:
         List of strings resulting from the split
     """
-    return _to_str(sv).split(delimiter)
+    return to_str(sv).split(delimiter)

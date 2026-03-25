@@ -488,16 +488,14 @@ fn generate_host_caller_method(
     emit_lua_host_args_setup(out, func, contract_prefix);
     emit_lua_host_out_setup(out, &func.returns);
 
-    // Read function pointer from vtable
-    out.push_str("        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)\n");
-    out.push_str("        local function_count = ffi.cast(\"uint32_t*\", vtable + 12)[0]\n");
-    out.push_str(&format!("        if {fn_id} >= function_count then\n"));
+    out.push_str("        local interface = ffi.cast(\"PluginInterface*\", vtable)\n");
+    out.push_str(&format!(
+        "        if {fn_id} >= interface.function_count then\n"
+    ));
     out.push_str("            error(\"function not available in vtable\", 2)\n");
     out.push_str("        end\n");
-    out.push_str("        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)\n");
-    out.push_str("        local functions_ptr = ffi.cast(\"void**\", vtable + 16)[0]\n");
     out.push_str(&format!(
-        "        local fn_ptr = ffi.cast(\"void*\", functions_ptr[{fn_id}])\n"
+        "        local fn_ptr = interface.dispatch.native.functions[{fn_id}]\n"
     ));
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
     out.push_str("        local err = fn(args_ptr, out_ptr)\n");

@@ -492,9 +492,21 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     out.push_str("use polyplug_guest::NativeDispatch;\n");
     out.push_str("use polyplug_guest::PluginDispatch;\n");
     out.push_str("use polyplug_guest::StringView;\n");
+    out.push_str("use polyplug_guest::PluginError;\n");
+    out.push_str("use polyplug_guest::alloc_string;\n");
     out.push_str("#[allow(unused_imports)]\n");
     out.push_str("use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};\n");
     out.push_str("use super::types::*;\n");
+
+    // Helper function to convert PluginError to AbiError with message allocation
+    out.push_str(
+        "/// Convert a PluginError to an AbiError, allocating the message via host_alloc.\n",
+    );
+    out.push_str("/// Falls back to a null message if allocation fails.\n");
+    out.push_str("fn plugin_error_to_abi_error(e: PluginError) -> AbiError {\n");
+    out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| StringView::null());\n");
+    out.push_str("    AbiError { code: e.code, message }\n");
+    out.push_str("}\n\n");
     for contract in &ir.contracts {
         let trait_name: String = contract_name_to_guest_trait(&contract.name);
         out.push_str(&format!("use super::contracts::{trait_name};\n"));
@@ -754,7 +766,7 @@ fn generate_guest_abi_wrapper(
         "        let impl_ref: &dyn {trait_name} = match {contract_upper}_IMPL.get() {{\n"
     ));
     out.push_str("            Some(i) => i.as_ref(),\n");
-    out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() },\n");
+    out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"implementation not registered\") },\n");
     out.push_str("        };\n");
 
     // Build the call expression
@@ -776,16 +788,12 @@ fn generate_guest_abi_wrapper(
         ));
         out.push_str("                AbiError::ok()\n");
         out.push_str("            }\n");
-        out.push_str(
-            "            Err(e) => AbiError { code: e.code, message: StringView::null() },\n",
-        );
+        out.push_str("            Err(e) => plugin_error_to_abi_error(e),\n");
         out.push_str("        }\n");
     } else {
         out.push_str("        match result {\n");
         out.push_str("            Ok(()) => AbiError::ok(),\n");
-        out.push_str(
-            "            Err(e) => AbiError { code: e.code, message: StringView::null() },\n",
-        );
+        out.push_str("            Err(e) => plugin_error_to_abi_error(e),\n");
         out.push_str("        }\n");
     }
 
@@ -907,17 +915,17 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str(") -> AbiError {\n");
     out.push_str("    if rt_ctx.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"rt_ctx is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    if host.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"host is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    if ctx.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };\n",
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"ctx is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.\n");
@@ -1196,13 +1204,17 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "            if {fn_id}_u32 >= vtable.function_count {{\n"
     ));
-    out.push_str("                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::null() }\n");
+    out.push_str("                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::from_static(b\"function not available in vtable\") }\n");
     out.push_str("            } else {\n");
     out.push_str("                match vtable.dispatch_type {\n");
     out.push_str("                    DispatchType::Native => {\n");
     out.push_str(&format!(
         "                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
+    out.push_str("                        // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
+    out.push_str("                        // - Function pointers have the same size and alignment as data pointers on all supported platforms\n");
+    out.push_str("                        // - The vtable guarantees that the function at this index is a native dispatch function\n");
+    out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError\n");
     out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
     out.push_str("                        dispatch_fn(args_ptr, out_ptr)\n");
     out.push_str("                    }\n");
@@ -1215,9 +1227,23 @@ fn generate_host_fn_caller(
     out.push_str("            }\n");
     out.push_str("        };\n");
     out.push_str("        if err.code != ABI_OK {\n");
+    out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
+    out.push_str("                String::new()\n");
+    out.push_str("            } else {\n");
+    out.push_str("                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data\n");
     out.push_str(
-        "            return Err(ContractError { code: err.code, message: String::new() });\n",
+        "                // allocated by the plugin via host_alloc. We read it before freeing.\n",
     );
+    out.push_str("                let s: String = unsafe {\n");
+    out.push_str("                    let slice: &[u8] = core::slice::from_raw_parts(err.message.ptr, err.message.len);\n");
+    out.push_str("                    core::str::from_utf8_unchecked(slice).to_owned()\n");
+    out.push_str("                };\n");
+    out.push_str("                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.\n");
+    out.push_str("                // We must free it after reading to avoid memory leak.\n");
+    out.push_str("                unsafe { polyplug_abi::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };\n");
+    out.push_str("                s\n");
+    out.push_str("            };\n");
+    out.push_str("            return Err(ContractError { code: err.code, message });\n");
     out.push_str("        }\n");
 
     // Return

@@ -40,6 +40,7 @@ from polyplug_abi.abi import (
     FNV_PRIME,
 )
 from polyplug_abi.helpers import (
+    to_str,
     strip_prefix,
     starts_with,
     split,
@@ -131,6 +132,7 @@ __all__ = [
     "FNV_PRIME",
     "ReloadPhaseType",
     "ReloadPhase",
+    "to_str",
     "strip_prefix",
     "starts_with",
     "split",

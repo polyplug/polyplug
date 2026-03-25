@@ -134,45 +134,8 @@ export class DependencyNotFoundError extends Error {
     }
 }
 
-/**
- * Helper utilities for StringView operations.
- */
-export class StringViewHelper {
-    /**
-     * Create a StringView from a JavaScript string.
-     * 
-     * @param {string} str - The JavaScript string
-     * @returns {StringView} StringView pointing to encoded bytes
-     * 
-     * @example
-     * const sv = StringViewHelper.fromString("hello");
-     */
-    static fromString(str) {
-        const encoder = new TextEncoder();
-        const bytes = encoder.encode(str);
-        return {
-            ptr_lo: bytes,  // Host will handle memory
-            ptr_hi: 0,
-            len: bytes.length
-        };
-    }
-
-    /**
-     * Convert a StringView to a JavaScript string.
-     * 
-     * @param {StringView} sv - The StringView to convert
-     * @returns {string} JavaScript string
-     * 
-     * @example
-     * const str = StringViewHelper.toString(sv);
-     */
-    static toString(sv) {
-        if (!sv || sv.len === 0) return '';
-        // Host provides memory accessor - actual implementation depends on runtime
-        // This is a placeholder - the generated code will provide actual implementation
-        return '';
-    }
-}
+// Re-export StringViewHelper from ABI for backward compatibility
+export { StringViewHelper } from '../abi/polyplug_abi.ts';
 
 /**
  * Get extension by ID.
@@ -216,9 +179,18 @@ export default {
  * const bytes = readBytes(0x1234n, 10);
  */
 export function readBytes(ptr, len) {
+    if (len === 0) {
+        return new Uint8Array(0);
+    }
+    // QuickJS: use bulk readMemory for performance (single FFI call)
+    if (globalThis.polyplug.readMemory) {
+        const buffer = globalThis.polyplug.readMemory(ptr, len);
+        return new Uint8Array(buffer);
+    }
+    // Fallback: byte-by-byte read (for runtimes without readMemory)
     const bytes = new Uint8Array(len);
     for (let i = 0; i < len; i++) {
-        bytes[i] = globalThis.polyplug.readByte(ptr + i);
+        bytes[i] = globalThis.polyplug.readByte(ptr + BigInt(i));
     }
     return bytes;
 }

@@ -222,6 +222,7 @@ fn generate_vtables_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("#include \"contracts.hpp\"\n");
     out.push_str("#include \"polyplug/abi.hpp\"\n");
     out.push_str("#include <cstdint>\n");
+    out.push_str("#include <cstring>\n");
     out.push_str("#include <exception>\n\n");
     out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
 
@@ -426,10 +427,11 @@ fn generate_cpp_guest_abi_wrapper(
         out.push_str("        return AbiError{ABI_OK, StringView{nullptr, 0}};\n");
     }
 
-    out.push_str("    } catch (const std::exception&) {\n");
-    out.push_str("        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC\n");
+    out.push_str("    } catch (const std::exception& e) {\n");
+    out.push_str("        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};  // ABI_ERROR_GENERIC\n");
     out.push_str("    } catch (...) {\n");
-    out.push_str("        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC\n");
+    out.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
+    out.push_str("        return AbiError{3U, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};  // ABI_ERROR_PANIC\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
 
@@ -564,9 +566,14 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
 
     // polyplug_init
     out.push_str("extern \"C\" AbiError polyplug_init(void* rt_ctx, const HostVTable* host, const PluginContext* ctx) {\n");
+    out.push_str("    if (!rt_ctx || !host || !ctx) {\n");
     out.push_str(
-        "    if (!rt_ctx || !host || !ctx) return AbiError{1U, StringView{nullptr, 0}};\n\n",
+        "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
     );
+    out.push_str(
+        "        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
+    );
+    out.push_str("    }\n\n");
     if has_trace {
         out.push_str("    static constexpr uint32_t EXT_TRACE_ID = 0xC4EB9AEEu;\n");
         out.push_str("    // Optional: trace extension — query via host vtable at init time\n");
@@ -1043,10 +1050,18 @@ fn generate_cpp_host_function(
 
     out.push_str("        const PluginInterface* vtable = guard_.vtable();\n");
     out.push_str("        if (!vtable) {\n");
-    out.push_str("            polyplug::check_abi_error(AbiError{4, {nullptr, 0}});\n");
+    out.push_str("            static constexpr const char* err_msg = \"vtable is null\";\n");
+    out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});\n");
     out.push_str("        }\n");
 
     if is_void_return {
+        out.push_str(&format!(
+            "        if ({}_u32 >= vtable->function_count) {{\n",
+            fn_id
+        ));
+        out.push_str("            static constexpr const char* err_msg = \"function not available in vtable\";\n");
+        out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
+        out.push_str("        }\n");
         out.push_str(&format!(
             "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[{}U]);\n",
             fn_id
@@ -1057,9 +1072,12 @@ fn generate_cpp_host_function(
         out.push_str(&format!("        {} out{{}};\n", return_type));
         out.push_str("        void* out_ptr = &out;\n");
         out.push_str(&format!(
-            "        if ({}_u32 >= vtable->function_count) {{ polyplug::check_abi_error(AbiError{{4, {{nullptr, 0}}}}); }}\n",
+            "        if ({}_u32 >= vtable->function_count) {{\n",
             fn_id
         ));
+        out.push_str("            static constexpr const char* err_msg = \"function not available in vtable\";\n");
+        out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
+        out.push_str("        }\n");
         out.push_str(&format!(
             "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[{}U]);\n",
             fn_id

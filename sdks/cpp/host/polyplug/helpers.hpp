@@ -3,20 +3,14 @@
 
 #pragma once
 
-#include "../../abi/polyplug/abi.hpp"
+#include "../../abi/polyplug/helpers.hpp"
 
-#include <cstring>
 #include <stdexcept>
-#include <string_view>
 
 namespace polyplug {
 namespace host {
 
-/// Convert StringView to std::string (copies data)
-inline std::string to_string(StringView sv) {
-    if (!sv.ptr || sv.len == 0) return {};
-    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
-}
+using polyplug::abi::to_string;
 
 /// Create StringView from string literal (borrowed)
 inline StringView string_view(const char* s) {

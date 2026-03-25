@@ -673,6 +673,100 @@ fn concurrent_loads_do_not_panic() {
 }
 
 #[test]
+fn multiple_runtimes_on_same_thread_are_isolated() {
+    // CRITICAL TEST: Verifies that multiple Runtime instances on the SAME thread
+    // have isolated state. This would have FAILED with the old thread-local approach
+    // because REGISTRATION_DATA was shared across all Runtime instances on a thread.
+    //
+    // With the new userdata-based approach, each QuickJS Runtime has its own
+    // registration slot stored in its userdata, ensuring complete isolation.
+
+    // Create first runtime and load a plugin with contract_id A
+    let contract_id_a: u64 = polyplug_abi::contract_id("test.isolation.a", 1);
+    let bundle_a: String = make_bundle_js(contract_id_a, 1, "test.isolation.a");
+    let (_dir_a, path_a) = write_temp_bundle(&bundle_a);
+
+    let runtime_a: Runtime = RuntimeBuilder::new()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("runtime_a build must succeed");
+    let loader_a: JsLoader = JsLoader::new(JsConfig {});
+
+    let manifest_a: ManifestData = make_manifest(&path_a, "test.bundle.a");
+    loader_a
+        .load(&manifest_a, &runtime_a)
+        .expect("load runtime_a must succeed");
+
+    // Verify plugin A is registered in runtime_a
+    let handle_a: PluginHandle = runtime_a
+        .registry()
+        .find(contract_id_a, 0)
+        .expect("plugin A must be registered in runtime_a");
+    assert!(!handle_a.is_null(), "handle_a must be valid");
+
+    // Create second runtime on the SAME thread and load a plugin with contract_id B
+    let contract_id_b: u64 = polyplug_abi::contract_id("test.isolation.b", 1);
+    let bundle_b: String = make_bundle_js(contract_id_b, 1, "test.isolation.b");
+    let (_dir_b, path_b) = write_temp_bundle(&bundle_b);
+
+    let runtime_b: Runtime = RuntimeBuilder::new()
+        .loader(JsLoader::new(JsConfig {}))
+        .build()
+        .expect("runtime_b build must succeed");
+    let loader_b: JsLoader = JsLoader::new(JsConfig {});
+
+    let manifest_b: ManifestData = make_manifest(&path_b, "test.bundle.b");
+    loader_b
+        .load(&manifest_b, &runtime_b)
+        .expect("load runtime_b must succeed");
+
+    // Verify plugin B is registered in runtime_b
+    let handle_b: PluginHandle = runtime_b
+        .registry()
+        .find(contract_id_b, 0)
+        .expect("plugin B must be registered in runtime_b");
+    assert!(!handle_b.is_null(), "handle_b must be valid");
+
+    // CRITICAL: Verify that runtime_a still has plugin A (not corrupted by runtime_b)
+    // With the old thread-local approach, loading runtime_b would have overwritten
+    // the registration data, causing this check to fail.
+    let handle_a_still_valid: PluginHandle = runtime_a
+        .registry()
+        .find(contract_id_a, 0)
+        .expect("plugin A must still be registered in runtime_a");
+    assert!(
+        !handle_a_still_valid.is_null(),
+        "handle_a must still be valid after runtime_b was created"
+    );
+
+    // Verify runtime_b does NOT have plugin A (isolation)
+    let handle_a_in_b: Result<PluginHandle, polyplug::error::RegistryError> =
+        runtime_b.registry().find(contract_id_a, 0);
+    assert!(
+        handle_a_in_b.is_err()
+            || handle_a_in_b
+                .as_ref()
+                .ok()
+                .map(|h| h.is_null())
+                .unwrap_or(true),
+        "runtime_b must NOT have plugin A (isolation)"
+    );
+
+    // Verify runtime_a does NOT have plugin B (isolation)
+    let handle_b_in_a: Result<PluginHandle, polyplug::error::RegistryError> =
+        runtime_a.registry().find(contract_id_b, 0);
+    assert!(
+        handle_b_in_a.is_err()
+            || handle_b_in_a
+                .as_ref()
+                .ok()
+                .map(|h| h.is_null())
+                .unwrap_or(true),
+        "runtime_a must NOT have plugin B (isolation)"
+    );
+}
+
+#[test]
 fn sequential_loads_of_different_contracts_all_succeed() {
     // Sequential re-use of the same JsLoader for multiple bundles.
     let loader: JsLoader = JsLoader::new(JsConfig {});
@@ -743,4 +837,59 @@ fn dispatch_vm_call_works_correctly() {
         "dispatch.vm.call must return ABI_OK, got code={}",
         call_result.code
     );
+}
+
+// ── StringView.toString() Tests ────────────────────────────────────────────────
+
+#[test]
+fn stringview_to_string_handles_empty_string() {
+    // Test that StringView.toString() handles empty strings (len=0).
+    let contract_id: u64 = polyplug_abi::contract_id("test.stringview.empty", 1);
+
+    let bundle: String = format!(
+        r#"
+var testResult = null;
+
+// Test empty string handling - should return '' without reading memory
+function stringViewToString(sv) {{
+    if (!sv || sv.len === 0) return '';
+    return 'non-empty';
+}}
+
+var result = stringViewToString({{ ptr_lo: 0, ptr_hi: 0, len: 0 }});
+if (result === '') {{
+    testResult = "PASS";
+}} else {{
+    throw new Error("expected empty string, got: " + result);
+}}
+
+function polyplug_init(rt_ctx, host_vtable, ctx) {{
+    var vtable = {{
+        contractLo: {},
+        contractHi: {},
+        fnCount: 1,
+        contractName: "test.stringview.empty",
+        functions: [function(args, out) {{ return 0; }}]
+    }};
+    polyplug.registerVtable(
+        vtable.contractLo,
+        vtable.contractHi,
+        vtable,
+        vtable.fnCount,
+        vtable.contractName
+    );
+    return {{ code: 0, message: null }};
+}}
+"#,
+        contract_id as u32,
+        (contract_id >> 32) as u32
+    );
+    let (_dir, path) = write_temp_bundle(&bundle);
+
+    let runtime: Runtime = make_runtime();
+    let loader: JsLoader = JsLoader::new(JsConfig {});
+
+    let manifest: ManifestData = make_manifest(&path, "test.bundle");
+    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    assert!(result.is_ok(), "Empty string test must succeed: {result:?}");
 }

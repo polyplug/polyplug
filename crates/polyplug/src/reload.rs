@@ -78,10 +78,11 @@ pub(crate) unsafe extern "C" fn reload_register_callback(
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
     // during the reload operation.
     let runtime: &Runtime = unsafe { &*ctx.runtime };
-    let mut guard: std::sync::MutexGuard<'_, Vec<VTablePtr>> = runtime
-        .reload_captured_vtables
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let mut guard: std::sync::MutexGuard<'_, Vec<VTablePtr>> =
+        runtime.reload_captured_vtables.lock().unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        });
     guard.push(VTablePtr(vtable));
     polyplug_abi::AbiError::ok()
 }
@@ -203,7 +204,10 @@ pub(crate) fn reload_bundle_impl(
     runtime
         .reload_captured_vtables
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        })
         .clear();
 
     // Create PluginContext with bundle_id
@@ -267,7 +271,10 @@ pub(crate) fn reload_bundle_impl(
     let captured_vtables: Vec<VTablePtr> = runtime
         .reload_captured_vtables
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        })
         .clone();
 
     let mut new_vtable_map: HashMap<u64, *const polyplug_abi::PluginInterface> = HashMap::new();
@@ -383,26 +390,36 @@ pub(crate) fn reload_bundle_impl(
     let old_library: Option<libloading::Library> = runtime
         .reload_libraries
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        })
         .remove(&bundle_id_val);
     drop(old_library);
 
     runtime
         .reload_libraries
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        })
         .insert(bundle_id_val, new_library);
     runtime
         .bundle_manifests
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        })
         .insert(manifest.name.clone(), manifest.clone());
 
     let dependents: Vec<(String, PathBuf)> = {
-        let manifests_guard: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> = runtime
-            .bundle_manifests
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let manifests_guard: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
+            runtime.bundle_manifests.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         find_cascade_targets(&manifests_guard, &manifest.name)
     };
     for (_dep_name, dep_path) in dependents {
@@ -668,7 +685,10 @@ mod tests {
 
         let callback = move |phase: ReloadPhase| {
             let mut guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
-                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                captured_clone.lock().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
             *guard = Some(phase);
         };
 
@@ -680,7 +700,10 @@ mod tests {
         });
 
         let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
-            captured.lock().unwrap_or_else(|e| e.into_inner());
+            captured.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let phase: &Option<ReloadPhase> = &guard;
         match phase {
             Some(ReloadPhase::Preparing {
@@ -705,7 +728,10 @@ mod tests {
 
         let callback = move |phase: ReloadPhase| {
             let mut guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
-                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                captured_clone.lock().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
             *guard = Some(phase);
         };
 
@@ -716,7 +742,10 @@ mod tests {
         });
 
         let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
-            captured.lock().unwrap_or_else(|e| e.into_inner());
+            captured.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let phase: &Option<ReloadPhase> = &guard;
         match phase {
             Some(ReloadPhase::Reloaded {
@@ -739,7 +768,10 @@ mod tests {
 
         let callback = move |phase: ReloadPhase| {
             let mut guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
-                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                captured_clone.lock().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
             *guard = Some(phase);
         };
 
@@ -751,7 +783,10 @@ mod tests {
         });
 
         let guard: std::sync::MutexGuard<'_, Option<ReloadPhase>> =
-            captured.lock().unwrap_or_else(|e| e.into_inner());
+            captured.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let phase: &Option<ReloadPhase> = &guard;
         match phase {
             Some(ReloadPhase::Failed {
@@ -776,7 +811,10 @@ mod tests {
 
         let callback = move |phase: ReloadPhase| {
             let mut guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
-                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                captured_clone.lock().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
             guard.push(phase);
         };
 
@@ -792,7 +830,10 @@ mod tests {
         });
 
         let guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
-            captured.lock().unwrap_or_else(|e| e.into_inner());
+            captured.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let phases: &Vec<ReloadPhase> = &guard;
 
         assert_eq!(phases.len(), 2);
@@ -815,7 +856,10 @@ mod tests {
 
         let callback = move |phase: ReloadPhase| {
             let mut guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
-                captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                captured_clone.lock().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
             guard.push(phase);
         };
 
@@ -832,7 +876,10 @@ mod tests {
         });
 
         let guard: std::sync::MutexGuard<'_, Vec<ReloadPhase>> =
-            captured.lock().unwrap_or_else(|e| e.into_inner());
+            captured.lock().unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            });
         let phases: &Vec<ReloadPhase> = &guard;
 
         assert_eq!(phases.len(), 2);
@@ -860,7 +907,10 @@ mod tests {
         let callback = move |phase: ReloadPhase| {
             if let ReloadPhase::Preparing { retry_count, .. } = phase {
                 let mut guard: std::sync::MutexGuard<'_, Vec<u32>> =
-                    captured_clone.lock().unwrap_or_else(|e| e.into_inner());
+                    captured_clone.lock().unwrap_or_else(|e| {
+                        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                        e.into_inner()
+                    });
                 guard.push(retry_count);
             }
         };
@@ -874,8 +924,10 @@ mod tests {
             });
         }
 
-        let guard: std::sync::MutexGuard<'_, Vec<u32>> =
-            captured.lock().unwrap_or_else(|e| e.into_inner());
+        let guard: std::sync::MutexGuard<'_, Vec<u32>> = captured.lock().unwrap_or_else(|e| {
+            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+            e.into_inner()
+        });
         let retry_counts: &Vec<u32> = &guard;
 
         assert_eq!(retry_counts, &[0_u32, 1_u32, 2_u32, 3_u32]);

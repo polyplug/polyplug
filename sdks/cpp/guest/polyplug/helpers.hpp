@@ -3,19 +3,12 @@
 
 #pragma once
 
-#include "../../abi/polyplug/abi.hpp"
-
-#include <cstring>
-#include <string>
+#include "../../abi/polyplug/helpers.hpp"
 
 namespace polyplug {
 namespace guest {
 
-/// Convert StringView to std::string
-inline std::string to_string(StringView sv) {
-    if (!sv.ptr || sv.len == 0) return {};
-    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
-}
+using polyplug::abi::to_string;
 
 /// Allocate StringView from std::string using host allocator
 inline StringView alloc_string(const std::string& s) {

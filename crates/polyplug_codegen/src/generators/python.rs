@@ -257,7 +257,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, ABI_FUNCTION_NOT_AVAIL, NULL_HANDLE, StringView\n\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, ABI_FUNCTION_NOT_AVAIL, NULL_HANDLE, PluginInterface, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -311,7 +311,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, StringView\n\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, PluginInterface, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
@@ -372,9 +372,18 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("POLYPLUG_ABI_VERSION: int = 1\n");
-    out.push_str("_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)\n");
+    out.push_str("class _AbiError(ctypes.Structure):\n");
+    out.push_str("    _fields_ = [\n");
+    out.push_str("        ('code', ctypes.c_uint32),\n");
+    out.push_str("        ('_pad', ctypes.c_uint32),\n");
+    out.push_str("        ('message_ptr', ctypes.c_void_p),\n");
+    out.push_str("        ('message_len', ctypes.c_size_t),\n");
+    out.push_str("    ]\n\n");
     out.push_str(
-        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)\n",
+    );
+    out.push_str(
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n",
     );
 
     if let Some(bundle) = &ir.bundle {
@@ -605,12 +614,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str("        vtable_ptr: int = self._guard.vtable\n");
     out.push_str("        if vtable_ptr == 0:\n");
     out.push_str("            raise RuntimeError(\"invalid caller: guard is null\")\n");
-    out.push_str("        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)\n");
-    out.push_str("        function_count: int = ctypes.cast(vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)).contents.value\n");
-    out.push_str(&format!("        if {fn_id} >= function_count:\n"));
+    out.push_str("        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)\n");
+    out.push_str(&format!("        if {fn_id} >= vtable.function_count:\n"));
     out.push_str("            raise RuntimeError(\"function not available in vtable\")\n");
-    out.push_str("        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)\n");
-    out.push_str("        functions_ptr: int = ctypes.cast(vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)).contents.value\n");
+    out.push_str("        functions_ptr: int = vtable.dispatch.native.functions\n");
     out.push_str(&format!(
         "        fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
@@ -842,11 +849,11 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
     for func in &contract.functions {
         let abi_name: String = format!("{lower}_{}_abi", func.name);
         out.push_str(&format!(
-            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:\n"
+            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
         out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
         out.push_str("    if impl is None:\n");
-        out.push_str("        return ABI_ERROR_GENERIC\n");
+        out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
         emit_guest_abi_args_unpack(out, func, &struct_name);
         emit_guest_abi_call(out, func);
         emit_guest_abi_return(out, func);
@@ -929,13 +936,13 @@ fn generate_guest_plugin_vtable(
     for func in &contract.functions {
         let abi_name: String = format!("{plugin_lower}_{}_abi", func.name);
         out.push_str(&format!(
-            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:\n"
+            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
         out.push_str(&format!(
             "    impl: {plugin_upper}{trait_name} | None = _{plugin_lower}_IMPL\n"
         ));
         out.push_str("    if impl is None:\n");
-        out.push_str("        return ABI_ERROR_GENERIC\n");
+        out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
         emit_guest_abi_args_unpack(out, func, &struct_name);
         emit_guest_abi_call(out, func);
         emit_guest_abi_return(out, func);
@@ -1037,7 +1044,7 @@ fn emit_guest_abi_call(out: &mut String, func: &ResolvedFunction) {
 
 fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
     if !has_return_value(&func.returns) {
-        out.push_str("    return ABI_OK\n");
+        out.push_str("    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)\n");
         return;
     }
     let ret_ty: String = python_return_type(&func.returns);
@@ -1045,7 +1052,7 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
         "    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER({ret_ty}))\n"
     ));
     out.push_str("    out_ptr_t[0] = result\n");
-    out.push_str("    return ABI_OK\n");
+    out.push_str("    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)\n");
 }
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {

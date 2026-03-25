@@ -103,6 +103,15 @@ pub enum PolyplugcError {
 
     #[error("guest generation not supported for `{language}`: {reason}")]
     GuestGenerationNotSupported { language: String, reason: String },
+
+    #[error(
+        "version overflow: {component}={value} exceeds maximum 65535 in version `{version_str}`"
+    )]
+    VersionOverflow {
+        component: String,
+        value: u32,
+        version_str: String,
+    },
 }
 
 #[cfg(test)]
@@ -233,5 +242,19 @@ mod tests {
         assert!(s.contains("EventKind"), "got: {s}");
         // The message says both [[type]] and [[enum]] use the name
         assert!(s.contains("type") || s.contains("enum"), "got: {s}");
+    }
+
+    #[test]
+    fn version_overflow_display() {
+        let err: PolyplugcError = PolyplugcError::VersionOverflow {
+            component: "minor".to_owned(),
+            value: 70000,
+            version_str: "1.70000.0".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("version overflow"), "got: {s}");
+        assert!(s.contains("minor"), "got: {s}");
+        assert!(s.contains("70000"), "got: {s}");
+        assert!(s.contains("65535"), "got: {s}");
     }
 }
