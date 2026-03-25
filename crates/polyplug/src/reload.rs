@@ -147,152 +147,16 @@ pub(crate) fn reload_bundle_impl(
     }
 
     let path_str: String = so_path.to_string_lossy().into_owned();
-    // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
-    let new_library: libloading::Library = unsafe {
-        libloading::Library::new(&so_path).map_err(|e: libloading::Error| {
-            PolyplugError::ReloadFailed {
-                bundle: path_str.clone(),
-                reason: format!("dlopen failed: {e}"),
-            }
-        })?
-    };
-    // SAFETY: Symbol lookup returns a valid function pointer for polyplug_abi_version.
-    let abi_version_sym: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
-        new_library
-            .get(b"polyplug_abi_version\0")
-            .map_err(|_| PolyplugError::ReloadFailed {
-                bundle: path_str.clone(),
-                reason: "missing symbol polyplug_abi_version".to_owned(),
-            })?
-    };
-    // SAFETY: abi_version_sym is a valid function pointer just resolved from the library.
-    let found_version: u32 = unsafe { abi_version_sym() };
-    if found_version != polyplug_abi::POLYPLUG_ABI_VERSION {
-        return Err(PolyplugError::ReloadFailed {
-            bundle: path_str.clone(),
-            reason: format!(
-                "abi version mismatch: expected={}, found={}",
-                polyplug_abi::POLYPLUG_ABI_VERSION,
-                found_version
-            ),
-        });
-    }
-    let init_fn_ptr: unsafe extern "C" fn(
-        *mut core::ffi::c_void,
-        *const polyplug_abi::HostVTable,
-        *const polyplug_abi::PluginContext,
-    ) -> polyplug_abi::AbiError = {
-        // SAFETY: Symbol lookup returns a valid function pointer on success.
-        let init_sym: libloading::Symbol<
-            '_,
-            unsafe extern "C" fn(
-                *mut core::ffi::c_void,
-                *const polyplug_abi::HostVTable,
-                *const polyplug_abi::PluginContext,
-            ) -> polyplug_abi::AbiError,
-        > = unsafe {
-            new_library
-                .get(b"polyplug_init\0")
-                .map_err(|_| PolyplugError::ReloadFailed {
-                    bundle: path_str.clone(),
-                    reason: "missing symbol polyplug_init".to_owned(),
-                })?
-        };
-        *init_sym
-    };
-
-    runtime
-        .reload_captured_vtables
-        .lock()
-        .unwrap_or_else(|e| {
-            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-            e.into_inner()
-        })
-        .clear();
-
-    // Create PluginContext with bundle_id
-    let bundle_path_sv: polyplug_abi::StringView = polyplug_abi::StringView {
-        ptr: bundle_dir_path.as_os_str().as_encoded_bytes().as_ptr(),
-        len: bundle_dir_path.as_os_str().as_encoded_bytes().len(),
-    };
-    let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
-        bundle_path: bundle_path_sv,
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        bundle_id: manifest.id,
-    };
-
-    // Create HostContext on the stack for dependency enforcement
-    let expected_bundle_id: u64 = manifest.id;
-    let host_ctx: HostContext = HostContext {
-        runtime: runtime as *const Runtime as *mut Runtime,
-        bundle_id: expected_bundle_id,
-    };
-
-    // Build a temporary HostVTable with our capture callback
-    let reload_host_vtable: polyplug_abi::HostVTable = polyplug_abi::HostVTable {
-        register_plugin: reload_register_callback,
-        alloc: crate::runtime::host_alloc,
-        free: crate::runtime::host_free,
-        find_by_contract: crate::runtime::host_find_by_contract,
-        find_by_bundle: crate::runtime::host_find_by_bundle,
-        find_all_by_contract: crate::runtime::host_find_all_by_contract,
-        resolve_plugin: crate::runtime::host_resolve_plugin,
-        get_extension: crate::runtime::host_get_extension,
-    };
-
-    let rt_ctx: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
-    // SAFETY: init_fn_ptr is resolved from new_library which remains alive for this call.
-    // rt_ctx is a valid HostContext pointer, and reload_host_vtable is a valid HostVTable.
-    let init_result: polyplug_abi::AbiError = unsafe {
-        init_fn_ptr(
-            rt_ctx,
-            &reload_host_vtable as *const polyplug_abi::HostVTable,
-            &ctx,
-        )
-    };
-
-    // Verify bundle_id wasn't tampered with during init
-    if host_ctx.bundle_id != expected_bundle_id {
-        return Err(PolyplugError::Loader(
-            crate::error::LoaderError::BundleTampered {
-                bundle: path_str.clone(),
-                expected: expected_bundle_id,
-                found: host_ctx.bundle_id,
-            },
-        ));
-    }
-
-    if init_result.code != polyplug_abi::ABI_OK {
-        return Err(PolyplugError::ReloadFailed {
-            bundle: path_str.clone(),
-            reason: format!("init failed with code {}", init_result.code),
-        });
-    }
-    let captured_vtables: Vec<VTablePtr> = runtime
-        .reload_captured_vtables
-        .lock()
-        .unwrap_or_else(|e| {
-            eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-            e.into_inner()
-        })
-        .clone();
-
-    let mut new_vtable_map: HashMap<u64, *const polyplug_abi::PluginInterface> = HashMap::new();
-    for vt_ptr in &captured_vtables {
-        // SAFETY: vt_ptr.0 returned by init() is valid while new_library is alive.
-        let contract_id: u64 = unsafe { (*vt_ptr.0).contract_id };
-        new_vtable_map.insert(contract_id, vt_ptr.0);
-    }
-
-    // Three-phase hot-reload with retry support:
-    // 1. Fire Preparing notification before vtable swap
-    // 2. Check Arc strong_count on all slots (retry if active instances)
-    // 3. Swap vtables, fire Reloaded notification, wait for quiescence
     let config: &crate::runtime::RuntimeConfig = runtime.config();
     let mut retry_count: u32 = 0_u32;
 
+    // Result of library loading and initialization (computed inside retry loop)
+    let new_library: libloading::Library;
+    let new_vtable_map: HashMap<u64, *const polyplug_abi::PluginInterface>;
+
+    // Retry loop wraps the entire reload process (library loading + quiescence waiting)
     loop {
-        // Phase 1: Fire Preparing notification before checking/swap
+        // Phase 1: Fire Preparing notification before any reload work
         if let Some(ref cb) = runtime.on_reload_cb {
             cb(ReloadPhase::Preparing {
                 bundle_id: bundle_id_val,
@@ -301,47 +165,302 @@ pub(crate) fn reload_bundle_impl(
             });
         }
 
-        // Check if all slots have no active instances (Arc strong_count == 1)
-        // When we call get_vtable_arc(), it returns an Arc with count incremented by 1,
-        // so we check for count == 2 (registry + our loaded Arc).
-        let mut all_slots_quiescent: bool = true;
-        for &slot_idx in &slot_indices {
-            let arc: Arc<VTableSlot> = match runtime.registry().get_vtable_arc(slot_idx) {
-                Some(a) => a,
-                None => continue,
-            };
-            if Arc::strong_count(&arc) > 2_usize {
-                all_slots_quiescent = false;
-                break;
+        // Try to load the new library
+        // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
+        let load_result: Result<libloading::Library, PolyplugError> = unsafe {
+            libloading::Library::new(&so_path).map_err(|e: libloading::Error| {
+                PolyplugError::ReloadFailed {
+                    bundle: path_str.clone(),
+                    reason: format!("dlopen failed: {e}"),
+                }
+            })
+        };
+
+        let loaded_library: libloading::Library = match load_result {
+            Ok(lib) => lib,
+            Err(e) => {
+                // Library load failed - check retry limits
+                if retry_count >= config.hot_reload_max_retries
+                    && config.hot_reload_abort_on_max_retries
+                {
+                    runtime.emit_warning(&format!(
+                        "hot-reload: max retries ({}) exceeded for bundle {} - library load failed",
+                        config.hot_reload_max_retries, manifest.name
+                    ));
+                    if let Some(ref cb) = runtime.on_reload_cb {
+                        cb(ReloadPhase::Failed {
+                            bundle_id: bundle_id_val,
+                            bundle_name: manifest.name.clone(),
+                            reason: format!("max retries exceeded: {}", e),
+                        });
+                    }
+                    return Err(e);
+                }
+                // Retry
+                std::thread::sleep(config.hot_reload_retry_interval);
+                retry_count = retry_count.saturating_add(1_u32);
+                continue;
             }
+        };
+
+        // SAFETY: Symbol lookup returns a valid function pointer for polyplug_abi_version.
+        let abi_version_sym: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
+            match loaded_library.get(b"polyplug_abi_version\0") {
+                Ok(sym) => sym,
+                Err(_) => {
+                    // Symbol not found - check retry limits
+                    if retry_count >= config.hot_reload_max_retries
+                        && config.hot_reload_abort_on_max_retries
+                    {
+                        let err: PolyplugError = PolyplugError::ReloadFailed {
+                            bundle: path_str.clone(),
+                            reason: "missing symbol polyplug_abi_version".to_owned(),
+                        };
+                        if let Some(ref cb) = runtime.on_reload_cb {
+                            cb(ReloadPhase::Failed {
+                                bundle_id: bundle_id_val,
+                                bundle_name: manifest.name.clone(),
+                                reason: "max retries exceeded: missing symbol".to_owned(),
+                            });
+                        }
+                        return Err(err);
+                    }
+                    std::thread::sleep(config.hot_reload_retry_interval);
+                    retry_count = retry_count.saturating_add(1_u32);
+                    continue;
+                }
+            }
+        };
+        // SAFETY: abi_version_sym is a valid function pointer just resolved from the library.
+        let found_version: u32 = unsafe { abi_version_sym() };
+        if found_version != polyplug_abi::POLYPLUG_ABI_VERSION {
+            // ABI version mismatch - check retry limits
+            if retry_count >= config.hot_reload_max_retries
+                && config.hot_reload_abort_on_max_retries
+            {
+                let err: PolyplugError = PolyplugError::ReloadFailed {
+                    bundle: path_str.clone(),
+                    reason: format!(
+                        "abi version mismatch: expected={}, found={}",
+                        polyplug_abi::POLYPLUG_ABI_VERSION,
+                        found_version
+                    ),
+                };
+                if let Some(ref cb) = runtime.on_reload_cb {
+                    cb(ReloadPhase::Failed {
+                        bundle_id: bundle_id_val,
+                        bundle_name: manifest.name.clone(),
+                        reason: "max retries exceeded: abi version mismatch".to_owned(),
+                    });
+                }
+                return Err(err);
+            }
+            std::thread::sleep(config.hot_reload_retry_interval);
+            retry_count = retry_count.saturating_add(1_u32);
+            continue;
         }
 
-        if all_slots_quiescent {
-            break;
-        }
+        let init_fn_ptr: unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const polyplug_abi::HostVTable,
+            *const polyplug_abi::PluginContext,
+        ) -> polyplug_abi::AbiError = {
+            // SAFETY: Symbol lookup returns a valid function pointer on success.
+            let init_sym: libloading::Symbol<
+                '_,
+                unsafe extern "C" fn(
+                    *mut core::ffi::c_void,
+                    *const polyplug_abi::HostVTable,
+                    *const polyplug_abi::PluginContext,
+                ) -> polyplug_abi::AbiError,
+            > = unsafe {
+                match loaded_library.get(b"polyplug_init\0") {
+                    Ok(sym) => sym,
+                    Err(_) => {
+                        // Symbol not found - check retry limits
+                        if retry_count >= config.hot_reload_max_retries
+                            && config.hot_reload_abort_on_max_retries
+                        {
+                            let err: PolyplugError = PolyplugError::ReloadFailed {
+                                bundle: path_str.clone(),
+                                reason: "missing symbol polyplug_init".to_owned(),
+                            };
+                            if let Some(ref cb) = runtime.on_reload_cb {
+                                cb(ReloadPhase::Failed {
+                                    bundle_id: bundle_id_val,
+                                    bundle_name: manifest.name.clone(),
+                                    reason: "max retries exceeded: missing init symbol".to_owned(),
+                                });
+                            }
+                            return Err(err);
+                        }
+                        // Signal retry needed
+                        std::thread::sleep(config.hot_reload_retry_interval);
+                        retry_count = retry_count.saturating_add(1_u32);
+                        continue;
+                    }
+                }
+            };
+            *init_sym
+        };
 
-        // Not all slots are quiescent - check retry limits
-        if retry_count >= config.hot_reload_max_retries && config.hot_reload_abort_on_max_retries {
-            runtime.emit_warning(&format!(
-                "hot-reload: max retries ({}) exceeded for bundle {} with active instances",
-                config.hot_reload_max_retries, manifest.name
-            ));
+        runtime
+            .reload_captured_vtables
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .clear();
+
+        // Create PluginContext with bundle_id
+        let bundle_path_sv: polyplug_abi::StringView = polyplug_abi::StringView {
+            ptr: bundle_dir_path.as_os_str().as_encoded_bytes().as_ptr(),
+            len: bundle_dir_path.as_os_str().as_encoded_bytes().len(),
+        };
+        let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+            bundle_path: bundle_path_sv,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+            bundle_id: manifest.id,
+        };
+
+        // Create HostContext on the stack for dependency enforcement
+        let expected_bundle_id: u64 = manifest.id;
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id: expected_bundle_id,
+        };
+
+        // Build a temporary HostVTable with our capture callback
+        let reload_host_vtable: polyplug_abi::HostVTable = polyplug_abi::HostVTable {
+            register_plugin: reload_register_callback,
+            alloc: crate::runtime::host_alloc,
+            free: crate::runtime::host_free,
+            find_by_contract: crate::runtime::host_find_by_contract,
+            find_by_bundle: crate::runtime::host_find_by_bundle,
+            find_all_by_contract: crate::runtime::host_find_all_by_contract,
+            resolve_plugin: crate::runtime::host_resolve_plugin,
+            get_extension: crate::runtime::host_get_extension,
+        };
+
+        let rt_ctx: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        // SAFETY: init_fn_ptr is resolved from loaded_library which remains alive for this call.
+        // rt_ctx is a valid HostContext pointer, and reload_host_vtable is a valid HostVTable.
+        let init_result: polyplug_abi::AbiError = unsafe {
+            init_fn_ptr(
+                rt_ctx,
+                &reload_host_vtable as *const polyplug_abi::HostVTable,
+                &ctx,
+            )
+        };
+
+        // Verify bundle_id wasn't tampered with during init
+        if host_ctx.bundle_id != expected_bundle_id {
+            let err: PolyplugError =
+                PolyplugError::Loader(crate::error::LoaderError::BundleTampered {
+                    bundle: path_str.clone(),
+                    expected: expected_bundle_id,
+                    found: host_ctx.bundle_id,
+                });
             if let Some(ref cb) = runtime.on_reload_cb {
                 cb(ReloadPhase::Failed {
                     bundle_id: bundle_id_val,
                     bundle_name: manifest.name.clone(),
-                    reason: "max retries exceeded with active instances".to_owned(),
+                    reason: "bundle tampered".to_owned(),
                 });
             }
-            return Err(PolyplugError::ReloadFailed {
-                bundle: path.display().to_string(),
-                reason: "max retries exceeded with active instances".to_owned(),
-            });
+            return Err(err);
         }
-        // If abort_on_max_retries is false, keep retrying forever
 
-        std::thread::sleep(config.hot_reload_retry_interval);
-        retry_count = retry_count.saturating_add(1_u32);
+        if init_result.code != polyplug_abi::ABI_OK {
+            // Init failed - check retry limits
+            if retry_count >= config.hot_reload_max_retries
+                && config.hot_reload_abort_on_max_retries
+            {
+                let err: PolyplugError = PolyplugError::ReloadFailed {
+                    bundle: path_str.clone(),
+                    reason: format!("init failed with code {}", init_result.code),
+                };
+                if let Some(ref cb) = runtime.on_reload_cb {
+                    cb(ReloadPhase::Failed {
+                        bundle_id: bundle_id_val,
+                        bundle_name: manifest.name.clone(),
+                        reason: "max retries exceeded: init failed".to_owned(),
+                    });
+                }
+                return Err(err);
+            }
+            std::thread::sleep(config.hot_reload_retry_interval);
+            retry_count = retry_count.saturating_add(1_u32);
+            continue;
+        }
+
+        let local_captured_vtables: Vec<VTablePtr> = runtime
+            .reload_captured_vtables
+            .lock()
+            .unwrap_or_else(|e| {
+                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+                e.into_inner()
+            })
+            .clone();
+
+        let mut local_vtable_map: HashMap<u64, *const polyplug_abi::PluginInterface> =
+            HashMap::new();
+        for vt_ptr in &local_captured_vtables {
+            // SAFETY: vt_ptr.0 returned by init() is valid while loaded_library is alive.
+            let contract_id: u64 = unsafe { (*vt_ptr.0).contract_id };
+            local_vtable_map.insert(contract_id, vt_ptr.0);
+        }
+
+        // Wait for all slots to become quiescent (no active instances).
+        // When we call get_vtable_arc(), it returns an Arc with count incremented by 1,
+        // so we check for count == 2 (registry + our loaded Arc).
+        // This wait uses a proper timeout instead of retry count to handle
+        // sustained concurrent access from reader threads.
+        let quiescence_start: Instant = Instant::now();
+        loop {
+            let mut all_slots_quiescent: bool = true;
+            for &slot_idx in &slot_indices {
+                let arc: Arc<VTableSlot> = match runtime.registry().get_vtable_arc(slot_idx) {
+                    Some(a) => a,
+                    None => continue,
+                };
+                if Arc::strong_count(&arc) > 2_usize {
+                    all_slots_quiescent = false;
+                    break;
+                }
+            }
+
+            if all_slots_quiescent {
+                break;
+            }
+
+            if quiescence_start.elapsed() > QUIESCENCE_TIMEOUT {
+                runtime.emit_warning(&format!(
+                    "hot-reload: quiescence timeout for bundle {} with active instances",
+                    manifest.name
+                ));
+                if let Some(ref cb) = runtime.on_reload_cb {
+                    cb(ReloadPhase::Failed {
+                        bundle_id: bundle_id_val,
+                        bundle_name: manifest.name.clone(),
+                        reason: "quiescence timeout with active instances".to_owned(),
+                    });
+                }
+                return Err(PolyplugError::QuiescenceTimeout {
+                    bundle: manifest.name.clone(),
+                });
+            }
+
+            std::thread::sleep(Duration::from_millis(1_u64));
+            spin_loop();
+        }
+
+        // Success - store results and break out of retry loop
+        new_library = loaded_library;
+        new_vtable_map = local_vtable_map;
+        break;
     }
 
     let mut old_arcs: Vec<Arc<VTableSlot>> = Vec::new();

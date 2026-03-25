@@ -349,7 +349,16 @@ fn highest_version_hostfxr(dotnet_root: &std::path::Path) -> Option<PathBuf> {
 
     // Collect all subdirectory names that look like version strings.
     let mut versions: Vec<(Vec<u64>, PathBuf)> = Vec::new();
-    let entries: fs::ReadDir = fs::read_dir(&fxr_dir).ok()?;
+    let entries: fs::ReadDir = fs::read_dir(&fxr_dir)
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_dotnet] highest_version_hostfxr: failed to read dir '{}': {}",
+                fxr_dir.display(),
+                e
+            );
+            e
+        })
+        .ok()?;
     for entry in entries.flatten() {
         let path: PathBuf = entry.path();
         if !path.is_dir() {

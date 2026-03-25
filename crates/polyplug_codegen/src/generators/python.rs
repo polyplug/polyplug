@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -360,7 +360,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -848,12 +848,22 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
 
     for func in &contract.functions {
         let abi_name: String = format!("{lower}_{}_abi", func.name);
+        let has_return: bool = has_return_value(&func.returns);
+        let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
             "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
         out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
         out.push_str("    if impl is None:\n");
         out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
+        if has_params {
+            out.push_str("    if args_ptr.value is None or args_ptr.value == 0:\n");
+            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+        }
+        if has_return {
+            out.push_str("    if out_ptr.value is None or out_ptr.value == 0:\n");
+            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+        }
         emit_guest_abi_args_unpack(out, func, &struct_name);
         emit_guest_abi_call(out, func);
         emit_guest_abi_return(out, func);
@@ -935,6 +945,8 @@ fn generate_guest_plugin_vtable(
 
     for func in &contract.functions {
         let abi_name: String = format!("{plugin_lower}_{}_abi", func.name);
+        let has_return: bool = has_return_value(&func.returns);
+        let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
             "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
@@ -943,6 +955,14 @@ fn generate_guest_plugin_vtable(
         ));
         out.push_str("    if impl is None:\n");
         out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
+        if has_params {
+            out.push_str("    if args_ptr.value is None or args_ptr.value == 0:\n");
+            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+        }
+        if has_return {
+            out.push_str("    if out_ptr.value is None or out_ptr.value == 0:\n");
+            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+        }
         emit_guest_abi_args_unpack(out, func, &struct_name);
         emit_guest_abi_call(out, func);
         emit_guest_abi_return(out, func);

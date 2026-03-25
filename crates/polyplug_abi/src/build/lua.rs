@@ -761,9 +761,8 @@ mod tests {
     }
 
     /// Generate the polyplug_abi.lua file for the SDK.
-    /// Run with: cargo test --package polyplug_abi -- generate_abi_lua_file --ignored --nocapture
+    /// Run with: cargo test --package polyplug_abi -- generate_abi_lua_file --nocapture
     #[test]
-    #[ignore]
     fn generate_abi_lua_file() {
         use crate::build::AbiParser;
         use std::fs;

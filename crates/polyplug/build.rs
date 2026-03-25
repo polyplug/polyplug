@@ -506,7 +506,8 @@ fn main() {
     fs::write(
         depender_dir.join("manifest.toml"),
         concat!(
-            "bundle_name                = \"depender_plugin\"\n",
+            "id                         = 9221549014155646466\n",
+            "name                       = \"depender_plugin\"\n",
             "version                    = \"1.0\"\n",
             "runtime                    = \"native\"\n",
             "file                       = \"libdepender_plugin.so\"\n",

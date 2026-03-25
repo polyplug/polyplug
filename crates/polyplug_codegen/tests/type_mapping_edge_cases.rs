@@ -11,7 +11,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
 use std::io::Write as _;
 
 // ─── TOML helpers ─────────────────────────────────────────────────────────────
@@ -90,7 +90,6 @@ fn find_file<'a>(
 /// QuickJS uses the f64-based JavaScript number type internally, so it has no
 /// native BigInt. 64-bit values are therefore split into two u32 halves.
 #[test]
-#[ignore] // TODO: Update test for new generator structure
 fn quickjs_u64_field_maps_to_lo_hi_pair() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
         run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
@@ -106,7 +105,6 @@ fn quickjs_u64_field_maps_to_lo_hi_pair() {
 
 /// `i64` fields must map to `{ lo: number; hi: number }` in QuickJS TypeScript.
 #[test]
-#[ignore] // TODO: Update test for new generator structure
 fn quickjs_i64_field_maps_to_lo_hi_pair() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
         run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
@@ -122,7 +120,6 @@ fn quickjs_i64_field_maps_to_lo_hi_pair() {
 
 /// `u64` parameters must map to `{ lo: number; hi: number }` in QuickJS contracts.
 #[test]
-#[ignore] // TODO: Update test for new generator structure
 fn quickjs_u64_param_maps_to_lo_hi_pair() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
         run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);
@@ -138,7 +135,6 @@ fn quickjs_u64_param_maps_to_lo_hi_pair() {
 
 /// `u64` must NOT become `bigint` in QuickJS (QuickJS has no native BigInt).
 #[test]
-#[ignore] // TODO: Update test for new generator structure
 fn quickjs_u64_never_maps_to_bigint() {
     let files: Vec<polyplug_codegen::GeneratedFile> =
         run_generate(U64_I64_API_TOML, Lang::JsQuickJs, Side::Host);

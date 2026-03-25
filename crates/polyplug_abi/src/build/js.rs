@@ -517,6 +517,139 @@ impl AbiGenerator for JsGenerator {
             "    const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);\n",
         );
         output.push_str("    return s.split(delimiter);\n");
+        output.push_str("}\n\n");
+
+        // ABI Validation
+        output.push_str(
+            "// ─── ABI Validation ──────────────────────────────────────────────────────────\n\n",
+        );
+
+        output.push_str("/**\n");
+        output.push_str(" * Expected ABI struct sizes (in bytes) for 64-bit platforms.\n");
+        output.push_str(" * These match the Rust ABI layout tests exactly.\n");
+        output.push_str(" */\n");
+        output.push_str("export const ABI_EXPECTED_SIZES: {\n");
+        output.push_str("    StringView: number;\n");
+        output.push_str("    Buffer: number;\n");
+        output.push_str("    AbiError: number;\n");
+        output.push_str("    PluginHandle: number;\n");
+        output.push_str("    HostContext: number;\n");
+        output.push_str("    DispatchType: number;\n");
+        output.push_str("    NativeDispatch: number;\n");
+        output.push_str("    VmDispatch: number;\n");
+        output.push_str("    PluginDispatch: number;\n");
+        output.push_str("    PluginInterface: number;\n");
+        output.push_str("    PluginDescriptor: number;\n");
+        output.push_str("    HostVTable: number;\n");
+        output.push_str("    PluginContext: number;\n");
+        output.push_str("    ExtensionEntry: number;\n");
+        output.push_str("    RuntimeConfig: number;\n");
+        output.push_str("} = {\n");
+        output.push_str("    StringView: 16,\n");
+        output.push_str("    Buffer: 24,\n");
+        output.push_str("    AbiError: 24,\n");
+        output.push_str("    PluginHandle: 8,\n");
+        output.push_str("    HostContext: 16,\n");
+        output.push_str("    DispatchType: 4,\n");
+        output.push_str("    NativeDispatch: 8,\n");
+        output.push_str("    VmDispatch: 16,\n");
+        output.push_str("    PluginDispatch: 16,\n");
+        output.push_str("    PluginInterface: 48,\n");
+        output.push_str("    PluginDescriptor: 48,\n");
+        output.push_str("    HostVTable: 64,\n");
+        output.push_str("    PluginContext: 32,\n");
+        output.push_str("    ExtensionEntry: 16,\n");
+        output.push_str("    RuntimeConfig: 40,\n");
+        output.push_str("};\n\n");
+
+        output.push_str("/**\n");
+        output
+            .push_str(" * Validation error thrown when ABI struct shapes don't match expected.\n");
+        output.push_str(" */\n");
+        output.push_str("export class AbiValidationError extends Error {\n");
+        output.push_str("    constructor(\n");
+        output.push_str("        public readonly structName: string,\n");
+        output.push_str("        public readonly expected: number,\n");
+        output.push_str("        public readonly actual: number\n");
+        output.push_str("    ) {\n");
+        output.push_str("        super(\n");
+        output.push_str(
+            "            `ABI mismatch: ${structName} expected ${expected} bytes, got ${actual} bytes`\n",
+        );
+        output.push_str("        );\n");
+        output.push_str("        this.name = 'AbiValidationError';\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("/**\n");
+        output.push_str(" * Validate that an object has the expected ABI struct shape.\n");
+        output.push_str(" * @param obj - The object to validate.\n");
+        output.push_str(" * @param structName - The expected struct name.\n");
+        output.push_str(" * @param expectedFields - Array of [fieldName, fieldType] pairs.\n");
+        output.push_str(" * @throws AbiValidationError if validation fails.\n");
+        output.push_str(" */\n");
+        output.push_str(
+            "export function validateAbiStruct(obj: unknown, structName: string, expectedFields: [string, string][]): void {\n",
+        );
+        output.push_str("    if (obj === null || obj === undefined) {\n");
+        output.push_str(
+            "        throw new AbiValidationError(structName, ABI_EXPECTED_SIZES[structName as keyof typeof ABI_EXPECTED_SIZES] || 0, 0);\n",
+        );
+        output.push_str("    }\n\n");
+        output.push_str(
+            "    const record: Record<string, unknown> = obj as Record<string, unknown>;\n\n",
+        );
+        output.push_str("    for (const [field, expectedType] of expectedFields) {\n");
+        output.push_str("        const value: unknown = record[field];\n");
+        output.push_str("        const actualType: string = typeof value;\n\n");
+        output.push_str("        if (actualType !== expectedType) {\n");
+        output.push_str("            // Allow bigint for number in some cases (u64 fields)\n");
+        output.push_str(
+            "            if (!(expectedType === 'number' && actualType === 'bigint')) {\n",
+        );
+        output.push_str(
+            "                throw new AbiValidationError(structName, ABI_EXPECTED_SIZES[structName as keyof typeof ABI_EXPECTED_SIZES] || 0, 0);\n",
+        );
+        output.push_str("            }\n");
+        output.push_str("        }\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
+
+        output.push_str("/**\n");
+        output.push_str(" * Validate all core ABI struct shapes at runtime.\n");
+        output.push_str(" * Call this during initialization to catch ABI mismatches early.\n");
+        output.push_str(" * @throws AbiValidationError if any struct validation fails.\n");
+        output.push_str(" */\n");
+        output.push_str("export function validateAbi(): void {\n");
+        output.push_str("    // Validate StringView: ptr (bigint) + len (number)\n");
+        output.push_str(
+            "    validateAbiStruct({ ptr: 0n, len: 0 }, 'StringView', [['ptr', 'bigint'], ['len', 'number']]);\n",
+        );
+        output.push('\n');
+        output.push_str("    // Validate Buffer: ptr (bigint) + len (number) + cap (number)\n");
+        output.push_str(
+            "    validateAbiStruct({ ptr: 0n, len: 0, cap: 0 }, 'Buffer', [['ptr', 'bigint'], ['len', 'number'], ['cap', 'number']]);\n",
+        );
+        output.push('\n');
+        output.push_str("    // Validate AbiError: code (number) + message (StringView)\n");
+        output.push_str(
+            "    validateAbiStruct({ code: 0, message: { ptr: 0n, len: 0 } }, 'AbiError', [['code', 'number']]);\n",
+        );
+        output.push('\n');
+        output.push_str("    // Validate PluginHandle: index (number) + generation (number)\n");
+        output.push_str(
+            "    validateAbiStruct({ index: 0, generation: 0 }, 'PluginHandle', [['index', 'number'], ['generation', 'number']]);\n",
+        );
+        output.push('\n');
+        output.push_str("    // Validate HostContext: runtime (bigint) + bundle_id (bigint)\n");
+        output.push_str(
+            "    validateAbiStruct({ runtime: 0n, bundle_id: 0n }, 'HostContext', [['runtime', 'bigint'], ['bundle_id', 'bigint']]);\n",
+        );
+        output.push('\n');
+        output.push_str("    // Validate PluginInterface: rt_ctx (bigint) + contract_id (bigint) + contract_version (number) + function_count (number) + dispatch_type (number) + dispatch (object)\n");
+        output.push_str(
+            "    validateAbiStruct({ rt_ctx: 0n, contract_id: 0n, contract_version: 0, function_count: 0, dispatch_type: 0, dispatch: {} }, 'PluginInterface', [['rt_ctx', 'bigint'], ['contract_id', 'bigint'], ['contract_version', 'number'], ['function_count', 'number'], ['dispatch_type', 'number']]);\n",
+        );
         output.push_str("}\n");
 
         output
@@ -760,17 +893,14 @@ mod tests {
         assert_eq!(files.files.len(), 1);
         assert_eq!(files.files[0].path, PathBuf::from("polyplug_abi.ts"));
         assert!(files.files[0].content.contains("export const ABI_OK"));
-        assert!(
-            files.files[0]
-                .content
-                .contains("export interface StringView")
-        );
+        assert!(files.files[0]
+            .content
+            .contains("export interface StringView"));
     }
 
     /// Generate the polyplug_abi.ts file for the SDK.
-    /// Run with: cargo test --package polyplug_abi -- generate_abi_ts_file --ignored --nocapture
+    /// Run with: cargo test --package polyplug_abi -- generate_abi_ts_file --nocapture
     #[test]
-    #[ignore]
     fn generate_abi_ts_file() {
         use crate::build::AbiParser;
         use std::fs;

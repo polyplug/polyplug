@@ -5,10 +5,10 @@
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + vtable statics
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -395,6 +395,7 @@ fn generate_cpp_guest_abi_wrapper(
         func.returns.as_ref(),
         None | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Void))
     );
+    let has_params: bool = !func.params.is_empty();
 
     out.push_str(&format!(
         "// ABI wrapper for {} (function_id = {})\n",
@@ -405,6 +406,17 @@ fn generate_cpp_guest_abi_wrapper(
         contract_lower, func.name
     ));
     out.push_str("    try {\n");
+
+    if has_params {
+        out.push_str("        if (args == nullptr) {\n");
+        out.push_str("            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER\n");
+        out.push_str("        }\n");
+    }
+    if !is_void_return {
+        out.push_str("        if (out == nullptr) {\n");
+        out.push_str("            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER\n");
+        out.push_str("        }\n");
+    }
 
     // Build the call expression
     let call_expr: String = build_guest_call_expr(contract_lower, func);
@@ -1257,12 +1269,10 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(
-            files
-                .files
-                .iter()
-                .any(|f| f.content.contains("AUTO-GENERATED"))
-        );
+        assert!(files
+            .files
+            .iter()
+            .any(|f| f.content.contains("AUTO-GENERATED")));
     }
 
     #[test]

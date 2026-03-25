@@ -19,6 +19,8 @@ M.ABI_ERROR_PANIC = ffi.cast("uint32_t", 3)
 M.ABI_ERROR_NOT_FOUND = ffi.cast("uint32_t", 4)
 M.ABI_ERROR_STALE_HANDLE = ffi.cast("uint32_t", 5)
 M.ABI_FUNCTION_NOT_AVAIL = ffi.cast("uint32_t", 6)
+M.ABI_ERROR_DUPLICATE_PROVIDER = ffi.cast("uint32_t", 7)
+M.ABI_ERROR_INVALID_POINTER = ffi.cast("uint32_t", 8)
 
 -- ─── ABI Enums ────────────────────────────────────────────────────────────────
 
@@ -286,54 +288,6 @@ end
 -- @return number      The bundle ID.
 function M.bundle_id(name)
     return fnv1a_64(name)
-end
-
--- ─── String Helpers ────────────────────────────────────────────────────────────
-
---- Convert StringView to Lua string.
--- @param sv StringView|string  The StringView (FFI cdata) or Lua string.
--- @return string               The Lua string.
-local function to_string(sv)
-    if type(sv) == "string" then
-        return sv
-    end
-    -- Assume it's a StringView FFI cdata
-    return ffi.string(sv.ptr, sv.len)
-end
-
---- Strip prefix from a string.
--- @param sv StringView|string  The input string.
--- @param prefix string         The prefix to strip.
--- @return string               String without prefix, or original if no match.
-function M.strip_prefix(sv, prefix)
-    local s = to_string(sv)
-    if s:sub(1, #prefix) == prefix then
-        return s:sub(#prefix + 1)
-    end
-    return s
-end
-
---- Check if string starts with prefix.
--- @param sv StringView|string  The input string.
--- @param prefix string         The prefix to check.
--- @return boolean              True if string starts with prefix.
-function M.starts_with(sv, prefix)
-    local s = to_string(sv)
-    return s:sub(1, #prefix) == prefix
-end
-
---- Split string by delimiter.
--- @param sv StringView|string  The input string.
--- @param delimiter string      The delimiter (single character).
--- @return table                Array of strings.
-function M.split(sv, delimiter)
-    local s = to_string(sv)
-    local result = {}
-    local pattern = "([^" .. delimiter .. "]+)"
-    for part in s:gmatch(pattern) do
-        table.insert(result, part)
-    end
-    return result
 end
 
 return M

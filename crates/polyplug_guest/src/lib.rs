@@ -66,8 +66,10 @@ pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 /// Output buffer too small — caller must reallocate and retry.
 pub use polyplug_abi::ABI_BUFFER_TOO_SMALL;
+pub use polyplug_abi::ABI_ERROR_DUPLICATE_PROVIDER;
 /// Generic error code — use for unclassified plugin errors.
 pub use polyplug_abi::ABI_ERROR_GENERIC;
+pub use polyplug_abi::ABI_ERROR_INVALID_POINTER;
 /// Requested plugin or contract not found.
 pub use polyplug_abi::ABI_ERROR_NOT_FOUND;
 /// Plugin panicked — returned by the host runtime when `catch_unwind` fires.

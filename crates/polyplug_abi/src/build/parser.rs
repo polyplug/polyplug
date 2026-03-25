@@ -10,8 +10,8 @@ use super::{
 };
 use std::collections::HashSet;
 use syn::{
-    Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn, ItemStruct,
-    ItemUnion, Lit, Visibility, parse_file,
+    parse_file, Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn,
+    ItemStruct, ItemUnion, Lit, Visibility,
 };
 use thiserror::Error;
 
@@ -44,6 +44,8 @@ const ABI_CONSTANTS: &[&str] = &[
     "ABI_ERROR_NOT_FOUND",
     "ABI_ERROR_STALE_HANDLE",
     "ABI_FUNCTION_NOT_AVAIL",
+    "ABI_ERROR_DUPLICATE_PROVIDER",
+    "ABI_ERROR_INVALID_POINTER",
 ];
 
 /// ABI functions that should be extracted by the parser.
@@ -633,13 +635,11 @@ mod tests {
             .expect("StringView should exist");
 
         assert!(string_view.doc.is_some());
-        assert!(
-            string_view
-                .doc
-                .as_ref()
-                .unwrap()
-                .contains("Non-owning UTF-8 string view")
-        );
+        assert!(string_view
+            .doc
+            .as_ref()
+            .unwrap()
+            .contains("Non-owning UTF-8 string view"));
     }
 
     #[test]

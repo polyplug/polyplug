@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -317,6 +317,8 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
             for func in &contract.functions {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
+                let has_return: bool = func.returns.is_some();
+                let has_params: bool = !func.params.is_empty();
                 out.push_str(
                     "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
                 );
@@ -325,6 +327,16 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                     abi_method
                 ));
                 out.push_str("        try {\n");
+                if has_params {
+                    out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
+                    out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+                    out.push_str("            }\n");
+                }
+                if has_return {
+                    out.push_str("            if (outPtr == IntPtr.Zero) {\n");
+                    out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+                    out.push_str("            }\n");
+                }
                 out.push_str(&format!(
                     "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n"
                 ));
@@ -454,12 +466,24 @@ fn generate_cs_guest_plugin_vtables(
     for func in &contract.functions {
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
+        let has_return: bool = func.returns.is_some();
+        let has_params: bool = !func.params.is_empty();
         out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
         out.push_str(&format!(
             "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
             abi_method
         ));
         out.push_str("        try {\n");
+        if has_params {
+            out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
+            out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+            out.push_str("            }\n");
+        }
+        if has_return {
+            out.push_str("            if (outPtr == IntPtr.Zero) {\n");
+            out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+            out.push_str("            }\n");
+        }
         out.push_str(&format!(
             "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n",
             lower = plugin_lower

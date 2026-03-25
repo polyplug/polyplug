@@ -566,9 +566,8 @@ mod tests {
     }
 
     /// Generate the Abi.cs file for the SDK.
-    /// Run with: cargo test --package polyplug_abi -- generate_abi_cs_file --ignored --nocapture
+    /// Run with: cargo test --package polyplug_abi -- generate_abi_cs_file --nocapture
     #[test]
-    #[ignore]
     fn generate_abi_cs_file() {
         use crate::build::AbiParser;
         use std::fs;

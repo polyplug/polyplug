@@ -234,7 +234,8 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     // ABI constants for host
     out.push_str("-- ABI constants\n");
     out.push_str("local ABI_OK = 0\n");
-    out.push_str("local ABI_ERROR_GENERIC = 1\n\n");
+    out.push_str("local ABI_ERROR_GENERIC = 1\n");
+    out.push_str("local ABI_ERROR_INVALID_POINTER = 8\n\n");
 
     // Contract ID constants
     out.push_str("-- Contract ID constants\n");
@@ -314,7 +315,8 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
 
     out.push_str("-- ABI constants\n");
     out.push_str("local ABI_OK = 0\n");
-    out.push_str("local ABI_ERROR_GENERIC = 1\n\n");
+    out.push_str("local ABI_ERROR_GENERIC = 1\n");
+    out.push_str("local ABI_ERROR_INVALID_POINTER = 8\n\n");
 
     if has_trace {
         out.push_str("local EXT_TRACE_ID = 0xC4EB9AEE\n");

@@ -28,6 +28,7 @@ pub const ABI_ERROR_NOT_FOUND: u32 = 4; // plugin/contract not found
 pub const ABI_ERROR_STALE_HANDLE: u32 = 5; // PluginHandle generation mismatch
 pub const ABI_FUNCTION_NOT_AVAIL: u32 = 6; // function_id >= function_count
 pub const ABI_ERROR_DUPLICATE_PROVIDER: u32 = 7; // same bundle already provides this contract
+pub const ABI_ERROR_INVALID_POINTER: u32 = 8; // null or invalid pointer passed to ABI function
 
 /// Non-owning UTF-8 string view.
 ///

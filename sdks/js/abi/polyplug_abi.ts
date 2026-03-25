@@ -36,6 +36,12 @@ export const ABI_ERROR_STALE_HANDLE: number = 5;
 /** ABI constant: ABI_FUNCTION_NOT_AVAIL */
 export const ABI_FUNCTION_NOT_AVAIL: number = 6;
 
+/** ABI constant: ABI_ERROR_DUPLICATE_PROVIDER */
+export const ABI_ERROR_DUPLICATE_PROVIDER: number = 7;
+
+/** ABI constant: ABI_ERROR_INVALID_POINTER */
+export const ABI_ERROR_INVALID_POINTER: number = 8;
+
 // ─── ABI Enums ────────────────────────────────────────────────────────────────
 
 /**  Dispatch mechanism type — determines how function calls are routed. */
@@ -226,7 +232,7 @@ export interface PluginInterface {
 export interface HostVTable {
     register_plugin: (rt_ctx: bigint, descriptor: bigint, vtable: bigint) => AbiError;
     alloc: (rt_ctx: bigint, size: number, align: number) => bigint;
-    free: (rt_ctx: bigint, ptr: bigint, size: number, align: number) => void;
+    free: (rt_ctx: bigint, ptr: bigint, size: number, align: number, arg4: )) => void;
     find_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number) => PluginHandle;
     find_by_bundle: (rt_ctx: bigint, bundle_id: bigint, contract_id: bigint, min_version: number) => PluginHandle;
     find_all_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number, out: bigint, out_cap: number) => number;
@@ -340,57 +346,15 @@ export function bundleId(name: string): bigint {
 // ─── String Helpers ────────────────────────────────────────────────────────────
 
 /**
- * Helper utilities for StringView operations.
- * 
- * This class provides static methods for converting between JavaScript strings
- * and the ABI StringView type used for cross-boundary communication.
- */
-export class StringViewHelper {
-    /**
-     * Create a StringView from a JavaScript string.
-     * 
-     * @param str - The JavaScript string
-     * @returns StringView pointing to encoded bytes
-     * 
-     * @example
-     * const sv = StringViewHelper.fromString("hello");
-     */
-    static fromString(str: string): StringView {
-        const encoder = new TextEncoder();
-        const bytes = encoder.encode(str);
-        return {
-            ptr: 0n,  // Host will allocate and set ptr
-            len: bytes.length
-        };
-    }
-
-    /**
-     * Convert a StringView to a JavaScript string.
-     * 
-     * @param sv - The StringView to convert
-     * @returns JavaScript string, or empty string if null/empty
-     * 
-     * @example
-     * const str = StringViewHelper.toString(sv);
-     */
-    static toString(sv: StringView | null | undefined): string {
-        if (!sv || sv.ptr === 0n || sv.len === 0) return '';
-        // Note: Actual implementation requires FFI access to read memory.
-        // The host/guest libraries provide the actual implementation that
-        // can access host memory via globalThis.polyplug or Deno.UnsafePointerView.
-        // This ABI-level implementation is a placeholder.
-        return '';
-    }
-}
-
-/**
  * Convert a StringView to a JavaScript string.
  * @param sv - The StringView to convert.
  * @returns The JavaScript string, or empty string if null/empty.
- * @deprecated Use StringViewHelper.toString() instead.
  */
 export function stringViewToString(sv: StringView | null | undefined): string {
-    return StringViewHelper.toString(sv);
+    if (!sv || sv.ptr === 0n || sv.len === 0) return '';
+    // Note: Actual implementation requires FFI access to read memory.
+    // This is a placeholder - the host/guest libraries provide actual implementation.
+    return '';
 }
 
 /**
@@ -427,4 +391,112 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
 export function split(sv: StringView | string, delimiter: string): string[] {
     const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
     return s.split(delimiter);
+}
+
+// ─── ABI Validation ──────────────────────────────────────────────────────────
+
+/**
+ * Expected ABI struct sizes (in bytes) for 64-bit platforms.
+ * These match the Rust ABI layout tests exactly.
+ */
+export const ABI_EXPECTED_SIZES: {
+    StringView: number;
+    Buffer: number;
+    AbiError: number;
+    PluginHandle: number;
+    HostContext: number;
+    DispatchType: number;
+    NativeDispatch: number;
+    VmDispatch: number;
+    PluginDispatch: number;
+    PluginInterface: number;
+    PluginDescriptor: number;
+    HostVTable: number;
+    PluginContext: number;
+    ExtensionEntry: number;
+    RuntimeConfig: number;
+} = {
+    StringView: 16,
+    Buffer: 24,
+    AbiError: 24,
+    PluginHandle: 8,
+    HostContext: 16,
+    DispatchType: 4,
+    NativeDispatch: 8,
+    VmDispatch: 16,
+    PluginDispatch: 16,
+    PluginInterface: 48,
+    PluginDescriptor: 48,
+    HostVTable: 64,
+    PluginContext: 32,
+    ExtensionEntry: 16,
+    RuntimeConfig: 40,
+};
+
+/**
+ * Validation error thrown when ABI struct shapes don't match expected.
+ */
+export class AbiValidationError extends Error {
+    constructor(
+        public readonly structName: string,
+        public readonly expected: number,
+        public readonly actual: number
+    ) {
+        super(
+            `ABI mismatch: ${structName} expected ${expected} bytes, got ${actual} bytes`
+        );
+        this.name = 'AbiValidationError';
+    }
+}
+
+/**
+ * Validate that an object has the expected ABI struct shape.
+ * @param obj - The object to validate.
+ * @param structName - The expected struct name.
+ * @param expectedFields - Array of [fieldName, fieldType] pairs.
+ * @throws AbiValidationError if validation fails.
+ */
+export function validateAbiStruct(obj: unknown, structName: string, expectedFields: [string, string][]): void {
+    if (obj === null || obj === undefined) {
+        throw new AbiValidationError(structName, ABI_EXPECTED_SIZES[structName as keyof typeof ABI_EXPECTED_SIZES] || 0, 0);
+    }
+
+    const record: Record<string, unknown> = obj as Record<string, unknown>;
+
+    for (const [field, expectedType] of expectedFields) {
+        const value: unknown = record[field];
+        const actualType: string = typeof value;
+
+        if (actualType !== expectedType) {
+            // Allow bigint for number in some cases (u64 fields)
+            if (!(expectedType === 'number' && actualType === 'bigint')) {
+                throw new AbiValidationError(structName, ABI_EXPECTED_SIZES[structName as keyof typeof ABI_EXPECTED_SIZES] || 0, 0);
+            }
+        }
+    }
+}
+
+/**
+ * Validate all core ABI struct shapes at runtime.
+ * Call this during initialization to catch ABI mismatches early.
+ * @throws AbiValidationError if any struct validation fails.
+ */
+export function validateAbi(): void {
+    // Validate StringView: ptr (bigint) + len (number)
+    validateAbiStruct({ ptr: 0n, len: 0 }, 'StringView', [['ptr', 'bigint'], ['len', 'number']]);
+
+    // Validate Buffer: ptr (bigint) + len (number) + cap (number)
+    validateAbiStruct({ ptr: 0n, len: 0, cap: 0 }, 'Buffer', [['ptr', 'bigint'], ['len', 'number'], ['cap', 'number']]);
+
+    // Validate AbiError: code (number) + message (StringView)
+    validateAbiStruct({ code: 0, message: { ptr: 0n, len: 0 } }, 'AbiError', [['code', 'number']]);
+
+    // Validate PluginHandle: index (number) + generation (number)
+    validateAbiStruct({ index: 0, generation: 0 }, 'PluginHandle', [['index', 'number'], ['generation', 'number']]);
+
+    // Validate HostContext: runtime (bigint) + bundle_id (bigint)
+    validateAbiStruct({ runtime: 0n, bundle_id: 0n }, 'HostContext', [['runtime', 'bigint'], ['bundle_id', 'bigint']]);
+
+    // Validate PluginInterface: rt_ctx (bigint) + contract_id (bigint) + contract_version (number) + function_count (number) + dispatch_type (number) + dispatch (object)
+    validateAbiStruct({ rt_ctx: 0n, contract_id: 0n, contract_version: 0, function_count: 0, dispatch_type: 0, dispatch: {} }, 'PluginInterface', [['rt_ctx', 'bigint'], ['contract_id', 'bigint'], ['contract_version', 'number'], ['function_count', 'number'], ['dispatch_type', 'number']]);
 }

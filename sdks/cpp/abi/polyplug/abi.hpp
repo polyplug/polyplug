@@ -17,6 +17,8 @@
 #define ABI_ERROR_NOT_FOUND 4U
 #define ABI_ERROR_STALE_HANDLE 5U
 #define ABI_FUNCTION_NOT_AVAIL 6U
+#define ABI_ERROR_DUPLICATE_PROVIDER 7U
+#define ABI_ERROR_INVALID_POINTER 8U
 
 // ─── ABI Enums ────────────────────────────────────────────────────────────────
 

@@ -826,9 +826,8 @@ mod tests {
     }
 
     /// Generate the abi.hpp file for the SDK.
-    /// Run with: cargo test --package polyplug_abi -- generate_abi_hpp_file --ignored --nocapture
+    /// Run with: cargo test --package polyplug_abi -- generate_abi_hpp_file --nocapture
     #[test]
-    #[ignore]
     fn generate_abi_hpp_file() {
         use crate::build::AbiParser;
         use std::fs;

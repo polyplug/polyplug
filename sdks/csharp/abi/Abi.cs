@@ -17,6 +17,8 @@ public static class AbiConstants
     public const uint ABI_ERROR_NOT_FOUND = 4u;
     public const uint ABI_ERROR_STALE_HANDLE = 5u;
     public const uint ABI_FUNCTION_NOT_AVAIL = 6u;
+    public const uint ABI_ERROR_DUPLICATE_PROVIDER = 7u;
+    public const uint ABI_ERROR_INVALID_POINTER = 8u;
 }
 
 // ─── ABI Structs ─────────────────────────────────────────────────────────────

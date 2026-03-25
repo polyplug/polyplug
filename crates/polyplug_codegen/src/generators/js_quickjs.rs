@@ -190,6 +190,9 @@ fn generate_types_ts(ir: &ValidatedIr) -> String {
     for type_def in &ir.types {
         render_resolved_type(&mut out, type_def);
     }
+    for contract in &ir.contracts {
+        render_contract_types(&mut out, contract);
+    }
     out
 }
 
@@ -204,6 +207,28 @@ fn render_resolved_type(out: &mut String, type_def: &ResolvedType) {
 fn render_resolved_field(out: &mut String, field: &ResolvedField) {
     let ts_t: String = ts_type_ref(&field.ty);
     out.push_str(&format!("    readonly {}: {};\n", field.name, ts_t));
+}
+
+fn render_contract_types(out: &mut String, contract: &ResolvedContract) {
+    for func in &contract.functions {
+        let params: String = func
+            .params
+            .iter()
+            .map(|p: &ResolvedParam| format!("{}: {}", p.name, ts_type_ref(&p.ty)))
+            .collect::<Vec<String>>()
+            .join(", ");
+        let ret_type: String = match &func.returns {
+            None => "void".to_owned(),
+            Some(ty) => ts_type_ref(ty),
+        };
+        out.push_str(&format!(
+            "export type {}_{} = ({}) => {};\n",
+            contract.name.replace('.', "_"),
+            func.name,
+            params,
+            ret_type
+        ));
+    }
 }
 
 fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
@@ -307,8 +332,10 @@ fn render_plugin_vtable_quickjs(
     // Generate ABI wrapper functions for each contract function
     // These wrappers handle the raw pointer conversion between the loader and user code
     let mut abi_wrappers: Vec<String> = Vec::new();
-    for (idx, _func) in contract.functions.iter().enumerate() {
+    for (idx, func) in contract.functions.iter().enumerate() {
         let wrapper_name: String = format!("{}_fn{}_abi_wrapper", plugin_var.to_lowercase(), idx);
+        let has_params: bool = !func.params.is_empty();
+        let has_return: bool = func.returns.is_some();
 
         // Generate the ABI wrapper function
         // Note: QuickJS uses lo/hi u32 pairs for 64-bit pointers
@@ -322,6 +349,13 @@ fn render_plugin_vtable_quickjs(
         out.push_str(&plugin_var);
         out.push_str("_IMPL;\n");
         out.push_str("    if (!impl) return 1;\n");
+
+        if has_params {
+            out.push_str("    if (args_ptr_lo === 0 && args_ptr_hi === 0) return 8;\n");
+        }
+        if has_return {
+            out.push_str("    if (out_ptr_lo === 0 && out_ptr_hi === 0) return 8;\n");
+        }
 
         // Read input StringView from args_ptr
         // StringView is { ptr_lo: u32, ptr_hi: u32, len: u32 } = 12 bytes
@@ -507,7 +541,8 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
 
     out.push_str("// ABI constants\n");
     out.push_str("const ABI_OK = 0;\n");
-    out.push_str("const ABI_ERROR_GENERIC = 1;\n\n");
+    out.push_str("const ABI_ERROR_GENERIC = 1;\n");
+    out.push_str("const ABI_ERROR_INVALID_POINTER = 8;\n\n");
 
     if has_trace {
         out.push_str("export const EXT_TRACE_ID = 0xC4EB9AEE;\n\n");
@@ -696,7 +731,8 @@ fn generate_callers_ts(ir: &ValidatedIr) -> String {
     // ABI constants
     out.push_str("// ABI constants\n");
     out.push_str("export const ABI_OK = 0;\n");
-    out.push_str("export const ABI_ERROR_GENERIC = 1;\n\n");
+    out.push_str("export const ABI_ERROR_GENERIC = 1;\n");
+    out.push_str("export const ABI_ERROR_INVALID_POINTER = 8;\n\n");
 
     // Contract ID constants
     out.push_str("// Contract ID constants\n");

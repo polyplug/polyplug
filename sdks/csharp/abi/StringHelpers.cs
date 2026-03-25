@@ -10,7 +10,7 @@ namespace Polyplug.Abi;
 /// String helper methods for working with StringView.
 /// Native C# implementation for zero overhead.
 /// </summary>
-public static class StringHelpers
+public static unsafe class StringHelpers
 {
     /// <summary>
     /// Converts a StringView to a .NET string by copying the UTF-8 bytes.
@@ -20,9 +20,7 @@ public static class StringHelpers
         if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
             return string.Empty;
 
-        byte[] bytes = new byte[(int)sv.Len];
-        Marshal.Copy(sv.Ptr, bytes, 0, (int)sv.Len);
-        return Encoding.UTF8.GetString(bytes);
+        return Encoding.UTF8.GetString((byte*)sv.Ptr, (int)sv.Len);
     }
 
     /// <summary>

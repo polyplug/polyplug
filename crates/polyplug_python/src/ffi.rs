@@ -6,7 +6,7 @@ use core::ffi::c_void;
 
 use polyplug::loader::BundleLoader;
 
-use crate::{PythonLoader, config::PythonConfig};
+use crate::{config::PythonConfig, PythonLoader};
 
 /// C-visible configuration passed to `polyplug_python_loader_create`.
 ///
@@ -85,7 +85,27 @@ pub unsafe extern "C" fn polyplug_python_loader_free(ptr: *mut c_void) {
 
 fn parse_version(s: &str) -> Option<(u32, u32)> {
     let mut parts = s.splitn(2, '.');
-    let major: u32 = parts.next()?.parse().ok()?;
-    let minor: u32 = parts.next()?.parse().ok()?;
+    let major_str: &str = parts.next()?;
+    let major: u32 = major_str
+        .parse()
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_python] parse_version: failed to parse major '{}' as u32: {}",
+                major_str, e
+            );
+            e
+        })
+        .ok()?;
+    let minor_str: &str = parts.next()?;
+    let minor: u32 = minor_str
+        .parse()
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_python] parse_version: failed to parse minor '{}' as u32: {}",
+                minor_str, e
+            );
+            e
+        })
+        .ok()?;
     Some((major, minor))
 }

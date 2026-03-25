@@ -20,15 +20,13 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginDispatch;
@@ -36,6 +34,8 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::config::JsConfig;
 
@@ -44,9 +44,9 @@ use crate::config::JsConfig;
 use core::cell::RefCell;
 use std::rc::Rc;
 
-use rquickjs::JsLifetime;
 use rquickjs::runtime::UserDataError;
 use rquickjs::runtime::UserDataGuard;
+use rquickjs::JsLifetime;
 
 /// Registration data collected from the JS plugin during polyplug_init.
 ///
@@ -169,12 +169,58 @@ fn pack_handle(h: PluginHandle) -> Option<u64> {
 fn get_host_ctx_from_globals<'js>(
     ctx: &Ctx<'js>,
 ) -> Option<(*const HostVTable, *mut core::ffi::c_void)> {
-    let polyplug_obj: Object<'js> = ctx.globals().get::<&str, Object<'js>>("polyplug").ok()?;
+    let polyplug_obj: Object<'js> = ctx
+        .globals()
+        .get::<&str, Object<'js>>("polyplug")
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_js] get_host_ctx_from_globals: failed to get 'polyplug' global: {}",
+                e
+            );
+            e
+        })
+        .ok()?;
 
-    let vtable_lo: u32 = polyplug_obj.get::<&str, u32>("_hostVtableLo").ok()?;
-    let vtable_hi: u32 = polyplug_obj.get::<&str, u32>("_hostVtableHi").ok()?;
-    let rt_ctx_lo: u32 = polyplug_obj.get::<&str, u32>("_rtCtxLo").ok()?;
-    let rt_ctx_hi: u32 = polyplug_obj.get::<&str, u32>("_rtCtxHi").ok()?;
+    let vtable_lo: u32 = polyplug_obj
+        .get::<&str, u32>("_hostVtableLo")
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_js] get_host_ctx_from_globals: failed to get '_hostVtableLo': {}",
+                e
+            );
+            e
+        })
+        .ok()?;
+    let vtable_hi: u32 = polyplug_obj
+        .get::<&str, u32>("_hostVtableHi")
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_js] get_host_ctx_from_globals: failed to get '_hostVtableHi': {}",
+                e
+            );
+            e
+        })
+        .ok()?;
+    let rt_ctx_lo: u32 = polyplug_obj
+        .get::<&str, u32>("_rtCtxLo")
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_js] get_host_ctx_from_globals: failed to get '_rtCtxLo': {}",
+                e
+            );
+            e
+        })
+        .ok()?;
+    let rt_ctx_hi: u32 = polyplug_obj
+        .get::<&str, u32>("_rtCtxHi")
+        .map_err(|e| {
+            eprintln!(
+                "[polyplug_js] get_host_ctx_from_globals: failed to get '_rtCtxHi': {}",
+                e
+            );
+            e
+        })
+        .ok()?;
 
     let vtable_ptr: *const HostVTable =
         ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const HostVTable;

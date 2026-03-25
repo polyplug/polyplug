@@ -5,10 +5,10 @@
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -495,7 +495,7 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     out.push_str("use polyplug_guest::PluginError;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
     out.push_str("#[allow(unused_imports)]\n");
-    out.push_str("use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC};\n");
+    out.push_str("use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};\n");
     out.push_str("use super::types::*;\n");
 
     // Helper function to convert PluginError to AbiError with message allocation
@@ -755,9 +755,7 @@ fn generate_guest_abi_wrapper(
         "/// ABI wrapper for {} (function_id = {}).\n",
         func.name, func.function_id
     ));
-    out.push_str(
-        "// SAFETY: args and out pointers are validated by the host runtime ABI contract.\n",
-    );
+    out.push_str("// SAFETY: args and out pointers are validated at entry before dereferencing.\n");
     out.push_str(&format!(
         "extern \"C\" fn {wrapper_name}(args: *const (), {out_param}) -> AbiError {{\n"
     ));
@@ -769,7 +767,17 @@ fn generate_guest_abi_wrapper(
     out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"implementation not registered\") },\n");
     out.push_str("        };\n");
 
-    // Build the call expression
+    if !func.params.is_empty() {
+        out.push_str("        if args.is_null() {\n");
+        out.push_str("            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b\"args pointer is null\") };\n");
+        out.push_str("        }\n");
+    }
+    if has_return {
+        out.push_str("        if out.is_null() {\n");
+        out.push_str("            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b\"out pointer is null\") };\n");
+        out.push_str("        }\n");
+    }
+
     emit_guest_wrapper_call(out, func, contract_struct);
 
     // Match on result
