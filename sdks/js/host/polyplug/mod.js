@@ -44,8 +44,8 @@ const SYMBOLS = {
   polyplug_runtime_find_by_bundle: { parameters: ["pointer", "u64", "u64", "u32"], result: "u64" },
   polyplug_runtime_find_all_by_contract: { parameters: ["pointer", "u64", "u32", "pointer", "usize"], result: "usize" },
   polyplug_runtime_resolve_plugin: { parameters: ["pointer", "u64"], result: "pointer" },
-  polyplug_runtime_last_error: { parameters: ["pointer", "usize"], result: "usize" },
-  polyplug_runtime_error_message_len: { parameters: [], result: "usize" },
+  polyplug_runtime_last_error: { parameters: ["pointer", "pointer", "usize"], result: "usize" },
+  polyplug_runtime_error_message_len: { parameters: ["pointer"], result: "usize" },
   polyplug_runtime_create_with_options: { parameters: ["pointer"], result: "pointer" },
   polyplug_host_free: { parameters: ["pointer", "usize", "usize"], result: "void" },
 };
@@ -184,11 +184,11 @@ export class Runtime {
    * @returns {string}
    */
   lastError() {
-    const len = Number(this.#lib.symbols.polyplug_runtime_error_message_len());
+    const len = Number(this.#lib.symbols.polyplug_runtime_error_message_len(this.#ptr));
     if (len === 0) return "";
     const buf = new Uint8Array(len);
     const ptr = Deno.UnsafePointer.of(buf);
-    this.#lib.symbols.polyplug_runtime_last_error(ptr, BigInt(len));
+    this.#lib.symbols.polyplug_runtime_last_error(this.#ptr, ptr, BigInt(len));
     return _decoder.decode(buf);
   }
 
@@ -435,15 +435,7 @@ export function runtimeNew(lib) {
   }
 
   if (ptr === null) {
-    const lenVal = lib.symbols.polyplug_runtime_error_message_len();
-    const len = Number(lenVal);
-    let errMsg = "polyplug_runtime_create failed";
-    if (len > 0) {
-      const buf = new Uint8Array(len);
-      lib.symbols.polyplug_runtime_last_error(Deno.UnsafePointer.of(buf), BigInt(len));
-      errMsg += ": " + _decoder.decode(buf);
-    }
-    throw new Error(errMsg);
+    throw new Error("polyplug_runtime_create failed: unable to create runtime (no runtime pointer available for error details)");
   }
   return new Runtime(lib, ptr);
 }
