@@ -6,17 +6,17 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::AbiError;
-use polyplug_guest::ABI_OK;
-use polyplug_guest::ABI_ERROR_GENERIC;
-use polyplug_guest::PluginDescriptor;
-use polyplug_guest::HostVTable;
-use polyplug_guest::PluginInterface;
-use polyplug_guest::StringView;
-use polyplug_guest::PluginContext;
-use core::ffi::c_void;
 use super::vtables::TRANSFORMER_CONTRACT_ID;
 use super::vtables::TRANSFORMER_VTABLE;
+use core::ffi::c_void;
+use polyplug_guest::ABI_ERROR_GENERIC;
+use polyplug_guest::ABI_OK;
+use polyplug_guest::AbiError;
+use polyplug_guest::HostVTable;
+use polyplug_guest::PluginContext;
+use polyplug_guest::PluginDescriptor;
+use polyplug_guest::PluginInterface;
+use polyplug_guest::StringView;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -34,13 +34,22 @@ pub unsafe extern "C" fn polyplug_init(
     ctx: *const PluginContext,
 ) -> AbiError {
     if rt_ctx.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"rt_ctx is null") };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: StringView::from_static(b"rt_ctx is null"),
+        };
     }
     if host.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"host is null") };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: StringView::from_static(b"host is null"),
+        };
     }
     if ctx.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"ctx is null") };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: StringView::from_static(b"ctx is null"),
+        };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
     let ctx: &PluginContext = unsafe { &*ctx };
@@ -53,18 +62,30 @@ pub unsafe extern "C" fn polyplug_init(
         fn polyplug_user_init();
     }
     // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe { polyplug_user_init(); }
+    unsafe {
+        polyplug_user_init();
+    }
 
     let desc_TRANSFORMER: PluginDescriptor = PluginDescriptor {
-        name: StringView { ptr: b"transformer".as_ptr(), len: 11_usize },
-        contract_name: StringView { ptr: b"data.Transformer@1".as_ptr(), len: 18_usize },
+        name: StringView {
+            ptr: b"transformer".as_ptr(),
+            len: 11_usize,
+        },
+        contract_name: StringView {
+            ptr: b"data.Transformer@1".as_ptr(),
+            len: 18_usize,
+        },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
     let err_TRANSFORMER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_TRANSFORMER as *const PluginDescriptor, &TRANSFORMER_VTABLE as *const PluginInterface)
+        (host.register_plugin)(
+            rt_ctx,
+            &desc_TRANSFORMER as *const PluginDescriptor,
+            &TRANSFORMER_VTABLE as *const PluginInterface,
+        )
     };
     if err_TRANSFORMER.code != ABI_OK {
         return err_TRANSFORMER;

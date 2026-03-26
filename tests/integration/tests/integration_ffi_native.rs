@@ -8,10 +8,10 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::ffi::{
-    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
-    polyplug_runtime_find_all_by_contract, polyplug_runtime_find_by_contract,
-    polyplug_runtime_last_error, polyplug_runtime_load_bundle, polyplug_runtime_release_plugin,
-    polyplug_runtime_resolve_plugin, OpaqueRuntime, ResolveHandle,
+    OpaqueRuntime, ResolveHandle, polyplug_runtime_create, polyplug_runtime_destroy,
+    polyplug_runtime_error_message_len, polyplug_runtime_find_all_by_contract,
+    polyplug_runtime_find_by_contract, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
+    polyplug_runtime_release_plugin, polyplug_runtime_resolve_plugin,
 };
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");

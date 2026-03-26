@@ -782,8 +782,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -945,8 +945,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));

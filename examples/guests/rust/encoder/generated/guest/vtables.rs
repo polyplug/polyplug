@@ -6,29 +6,32 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use std::sync::OnceLock;
+use super::types::*;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
-use polyplug_guest::StringView;
 use polyplug_guest::PluginError;
+use polyplug_guest::PluginInterface;
+use polyplug_guest::StringView;
 use polyplug_guest::alloc_string;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};
-use super::types::*;
+use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_ERROR_PANIC, ABI_OK};
+use std::sync::OnceLock;
 /// Convert a PluginError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.
 fn plugin_error_to_abi_error(e: PluginError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| StringView::null());
-    AbiError { code: e.code, message }
+    AbiError {
+        code: e.code,
+        message,
+    }
 }
 
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineEncoderPlugin;
 use super::contracts::DataReporterPlugin;
+use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineDecoderPlugin;
+use super::contracts::PipelineEncoderPlugin;
 use super::contracts::PipelineValidatorPlugin;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
@@ -47,7 +50,9 @@ pub const ENCODER_CONTRACT_ID: u64 = 0x127D1703C6EFB432;
 pub static ENCODER_IMPL: OnceLock<Box<dyn PipelineEncoderPlugin>> = OnceLock::new();
 
 pub fn set_encoder_impl(impl_: Box<dyn PipelineEncoderPlugin>) -> Result<(), &'static str> {
-    ENCODER_IMPL.set(impl_).map_err(|_| "encoder already registered")
+    ENCODER_IMPL
+        .set(impl_)
+        .map_err(|_| "encoder already registered")
 }
 
 /// ABI wrapper for encode (function_id = 0).
@@ -56,20 +61,33 @@ extern "C" fn encoder_encode_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn PipelineEncoderPlugin = match ENCODER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"implementation not registered") },
+            None => {
+                return AbiError {
+                    code: ABI_ERROR_GENERIC,
+                    message: StringView::from_static(b"implementation not registered"),
+                };
+            }
         };
         if args.is_null() {
-            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"args pointer is null") };
+            return AbiError {
+                code: ABI_ERROR_INVALID_POINTER,
+                message: StringView::from_static(b"args pointer is null"),
+            };
         }
         if out.is_null() {
-            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"out pointer is null") };
+            return AbiError {
+                code: ABI_ERROR_INVALID_POINTER,
+                message: StringView::from_static(b"out pointer is null"),
+            };
         }
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.encode(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe { std::ptr::write(out as *mut StringView, val); }
+                unsafe {
+                    std::ptr::write(out as *mut StringView, val);
+                }
                 AbiError::ok()
             }
             Err(e) => plugin_error_to_abi_error(e),
@@ -80,9 +98,7 @@ extern "C" fn encoder_encode_abi(args: *const (), out: *mut ()) -> AbiError {
     }
 }
 
-static ENCODER_FNS: [FnPtr; 1_usize] = [
-    FnPtr(encoder_encode_abi as *const ()),
-];
+static ENCODER_FNS: [FnPtr; 1_usize] = [FnPtr(encoder_encode_abi as *const ())];
 
 pub static ENCODER_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -96,4 +112,3 @@ pub static ENCODER_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
-
