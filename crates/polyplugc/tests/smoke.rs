@@ -10,7 +10,6 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -18,6 +17,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -292,7 +292,7 @@ fn smoke_rust_codegen_dispatch() {
         .join("tests")
         .join("fixtures")
         .join("test_bundle.toml");
-    let guest_lib_path: PathBuf = workspace_root().join("guest-libs").join("rust");
+    let guest_lib_path: PathBuf = workspace_root().join("crates").join("polyplug_guest");
 
     std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
@@ -482,7 +482,7 @@ fn smoke_cpp_codegen_dispatch() {
 
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
-            let host_libs_cpp: PathBuf = workspace_root().join("host-libs").join("cpp");
+            let host_libs_cpp: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
             let vtables_hpp: PathBuf = guest_dir.join("vtables.hpp");
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_vtables.o");
