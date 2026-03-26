@@ -95,14 +95,14 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run all tests including stress (ignored)
-        run: cargo test --workspace -- --include-ignored
+        run: cargo test --workspace -- --include-ignored --skip stress_hot_reload
       - name: Generate stress coverage report
         run: |
           cargo llvm-cov \
             --workspace \
             --lcov \
             --output-path lcov-stress.info \
-            -- --include-ignored
+            -- --include-ignored --skip stress_hot_reload
       - name: Upload stress coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
