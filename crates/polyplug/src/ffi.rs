@@ -778,4 +778,179 @@ mod tests {
 
         assert_eq!(success_count.load(Ordering::SeqCst), 40);
     }
+
+    #[test]
+    fn multiple_ffi_runtimes_null_safety() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+
+        let result: u32 =
+            unsafe { polyplug_runtime_load_bundle(core::ptr::null_mut(), b"test".as_ptr(), 4) };
+        assert_eq!(result, 1);
+
+        let handle: u64 = unsafe { polyplug_runtime_find_by_contract(core::ptr::null(), 1, 0) };
+        assert_eq!(handle, u64::MAX);
+
+        let vtable: *const () = unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0) };
+        assert!(vtable.is_null());
+
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_error_clearing_isolated() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+
+        unsafe { polyplug_runtime_load_bundle(rt1, b"/bad1".as_ptr(), 5) };
+        unsafe { polyplug_runtime_load_bundle(rt2, b"/bad2".as_ptr(), 5) };
+
+        let len1_before: usize = unsafe { polyplug_runtime_error_message_len(rt1) };
+        let len2_before: usize = unsafe { polyplug_runtime_error_message_len(rt2) };
+        assert!(len1_before > 0);
+        assert!(len2_before > 0);
+
+        let mut buf: [u8; 256] = [0; 256];
+        unsafe { polyplug_runtime_last_error(rt1, buf.as_mut_ptr(), buf.len()) };
+
+        let len1_after: usize = unsafe { polyplug_runtime_error_message_len(rt1) };
+        let len2_after: usize = unsafe { polyplug_runtime_error_message_len(rt2) };
+        assert_eq!(len1_after, 0);
+        assert_eq!(len2_after, len2_before);
+
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_mixed_api_usage() {
+        let rt_default: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt_default.is_null());
+
+        let config: RuntimeConfigC = RuntimeConfigC {
+            hot_reload_max_retries: 3,
+            hot_reload_retry_interval_ms: 500,
+            hot_reload_abort_on_max_retries: 1,
+        };
+        let opts: RuntimeCreateOptions = RuntimeCreateOptions {
+            config: &config,
+            on_reload: None,
+        };
+        let rt_with_opts: *mut OpaqueRuntime =
+            unsafe { polyplug_runtime_create_with_options(&opts) };
+        assert!(!rt_with_opts.is_null());
+
+        assert_ne!(rt_default, rt_with_opts);
+
+        unsafe {
+            polyplug_runtime_destroy(rt_default);
+            polyplug_runtime_destroy(rt_with_opts);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_handle_packing_isolated() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+
+        let h1: u64 = unsafe { polyplug_runtime_find_by_contract(rt1, 100, 1) };
+        let h2: u64 = unsafe { polyplug_runtime_find_by_contract(rt2, 100, 1) };
+        assert_eq!(h1, u64::MAX);
+        assert_eq!(h2, u64::MAX);
+        assert_eq!(h1, h2);
+
+        let h3: u64 = unsafe { polyplug_runtime_find_by_contract(rt1, 200, 2) };
+        assert_eq!(h3, u64::MAX);
+
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_reuse_after_destroy() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt1.is_null());
+        unsafe { polyplug_runtime_destroy(rt1) };
+
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt2.is_null());
+
+        let result: u32 = unsafe { polyplug_runtime_load_bundle(rt2, b"/test".as_ptr(), 5) };
+        assert_eq!(result, 1);
+
+        let len: usize = unsafe { polyplug_runtime_error_message_len(rt2) };
+        assert!(len > 0);
+
+        unsafe { polyplug_runtime_destroy(rt2) };
+    }
+
+    #[test]
+    fn ffi_runtime_create_with_null_options() {
+        let rt: *mut OpaqueRuntime =
+            unsafe { polyplug_runtime_create_with_options(core::ptr::null()) };
+        assert!(!rt.is_null());
+        unsafe { polyplug_runtime_destroy(rt) };
+    }
+
+    #[test]
+    fn ffi_runtime_destroy_null_is_safe() {
+        unsafe { polyplug_runtime_destroy(core::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_parallel_mixed_ops() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let error_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<thread::JoinHandle<()>> = (0..8)
+            .map(|i| {
+                let success: Arc<AtomicUsize> = Arc::clone(&success_count);
+                let errors: Arc<AtomicUsize> = Arc::clone(&error_count);
+                thread::spawn(move || {
+                    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+                    if rt.is_null() {
+                        return;
+                    }
+
+                    let path: &[u8] = if i % 2 == 0 { b"/good" } else { b"/bad" };
+                    let result: u32 =
+                        unsafe { polyplug_runtime_load_bundle(rt, path.as_ptr(), path.len()) };
+
+                    if result == 0 {
+                        success.fetch_add(1, Ordering::SeqCst);
+                    } else {
+                        errors.fetch_add(1, Ordering::SeqCst);
+                    }
+
+                    unsafe { polyplug_runtime_destroy(rt) };
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+
+        assert_eq!(
+            success_count.load(Ordering::SeqCst) + error_count.load(Ordering::SeqCst),
+            8
+        );
+    }
 }
