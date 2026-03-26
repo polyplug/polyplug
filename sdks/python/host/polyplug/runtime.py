@@ -411,6 +411,7 @@ class Runtime:
 
         class RuntimeConfigC(ctypes.Structure):
             _fields_ = [
+                ("hot_reload_enabled", ctypes.c_uint8),
                 ("hot_reload_max_retries", ctypes.c_uint32),
                 ("hot_reload_retry_interval_ms", ctypes.c_uint64),
                 ("hot_reload_abort_on_max_retries", ctypes.c_uint8),
@@ -427,6 +428,7 @@ class Runtime:
 
         if self._config is not None:
             config_c = RuntimeConfigC(
+                hot_reload_enabled=1 if self._config.hot_reload_enabled else 0,
                 hot_reload_max_retries=self._config.hot_reload_max_retries,
                 hot_reload_retry_interval_ms=self._config.hot_reload_retry_interval_ms,
                 hot_reload_abort_on_max_retries=1

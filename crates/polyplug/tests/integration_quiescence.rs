@@ -9,11 +9,16 @@
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::runtime::Runtime;
+use polyplug::runtime::RuntimeConfig;
 
 #[test]
 fn test_quiescence_timeout() {
     // Build runtime and load v1.
     let rt: Runtime = Runtime::builder()
+        .config(RuntimeConfig {
+            hot_reload_enabled: true,
+            ..RuntimeConfig::default()
+        })
         .build()
         .expect("runtime build must succeed");
     let v1_dir: &str = env!("RELOAD_PLUGIN_V1_DIR");

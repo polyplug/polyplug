@@ -18,6 +18,8 @@ export class RuntimeConfig {
     /**
      * Create a new RuntimeConfig instance.
      * @param {Object} [options={}] - Configuration options
+     * @param {boolean} [options.hotReloadEnabled=false] - Whether hot-reload is enabled.
+     *   Must be true to use reloadBundle() or file watcher.
      * @param {number} [options.hotReloadMaxRetries=3] - Maximum retry attempts for hot-reload.
      *   Set to 0 for infinite retries when hotReloadAbortOnMaxRetries is false.
      * @param {number} [options.hotReloadRetryIntervalMs=1000] - Interval between retry attempts in milliseconds.
@@ -26,10 +28,13 @@ export class RuntimeConfig {
      *   If false: keep retrying forever.
      */
     constructor({
+        hotReloadEnabled = false,
         hotReloadMaxRetries = 3,
         hotReloadRetryIntervalMs = 1000,
         hotReloadAbortOnMaxRetries = true,
     } = {}) {
+        /** @type {boolean} Whether hot-reload is enabled */
+        this.hotReloadEnabled = hotReloadEnabled;
         /** @type {number} Maximum retry attempts for hot-reload */
         this.hotReloadMaxRetries = hotReloadMaxRetries;
         /** @type {number} Interval between retry attempts in milliseconds */

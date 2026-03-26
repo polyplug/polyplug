@@ -17,7 +17,7 @@
 | dispatch/struct_arg_and_return | 1.97 | 0.010 | AddArgs struct in, u32 out — dominant real-world path | YES |
 | dispatch/cross_plugin | 39.71 | 0.22 | Full dispatcher chain: TLS Registry.find + Registry.resolve + dispatch | YES |
 | dispatch/absent_extension_null_check | TBD | TBD | bench_get_extension stub null-return — floor cost of a function pointer call via HostVTable.get_extension | NO |
-| reload_bundle() cold path | < 1ms p50 | < 5ms p99 | Full vtable-swap reload cycle (quiescence wait + ArcSwap + notify callback) | identical to baseline (no overhead when hot-reload feature disabled; zero branches added to reader path) |
+| reload_bundle() cold path | < 1ms p50 | < 5ms p99 | Full vtable-swap reload cycle (quiescence wait + ArcSwap + notify callback) | identical to baseline (no overhead when hot_reload_enabled=false; zero branches added to reader path) |
 
 ## Interpretation
 
@@ -34,4 +34,4 @@
 | Extension System | 2026-03-10 | Extension trait, TraceExtension, GLOBAL_EXTENSION_MAP wiring, all 7 generators updated, integration tests added |
 
 
-> Hot-reload feature flag: the hot-reload feature adds no overhead to the reader path (resolve_guard, find_by_contract). All watcher and reload code paths are invoked only when reload_bundle() is called explicitly.
+> Hot-reload runtime config: when `hot_reload_enabled=false` (default), there is no overhead to the reader path (resolve_guard, find_by_contract). All watcher and reload code paths are invoked only when reload_bundle() is called explicitly.

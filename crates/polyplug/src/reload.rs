@@ -93,6 +93,10 @@ pub(crate) fn reload_bundle_impl(
     path: &Path,
     cascade_depth: usize,
 ) -> Result<(), PolyplugError> {
+    if !runtime.config().hot_reload_enabled {
+        return Err(PolyplugError::HotReloadDisabled);
+    }
+
     if cascade_depth >= MAX_CASCADE_DEPTH {
         return Err(PolyplugError::ReloadFailed {
             bundle: path.display().to_string(),
@@ -732,6 +736,7 @@ mod tests {
     fn runtime_config_default_values() {
         let config: RuntimeConfig = RuntimeConfig::default();
 
+        assert!(!config.hot_reload_enabled);
         assert_eq!(config.hot_reload_max_retries, 3_u32);
         assert_eq!(config.hot_reload_retry_interval, Duration::from_secs(1));
         assert!(config.hot_reload_abort_on_max_retries);
@@ -740,11 +745,13 @@ mod tests {
     #[test]
     fn runtime_config_custom_values() {
         let config: RuntimeConfig = RuntimeConfig {
+            hot_reload_enabled: true,
             hot_reload_max_retries: 10_u32,
             hot_reload_retry_interval: Duration::from_millis(500),
             hot_reload_abort_on_max_retries: false,
         };
 
+        assert!(config.hot_reload_enabled);
         assert_eq!(config.hot_reload_max_retries, 10_u32);
         assert_eq!(config.hot_reload_retry_interval, Duration::from_millis(500));
         assert!(!config.hot_reload_abort_on_max_retries);
@@ -753,12 +760,14 @@ mod tests {
     #[test]
     fn runtime_config_clone() {
         let original: RuntimeConfig = RuntimeConfig {
+            hot_reload_enabled: true,
             hot_reload_max_retries: 7_u32,
             hot_reload_retry_interval: Duration::from_millis(250),
             hot_reload_abort_on_max_retries: true,
         };
         let cloned: RuntimeConfig = original.clone();
 
+        assert_eq!(original.hot_reload_enabled, cloned.hot_reload_enabled);
         assert_eq!(
             original.hot_reload_max_retries,
             cloned.hot_reload_max_retries

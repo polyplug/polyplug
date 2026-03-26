@@ -37,9 +37,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 
-#[cfg(feature = "hot-reload")]
 use core::sync::atomic::Ordering;
-#[cfg(feature = "hot-reload")]
 use notify::Watcher;
 
 // ─── HostContext for rt_ctx parameter ─────────────────────────────────────────
@@ -65,6 +63,9 @@ unsafe impl Sync for HostContext {}
 /// Configuration for the polyplug runtime.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
+    /// Whether hot-reload is enabled for this runtime.
+    /// When disabled, reload_bundle() returns ReloadDisabled error.
+    pub hot_reload_enabled: bool,
     /// Maximum number of retry attempts for hot-reload operations.
     pub hot_reload_max_retries: u32,
     /// Interval between hot-reload retry attempts.
@@ -76,6 +77,7 @@ pub struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
+            hot_reload_enabled: false,
             hot_reload_max_retries: 3,
             hot_reload_retry_interval: Duration::from_secs(1),
             hot_reload_abort_on_max_retries: true,
@@ -112,11 +114,9 @@ pub struct Runtime {
     pub(crate) reload_libraries: std::sync::Mutex<HashMap<u64, libloading::Library>>,
     /// Optional callback fired after vtable swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCb>,
-    /// Background watcher thread handle. Feature-gated. Joined on Drop.
-    #[cfg(feature = "hot-reload")]
+    /// Background watcher thread handle. Joined on Drop.
     watcher_thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    /// Stop flag sent to watcher thread. Feature-gated.
-    #[cfg(feature = "hot-reload")]
+    /// Stop flag sent to watcher thread.
     watcher_stop: std::sync::Mutex<Option<std::sync::Arc<core::sync::atomic::AtomicBool>>>,
     config: RuntimeConfig,
     /// Extension map: extension_id -> raw vtable pointer.
@@ -301,9 +301,7 @@ impl RuntimeBuilder {
             bundle_manifests: std::sync::Mutex::new(manifests_map),
             reload_libraries: std::sync::Mutex::new(HashMap::new()),
             on_reload_cb: self.on_reload_cb,
-            #[cfg(feature = "hot-reload")]
             watcher_thread: std::sync::Mutex::new(None),
-            #[cfg(feature = "hot-reload")]
             watcher_stop: std::sync::Mutex::new(None),
             config: self.config,
             extension_map: ext_map,
@@ -627,23 +625,19 @@ impl Runtime {
 
 impl Drop for Runtime {
     fn drop(&mut self) {
-        #[cfg(feature = "hot-reload")]
+        if let Ok(mut guard) = self.watcher_stop.lock()
+            && let Some(flag) = guard.take()
         {
-            if let Ok(mut guard) = self.watcher_stop.lock()
-                && let Some(flag) = guard.take()
-            {
-                flag.store(true, core::sync::atomic::Ordering::Relaxed);
-            }
-            if let Ok(mut guard) = self.watcher_thread.lock()
-                && let Some(handle) = guard.take()
-            {
-                let _: std::thread::Result<()> = handle.join();
-            }
+            flag.store(true, core::sync::atomic::Ordering::Relaxed);
+        }
+        if let Ok(mut guard) = self.watcher_thread.lock()
+            && let Some(handle) = guard.take()
+        {
+            let _: std::thread::Result<()> = handle.join();
         }
     }
 }
 
-#[cfg(feature = "hot-reload")]
 impl Runtime {
     /// Start a background file watcher on `dir`.
     ///

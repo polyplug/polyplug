@@ -32,6 +32,7 @@ ffi.cdef([[
     );
 
     typedef struct {
+        uint8_t hot_reload_enabled;
         uint32_t hot_reload_max_retries;
         uint64_t hot_reload_retry_interval_ms;
         uint8_t hot_reload_abort_on_max_retries;
@@ -105,6 +106,7 @@ function M.Runtime.new()
 
         if M._pending_config then
             config_c = ffi.new("RuntimeConfigC", {
+                hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
                 hot_reload_max_retries = M._pending_config.hot_reload_max_retries,
                 hot_reload_retry_interval_ms = M._pending_config.hot_reload_retry_interval_ms,
                 hot_reload_abort_on_max_retries = M._pending_config.hot_reload_abort_on_max_retries and 1 or 0,

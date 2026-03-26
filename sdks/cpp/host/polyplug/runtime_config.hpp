@@ -13,6 +13,10 @@ namespace polyplug {
 /// This struct contains configurable parameters for hot-reload behavior
 /// and other runtime settings. It is designed to be extensible for future options.
 struct RuntimeConfig {
+    /// Whether hot-reload is enabled for this runtime.
+    /// Default: false. Must be true to use reload_bundle() or file watcher.
+    bool hot_reload_enabled{false};
+
     /// Maximum number of retry attempts for hot-reload operations.
     /// Default: 3. Set to 0 for infinite retries (when abort_on_max_retries is false).
     uint32_t hot_reload_max_retries{3U};

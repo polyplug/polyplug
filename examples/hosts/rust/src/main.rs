@@ -1,7 +1,7 @@
-use polyplug::ReloadPhase;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
 use polyplug_js::{JsConfig, JsLoader};
@@ -32,6 +32,7 @@ fn run() -> Result<(), String> {
     eprintln!("loading plugins from: {}", plugin_path.display());
 
     let config: RuntimeConfig = RuntimeConfig {
+        hot_reload_enabled: true,
         hot_reload_max_retries: 5,
         hot_reload_retry_interval: Duration::from_millis(200),
         hot_reload_abort_on_max_retries: false,

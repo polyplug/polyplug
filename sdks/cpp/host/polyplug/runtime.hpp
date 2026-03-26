@@ -20,6 +20,14 @@ static_assert(POLYPLUG_ABI_VERSION == 1,
 
 namespace polyplug {
 
+/// C-compatible runtime configuration for FFI boundary.
+struct RuntimeConfigC {
+    uint8_t hot_reload_enabled;
+    uint32_t hot_reload_max_retries;
+    uint64_t hot_reload_retry_interval_ms;
+    uint8_t hot_reload_abort_on_max_retries;
+};
+
 /// RAII guard for a resolved plugin handle.
 /// Stores runtime + handle for hot-reload safety.
 /// Re-resolves vtable on each call to detect stale handles.
@@ -205,6 +213,7 @@ public:
 
     static void set_config(const RuntimeConfig& config) {
         RuntimeConfigC config_c{};
+        config_c.hot_reload_enabled = config.hot_reload_enabled ? 1 : 0;
         config_c.hot_reload_max_retries = config.hot_reload_max_retries;
         config_c.hot_reload_retry_interval_ms = static_cast<uint64_t>(
             config.hot_reload_retry_interval.count());

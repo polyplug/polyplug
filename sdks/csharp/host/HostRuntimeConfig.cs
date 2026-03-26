@@ -11,6 +11,12 @@ namespace Polyplug.Host;
 public sealed class HostRuntimeConfig
 {
     /// <summary>
+    /// Whether hot-reload is enabled for this runtime.
+    /// Default: false. Must be true to use ReloadBundle() or file watcher.
+    /// </summary>
+    public bool HotReloadEnabled { get; set; } = false;
+
+    /// <summary>
     /// Maximum number of retry attempts for hot-reload operations.
     /// Default: 3. Set to 0 for infinite retries (when AbortOnMaxRetries is false).
     /// </summary>
@@ -37,8 +43,9 @@ public sealed class HostRuntimeConfig
     /// <summary>
     /// Creates a new HostRuntimeConfig with specified values.
     /// </summary>
-    public HostRuntimeConfig(uint maxRetries, ulong retryIntervalMs, bool abortOnMaxRetries)
+    public HostRuntimeConfig(bool hotReloadEnabled, uint maxRetries, ulong retryIntervalMs, bool abortOnMaxRetries)
     {
+        HotReloadEnabled = hotReloadEnabled;
         HotReloadMaxRetries = maxRetries;
         HotReloadRetryIntervalMs = retryIntervalMs;
         HotReloadAbortOnMaxRetries = abortOnMaxRetries;

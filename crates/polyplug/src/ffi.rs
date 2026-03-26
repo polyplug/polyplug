@@ -128,6 +128,9 @@ impl ReloadPhaseC {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RuntimeConfigC {
+    /// Whether hot-reload is enabled for this runtime.
+    /// 0 = disabled, non-zero = enabled.
+    pub hot_reload_enabled: u8,
     /// Maximum number of retry attempts for hot-reload operations.
     pub hot_reload_max_retries: u32,
     /// Interval between hot-reload retry attempts, in milliseconds.
@@ -141,6 +144,7 @@ impl RuntimeConfigC {
     /// Convert to the Rust `RuntimeConfig` type.
     fn into_runtime_config(self) -> RuntimeConfig {
         RuntimeConfig {
+            hot_reload_enabled: self.hot_reload_enabled != 0,
             hot_reload_max_retries: self.hot_reload_max_retries,
             hot_reload_retry_interval: core::time::Duration::from_millis(
                 self.hot_reload_retry_interval_ms,
@@ -643,11 +647,13 @@ mod tests {
     #[test]
     fn multiple_ffi_runtimes_with_config() {
         let config1: RuntimeConfigC = RuntimeConfigC {
+            hot_reload_enabled: 1,
             hot_reload_max_retries: 5,
             hot_reload_retry_interval_ms: 1000,
             hot_reload_abort_on_max_retries: 1,
         };
         let config2: RuntimeConfigC = RuntimeConfigC {
+            hot_reload_enabled: 0,
             hot_reload_max_retries: 10,
             hot_reload_retry_interval_ms: 2000,
             hot_reload_abort_on_max_retries: 0,
@@ -751,8 +757,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -837,6 +843,7 @@ mod tests {
         assert!(!rt_default.is_null());
 
         let config: RuntimeConfigC = RuntimeConfigC {
+            hot_reload_enabled: 1,
             hot_reload_max_retries: 3,
             hot_reload_retry_interval_ms: 500,
             hot_reload_abort_on_max_retries: 1,
@@ -912,8 +919,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));

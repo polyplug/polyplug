@@ -4,6 +4,7 @@
 local M = {}
 
 --- Default configuration values
+local DEFAULT_HOT_RELOAD_ENABLED = false
 local DEFAULT_MAX_RETRIES = 3
 local DEFAULT_RETRY_INTERVAL_MS = 1000
 local DEFAULT_ABORT_ON_MAX_RETRIES = true
@@ -14,6 +15,10 @@ local DEFAULT_ABORT_ON_MAX_RETRIES = true
 function M.new(opts)
     opts = opts or {}
     return {
+        --- Whether hot-reload is enabled for this runtime.
+        --- Default: false. Must be true to use reload_bundle() or file watcher.
+        hot_reload_enabled = opts.hot_reload_enabled ~= nil and opts.hot_reload_enabled or DEFAULT_HOT_RELOAD_ENABLED,
+
         --- Maximum number of retry attempts for hot-reload operations.
         --- Default: 3. Set to 0 for infinite retries (when abort_on_max_retries is false).
         hot_reload_max_retries = opts.hot_reload_max_retries or DEFAULT_MAX_RETRIES,

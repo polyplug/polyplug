@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
+use polyplug::ReloadPhase;
 use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -91,6 +91,22 @@ fn v2_so_path() -> PathBuf {
     PathBuf::from(RELOAD_V2_DIR).join("libreload_plugin_v2.so")
 }
 
+fn hot_reload_config() -> polyplug::runtime::RuntimeConfig {
+    polyplug::runtime::RuntimeConfig {
+        hot_reload_enabled: true,
+        hot_reload_max_retries: 3,
+        hot_reload_retry_interval: core::time::Duration::from_secs(1),
+        hot_reload_abort_on_max_retries: true,
+    }
+}
+
+fn make_hot_reload_runtime() -> Runtime {
+    Runtime::builder()
+        .config(hot_reload_config())
+        .build()
+        .expect("runtime build must succeed")
+}
+
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
     let vtable_ptr: *const PluginInterface = rt.resolve_plugin(handle).ok()?;
@@ -113,7 +129,7 @@ fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() 
 fn stress_rapid_reload_cycles_100() {
     const CYCLES: u32 = 100_u32;
 
-    let rt: Runtime = Runtime::builder().build().expect("build runtime");
+    let rt: Runtime = make_hot_reload_runtime();
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
@@ -326,7 +342,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
     const DISPATCHER_THREADS: usize = 6_usize;
     const RELOAD_ROUNDS: u32 = 80_u32;
 
-    let rt: Arc<Runtime> = Arc::new(Runtime::builder().build().expect("build runtime"));
+    let rt: Arc<Runtime> = Arc::new(make_hot_reload_runtime());
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
@@ -414,6 +430,10 @@ fn stress_reload_callback_fires_on_every_cycle() {
     let events_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&events);
 
     let rt: Runtime = Runtime::builder()
+        .config(polyplug::runtime::RuntimeConfig {
+            hot_reload_enabled: true,
+            ..polyplug::runtime::RuntimeConfig::default()
+        })
         .on_reload(move |ev: ReloadPhase| {
             events_clone
                 .lock()
@@ -471,7 +491,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
 fn stress_concurrent_reload_threads_no_panic() {
     const ROUNDS_PER_THREAD: u32 = 40_u32;
 
-    let rt: Arc<Runtime> = Arc::new(Runtime::builder().build().expect("build runtime"));
+    let rt: Arc<Runtime> = Arc::new(make_hot_reload_runtime());
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 

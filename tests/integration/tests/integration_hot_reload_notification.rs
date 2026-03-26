@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
@@ -32,6 +32,10 @@ fn test_preparing_fires_before_vtable_swap() {
 
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
+        .config(RuntimeConfig {
+            hot_reload_enabled: true,
+            ..RuntimeConfig::default()
+        })
         .on_reload(move |phase: ReloadPhase| {
             phases_clone
                 .lock()
@@ -101,6 +105,10 @@ fn test_reloaded_fires_after_vtable_swap() {
 
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
+        .config(RuntimeConfig {
+            hot_reload_enabled: true,
+            ..RuntimeConfig::default()
+        })
         .on_reload(move |phase: ReloadPhase| {
             phases_clone
                 .lock()
@@ -157,6 +165,7 @@ fn test_failed_fires_on_abort_after_max_retries() {
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
+            hot_reload_enabled: true,
             hot_reload_max_retries: 1_u32,
             hot_reload_retry_interval: Duration::from_millis(10_u64),
             hot_reload_abort_on_max_retries: true,
@@ -225,6 +234,7 @@ fn test_retry_count_increments_correctly() {
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
+            hot_reload_enabled: true,
             hot_reload_max_retries: 2_u32,
             hot_reload_retry_interval: Duration::from_millis(10_u64),
             hot_reload_abort_on_max_retries: true,
@@ -289,6 +299,7 @@ fn test_old_vtable_kept_on_abort() {
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
+            hot_reload_enabled: true,
             hot_reload_max_retries: 1_u32,
             hot_reload_retry_interval: Duration::from_millis(10_u64),
             hot_reload_abort_on_max_retries: true,
@@ -343,6 +354,10 @@ fn test_notification_order_on_successful_reload() {
 
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
+        .config(RuntimeConfig {
+            hot_reload_enabled: true,
+            ..RuntimeConfig::default()
+        })
         .on_reload(move |phase: ReloadPhase| {
             phases_clone
                 .lock()
@@ -386,6 +401,10 @@ fn test_notification_order_on_successful_reload() {
 fn test_runtime_config_defaults() {
     let config: RuntimeConfig = RuntimeConfig::default();
 
+    assert!(
+        !config.hot_reload_enabled,
+        "default hot_reload_enabled should be false"
+    );
     assert_eq!(
         config.hot_reload_max_retries, 3_u32,
         "default max_retries should be 3"
@@ -408,6 +427,10 @@ fn test_callback_receives_correct_bundle_id() {
 
     let rt: Runtime = Runtime::builder()
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
+        .config(RuntimeConfig {
+            hot_reload_enabled: true,
+            ..RuntimeConfig::default()
+        })
         .on_reload(move |phase: ReloadPhase| {
             let id: u64 = match phase {
                 ReloadPhase::Preparing { bundle_id, .. } => bundle_id,

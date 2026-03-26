@@ -20,11 +20,10 @@ serde = { workspace = true }
 toml = { workspace = true }
 notify = { workspace = true, default-features = false, features = [
     "macos_fsevent",
-], optional = true }
+] }
 
 [features]
 default = []
-hot-reload = ["dep:notify"]
 
 [lints]
 workspace = true

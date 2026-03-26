@@ -67,6 +67,12 @@ internal static partial class NativeMethods
     internal struct RuntimeConfigC
     {
         /// <summary>
+        /// Whether hot-reload is enabled for this runtime.
+        /// 0 = false (disabled), non-zero = true (enabled).
+        /// </summary>
+        public byte HotReloadEnabled;
+
+        /// <summary>
         /// Maximum number of retry attempts for hot-reload operations.
         /// </summary>
         public uint HotReloadMaxRetries;

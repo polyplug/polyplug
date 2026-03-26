@@ -8,14 +8,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
+use polyplug::runtime::RuntimeConfig;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
+fn hot_reload_config() -> RuntimeConfig {
+    RuntimeConfig {
+        hot_reload_enabled: true,
+        ..RuntimeConfig::default()
+    }
+}
+
 fn create_runtime_with_native() -> Runtime {
     Runtime::builder()
+        .config(hot_reload_config())
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .build()
         .expect("build runtime with native loader")
@@ -159,6 +168,7 @@ fn test_f_callback_fires() {
     let fired: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
     let fired_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&fired);
     let rt: Runtime = Runtime::builder()
+        .config(hot_reload_config())
         .on_reload(move |ev: ReloadPhase| {
             *fired_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(ev);
         })
@@ -187,7 +197,6 @@ fn test_f_callback_fires() {
 }
 
 #[test]
-#[ignore = "file watcher test - requires hot-reload feature"]
 fn test_g_file_watcher() {
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let bundle_dir: PathBuf = dir.path().join("reload_plugin_v1");
@@ -207,6 +216,7 @@ fn test_g_file_watcher() {
     let fired_clone: Arc<AtomicBool> = Arc::clone(&fired);
     let rt: Arc<Runtime> = Arc::new(
         Runtime::builder()
+            .config(hot_reload_config())
             .on_reload(move |_ev: ReloadPhase| {
                 fired_clone.store(true, Ordering::Relaxed);
             })
