@@ -1,47 +1,26 @@
 //! Integration tests for LuaLoader and the Lua VM initialization / bundle loading pipeline.
-//!
-//! These tests exercise:
-//! - Lua state initialization (idempotent, error paths)
-//! - Bundle loading with a valid plugin script
-//! - Bundle loading with a Lua syntax error
-//! - Bundle loading with a Lua runtime error inside polyplug_init
-//! - Missing `polyplug_init` function detection
-//! - VTable registration (function count, contract_id, dispatch)
-//! - Stack management (loading multiple bundles in sequence)
-//! - Thread safety (concurrent loaders share one global VM without data races)
 
-// allow expect_used in test code per AGENTS.md §4
 #![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
+use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
-// ── Process-global serialization ────────────────────────────────────────────
-//
-// The LuaJIT VM uses process-global state (LUA_VM).
-// Without serialization, parallel test threads would race on the shared
-// `_G.polyplug_init` / `_G._polyplug_handlers` globals.
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Create a minimal Runtime with the LuaLoader registered.
 fn make_runtime() -> Runtime {
     RuntimeBuilder::new()
         .loader(LuaLoader::new(LuaConfig::default()))
@@ -146,7 +125,6 @@ fn lua_loader_runtime_name_is_lua() {
 /// LuaJIT VM was initialized correctly.
 #[test]
 fn lua_state_initializes_on_first_load() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_init_test", valid_plugin_script());
     let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_init_test");
     assert!(
@@ -160,7 +138,6 @@ fn lua_state_initializes_on_first_load() {
 /// panicking (idempotent initialization).
 #[test]
 fn lua_state_init_is_idempotent() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_idempotent", valid_plugin_script());
     load_script(&path, "lua_loader_idempotent").expect("first load must succeed");
     // Second load of the same file: VM is already initialized — must not panic.
@@ -176,7 +153,6 @@ fn lua_state_init_is_idempotent() {
 
 #[test]
 fn load_valid_bundle_succeeds() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_valid", valid_plugin_script());
     let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_valid");
     assert!(result.is_ok(), "valid bundle must load: {:?}", result.err());
@@ -187,7 +163,6 @@ fn load_valid_bundle_succeeds() {
 /// A Lua script with a syntax error must produce a `LuaScriptLoadFailed` error.
 #[test]
 fn load_syntax_error_returns_script_load_failed() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle(
         "lua_loader_syntax_error",
         b"function polyplug_init( -- SYNTAX ERROR: unclosed paren\n",
@@ -211,7 +186,6 @@ fn load_syntax_error_returns_script_load_failed() {
 /// `LuaInitRaisedError`.
 #[test]
 fn load_runtime_error_in_init_returns_init_raised_error() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle(
         "lua_loader_runtime_err",
         b"function polyplug_init(_reg, _ctx)\n  error('deliberate runtime error')\nend\n",
@@ -235,7 +209,6 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
 /// `LuaInitFunctionMissing`.
 #[test]
 fn load_missing_polyplug_init_returns_typed_error() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) =
         write_temp_bundle("lua_loader_no_init", b"local x = 1  -- no polyplug_init\n");
     let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_no_init");
@@ -255,7 +228,6 @@ fn load_missing_polyplug_init_returns_typed_error() {
 
 #[test]
 fn load_nonexistent_path_returns_script_load_failed() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let path: PathBuf = dir.path().join("this_file_does_not_exist_42.lua");
     let result: Result<(), PolyplugError> = load_script(&path, "nonexistent");
@@ -277,7 +249,6 @@ fn load_nonexistent_path_returns_script_load_failed() {
 /// expected contract_id with the correct function count.
 #[test]
 fn vtable_is_registered_after_load() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_vtable", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
@@ -309,7 +280,6 @@ fn vtable_is_registered_after_load() {
 /// After loading the two-function plugin, function_count must equal 2.
 #[test]
 fn vtable_function_count_matches_script() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_two_fn", two_function_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
@@ -336,7 +306,6 @@ fn vtable_function_count_matches_script() {
 /// from the contract name and version declared in the script.
 #[test]
 fn vtable_contract_id_matches_computed_hash() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_cid", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
@@ -365,7 +334,6 @@ fn vtable_contract_id_matches_computed_hash() {
 /// own contract.
 #[test]
 fn sequential_loads_both_succeed() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir1, path1) = write_temp_bundle("lua_loader_seq1", valid_plugin_script());
     let (_dir2, path2) = write_temp_bundle("lua_loader_seq2", two_function_plugin_script());
 
@@ -400,14 +368,9 @@ fn sequential_loads_both_succeed() {
 /// either succeed or produce a recognized `PolyplugError` (no panics,
 /// no UB).
 ///
-/// The single LuaJIT VM uses process-global state, so this test acquires
-/// `TEST_MUTEX` to serialize the Lua globals (`polyplug_init`,
-/// `_polyplug_handlers`) while still exercising the Mutex-protected
-/// FUNCTION_REGISTRY and the `OnceLock` initialization path across threads.
+/// Each bundle gets its own isolated Lua VM, so parallel loads are safe.
 #[test]
 fn concurrent_loaders_do_not_race() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-
     let (_dir, path) = write_temp_bundle("lua_loader_thread_safety", valid_plugin_script());
 
     // Spawn 4 threads that all call LuaLoader::load on the same path.
@@ -456,7 +419,6 @@ fn concurrent_loaders_do_not_race() {
 /// The noop function must return `ABI_OK` without panicking.
 #[test]
 fn vtable_function_dispatch_returns_abi_ok() {
-    let _guard: MutexGuard<'_, ()> = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let (_dir, path) = write_temp_bundle("lua_loader_dispatch", valid_plugin_script());
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();

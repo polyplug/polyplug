@@ -4,9 +4,9 @@ use core::hint::spin_loop;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering;
 use core::time::Duration;
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::time::Instant;
 
 use polyplug::error::RegistryError;
@@ -373,7 +373,6 @@ fn stress_quiescence_succeeds_after_guard_released() {
 }
 
 #[test]
-#[ignore]
 fn stress_quiescence_timeout_fires() {
     let registry: Arc<Registry> = Arc::new(Registry::new());
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin3", "quie.race.contract3");

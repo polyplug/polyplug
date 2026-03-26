@@ -2,7 +2,7 @@
 //! Verifies that reload_bundle returns Err(QuiescenceTimeout) when an in-flight
 //! guard is held past the timeout window.
 //!
-//! This test takes ~5 seconds. Run with: cargo test -- --ignored
+//! Takes ~7 seconds due to timeout verification.
 
 #![allow(clippy::expect_used)]
 
@@ -11,7 +11,6 @@ use polyplug::registry::Registry;
 use polyplug::runtime::Runtime;
 
 #[test]
-#[ignore] // Takes ~5s — run with `cargo test -- --ignored`
 fn test_quiescence_timeout() {
     // Build runtime and load v1.
     let rt: Runtime = Runtime::builder()

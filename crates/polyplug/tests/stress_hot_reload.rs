@@ -2,11 +2,8 @@
 
 //! Stress tests for the hot-reload subsystem.
 //!
-//! These tests are marked `#[ignore]` because they are slow (100+ reload cycles,
-//! multi-threaded contention, memory tracking) and should only run on demand.
-//!
 //! Run with:
-//!   cargo test --test stress_hot_reload --package polyplug -- --ignored
+//!   cargo test --test stress_hot_reload --package polyplug
 
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
@@ -16,11 +13,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
+use polyplug::ReloadPhase;
 use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -113,7 +110,6 @@ fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() 
 /// Verifies that the vtable is consistent after every reload and that the
 /// runtime does not panic or leak library handles across iterations.
 #[test]
-#[ignore]
 fn stress_rapid_reload_cycles_100() {
     const CYCLES: u32 = 100_u32;
 
@@ -165,7 +161,6 @@ fn stress_rapid_reload_cycles_100() {
 /// We instrument this at the registry level by swapping a known static vtable
 /// and verifying quiescence (strong_count == 1) within a bounded time.
 #[test]
-#[ignore]
 fn stress_memory_vtable_slot_released_after_reload() {
     const CYCLES: usize = 50_usize;
     const QUIESCENCE_MS: u64 = 500_u64;
@@ -226,7 +221,6 @@ fn stress_memory_vtable_slot_released_after_reload() {
 /// PluginGuards while the reloader thread fires 50+ vtable swaps.
 /// Every swap must quiesce within the timeout despite the reader contention.
 #[test]
-#[ignore]
 fn stress_guard_quiescence_under_concurrent_reader_load() {
     const READER_THREADS: usize = 8_usize;
     const SWAP_ROUNDS: usize = 50_usize;
@@ -328,7 +322,6 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
 /// Dispatcher threads spin-read the vtable version function; every return value
 /// must be exactly 100 (v1) or 200 (v2) — never anything else.
 #[test]
-#[ignore]
 fn stress_vtable_handoff_correctness_no_torn_reads() {
     const DISPATCHER_THREADS: usize = 6_usize;
     const RELOAD_ROUNDS: u32 = 80_u32;
@@ -414,7 +407,6 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
 /// Verifies that the bundle metadata are correct for
 /// all 100 reload events.
 #[test]
-#[ignore]
 fn stress_reload_callback_fires_on_every_cycle() {
     const CYCLES: u32 = 100_u32;
 
@@ -476,7 +468,6 @@ fn stress_reload_callback_fires_on_every_cycle() {
 /// Both may succeed or one may get a transient error — but neither must panic
 /// and the final vtable must be valid and callable.
 #[test]
-#[ignore]
 fn stress_concurrent_reload_threads_no_panic() {
     const ROUNDS_PER_THREAD: u32 = 40_u32;
 

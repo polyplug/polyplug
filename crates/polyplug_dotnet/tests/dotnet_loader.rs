@@ -1,7 +1,4 @@
 //! Integration tests for polyplug_dotnet — .NET loader adapter.
-//!
-//! Tests that require the CLR or a real .NET SDK are marked `#[ignore]`.
-//! Run them with: `cargo test --test dotnet_loader -- --include-ignored`
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
@@ -15,14 +12,14 @@ use tempfile::NamedTempFile;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
+use polyplug_dotnet::version::read_target_framework;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
-use polyplug_dotnet::version::read_target_framework;
 
 fn temp_file_with_bytes(bytes: &[u8]) -> NamedTempFile {
     let mut f: NamedTempFile = NamedTempFile::new().expect("tempfile creation failed");
@@ -42,7 +39,7 @@ fn polyplug_dll_path() -> PathBuf {
                 .join("bin")
                 .join("Debug")
                 .join("net10.0")
-                .join("Polyplug.dll")
+                .join("Polyplug.Host.dll")
         })
         .expect("CARGO_MANIFEST_DIR resolution failed")
 }
@@ -117,10 +114,9 @@ fn tfm_reader_elf_magic_returns_assembly_not_found() {
 }
 
 #[test]
-#[ignore = "requires sdks/csharp/host to be built: dotnet build sdks/csharp/host"]
 fn tfm_reader_net10_dll_returns_correct_tfm() {
     let dll: PathBuf = polyplug_dll_path();
-    assert!(dll.exists(), "Polyplug.dll not found at {dll:?}");
+    assert!(dll.exists(), "Polyplug.Host.dll not found at {dll:?}");
     let tfm: String = read_target_framework(&dll).expect("read_target_framework failed");
     assert!(
         tfm.starts_with(".NETCoreApp,Version=v10.0"),
@@ -258,12 +254,11 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "requires sdks/csharp/host to be built: dotnet build sdks/csharp/host"]
 fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
-        "Polyplug.dll not found — build sdks/csharp/host first"
+        "Polyplug.Host.dll not found — build sdks/csharp/host first"
     );
     let cfg: DotnetConfig = DotnetConfig {
         min_framework: String::from("net6.0"),
@@ -286,12 +281,11 @@ fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
 }
 
 #[test]
-#[ignore = "requires sdks/csharp/host to be built: dotnet build sdks/csharp/host"]
 fn load_dll_with_matching_version_passes_tfm_check() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
-        "Polyplug.dll not found — build sdks/csharp/host first"
+        "Polyplug.Host.dll not found — build sdks/csharp/host first"
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
@@ -313,12 +307,11 @@ fn load_dll_with_matching_version_passes_tfm_check() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "requires sdks/csharp/host to be built: dotnet build sdks/csharp/host"]
 fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
-        "Polyplug.dll not found — build sdks/csharp/host first"
+        "Polyplug.Host.dll not found — build sdks/csharp/host first"
     );
     let cfg: DotnetConfig = DotnetConfig {
         min_framework: String::from("net10.0"),
@@ -347,12 +340,11 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "requires .NET 10 SDK installed and sdks/csharp/host built"]
 fn full_clr_init_reaches_init_symbol_check() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
-        "Polyplug.dll not found — build sdks/csharp/host first"
+        "Polyplug.Host.dll not found — build sdks/csharp/host first"
     );
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();

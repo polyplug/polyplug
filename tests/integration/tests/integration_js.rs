@@ -1,7 +1,4 @@
 //! Integration tests for JsLoader (js-quickjs).
-//!
-//! Tests that verify runtime name, RuntimeBuilder registration, and duplicate detection.
-//! Tests requiring pre-built bundle fixtures are marked #[ignore].
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
@@ -11,11 +8,11 @@ use polyplug::error::PolyplugError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
+use polyplug_abi::ABI_OK;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 
@@ -55,8 +52,6 @@ fn js_quickjs_duplicate_runtime_name_is_rejected() {
     );
 }
 
-static JS_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 const JS_PLUGIN: &str = env!("TEST_JS_PLUGIN");
 
 #[repr(C)]
@@ -67,8 +62,6 @@ struct AddArgs {
 
 #[test]
 fn js_quickjs_load_bundle_and_call() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        JS_TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let rt: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
@@ -99,7 +92,6 @@ fn js_quickjs_load_bundle_and_call() {
 
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
-    // SAFETY: dispatch_type is VirtualMachine, so .vm is valid.
     let result: AbiError = unsafe {
         (vtable.dispatch.vm.call)(
             vtable.dispatch.vm.loader_data,

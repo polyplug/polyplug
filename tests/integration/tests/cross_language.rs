@@ -16,7 +16,6 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -24,6 +23,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -88,10 +88,6 @@ struct AddArgs {
     a: u32,
     b: u32,
 }
-
-// ─── Process-level mutex for Lua (single-VM) and JS (quickjs) ────────────────
-
-static CROSS_LANG_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 // ─── Thread-local for native .so tests ────────────────────────────────────────
 
@@ -1525,13 +1521,10 @@ fn test_js_host_python_guest() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LUA GUEST (all 6 host labels)
-// Use LuaLoader with Runtime + process mutex (single-VM global state).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_rust_host_lua_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -1549,8 +1542,6 @@ fn test_rust_host_lua_guest() {
 
 #[test]
 fn test_cpp_host_lua_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -1568,8 +1559,6 @@ fn test_cpp_host_lua_guest() {
 
 #[test]
 fn test_csharp_host_lua_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -1587,8 +1576,6 @@ fn test_csharp_host_lua_guest() {
 
 #[test]
 fn test_python_host_lua_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -1606,8 +1593,6 @@ fn test_python_host_lua_guest() {
 
 #[test]
 fn test_lua_host_lua_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -1625,8 +1610,6 @@ fn test_lua_host_lua_guest() {
 
 #[test]
 fn test_js_host_lua_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
@@ -1649,8 +1632,6 @@ fn test_js_host_lua_guest() {
 
 #[test]
 fn test_rust_host_js_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
@@ -1668,8 +1649,6 @@ fn test_rust_host_js_guest() {
 
 #[test]
 fn test_cpp_host_js_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
@@ -1687,8 +1666,6 @@ fn test_cpp_host_js_guest() {
 
 #[test]
 fn test_csharp_host_js_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
@@ -1706,8 +1683,6 @@ fn test_csharp_host_js_guest() {
 
 #[test]
 fn test_python_host_js_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
@@ -1725,8 +1700,6 @@ fn test_python_host_js_guest() {
 
 #[test]
 fn test_lua_host_js_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()
@@ -1744,8 +1717,6 @@ fn test_lua_host_js_guest() {
 
 #[test]
 fn test_js_host_js_guest() {
-    let _guard: std::sync::MutexGuard<'_, ()> =
-        CROSS_LANG_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let runtime: Runtime = Runtime::builder()
         .loader(JsLoader::new(JsConfig {}))
         .build()

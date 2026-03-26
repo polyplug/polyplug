@@ -8,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -16,7 +15,8 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_abi::ABI_OK;
+use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -115,7 +115,6 @@ use polyplug_guest::StringView;
 use core::ffi::c_void;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
-use guest::vtables::TEST_ADDER_IMPL;
 use guest::vtables::TEST_ADDER_VTABLE;
 use guest::vtables::set_test_adder_impl;
 
@@ -138,8 +137,6 @@ impl TestAddPlugin for MyPlugin {
         Ok(())
     }
 }
-
-static MY_PLUGIN: MyPlugin = MyPlugin;
 
 /// # Safety
 /// `rt_ctx` and `host` must be valid non-null pointers provided by the host.

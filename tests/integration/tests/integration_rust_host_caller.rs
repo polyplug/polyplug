@@ -1,17 +1,13 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-use std::sync::Mutex;
-
 use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
+use polyplug_abi::ABI_OK;
 use polyplug_native::NativeLoader;
-
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 
@@ -103,9 +99,8 @@ fn create_static_runtime() -> &'static Runtime {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_host_caller_factory_method_returns_some_when_plugin_exists() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let rt: &'static Runtime = create_static_runtime();
 
@@ -122,7 +117,7 @@ fn test_host_caller_factory_method_returns_some_when_plugin_exists() {
 
 #[test]
 fn test_host_caller_factory_method_returns_none_when_plugin_not_found() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let rt: &'static Runtime = create_static_runtime();
 
@@ -134,9 +129,8 @@ fn test_host_caller_factory_method_returns_none_when_plugin_not_found() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_host_caller_is_valid_returns_true() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let rt: &'static Runtime = create_static_runtime();
 
@@ -150,9 +144,8 @@ fn test_host_caller_is_valid_returns_true() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_host_caller_method_call_works() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let rt: &'static Runtime = create_static_runtime();
 
@@ -167,9 +160,8 @@ fn test_host_caller_method_call_works() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_host_caller_reset_is_noop() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let rt: &'static Runtime = create_static_runtime();
 

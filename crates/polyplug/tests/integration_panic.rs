@@ -10,16 +10,16 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
@@ -224,7 +224,6 @@ fn test_panic_returns_abi_error_panic() {
         "use polyplug_guest::PluginInterface;\n",
         "use polyplug_guest::StringView;\n",
         "use polyplug_guest::ABI_ERROR_GENERIC;\n",
-        "use polyplug_guest::POLYPLUG_ABI_VERSION;\n",
         "use guest::vtables::PANIC_PLUGIN_IMPL;\n",
         "use guest::vtables::PANIC_PLUGIN_VTABLE;\n",
         "use guest::contracts::TestPanicPlugin;\n",

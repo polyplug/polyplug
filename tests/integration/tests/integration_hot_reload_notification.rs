@@ -6,14 +6,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
-
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
@@ -28,9 +26,8 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_preparing_fires_before_vtable_swap() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
@@ -100,9 +97,8 @@ fn test_preparing_fires_before_vtable_swap() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_reloaded_fires_after_vtable_swap() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
@@ -158,9 +154,8 @@ fn test_reloaded_fires_after_vtable_swap() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_failed_fires_on_abort_after_max_retries() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
@@ -229,9 +224,8 @@ fn test_failed_fires_on_abort_after_max_retries() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_retry_count_increments_correctly() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
@@ -296,9 +290,8 @@ fn test_retry_count_increments_correctly() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_old_vtable_kept_on_abort() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
@@ -354,9 +347,8 @@ fn test_old_vtable_kept_on_abort() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_notification_order_on_successful_reload() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
@@ -422,9 +414,8 @@ fn test_runtime_config_defaults() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_callback_receives_correct_bundle_id() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
 
     let bundle_ids: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let bundle_ids_clone: Arc<Mutex<Vec<u64>>> = Arc::clone(&bundle_ids);

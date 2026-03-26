@@ -8,14 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
-
-// Global mutex to serialize tests that share global registry state
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 fn create_runtime_with_native() -> Runtime {
     Runtime::builder()
@@ -38,7 +35,7 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
 
 #[test]
 fn test_a_basic_reload() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let v1_path: &str = env!("RELOAD_PLUGIN_V1_DIR");
     let v2_path: PathBuf =
         std::path::PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
@@ -54,9 +51,8 @@ fn test_a_basic_reload() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_b_in_flight_safety() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let rt: Arc<Runtime> = Arc::new(create_runtime_with_native());
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -92,9 +88,8 @@ fn test_b_in_flight_safety() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_c_quiescence_arc_count() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -107,9 +102,8 @@ fn test_c_quiescence_arc_count() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_d_dlclose_timing() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let rt: Arc<Runtime> = Arc::new(create_runtime_with_native());
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -125,9 +119,8 @@ fn test_d_dlclose_timing() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_e_cascade_reload() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(env!("DEPENDER_PLUGIN_DIR")))
         .expect("load depender");
@@ -167,9 +160,8 @@ fn test_e_cascade_reload() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_f_callback_fires() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let fired: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
     let fired_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&fired);
     let rt: Runtime = Runtime::builder()
@@ -203,7 +195,7 @@ fn test_f_callback_fires() {
 #[test]
 #[ignore = "file watcher test - requires hot-reload feature"]
 fn test_g_file_watcher() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let bundle_dir: PathBuf = dir.path().join("reload_plugin_v1");
     std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
@@ -250,9 +242,8 @@ fn test_g_file_watcher() {
 }
 
 #[test]
-#[ignore = "global registry state shared across tests - requires test isolation fix"]
 fn test_h_multiple_reloads() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -273,7 +264,7 @@ fn test_h_multiple_reloads() {
 
 #[test]
 fn test_i_non_native_returns_error() {
-    let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
     let rt: Runtime = create_runtime_with_native();
     let result: Result<(), PolyplugError> =
         rt.reload_bundle(std::path::Path::new("/nonexistent/fake_plugin.so"));
