@@ -132,6 +132,15 @@ Bootstrap layer for C# plugins:
 - .NET 10.0 or later
 - For NativeAOT: Publish with `-p:PublishAot=true`
 
+## Runtime Isolation Note
+
+The .NET loader uses a **process-wide CLR runtime**. This means:
+- Multiple `Runtime` instances in the same process share the same CLR runtime
+- .NET assemblies from different runtimes share the same loader cache
+- **For full isolation between .NET runtimes, use separate processes**
+
+Other loaders (Lua, JavaScript, Native) provide per-runtime isolation.
+
 ## See Also
 
 - `../cpp/` — C++ SDK

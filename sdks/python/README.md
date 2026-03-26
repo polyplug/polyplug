@@ -114,6 +114,15 @@ Python runtime adapter:
 - Python 3.10 or later
 - CPython (not PyPy for best compatibility)
 
+## Runtime Isolation Note
+
+The Python loader uses a **process-wide CPython interpreter**. This means:
+- Multiple `Runtime` instances in the same process share the same Python interpreter
+- Python plugins from different runtimes can see each other's modules and state
+- **For full isolation between Python runtimes, use separate processes**
+
+Other loaders (Lua, JavaScript, Native) provide per-runtime isolation.
+
 ## See Also
 
 - `../csharp/` — C# SDK
