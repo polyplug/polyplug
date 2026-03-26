@@ -27,6 +27,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK (Polyplug.Host.dll for tests)
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Build test fixtures
         run: cargo build --workspace --tests
       - name: Run fast tests (no ignored)
@@ -45,6 +50,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK (Polyplug.Host.dll for tests)
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Build test fixtures
@@ -75,6 +85,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK (Polyplug.Host.dll for tests)
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Build test fixtures
         run: cargo build --workspace --tests
       - name: Install cargo-llvm-cov
@@ -108,10 +123,7 @@ jobs:
         include:
           - toolchain: dotnet
             setup: |
-              wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
-              sudo dpkg -i packages-microsoft-prod.deb
-              sudo apt-get update
-              sudo apt-get install -y dotnet-sdk-9.0
+              echo "dotnet setup via actions/setup-dotnet"
             test_cmd: cargo test -p integration --test integration_dotnet
             feature_flag: ""
           - toolchain: python
@@ -137,6 +149,13 @@ jobs:
         with:
           key: ${{ matrix.toolchain }}
           save-if: true
+      - uses: actions/setup-dotnet@v4
+        if: matrix.toolchain == 'dotnet'
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK (Polyplug.Host.dll for tests)
+        if: matrix.toolchain == 'dotnet'
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
       - name: Setup ${{ matrix.toolchain }} toolchain
         run: ${{ matrix.setup }}
       - name: Build test fixtures
