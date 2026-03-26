@@ -480,3 +480,35 @@ Every pull request must pass:
 4. Manual review against this AGENTS.md checklist
 
 A reviewer finding any violation of this document must reject the PR immediately, regardless of how minor the violation appears. Consistency is non-negotiable.
+
+---
+
+### 13. Test Failures Must Be Fixed, Never Skipped
+
+**NEVER skip, ignore, or mark tests as `#[ignore]` to avoid fixing failures.**
+
+- If a test fails, find and fix the root cause
+- If a test is flaky, fix the race condition or timing issue
+- If a test crashes (SIGSEGV, panic, etc.), debug and fix the underlying bug
+- `#[ignore]` is ONLY acceptable for tests that require unavailable external resources (e.g., specific hardware, paid services)
+
+**FORBIDDEN:**
+```rust
+#[test]
+#[ignore = "this test is flaky"]  // FORBIDDEN — fix the flakiness instead
+fn test_something() { }
+
+#[test]
+#[ignore = "causes SIGSEGV"]  // FORBIDDEN — debug and fix the crash
+fn test_something_else() { }
+```
+
+**In CI workflows:**
+- Never use `--skip` to avoid failing tests
+- Never use `--ignore` to exclude failing tests
+- If a test fails in CI but passes locally, investigate the environmental difference
+
+**Why this matters:**
+- Skipped tests hide bugs that will bite users in production
+- A test failure is a bug report — treat it as such
+- Technical debt compounds: every skipped test makes the codebase less trustworthy
