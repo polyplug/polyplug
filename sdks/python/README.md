@@ -102,6 +102,38 @@ Python runtime adapter:
 - Automatic CPython embedding
 - GIL management
 
+## Hot-Reload
+
+To enable hot-reload, set `hot_reload_enabled=True` and register an `on_reload` callback:
+
+```python
+from polyplug import Runtime, RuntimeConfig, ReloadPhase
+
+# Enable hot-reload
+config = RuntimeConfig(hot_reload_enabled=True)
+Runtime.set_config(config)
+
+# Register callback before creating runtime
+def on_reload(phase):
+    if phase.type == ReloadPhase.PREPARING:
+        # Destroy instances for this bundle
+        instances.pop(phase.bundle_id, None)
+    elif phase.type == ReloadPhase.RELOADED:
+        print(f"Reloaded: {phase.bundle_name}")
+    elif phase.type == ReloadPhase.FAILED:
+        print(f"Failed: {phase.reason}")
+
+Runtime.on_reload(on_reload)
+
+runtime = Runtime()
+```
+
+**Key points:**
+- `hot_reload_enabled` defaults to `False` — must be explicitly enabled
+- Callback must be registered **before** creating the runtime
+- Host must track and destroy instances on `PREPARING` notification
+- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
+
 ## Performance Notes
 
 - **Backend**: ctypes (default) or cffi (faster, optional)

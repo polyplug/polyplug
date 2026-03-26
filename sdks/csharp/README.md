@@ -120,6 +120,42 @@ Bootstrap layer for C# plugins:
 - Supports standard .NET (CLR) and NativeAOT
 - Automatic framework version detection
 
+## Hot-Reload
+
+To enable hot-reload, set `HotReloadEnabled = true` and register an `OnReload` callback:
+
+```csharp
+using Polyplug;
+
+// Enable hot-reload
+var config = new RuntimeConfig { HotReloadEnabled = true };
+Runtime.SetConfig(config);
+
+// Register callback before creating runtime
+Runtime.OnReload(phase => {
+    switch (phase.Type) {
+        case ReloadPhaseType.Preparing:
+            // Destroy instances for this bundle
+            instances.Remove(phase.BundleId);
+            break;
+        case ReloadPhaseType.Reloaded:
+            Console.WriteLine($"Reloaded: {phase.BundleName}");
+            break;
+        case ReloadPhaseType.Failed:
+            Console.WriteLine($"Failed: {phase.Reason}");
+            break;
+    }
+});
+
+var runtime = Runtime.Builder().Build();
+```
+
+**Key points:**
+- `HotReloadEnabled` defaults to `false` — must be explicitly enabled
+- Callback must be registered **before** creating the runtime
+- Host must track and destroy instances on `Preparing` notification
+- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
+
 ## Performance Notes
 
 - **Hot path**: Single indirect call via `calli` IL instruction

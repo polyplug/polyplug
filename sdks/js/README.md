@@ -109,6 +109,42 @@ QuickJS runtime adapter:
 - Embedded QuickJS via `rquickjs` crate
 - Automatic module bundling via Rolldown
 
+## Hot-Reload
+
+To enable hot-reload, set `hotReloadEnabled: true` and register an `onReload` callback:
+
+```typescript
+import { Runtime, RuntimeConfig, ReloadPhaseType } from "@polyplug/core";
+
+// Enable hot-reload
+const config: RuntimeConfig = { hotReloadEnabled: true };
+Runtime.setConfig(config);
+
+// Register callback before creating runtime
+Runtime.onReload((phase) => {
+    switch (phase.type) {
+        case ReloadPhaseType.PREPARING:
+            // Destroy instances for this bundle
+            instances.delete(phase.bundleId);
+            break;
+        case ReloadPhaseType.RELOADED:
+            console.log(`Reloaded: ${phase.bundleName}`);
+            break;
+        case ReloadPhaseType.FAILED:
+            console.error(`Failed: ${phase.reason}`);
+            break;
+    }
+});
+
+const runtime = Runtime.builder().build();
+```
+
+**Key points:**
+- `hotReloadEnabled` defaults to `false` — must be explicitly enabled
+- Callback must be registered **before** creating the runtime
+- Host must track and destroy instances on `PREPARING` notification
+- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
+
 ## Runtime Support
 
 ### Deno

@@ -103,6 +103,37 @@ Lua runtime adapter:
 - LuaJIT embedding via `mlua` crate
 - Automatic GIL-like state management
 
+## Hot-Reload
+
+To enable hot-reload, set `hot_reload_enabled = true` and register an `on_reload` callback:
+
+```lua
+local polyplug = require("polyplug")
+
+-- Enable hot-reload
+polyplug.set_config({ hot_reload_enabled = true })
+
+-- Register callback before creating runtime
+polyplug.on_reload(function(phase)
+    if phase.type == ReloadPhase.PREPARING then
+        -- Destroy instances for this bundle
+        instances[phase.bundle_id] = nil
+    elseif phase.type == ReloadPhase.RELOADED then
+        print("Reloaded: " .. phase.bundle_name)
+    elseif phase.type == ReloadPhase.FAILED then
+        print("Failed: " .. phase.reason)
+    end
+end)
+
+local runtime = polyplug.Runtime.new()
+```
+
+**Key points:**
+- `hot_reload_enabled` defaults to `false` — must be explicitly enabled
+- Callback must be registered **before** creating the runtime
+- Host must track and destroy instances on `PREPARING` notification
+- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
+
 ## Performance Notes
 
 - **Backend**: LuaJIT FFI (required)

@@ -113,6 +113,43 @@ Runtime adapters for loading C++ plugins:
 - Native loader (dlopen/LoadLibrary)
 - Register loader functions for other runtimes
 
+## Hot-Reload
+
+To enable hot-reload, set `hot_reload_enabled = true` and register an `on_reload` callback:
+
+```cpp
+#include <polyplug/runtime.hpp>
+
+// Enable hot-reload
+polyplug::RuntimeConfig config;
+config.hot_reload_enabled = true;
+polyplug::Runtime::set_config(config);
+
+// Register callback before creating runtime
+polyplug::Runtime::on_reload([](const ReloadPhase& phase) {
+    switch (phase.type) {
+        case ReloadPhaseType::Preparing:
+            // Destroy instances for this bundle
+            instances_[phase.bundle_id].clear();
+            break;
+        case ReloadPhaseType::Reloaded:
+            std::cout << "Reloaded: " << phase.bundle_name << "\n";
+            break;
+        case ReloadPhaseType::Failed:
+            std::cerr << "Failed: " << phase.reason << "\n";
+            break;
+    }
+});
+
+auto runtime = polyplug::Runtime::builder().build();
+```
+
+**Key points:**
+- `hot_reload_enabled` defaults to `false` — must be explicitly enabled
+- Callback must be registered **before** creating the runtime
+- Host must track and destroy instances on `Preparing` notification
+- See [Hot-Reload Design](../../docs/HOT_RELOAD_DESIGN.md) for details
+
 ## Performance Notes
 
 - **Hot path**: Single indirect function call
