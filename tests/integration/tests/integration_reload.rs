@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
-use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
