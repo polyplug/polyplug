@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
-use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
@@ -35,7 +35,6 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
 
 #[test]
 fn test_a_basic_reload() {
-
     let v1_path: &str = env!("RELOAD_PLUGIN_V1_DIR");
     let v2_path: PathBuf =
         std::path::PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so");
@@ -52,7 +51,6 @@ fn test_a_basic_reload() {
 
 #[test]
 fn test_b_in_flight_safety() {
-
     let rt: Arc<Runtime> = Arc::new(create_runtime_with_native());
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -89,7 +87,6 @@ fn test_b_in_flight_safety() {
 
 #[test]
 fn test_c_quiescence_arc_count() {
-
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -103,7 +100,6 @@ fn test_c_quiescence_arc_count() {
 
 #[test]
 fn test_d_dlclose_timing() {
-
     let rt: Arc<Runtime> = Arc::new(create_runtime_with_native());
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -120,7 +116,6 @@ fn test_d_dlclose_timing() {
 
 #[test]
 fn test_e_cascade_reload() {
-
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(env!("DEPENDER_PLUGIN_DIR")))
         .expect("load depender");
@@ -161,7 +156,6 @@ fn test_e_cascade_reload() {
 
 #[test]
 fn test_f_callback_fires() {
-
     let fired: Arc<Mutex<Option<ReloadPhase>>> = Arc::new(Mutex::new(None));
     let fired_clone: Arc<Mutex<Option<ReloadPhase>>> = Arc::clone(&fired);
     let rt: Runtime = Runtime::builder()
@@ -195,7 +189,6 @@ fn test_f_callback_fires() {
 #[test]
 #[ignore = "file watcher test - requires hot-reload feature"]
 fn test_g_file_watcher() {
-
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let bundle_dir: PathBuf = dir.path().join("reload_plugin_v1");
     std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
@@ -243,7 +236,6 @@ fn test_g_file_watcher() {
 
 #[test]
 fn test_h_multiple_reloads() {
-
     let rt: Runtime = create_runtime_with_native();
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
@@ -264,7 +256,6 @@ fn test_h_multiple_reloads() {
 
 #[test]
 fn test_i_non_native_returns_error() {
-
     let rt: Runtime = create_runtime_with_native();
     let result: Result<(), PolyplugError> =
         rt.reload_bundle(std::path::Path::new("/nonexistent/fake_plugin.so"));

@@ -6,10 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
-use polyplug::ReloadPhase;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
 
@@ -27,8 +27,6 @@ fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u
 
 #[test]
 fn test_preparing_fires_before_vtable_swap() {
-
-
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -98,8 +96,6 @@ fn test_preparing_fires_before_vtable_swap() {
 
 #[test]
 fn test_reloaded_fires_after_vtable_swap() {
-
-
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -155,8 +151,6 @@ fn test_reloaded_fires_after_vtable_swap() {
 
 #[test]
 fn test_failed_fires_on_abort_after_max_retries() {
-
-
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -225,8 +219,6 @@ fn test_failed_fires_on_abort_after_max_retries() {
 
 #[test]
 fn test_retry_count_increments_correctly() {
-
-
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -291,8 +283,6 @@ fn test_retry_count_increments_correctly() {
 
 #[test]
 fn test_old_vtable_kept_on_abort() {
-
-
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -348,8 +338,6 @@ fn test_old_vtable_kept_on_abort() {
 
 #[test]
 fn test_notification_order_on_successful_reload() {
-
-
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -415,8 +403,6 @@ fn test_runtime_config_defaults() {
 
 #[test]
 fn test_callback_receives_correct_bundle_id() {
-
-
     let bundle_ids: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let bundle_ids_clone: Arc<Mutex<Vec<u64>>> = Arc::clone(&bundle_ids);
 

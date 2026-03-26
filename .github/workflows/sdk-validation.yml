@@ -39,7 +39,10 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
-        run: cargo install ast-grep
+        run: |
+          # Install pre-built binary from GitHub releases
+          curl -fsSL https://raw.githubusercontent.com/ast-grep/ast-grep/main/crates/cli/install/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       - name: Build sdk-validator
         run: cargo build --package sdk-validator
       - name: Run SDK validation

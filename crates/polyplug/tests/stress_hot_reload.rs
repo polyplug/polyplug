@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
-use polyplug::ReloadPhase;
 use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────

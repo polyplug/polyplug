@@ -3,10 +3,10 @@
 
 use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
+use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
-use polyplug_abi::ABI_OK;
 use polyplug_native::NativeLoader;
 
 const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
@@ -100,8 +100,6 @@ fn create_static_runtime() -> &'static Runtime {
 
 #[test]
 fn test_host_caller_factory_method_returns_some_when_plugin_exists() {
-
-
     let rt: &'static Runtime = create_static_runtime();
 
     let plugin_dir: &str = env!("TEST_PLUGIN_DIR");
@@ -117,8 +115,6 @@ fn test_host_caller_factory_method_returns_some_when_plugin_exists() {
 
 #[test]
 fn test_host_caller_factory_method_returns_none_when_plugin_not_found() {
-
-
     let rt: &'static Runtime = create_static_runtime();
 
     let caller: Option<TestAddContract> = TestAddContract::create(rt, 0);
@@ -130,8 +126,6 @@ fn test_host_caller_factory_method_returns_none_when_plugin_not_found() {
 
 #[test]
 fn test_host_caller_is_valid_returns_true() {
-
-
     let rt: &'static Runtime = create_static_runtime();
 
     let plugin_dir: &str = env!("TEST_PLUGIN_DIR");
@@ -145,8 +139,6 @@ fn test_host_caller_is_valid_returns_true() {
 
 #[test]
 fn test_host_caller_method_call_works() {
-
-
     let rt: &'static Runtime = create_static_runtime();
 
     let plugin_dir: &str = env!("TEST_PLUGIN_DIR");
@@ -161,8 +153,6 @@ fn test_host_caller_method_call_works() {
 
 #[test]
 fn test_host_caller_reset_is_noop() {
-
-
     let rt: &'static Runtime = create_static_runtime();
 
     let plugin_dir: &str = env!("TEST_PLUGIN_DIR");
