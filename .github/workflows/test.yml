@@ -136,11 +136,10 @@ jobs:
               sudo apt-get install -y liblua5.4-dev
             test_cmd: cargo test -p integration --test integration_lua
             feature_flag: ""
-          - toolchain: deno
+          - toolchain: js-quickjs
             setup: |
-              curl -fsSL https://deno.land/install.sh | sh
-              echo "$HOME/.deno/bin" >> $GITHUB_PATH
-            test_cmd: cargo test -p integration --test cross_language_deno
+              echo "js-quickjs uses vendored QuickJS - no external setup needed"
+            test_cmd: cargo test -p integration --test integration_js
             feature_flag: ""
     steps:
       - uses: actions/checkout@v6
