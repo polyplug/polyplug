@@ -53,6 +53,19 @@ def starts_with(sv: StringView, prefix: str) -> bool:
     return to_str(sv).startswith(prefix)
 
 
+def ends_with(sv: StringView, suffix: str) -> bool:
+    """Check if StringView ends with suffix.
+
+    Args:
+        sv: StringView from polyplug ABI
+        suffix: Suffix string to check for
+
+    Returns:
+        True if the string ends with the suffix, False otherwise
+    """
+    return to_str(sv).endswith(suffix)
+
+
 def split(sv: StringView, delimiter: str) -> list[str]:
     """Split StringView by delimiter.
 

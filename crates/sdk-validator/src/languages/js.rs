@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast_grep::{AstGrepRunner, Language, NamingConvention, transform_name};
+use crate::ast_grep::{transform_name, AstGrepRunner, Language, NamingConvention};
 use crate::languages::{LanguageValidator, ValidationResult};
 
 /// Validator for JavaScript/TypeScript SDK files.
@@ -23,13 +23,6 @@ impl JsValidator {
         Self
     }
 
-    /// Generate an ast-grep pattern for detecting a TypeScript function.
-    ///
-    /// TypeScript functions can be:
-    /// 1. Function declarations: `function $NAME($$$): $$$`
-    /// 2. Exported function declarations: `export function $NAME($$$): $$$`
-    ///
-    /// We use a pattern that matches function declarations with optional export.
     fn generate_function_pattern(method_name: &str) -> String {
         let camel_name: String = transform_name(
             method_name,
@@ -92,16 +85,11 @@ impl LanguageValidator for JsValidator {
                 }
             }
 
-            let camel_name: String = transform_name(
-                method_name,
-                NamingConvention::Snake,
-                NamingConvention::Camel,
-            );
-
+            // Store snake_case name for aggregator compatibility
             if found {
-                result.found_methods.push(camel_name);
+                result.found_methods.push(method_name.clone());
             } else {
-                result.missing_methods.push(camel_name);
+                result.missing_methods.push(method_name.clone());
             }
         }
 
@@ -181,7 +169,7 @@ export function toStr(sv: StringView | null | undefined): string {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"toStr".to_string()));
+        assert!(result.found_methods.contains(&"to_str".to_string()));
         assert!(result.missing_methods.is_empty());
     }
 
@@ -212,7 +200,7 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"startsWith".to_string()));
+        assert!(result.found_methods.contains(&"starts_with".to_string()));
     }
 
     #[test]
@@ -245,7 +233,7 @@ export function stripPrefix(sv: StringView | string, prefix: string): string {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"stripPrefix".to_string()));
+        assert!(result.found_methods.contains(&"strip_prefix".to_string()));
     }
 
     #[test]
@@ -311,10 +299,10 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"toStr".to_string()));
-        assert!(result.found_methods.contains(&"startsWith".to_string()));
-        assert!(result.missing_methods.contains(&"endsWith".to_string()));
-        assert!(result.missing_methods.contains(&"stripPrefix".to_string()));
+        assert!(result.found_methods.contains(&"to_str".to_string()));
+        assert!(result.found_methods.contains(&"starts_with".to_string()));
+        assert!(result.missing_methods.contains(&"ends_with".to_string()));
+        assert!(result.missing_methods.contains(&"strip_prefix".to_string()));
         assert!(result.missing_methods.contains(&"split".to_string()));
         assert!(!result.is_complete());
     }
@@ -336,7 +324,7 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.is_empty());
-        assert!(result.missing_methods.contains(&"toStr".to_string()));
+        assert!(result.missing_methods.contains(&"to_str".to_string()));
     }
 
     #[test]
@@ -372,8 +360,8 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"toStr".to_string()));
-        assert!(result.found_methods.contains(&"startsWith".to_string()));
+        assert!(result.found_methods.contains(&"to_str".to_string()));
+        assert!(result.found_methods.contains(&"starts_with".to_string()));
         assert!(result.is_complete());
     }
 }

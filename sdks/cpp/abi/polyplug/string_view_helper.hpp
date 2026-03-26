@@ -26,6 +26,11 @@ inline std::string to_string(StringView sv) {
     return {reinterpret_cast<const char*>(sv.ptr), sv.len};
 }
 
+/// Convert StringView to std::string (alias for to_string)
+inline std::string to_str(StringView sv) {
+    return to_string(sv);
+}
+
 /// Strip prefix from a string.
 /// @param sv The input StringView.
 /// @param prefix The prefix to strip.
@@ -45,6 +50,16 @@ inline std::string_view strip_prefix(StringView sv, std::string_view prefix) noe
 inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
     auto s = to_string_view(sv);
     return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
+}
+
+/// Check if string ends with suffix.
+/// @param sv The input StringView.
+/// @param suffix The suffix to check.
+/// @return true if string ends with suffix.
+inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
+    auto s = to_string_view(sv);
+    if (s.size() < suffix.size()) return false;
+    return s.substr(s.size() - suffix.size()) == suffix;
 }
 
 /// Split string by delimiter.

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast_grep::{AstGrepRunner, Language, NamingConvention, transform_name};
+use crate::ast_grep::{transform_name, AstGrepRunner, Language, NamingConvention};
 use crate::languages::{LanguageValidator, ValidationResult};
 
 /// Validator for C# SDK files.
@@ -11,6 +11,9 @@ use crate::languages::{LanguageValidator, ValidationResult};
 /// - Extension methods (`public static string ToString(this StringView sv)`)
 /// - Static class methods (`public static StringView FromPtr(...)`)
 /// - Expression-bodied methods (`public static StringView FromPtr(...) => ...`)
+///
+/// Uses the class pattern `public static class $CLASS { $$$ }` to get the entire
+/// class body, then checks if method names appear in the text.
 pub struct CSharpValidator;
 
 impl CSharpValidator {
@@ -19,20 +22,20 @@ impl CSharpValidator {
         Self
     }
 
-    /// Generate a YAML rule for finding all method declarations, then filter by name.
-    fn generate_method_rule() -> String {
-        "id: find-methods\nlanguage: csharp\nrule:\n  kind: method_declaration".to_string()
+    fn generate_class_pattern() -> String {
+        "public static class $CLASS { $$$ }".to_string()
     }
 
-    /// Check if a method match contains the expected method name.
-    fn match_contains_method(match_text: &str, method_name: &str) -> bool {
+    fn text_contains_method(class_text: &str, method_name: &str) -> bool {
         let pascal_name: String = transform_name(
             method_name,
             NamingConvention::Snake,
             NamingConvention::Pascal,
         );
-        match_text.contains(&format!(" {pascal_name}("))
-            || match_text.contains(&format!(" {pascal_name}<"))
+        // Check for method declarations like "public static ... MethodName("
+        // or "public ... MethodName(" for extension methods
+        class_text.contains(&format!(" {pascal_name}("))
+            || class_text.contains(&format!(" {pascal_name}<"))
     }
 }
 
@@ -65,45 +68,37 @@ impl LanguageValidator for CSharpValidator {
         let mut result: ValidationResult =
             ValidationResult::new(struct_name.to_string(), self.language_name().to_string());
 
-        let rule: String = Self::generate_method_rule();
+        let pattern: String = Self::generate_class_pattern();
 
-        for method_name in required_methods {
-            let mut found: bool = false;
-
-            for file_path in target_files {
-                let path: PathBuf = PathBuf::from(file_path);
-                if !path.exists() {
-                    continue;
-                }
-
-                match runner.run_with_rule(&rule, &path) {
-                    Ok(matches) => {
-                        for m in matches {
-                            if Self::match_contains_method(&m.text, method_name) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if found {
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        continue;
-                    }
-                }
+        let mut all_class_texts: Vec<String> = Vec::new();
+        for file_path in target_files {
+            let path: PathBuf = PathBuf::from(file_path);
+            if !path.exists() {
+                continue;
             }
 
-            let pascal_name: String = transform_name(
-                method_name,
-                NamingConvention::Snake,
-                NamingConvention::Pascal,
-            );
+            match runner.run_ast_grep(&pattern, self.ast_grep_language(), &path) {
+                Ok(matches) => {
+                    for m in matches {
+                        all_class_texts.push(m.text);
+                    }
+                }
+                Err(_) => {
+                    continue;
+                }
+            }
+        }
 
+        for method_name in required_methods {
+            let found: bool = all_class_texts
+                .iter()
+                .any(|text| Self::text_contains_method(text, method_name));
+
+            // Store snake_case name for aggregator compatibility
             if found {
-                result.found_methods.push(pascal_name);
+                result.found_methods.push(method_name.clone());
             } else {
-                result.missing_methods.push(pascal_name);
+                result.missing_methods.push(method_name.clone());
             }
         }
 
@@ -144,29 +139,27 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_method_rule() {
-        let rule: String = CSharpValidator::generate_method_rule();
-        assert!(rule.contains("method_declaration"));
-        assert!(rule.contains("csharp"));
+    fn test_generate_class_pattern() {
+        let pattern: String = CSharpValidator::generate_class_pattern();
+        assert!(pattern.contains("public static class"));
     }
 
     #[test]
-    fn test_match_contains_method() {
-        let method_text = "public static string ToString(this StringView sv) { return \"test\"; }";
-        assert!(CSharpValidator::match_contains_method(
-            method_text,
+    fn test_text_contains_method() {
+        let class_text = "public static string ToString(this StringView sv) { return \"test\"; }";
+        assert!(CSharpValidator::text_contains_method(
+            class_text,
             "to_string"
         ));
 
-        let method_text =
+        let class_text =
             "public static StringView FromPtr(IntPtr ptr, int length) => new StringView();";
-        assert!(CSharpValidator::match_contains_method(
-            method_text,
-            "from_ptr"
+        assert!(CSharpValidator::text_contains_method(
+            class_text, "from_ptr"
         ));
 
-        assert!(!CSharpValidator::match_contains_method(
-            method_text,
+        assert!(!CSharpValidator::text_contains_method(
+            class_text,
             "to_string"
         ));
     }
@@ -223,7 +216,7 @@ namespace Polyplug.Abi {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"ToString".to_string()));
+        assert!(result.found_methods.contains(&"to_string".to_string()));
         assert!(result.missing_methods.is_empty());
     }
 
@@ -255,7 +248,7 @@ namespace Polyplug.Abi {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"FromPtr".to_string()));
+        assert!(result.found_methods.contains(&"from_ptr".to_string()));
     }
 
     #[test]
@@ -287,7 +280,7 @@ namespace Polyplug.Abi {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"FromPtr".to_string()));
+        assert!(result.found_methods.contains(&"from_ptr".to_string()));
     }
 
     #[test]
@@ -323,9 +316,9 @@ namespace Polyplug.Abi {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"ToString".to_string()));
-        assert!(result.missing_methods.contains(&"StartsWith".to_string()));
-        assert!(result.missing_methods.contains(&"EndsWith".to_string()));
+        assert!(result.found_methods.contains(&"to_string".to_string()));
+        assert!(result.missing_methods.contains(&"starts_with".to_string()));
+        assert!(result.missing_methods.contains(&"ends_with".to_string()));
         assert!(!result.is_complete());
     }
 
@@ -346,7 +339,7 @@ namespace Polyplug.Abi {
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
         assert!(result.found_methods.is_empty());
-        assert!(result.missing_methods.contains(&"ToString".to_string()));
+        assert!(result.missing_methods.contains(&"to_string".to_string()));
     }
 
     #[test]
@@ -376,10 +369,11 @@ namespace Polyplug.Abi {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(result.found_methods.contains(&"ToString".to_string()));
-        assert!(result.missing_methods.contains(&"StartsWith".to_string()));
-        assert!(result.missing_methods.contains(&"EndsWith".to_string()));
-        assert!(result.missing_methods.contains(&"StripPrefix".to_string()));
-        assert!(result.missing_methods.contains(&"Split".to_string()));
+        assert!(result.found_methods.contains(&"to_string".to_string()));
+        assert!(result.found_methods.contains(&"starts_with".to_string()));
+        assert!(result.found_methods.contains(&"ends_with".to_string()));
+        assert!(result.found_methods.contains(&"strip_prefix".to_string()));
+        assert!(result.found_methods.contains(&"split".to_string()));
+        assert!(result.missing_methods.is_empty());
     }
 }

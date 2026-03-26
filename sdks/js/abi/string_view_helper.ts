@@ -47,6 +47,26 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
 }
 
 /**
+ * Check if a string ends with a suffix.
+ * @param sv - The input StringView or string.
+ * @param suffix - The suffix to check.
+ * @returns True if the string ends with the suffix.
+ */
+export function endsWith(sv: StringView | string, suffix: string): boolean {
+    const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    return s.endsWith(suffix);
+}
+
+/**
+ * Convert a StringView to a JavaScript string (shorthand alias).
+ * @param sv - The StringView to convert.
+ * @returns The JavaScript string, or empty string if null/empty.
+ */
+export function toStr(sv: StringView | null | undefined): string {
+    return stringViewToString(sv);
+}
+
+/**
  * Split a string by a delimiter.
  * @param sv - The input StringView or string.
  * @param delimiter - The delimiter to split by.

@@ -283,3 +283,75 @@ pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
         len: bytes.len(),
     })
 }
+
+/// Check if a `StringView` starts with the given prefix.
+///
+/// # Example
+/// ```rust
+/// use polyplug_guest::{StringView, starts_with};
+///
+/// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
+/// assert!(starts_with(sv, "hello"));
+/// assert!(!starts_with(sv, "world"));
+/// ```
+pub fn starts_with(sv: StringView, prefix: &str) -> bool {
+    let s: &str = to_str(sv);
+    s.starts_with(prefix)
+}
+
+/// Check if a `StringView` ends with the given suffix.
+///
+/// # Example
+/// ```rust
+/// use polyplug_guest::{StringView, ends_with};
+///
+/// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
+/// assert!(ends_with(sv, "world"));
+/// assert!(!ends_with(sv, "hello"));
+/// ```
+pub fn ends_with(sv: StringView, suffix: &str) -> bool {
+    let s: &str = to_str(sv);
+    s.ends_with(suffix)
+}
+
+/// Strip a prefix from a `StringView` if present.
+///
+/// Returns the remaining string slice if the prefix was present,
+/// otherwise returns the original string.
+///
+/// # Example
+/// ```rust
+/// use polyplug_guest::{StringView, strip_prefix};
+///
+/// let sv = StringView { ptr: b"hello world".as_ptr(), len: 11 };
+/// assert_eq!(strip_prefix(sv, "hello "), "world");
+/// assert_eq!(strip_prefix(sv, "goodbye"), "hello world");
+/// ```
+pub fn strip_prefix(sv: StringView, prefix: &str) -> &'static str {
+    let s: &str = to_str(sv);
+    match s.strip_prefix(prefix) {
+        Some(remaining) => remaining,
+        None => s,
+    }
+}
+
+/// Split a `StringView` by a delimiter.
+///
+/// Returns a vector of string slices. Empty input returns an empty vector.
+/// Consecutive delimiters produce empty strings in the output.
+///
+/// # Example
+/// ```rust
+/// use polyplug_guest::{StringView, split};
+///
+/// let sv = StringView { ptr: b"a,b,c".as_ptr(), len: 5 };
+/// let parts: Vec<&str> = split(sv, ",");
+/// assert_eq!(parts, vec!["a", "b", "c"]);
+/// ```
+pub fn split(sv: StringView, delimiter: &str) -> Vec<&'static str> {
+    let s: &str = to_str(sv);
+    if s.is_empty() {
+        return Vec::new();
+    }
+    s.split(delimiter).collect()
+}

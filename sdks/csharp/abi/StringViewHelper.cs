@@ -50,4 +50,67 @@ public static class StringViewHelper
         Marshal.Copy(sv.Ptr, bytes, 0, (int)sv.Len);
         return Encoding.UTF8.GetString(bytes);
     }
+
+    /// <summary>
+    /// Converts a StringView to a .NET string. Alias for ToString.
+    /// </summary>
+    public static string ToStr(StringView sv) => ToString(sv);
+
+    /// <summary>
+    /// Checks if a StringView starts with the given prefix.
+    /// </summary>
+    public static bool StartsWith(StringView sv, string prefix)
+    {
+        if (string.IsNullOrEmpty(prefix))
+            return true;
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return false;
+
+        string str = ToString(sv);
+        return str.StartsWith(prefix);
+    }
+
+    /// <summary>
+    /// Checks if a StringView ends with the given suffix.
+    /// </summary>
+    public static bool EndsWith(StringView sv, string suffix)
+    {
+        if (string.IsNullOrEmpty(suffix))
+            return true;
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return false;
+
+        string str = ToString(sv);
+        return str.EndsWith(suffix);
+    }
+
+    /// <summary>
+    /// Strips the prefix from a StringView if it starts with it.
+    /// Returns the original string if the prefix is not present.
+    /// </summary>
+    public static string StripPrefix(StringView sv, string prefix)
+    {
+        if (string.IsNullOrEmpty(prefix))
+            return ToString(sv);
+
+        string str = ToString(sv);
+        if (str.StartsWith(prefix))
+            return str.Substring(prefix.Length);
+        return str;
+    }
+
+    /// <summary>
+    /// Splits a StringView by the given delimiter and returns an array of strings.
+    /// </summary>
+    public static string[] Split(StringView sv, string delimiter)
+    {
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return System.Array.Empty<string>();
+
+        string str = ToString(sv);
+        if (string.IsNullOrEmpty(delimiter))
+            return new[] { str };
+
+        return str.Split(new[] { delimiter }, System.StringSplitOptions.None);
+    }
 }
