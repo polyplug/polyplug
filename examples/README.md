@@ -52,8 +52,8 @@ examples/
 
 ## Dependencies
 
-**Guest plugins** depend only on guest-libs (polyplug_guest).
-**Host applications** depend only on host-libs (polyplug).
+**Guest plugins** depend only on sdks/*/guest (polyplug_guest).
+**Host applications** depend only on sdks/*/host (polyplug).
 
 ## See Also
 

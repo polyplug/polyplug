@@ -207,7 +207,7 @@ For typical plugin calls (>1μs), the 10-50ns overhead is <5%.
 
 ```bash
 # Python
-cd host-libs/python
+cd sdks/python/host
 python -m venv .venv && source .venv/bin/activate
 pip install cffi
 POLYPLUG_LIB=/path/to/libpolyplug.so python benchmarks/benchmark_ffi_final.py
@@ -427,7 +427,7 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 
 - [ABI Architecture](./ABI_ARCHITECTURE.md)
 - [ABI Types](./abi_types.md)
-- [Python README](../host-libs/python/README.md)
-- [C++ README](../host-libs/cpp/README.md)
-- [Lua README](../host-libs/lua/README.md)
-- [JavaScript README](../host-libs/js-deno/README.md)
+- [Python README](../sdks/python/host/README.md)
+- [C++ README](../sdks/cpp/host/README.md)
+- [Lua README](../sdks/lua/host/README.md)
+- [JavaScript README](../sdks/js/host/README.md)

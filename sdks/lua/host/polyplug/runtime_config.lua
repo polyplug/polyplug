@@ -1,4 +1,4 @@
--- host-libs/lua/polyplug/runtime_config.lua
+-- sdks/lua/host/polyplug/runtime_config.lua
 -- Runtime configuration options for hot-reload behavior and other settings.
 
 local M = {}

@@ -75,7 +75,7 @@ Language runtime adapters (dotnet, python, lua) are separate crates following th
 
 **C# unsafe is confined to generated code only — never in libs or app code**
 
-`unsafe` in C# requires `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` in the project file, or the `unsafe` keyword on a specific type or method. Neither is acceptable in `guest-libs/csharp/`, `host-libs/csharp/`, plugin developer projects, or host app developer projects — they must compile with zero unsafe.
+`unsafe` in C# requires `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` in the project file, or the `unsafe` keyword on a specific type or method. Neither is acceptable in `sdks/csharp/guest/`, `sdks/csharp/host/`, plugin developer projects, or host app developer projects — they must compile with zero unsafe.
 
 `unsafe` IS used in generated `Init.cs` (produced by `polyplugc generate`), which lives in an isolated generated project that polyplugc controls. This is where `delegate*` unmanaged function pointers are used to call vtable functions via the `calli` IL instruction — a genuine ~4–6x performance advantage over `Marshal.GetDelegateForFunctionPointer` (which heap-allocates a delegate and routes through `Delegate.Invoke`). Plugin developers never edit generated files and never enable unsafe in their own project.
 
@@ -402,28 +402,28 @@ polyplug C ABI
 **Per language — source location, published artifact, and contents:**
 
 ```
-Rust    host-libs/rust/    →  polyplug crate (crates.io)
+Rust    crates/polyplug/   →  polyplug crate (crates.io)
                                PluginRuntime builder, type-safe ABI wrappers
 
-C++     host-libs/cpp/     →  polyplug package (vcpkg / Conan / release archive)
+C++     sdks/cpp/host/     →  polyplug package (vcpkg / Conan / release archive)
                                RAII Runtime class, zero-overhead ABI wrappers
                                loaders/python.hpp, loaders/lua.hpp, etc. (one per loader)
 
-C#      host-libs/csharp/  →  Polyplug NuGet
+C#      sdks/csharp/host/  →  Polyplug NuGet
                                P/Invoke declarations, Runtime class,
                                ref struct wrappers for StringView and Buffer
                                Register*Loader() methods (one per loader)
 
-Python  host-libs/python/  →  polyplug pip package
+Python  sdks/python/host/  →  polyplug pip package
                                ctypes bindings, Runtime class, ctypes.Structure wrappers
                                loaders/python.py, loaders/lua.py, etc. (one per loader)
 
-Lua     host-libs/lua/     →  polyplug LuaRocks rock / release archive
+Lua     sdks/lua/host/     →  polyplug LuaRocks rock / release archive
                                LuaJIT FFI host lib, Runtime metatable, Guard metatable
                                register_*_loader() functions (one per loader)
                                Performance: JIT-inlined C calls, near-native or faster
 
-JS/TS   host-libs/js-deno/ →  @polyplug/core JSR package
+JS/TS   sdks/js/host/      →  @polyplug/core JSR package
                                Deno.dlopen host lib, Runtime class, TypeScript types
                                register*Loader() functions (one per loader)
                                Requires --allow-ffi at runtime
@@ -433,7 +433,7 @@ JS/TS   host-libs/js-deno/ →  @polyplug/core JSR package
 Note: `polyplug_loaders_dotnet`, `polyplug_loaders_python`, `polyplug_loaders_lua`,
 `polyplug_loaders_js` are **loader packages** — they teach
 the runtime how to load plugins written in those languages. They are distinct from the
-host lib for a given language. A C# host app uses `host-libs/csharp/` (`Polyplug` NuGet)
+host lib for a given language. A C# host app uses `sdks/csharp/host/` (`Polyplug` NuGet)
 to drive the runtime. It additionally installs `Polyplug.Loaders.Python` only if it
 wants to load Python guest plugins. Each loader is a separate opt-in package in every
 language ecosystem. See §24 for the full package listing per language.
@@ -507,7 +507,7 @@ polyplug.load_bundle(rt, "./plugins/my_plugin")
 
 ```typescript
 // Deno — Deno.dlopen into libpolyplug.so + libpolyplug_*.so
-import * as polyplug from "./host-libs/js-deno/polyplug.ts";
+import * as polyplug from "./sdks/js/host/polyplug.js";
 
 const rt = polyplug.runtimeNew();
 await polyplug.registerDotnetLoader(rt, { minFramework: "10.0" });
@@ -544,7 +544,7 @@ Runtime C ABI
 
 ```
 Rust    → polyplug-guest crate, proc macro, allocator hook
-C++     → guest-libs/cpp/ header-only, entry point macro, RAII helpers
+C++     → sdks/cpp/guest/ header-only, entry point macro, RAII helpers
 C#      → Polyplug.Guest NuGet, entry point attribute, marshaling helpers
 Python  → polyplug-guest pip package, entry point decorator, ctypes helpers
 Lua     → polyplug-guest.lua, entry point registration helper
@@ -686,7 +686,7 @@ Each .NET bundle:
 
 **Generated C# — performance requirements:**
 
-> **unsafe policy:** `guest-libs/csharp/` and `host-libs/csharp/` have zero `unsafe` and require no `<AllowUnsafeBlocks>` in the plugin developer's or host app developer's project. All `unsafe` is confined to generated `Init.cs` only, in the polyplugc-controlled generated project. Plugin developers never edit or enable unsafe anywhere.
+> **unsafe policy:** `sdks/csharp/guest/` and `sdks/csharp/host/` have zero `unsafe` and require no `<AllowUnsafeBlocks>` in the plugin developer's or host app developer's project. All `unsafe` is confined to generated `Init.cs` only, in the polyplugc-controlled generated project. Plugin developers never edit or enable unsafe anywhere.
 
 ```csharp
 // Generated Init.cs — polyplugc output, plugin developer never edits this.
@@ -722,7 +722,7 @@ public static AbiError Init(IntPtr registrarPtr, IntPtr ctxPtr) {
 **C# host lib P/Invoke — `LibraryImport` + `[SuppressGCTransition]` on hot path:**
 
 ```csharp
-// host-libs/csharp/ — zero unsafe. void* → IntPtr, ABI-identical.
+// sdks/csharp/host/ — zero unsafe. void* → IntPtr, ABI-identical.
 // LibraryImport (source-generated, AOT-safe) replaces DllImport everywhere.
 [LibraryImport("polyplug"), SuppressGCTransition]
 public static partial uint CallPlugin(
@@ -743,8 +743,8 @@ or call back into managed code directly.
 
 | Location | `unsafe`? | `<AllowUnsafeBlocks>`? | Reason |
 |---|---|---|---|
-| `guest-libs/csharp/` | ❌ None | ❌ Not required | IntPtr/ulong replace raw pointers |
-| `host-libs/csharp/` | ❌ None | ❌ Not required | IntPtr replaces void* in P/Invoke |
+| `sdks/csharp/guest/` | ❌ None | ❌ Not required | IntPtr/ulong replace raw pointers |
+| `sdks/csharp/host/` | ❌ None | ❌ Not required | IntPtr replaces void* in P/Invoke |
 | Plugin developer project | ❌ None | ❌ Not required | Writes only business logic |
 | Host app developer project | ❌ None | ❌ Not required | Uses safe Runtime class only |
 | Generated `Init.cs` | ✅ Isolated block | ✅ Generated .csproj only | `delegate*` for `calli` perf gain |
@@ -782,7 +782,7 @@ All plugin loads run inside `Python::with_gil(|py| { ... })`. The GIL is release
 
 Plugins are loaded via `importlib.util.spec_from_file_location`. Before loading, polyplug-python prepends the bundle directory to `sys.path`. If `bundle_dir/site-packages/` exists, it is also prepended — this allows plugin developers to ship pip dependencies inside their bundle directory. These paths are not removed after load (removing them could break already-imported modules).
 
-The `host-libs/python/` package loads `polyplug.so` from a co-located path configured at builder time.
+The `sdks/python/host/` package loads `polyplug.so` from a co-located path configured at builder time.
 
 **Generated code performance rules:**
 - All `ctypes` function objects cached at module level — no per-call lookup
@@ -1927,14 +1927,14 @@ polyplug_runtime_register_loader(rt, loader_ptr) → u32  (0 = ok)
 Non-Rust host libs call create → register in two steps. The language-specific
 wrapper in each loader package reduces this to a single idiomatic function call.
 
-NOTE: `host-libs/js-deno/` targets Deno as the host runtime (Deno.dlopen into libpolyplug).
+NOTE: `sdks/js/host/` targets Deno as the host runtime (Deno.dlopen into libpolyplug).
 QuickJS cannot be a standalone host — it is an embedded VM that runs inside a Rust process.
 
 ---
 
 ## 25. C Facade — Stable Host API for FFI Consumers
 
-`host-libs/lua/` and `host-libs/js-deno/` both call into `libpolyplug.so` via FFI (LuaJIT FFI and `Deno.dlopen` respectively). They cannot use the Rust-native API surface. A thin stable `extern "C"` facade is therefore added to `crates/polyplug/src/ffi/mod.rs` and exported from `lib.rs`.
+`sdks/lua/host/` and `sdks/js/host/` both call into `libpolyplug.so` via FFI (LuaJIT FFI and `Deno.dlopen` respectively). They cannot use the Rust-native API surface. A thin stable `extern "C"` facade is therefore added to `crates/polyplug/src/ffi/mod.rs` and exported from `lib.rs`.
 
 **Design rules:**
 - All symbols prefixed `polyplug_`
@@ -2174,27 +2174,33 @@ polyplug/                                YOU maintain
 │               │   └── mod.rs
 │               └── lua/
 │                   └── mod.rs
-├── host-libs/
+├── sdks/
 │   ├── cpp/
-│   │   ├── polyplug.hpp
-│   │   └── polyplug/
-│   │       ├── abi.hpp
-│   │       ├── error.hpp
-│   │       ├── handle.hpp
-│   │       └── runtime.hpp
-│   ├── csharp/                          Polyplug NuGet
-│   ├── python/                          polyplug pip
-│   └── lua/                             polyplug.lua + .so
-├── guest-libs/
-│   ├── cpp/
-│   │   ├── polyplug_guest.hpp
-│   │   └── polyplug/
-│   │       ├── abi.hpp
-│   │       ├── contract.hpp
-│   │       └── guest.hpp
-│   ├── csharp/                          Polyplug.Guest NuGet
-│   ├── python/                          polyplug-guest pip
-│   └── lua/                             polyplug-guest.lua
+│   │   ├── host/
+│   │   │   ├── polyplug.hpp
+│   │   │   └── polyplug/
+│   │   │       ├── abi.hpp
+│   │   │       ├── error.hpp
+│   │   │       ├── handle.hpp
+│   │   │       └── runtime.hpp
+│   │   └── guest/
+│   │       ├── polyplug_guest.hpp
+│   │       └── polyplug/
+│   │           ├── abi.hpp
+│   │           ├── contract.hpp
+│   │           └── guest.hpp
+│   ├── csharp/
+│   │   ├── host/                          Polyplug NuGet
+│   │   └── guest/                         Polyplug.Guest NuGet
+│   ├── python/
+│   │   ├── host/                          polyplug pip
+│   │   └── guest/                         polyplug-guest pip
+│   ├── lua/
+│   │   ├── host/                          polyplug.lua + .so
+│   │   └── guest/                         polyplug-guest.lua
+│   └── js/
+│       ├── host/                          @polyplug/core JSR
+│       └── guest/                         @polyplug/guest JSR
 └── tests/
     ├── fixtures/
     │   ├── test_api.toml

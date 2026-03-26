@@ -414,19 +414,23 @@ polyplug/
 │               ├── lua.rs
 │               ├── js_deno.rs
 │               └── js_quickjs.rs
-├── host-libs/
-│   ├── rust/
+├── sdks/
 │   ├── cpp/
+│   │   ├── host/
+│   │   └── guest/
 │   ├── csharp/
+│   │   ├── host/
+│   │   └── guest/
 │   ├── python/
-│   └── lua/
-└── guest-libs/
-    ├── rust/
-    ├── cpp/
-    ├── csharp/
-    ├── python/
-    └── lua/
-```
+│   │   ├── host/
+│   │   └── guest/
+│   ├── lua/
+│   │   ├── host/
+│   │   └── guest/
+│   └── js/
+│       ├── host/
+│       └── guest/
+└── examples/
 
 ---
 

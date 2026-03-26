@@ -29,7 +29,7 @@ echo ""
 # Run Python host
 echo "=== Python Host ==="
 if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    if PYTHONPATH="$WORKSPACE_DIR/host-libs/python:$WORKSPACE_DIR/host-libs/python/loaders/polyplug-loaders-native" python3 hosts/python/host.py 2>&1; then
+    if PYTHONPATH="$WORKSPACE_DIR/sdks/python/host:$WORKSPACE_DIR/sdks/python/host/loaders/polyplug-loaders-native" python3 hosts/python/host.py 2>&1; then
         echo "✓ python host passed"
     else
         echo "✗ python host failed"
@@ -43,7 +43,7 @@ echo ""
 # Run Lua host
 echo "=== Lua Host ==="
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    if LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;$PWD/hosts/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1; then
+    if LUA_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;$PWD/hosts/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1; then
         echo "✓ lua host passed"
     else
         echo "✗ lua host failed"
@@ -112,7 +112,7 @@ if [ -f "$WORKSPACE_DIR/target/release/pipeline_host" ]; then
 fi
 
 if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
-    OUTPUT=$(PYTHONPATH="$WORKSPACE_DIR/host-libs/python" python3 hosts/python/host.py 2>&1)
+    OUTPUT=$(PYTHONPATH="$WORKSPACE_DIR/sdks/python/host" python3 hosts/python/host.py 2>&1)
     if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
         echo "✓ python host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))
@@ -122,7 +122,7 @@ if command -v python3 &> /dev/null && [ -f "hosts/python/host.py" ]; then
 fi
 
 if command -v luajit &> /dev/null && [ -f "hosts/lua/host.lua" ]; then
-    OUTPUT=$(LUA_PATH="$WORKSPACE_DIR/host-libs/lua/?.lua;;" luajit hosts/lua/host.lua 2>&1)
+    OUTPUT=$(LUA_PATH="$WORKSPACE_DIR/sdks/lua/host/?.lua;;" luajit hosts/lua/host.lua 2>&1)
     if echo "$OUTPUT" | grep -q "provides.*Decoder" && echo "$OUTPUT" | grep -q "provides.*Transformer"; then
         echo "✓ lua host: full pipeline executed"
         PIPELINE_OK=$((PIPELINE_OK + 1))

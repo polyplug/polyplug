@@ -7,7 +7,7 @@ import ctypes
 import sys
 from pathlib import Path
 
-# Add guest-libs to path for this fixture
+# Add sdks/python/guest to path for this fixture
 _REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "guest"))
 

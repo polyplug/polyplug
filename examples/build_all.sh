@@ -54,7 +54,7 @@ for lang in $LANGS; do
                 ;;
             cpp)
                 g++ -std=c++20 -fPIC -shared -O2 \
-                    -I"$SCRIPT_DIR/../guest-libs/cpp" \
+                    -I"$SCRIPT_DIR/../sdks/cpp/guest" \
                     -I"$dir/generated" \
                     "$dir/$plugin.cpp" \
                     -L"$SCRIPT_DIR/../target/release" -lpolyplug \

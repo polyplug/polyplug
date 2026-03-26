@@ -24,10 +24,7 @@ dist_dir := "dist"
 # Marker directory for tracking failed builds
 marker_dir := ".build-markers"
 
-# Host-libs directory
-host_libs_dir := "host-libs"
-
-# SDK directories (guest libs are now in sdks/*/guest/)
+# SDK directories (host and guest libs are now in sdks/*/host/ and sdks/*/guest/)
 sdks_dir := "sdks"
 
 # Version (read from Cargo.toml)
@@ -41,17 +38,17 @@ version := `grep -m1 '^version =' crates/polyplug/Cargo.toml | sed 's/.*"\([^"]*
 # Use this for local development. CI embeds natives automatically during release.
 download-native-local: build-ffi
     @echo "=== Copying Local Native Library ==="
-    @mkdir -p {{host_libs_dir}}/csharp/Polyplug/runtimes/linux-x64/native
-    @mkdir -p {{host_libs_dir}}/python/polyplug/_native/linux-x64
-    @mkdir -p {{host_libs_dir}}/js/_native/linux-x64
-    @mkdir -p {{host_libs_dir}}/lua/_native/linux-x64
-    @mkdir -p {{host_libs_dir}}/cpp/_native/linux-x64
+    @mkdir -p {{sdks_dir}}/csharp/host/Polyplug/runtimes/linux-x64/native
+    @mkdir -p {{sdks_dir}}/python/host/polyplug/_native/linux-x64
+    @mkdir -p {{sdks_dir}}/js/host/_native/linux-x64
+    @mkdir -p {{sdks_dir}}/lua/host/_native/linux-x64
+    @mkdir -p {{sdks_dir}}/cpp/host/_native/linux-x64
     @if [ -f {{target_dir}}/libpolyplug.so ]; then \
-        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/csharp/Polyplug/runtimes/linux-x64/native/ && \
-        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/python/polyplug/_native/linux-x64/ && \
-        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/js/_native/linux-x64/ && \
-        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/lua/_native/linux-x64/ && \
-        cp {{target_dir}}/libpolyplug.so {{host_libs_dir}}/cpp/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/csharp/host/Polyplug/runtimes/linux-x64/native/ && \
+        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/python/host/polyplug/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/js/host/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/lua/host/_native/linux-x64/ && \
+        cp {{target_dir}}/libpolyplug.so {{sdks_dir}}/cpp/host/_native/linux-x64/ && \
         echo "✓ Copied libpolyplug.so to all host libraries"; \
     else \
         echo "✗ No native library found in {{target_dir}}"; \
@@ -63,7 +60,7 @@ download-native-local: build-ffi
 # Core Rust Build
 # ============================================================================
 
-# Build the core FFI library (libpolyplug.so) - required by ALL host-libs
+# Build the core FFI library (libpolyplug.so) - required by ALL sdks/*/host/
 build-ffi:
     @echo "=== Building Core FFI Library ==="
     cargo build --{{profile}} -p polyplug
@@ -103,8 +100,8 @@ _build-host-cpp:
         echo "  [host-cpp] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if g++ -std=c++17 -fsyntax-only -I{{host_libs_dir}}/cpp \
-        {{host_libs_dir}}/cpp/polyplug.hpp 2>/dev/null; then \
+    @if g++ -std=c++17 -fsyntax-only -I{{sdks_dir}}/cpp/host \
+        {{sdks_dir}}/cpp/host/polyplug.hpp 2>/dev/null; then \
         echo "  [host-cpp] ✓ Headers valid"; \
     else \
         echo "  [host-cpp] ✗ Header validation failed"; \
@@ -118,7 +115,7 @@ _build-host-python:
         echo "  [host-python] SKIPPED (previously failed)"; \
         exit 0; \
     fi
-    @if python3 -m py_compile {{host_libs_dir}}/python/polyplug/*.py 2>/dev/null; then \
+    @if python3 -m py_compile {{sdks_dir}}/python/host/polyplug/*.py 2>/dev/null; then \
         echo "  [host-python] ✓ Modules valid"; \
     else \
         echo "  [host-python] ✗ Validation failed"; \
@@ -133,7 +130,7 @@ _build-host-csharp:
         exit 0; \
     fi
     @if command -v dotnet >/dev/null 2>&1; then \
-        if dotnet build {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release 2>/dev/null; then \
+        if dotnet build {{sdks_dir}}/csharp/host/Polyplug/Polyplug.csproj -c Release 2>/dev/null; then \
             echo "  [host-csharp] ✓ Build succeeded"; \
         else \
             echo "  [host-csharp] ✗ Build failed"; \
@@ -151,7 +148,7 @@ _build-host-lua:
         exit 0; \
     fi
     @if command -v luajit >/dev/null 2>&1; then \
-        if luajit -bl {{host_libs_dir}}/lua/polyplug.lua >/dev/null 2>&1; then \
+        if luajit -bl {{sdks_dir}}/lua/host/polyplug.lua >/dev/null 2>&1; then \
             echo "  [host-lua] ✓ Modules valid"; \
         else \
             echo "  [host-lua] ✗ Validation failed"; \
@@ -169,7 +166,7 @@ _build-host-js:
         exit 0; \
     fi
     @if command -v deno >/dev/null 2>&1; then \
-        if deno check {{host_libs_dir}}/js/polyplug.js 2>/dev/null; then \
+        if deno check {{sdks_dir}}/js/host/polyplug.js 2>/dev/null; then \
             echo "  [host-js] ✓ Modules valid"; \
         else \
             echo "  [host-js] ✗ Validation failed"; \
@@ -291,7 +288,7 @@ _build-guest-js:
 # Build All
 # ============================================================================
 
-# Build everything (core Rust, host-libs, guest-libs)
+# Build everything (core Rust, sdks/*/host/, sdks/*/guest/)
 build: build-rust build-host-libs build-guest-libs
     @echo ""
     @echo "=== Build Complete ==="
@@ -337,7 +334,7 @@ test-host-cpp:
         echo "SKIPPED (build failed)"; \
         exit 0; \
     fi
-    @g++ -std=c++17 -I{{host_libs_dir}}/cpp \
+    @g++ -std=c++17 -I{{sdks_dir}}/cpp/host \
         tests/integration/cpp/hot_reload_test.cpp \
         -o /tmp/polyplug_test_cpp 2>/dev/null && \
         /tmp/polyplug_test_cpp
@@ -372,7 +369,7 @@ test-host-lua:
         exit 0; \
     fi
     @if command -v luajit >/dev/null 2>&1; then \
-        cd host-libs/lua/tests && luajit test_reload_notification.lua; \
+        cd {{sdks_dir}}/lua/host/tests && luajit test_reload_notification.lua; \
     else \
         echo "luajit not installed, skipping"; \
     fi
@@ -385,7 +382,7 @@ test-host-js:
         exit 0; \
     fi
     @if command -v deno >/dev/null 2>&1; then \
-        cd host-libs/js-deno/tests && deno test reload_notification_test.ts; \
+        cd {{sdks_dir}}/js/host/tests && deno test reload_notification_test.ts; \
     else \
         echo "deno not installed, skipping"; \
     fi
@@ -718,61 +715,61 @@ _dist-copy-host-libs:
     @echo "Copying host libraries..."
     @# C++ (header-only) - ONLY .hpp files, NO CMakeLists.txt, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/cpp/polyplug
-    @cp {{host_libs_dir}}/cpp/polyplug/*.hpp {{dist_dir}}/host-libs/cpp/polyplug/
-    @cp {{host_libs_dir}}/cpp/polyplug.hpp {{dist_dir}}/host-libs/cpp/
+    @cp {{sdks_dir}}/cpp/host/polyplug/*.hpp {{dist_dir}}/host-libs/cpp/polyplug/
+    @cp {{sdks_dir}}/cpp/host/polyplug.hpp {{dist_dir}}/host-libs/cpp/
     @# C++ loaders - ONLY .hpp files, NO CMakeLists.txt
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/native
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/python
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/lua
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/js
     @mkdir -p {{dist_dir}}/host-libs/cpp/loaders/dotnet
-    @cp {{host_libs_dir}}/cpp/loaders/native/*.hpp {{dist_dir}}/host-libs/cpp/loaders/native/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/cpp/loaders/python/*.hpp {{dist_dir}}/host-libs/cpp/loaders/python/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/cpp/loaders/lua/*.hpp {{dist_dir}}/host-libs/cpp/loaders/lua/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/cpp/loaders/js/*.hpp {{dist_dir}}/host-libs/cpp/loaders/js/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/cpp/loaders/dotnet/*.hpp {{dist_dir}}/host-libs/cpp/loaders/dotnet/ 2>/dev/null || true
+    @cp {{sdks_dir}}/cpp/host/loaders/native/*.hpp {{dist_dir}}/host-libs/cpp/loaders/native/ 2>/dev/null || true
+    @cp {{sdks_dir}}/cpp/host/loaders/python/*.hpp {{dist_dir}}/host-libs/cpp/loaders/python/ 2>/dev/null || true
+    @cp {{sdks_dir}}/cpp/host/loaders/lua/*.hpp {{dist_dir}}/host-libs/cpp/loaders/lua/ 2>/dev/null || true
+    @cp {{sdks_dir}}/cpp/host/loaders/js/*.hpp {{dist_dir}}/host-libs/cpp/loaders/js/ 2>/dev/null || true
+    @cp {{sdks_dir}}/cpp/host/loaders/dotnet/*.hpp {{dist_dir}}/host-libs/cpp/loaders/dotnet/ 2>/dev/null || true
     @# Python (pure Python) - ONLY .py files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/python/polyplug
-    @cp {{host_libs_dir}}/python/polyplug/*.py {{dist_dir}}/host-libs/python/polyplug/
-    @cp {{host_libs_dir}}/python/polyplug/*.pyi {{dist_dir}}/host-libs/python/polyplug/ 2>/dev/null || true
+    @cp {{sdks_dir}}/python/host/polyplug/*.py {{dist_dir}}/host-libs/python/polyplug/
+    @cp {{sdks_dir}}/python/host/polyplug/*.pyi {{dist_dir}}/host-libs/python/polyplug/ 2>/dev/null || true
     @# Python loaders - ONLY .py files
     @mkdir -p {{dist_dir}}/host-libs/python/loaders
-    @cp -r {{host_libs_dir}}/python/loaders/* {{dist_dir}}/host-libs/python/loaders/
+    @cp -r {{sdks_dir}}/python/host/loaders/* {{dist_dir}}/host-libs/python/loaders/
     @find {{dist_dir}}/host-libs/python/loaders -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
     @# C# - Build DLLs in source location, copy ONLY built DLLs to dist
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [dist] Building C# host library and loaders..."; \
-        dotnet build {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{host_libs_dir}}/csharp/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{host_libs_dir}}/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{host_libs_dir}}/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release 2>/dev/null || true; \
-        dotnet build {{host_libs_dir}}/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Polyplug/Polyplug.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release 2>/dev/null || true; \
+        dotnet build {{sdks_dir}}/csharp/host/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release 2>/dev/null || true; \
         mkdir -p {{dist_dir}}/host-libs/csharp; \
-        cp {{host_libs_dir}}/csharp/Polyplug/bin/Release/net10.0/Polyplug.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/csharp/Loaders/Native/bin/Release/net10.0/Polyplug.Loaders.Native.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/csharp/Loaders/Python/bin/Release/net10.0/Polyplug.Loaders.Python.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/csharp/Loaders/Lua/bin/Release/net10.0/Polyplug.Loaders.Lua.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/csharp/Loaders/Js/bin/Release/net10.0/Polyplug.Loaders.Js.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/csharp/Loaders/Dotnet/bin/Release/net10.0/Polyplug.Loaders.Dotnet.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/Polyplug/bin/Release/net10.0/Polyplug.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/Loaders/Native/bin/Release/net10.0/Polyplug.Loaders.Native.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/Loaders/Python/bin/Release/net10.0/Polyplug.Loaders.Python.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/Loaders/Lua/bin/Release/net10.0/Polyplug.Loaders.Lua.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/Loaders/Js/bin/Release/net10.0/Polyplug.Loaders.Js.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/csharp/host/Loaders/Dotnet/bin/Release/net10.0/Polyplug.Loaders.Dotnet.dll {{dist_dir}}/host-libs/csharp/ 2>/dev/null || true; \
     fi
     @# Lua (pure Lua) - ONLY .lua files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/lua/polyplug
-    @cp {{host_libs_dir}}/lua/polyplug.lua {{dist_dir}}/host-libs/lua/
-    @cp {{host_libs_dir}}/lua/polyplug.d.lua {{dist_dir}}/host-libs/lua/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/lua/polyplug/*.lua {{dist_dir}}/host-libs/lua/polyplug/
+    @cp {{sdks_dir}}/lua/host/polyplug.lua {{dist_dir}}/host-libs/lua/
+    @cp {{sdks_dir}}/lua/host/polyplug.d.lua {{dist_dir}}/host-libs/lua/ 2>/dev/null || true
+    @cp {{sdks_dir}}/lua/host/polyplug/*.lua {{dist_dir}}/host-libs/lua/polyplug/
     @# Lua loaders - ONLY .lua files
     @mkdir -p {{dist_dir}}/host-libs/lua/loaders
-    @cp -r {{host_libs_dir}}/lua/loaders/* {{dist_dir}}/host-libs/lua/loaders/
+    @cp -r {{sdks_dir}}/lua/host/loaders/* {{dist_dir}}/host-libs/lua/loaders/
     @find {{dist_dir}}/host-libs/lua/loaders -name "*.rockspec" -delete 2>/dev/null || true
     @# JS (pure JS) - ONLY .js/.ts files, NO .so files
     @mkdir -p {{dist_dir}}/host-libs/js-deno/polyplug
-    @cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js-deno/
-    @cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true
-    @cp {{host_libs_dir}}/js/polyplug/*.js {{dist_dir}}/host-libs/js-deno/polyplug/
+    @cp {{sdks_dir}}/js/host/polyplug.js {{dist_dir}}/host-libs/js-deno/
+    @cp {{sdks_dir}}/js/host/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true
+    @cp {{sdks_dir}}/js/host/polyplug/*.js {{dist_dir}}/host-libs/js-deno/polyplug/
     @# JS loaders - ONLY .js/.ts files
     @mkdir -p {{dist_dir}}/host-libs/js-deno/loaders
-    @cp -r {{host_libs_dir}}/js/loaders/* {{dist_dir}}/host-libs/js-deno/loaders/
+    @cp -r {{sdks_dir}}/js/host/loaders/* {{dist_dir}}/host-libs/js-deno/loaders/
 
 # Copy guest libraries to dist (library files ONLY - NO build artifacts)
 _dist-copy-guest-libs:
@@ -865,14 +862,14 @@ _prepare-nuget-packages:
     @echo "  [nuget] Preparing packages..."
     @if command -v dotnet >/dev/null 2>&1; then \
         echo "  [nuget] Packing core libraries..."; \
-        dotnet pack {{host_libs_dir}}/csharp/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Polyplug/Polyplug.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         dotnet pack {{sdks_dir}}/csharp/guest/Polyplug.Guest.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] Packing loaders..."; \
-        dotnet pack {{host_libs_dir}}/csharp/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
-        dotnet pack {{host_libs_dir}}/csharp/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
-        dotnet pack {{host_libs_dir}}/csharp/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
-        dotnet pack {{host_libs_dir}}/csharp/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
-        dotnet pack {{host_libs_dir}}/csharp/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Loaders/Native/Polyplug.Loaders.Native.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Loaders/Python/Polyplug.Loaders.Python.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Loaders/Lua/Polyplug.Loaders.Lua.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Loaders/Js/Polyplug.Loaders.Js.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
+        dotnet pack {{sdks_dir}}/csharp/host/Loaders/Dotnet/Polyplug.Loaders.Dotnet.csproj -c Release -o {{dist_dir}}/publish/nuget 2>/dev/null || true; \
         echo "  [nuget] ✓ Packages ready"; \
     else \
         echo "  [nuget] ⊘ dotnet not installed, skipping"; \
@@ -886,9 +883,9 @@ _prepare-pypi-packages:
     @mkdir -p {{dist_dir}}/publish/pypi
     @if command -v uv >/dev/null 2>&1; then \
         echo "  [pypi] Building host library..."; \
-        cp {{host_libs_dir}}/python/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/python/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/python/LICENSE {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/python/host/pyproject.toml {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/python/host/README.md {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/python/host/LICENSE {{dist_dir}}/host-libs/python/ 2>/dev/null || true; \
         cd {{dist_dir}}/host-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building guest library..."; \
         cp {{sdks_dir}}/python/guest/pyproject.toml {{dist_dir}}/guest-libs/python/ 2>/dev/null || true; \
@@ -896,7 +893,7 @@ _prepare-pypi-packages:
         cd {{dist_dir}}/guest-libs/python && uv build --out-dir ../../publish/pypi; \
         echo "  [pypi] Building loaders..."; \
         for loader in native python lua js dotnet; do \
-            loader_dir="{{host_libs_dir}}/python/loaders/polyplug-loaders-$$loader"; \
+            loader_dir="{{sdks_dir}}/python/host/loaders/polyplug-loaders-$$loader"; \
             if [ -d "$$loader_dir" ]; then \
                 echo "  [pypi]   Building polyplug-loaders-$$loader..."; \
                 cd "$$loader_dir" && uv build --out-dir ../../../dist/publish/pypi; \
@@ -915,18 +912,18 @@ _prepare-npm-packages:
     @mkdir -p {{dist_dir}}/publish/npm
     @if command -v npm >/dev/null 2>&1; then \
         echo "  [npm] Packing host library..."; \
-        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/js/host/package.json {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/js/host/README.md {{dist_dir}}/host-libs/js-deno/ 2>/dev/null || true; \
         (cd {{dist_dir}}/host-libs/js-deno && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing guest library..."; \
         cp {{sdks_dir}}/js/guest/package.json {{dist_dir}}/guest-libs/js/ 2>/dev/null || true; \
         (cd {{dist_dir}}/guest-libs/js && npm pack 2>/dev/null && mv *.tgz ../../publish/npm/ 2>/dev/null) || true; \
         echo "  [npm] Packing loaders..."; \
-        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-native 2>/dev/null || true; \
-        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-python 2>/dev/null || true; \
-        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-lua 2>/dev/null || true; \
-        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-js 2>/dev/null || true; \
-        npm pack {{host_libs_dir}}/js/loaders/@polyplug/loaders-dotnet 2>/dev/null || true; \
+        npm pack {{sdks_dir}}/js/host/loaders/@polyplug/loaders-native 2>/dev/null || true; \
+        npm pack {{sdks_dir}}/js/host/loaders/@polyplug/loaders-python 2>/dev/null || true; \
+        npm pack {{sdks_dir}}/js/host/loaders/@polyplug/loaders-lua 2>/dev/null || true; \
+        npm pack {{sdks_dir}}/js/host/loaders/@polyplug/loaders-js 2>/dev/null || true; \
+        npm pack {{sdks_dir}}/js/host/loaders/@polyplug/loaders-dotnet 2>/dev/null || true; \
         mv polyplug-loaders-*.tgz {{dist_dir}}/publish/npm/ 2>/dev/null || true; \
         echo "  [npm] ✓ Packages ready"; \
     else \
@@ -941,13 +938,13 @@ _prepare-luarocks-packages:
     @mkdir -p {{dist_dir}}/publish/luarocks
     @if command -v luarocks >/dev/null 2>&1; then \
         echo "  [luarocks] Copying rockspecs for upload..."; \
-        cp {{host_libs_dir}}/lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/host/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         cp {{sdks_dir}}/lua/guest/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-native/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-python/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-js/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
-        cp {{host_libs_dir}}/lua/loaders/polyplug-loaders-dotnet/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/host/loaders/polyplug-loaders-native/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/host/loaders/polyplug-loaders-python/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/host/loaders/polyplug-loaders-lua/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/host/loaders/polyplug-loaders-js/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
+        cp {{sdks_dir}}/lua/host/loaders/polyplug-loaders-dotnet/*.rockspec {{dist_dir}}/publish/luarocks/ 2>/dev/null || true; \
         echo "  [luarocks] ✓ Rockspecs ready for upload"; \
     else \
         echo "  [luarocks] ⊘ luarocks not installed, skipping"; \
@@ -960,12 +957,12 @@ _prepare-jsr-packages:
     @if command -v deno >/dev/null 2>&1; then \
         echo "  [jsr.io] Preparing host library..."; \
         mkdir -p {{dist_dir}}/host-libs/js-deno/polyplug; \
-        cp {{host_libs_dir}}/js/deno.json {{dist_dir}}/host-libs/js-deno/; \
-        cp {{host_libs_dir}}/js/package.json {{dist_dir}}/host-libs/js-deno/; \
-        cp {{host_libs_dir}}/js/README.md {{dist_dir}}/host-libs/js-deno/; \
-        cp {{host_libs_dir}}/js/polyplug.js {{dist_dir}}/host-libs/js-deno/; \
-        cp {{host_libs_dir}}/js/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/; \
-        cp -r {{host_libs_dir}}/js/polyplug/* {{dist_dir}}/host-libs/js-deno/polyplug/; \
+        cp {{sdks_dir}}/js/host/deno.json {{dist_dir}}/host-libs/js-deno/; \
+        cp {{sdks_dir}}/js/host/package.json {{dist_dir}}/host-libs/js-deno/; \
+        cp {{sdks_dir}}/js/host/README.md {{dist_dir}}/host-libs/js-deno/; \
+        cp {{sdks_dir}}/js/host/polyplug.js {{dist_dir}}/host-libs/js-deno/; \
+        cp {{sdks_dir}}/js/host/polyplug.d.ts {{dist_dir}}/host-libs/js-deno/; \
+        cp -r {{sdks_dir}}/js/host/polyplug/* {{dist_dir}}/host-libs/js-deno/polyplug/; \
         (cd {{dist_dir}}/host-libs/js-deno && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing guest library..."; \
         mkdir -p {{dist_dir}}/guest-libs/js; \
@@ -976,7 +973,7 @@ _prepare-jsr-packages:
         (cd {{dist_dir}}/guest-libs/js && deno publish --dry-run 2>&1 | head -20) || true; \
         echo "  [jsr.io] Preparing loaders..."; \
         for loader in native python lua js dotnet; do \
-            src_dir="{{host_libs_dir}}/js/loaders/@polyplug/loaders-$$loader"; \
+            src_dir="{{sdks_dir}}/js/host/loaders/@polyplug/loaders-$$loader"; \
             dst_dir="{{dist_dir}}/host-libs/js-deno/loaders/@polyplug/loaders-$$loader"; \
             if [ -d "$$src_dir" ]; then \
                 echo "  [jsr.io]   Preparing @polyplug/loaders-$$loader..."; \

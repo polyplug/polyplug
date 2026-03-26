@@ -4,8 +4,8 @@
  * @description Pipeline Host — Deno host demonstrating polyplug usage.
  */
 
-import { openPolyplug, runtimeNew, NULL_HANDLE, onReload, setConfig } from "../../../host-libs/js-deno/polyplug.js";
-import { RuntimeConfig } from "../../../host-libs/js-deno/polyplug/runtime_config.js";
+import { openPolyplug, runtimeNew, NULL_HANDLE, onReload, setConfig } from "../../../sdks/js/host/polyplug.js";
+import { RuntimeConfig } from "../../../sdks/js/host/polyplug/runtime_config.js";
 import { ContractIds } from "./generated/host/callers.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")

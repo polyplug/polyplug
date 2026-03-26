@@ -1,4 +1,4 @@
--- host-libs/lua/polyplug/reload_phase.lua
+-- sdks/lua/host/polyplug/reload_phase.lua
 -- ReloadPhase type for hot-reload notifications.
 
 local M = {}

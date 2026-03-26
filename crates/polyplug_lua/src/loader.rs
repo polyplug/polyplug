@@ -28,7 +28,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
 use polyplug_abi::contract_id;
 
-/// The path to the guest-libs/lua/ directory, set at compile time by build.rs.
+/// The path to the sdks/lua/guest/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
 
 /// The path to the abi/lua/ directory, set at compile time by build.rs.

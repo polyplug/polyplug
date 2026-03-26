@@ -1,7 +1,7 @@
 // tests/integration/cpp/hot_reload_test.cpp
 // Unit tests for ReloadPhase and RuntimeConfig types.
 //
-// Compile with: g++ -std=c++17 -I../../../host-libs/cpp hot_reload_test.cpp -o hot_reload_test
+// Compile with: g++ -std=c++17 -I../../../sdks/cpp/host hot_reload_test.cpp -o hot_reload_test
 // Run: ./hot_reload_test
 
 #include <cassert>

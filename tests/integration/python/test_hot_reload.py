@@ -8,9 +8,10 @@ import sys
 import os
 import unittest
 
-# Add host-libs/python to path
+# Add sdks/python/host to path
 sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "host-libs", "python")
+    0,
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "sdks", "python", "host"),
 )
 
 from polyplug.abi import ReloadPhase, ReloadPhaseType

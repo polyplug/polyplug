@@ -28,25 +28,25 @@ Update the version in all relevant files:
 sed -i 's/version = "0.1.0"/version = "0.2.0"/g' Cargo.toml
 
 # Update host library versions
-sed -i 's/<Version>0.1.0</<Version>0.2.0</g' host-libs/csharp/Polyplug/Polyplug.csproj
-sed -i 's/<Version>0.1.0</<Version>0.2.0</g' host-libs/csharp/Loaders/*/*.csproj
-sed -i 's/version = "0.1.0"/version = "0.2.0"/g' host-libs/python/pyproject.toml
-sed -i 's/version = "0.1.0"/version = "0.2.0"/g' host-libs/python/loaders/*/pyproject.toml
-sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' host-libs/js-deno/package.json
-sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' host-libs/js-deno/loaders/@polyplug/*/package.json
-sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' guest-libs/js/package.json
-sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' guest-libs/python/pyproject.toml
+sed -i 's/<Version>0.1.0</<Version>0.2.0</g' sdks/csharp/host/Polyplug/Polyplug.csproj
+sed -i 's/<Version>0.1.0</<Version>0.2.0</g' sdks/csharp/host/Loaders/*/*.csproj
+sed -i 's/version = "0.1.0"/version = "0.2.0"/g' sdks/python/host/pyproject.toml
+sed -i 's/version = "0.1.0"/version = "0.2.0"/g' sdks/python/host/loaders/*/pyproject.toml
+sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' sdks/js/host/package.json
+sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' sdks/js/host/loaders/@polyplug/*/package.json
+sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' sdks/js/guest/package.json
+sed -i 's/"version": "0.1.0"/"version": "0.2.0"/g' sdks/python/guest/pyproject.toml
 
 # Update LuaRocks versions (format: version-revision)
 # First update content, then rename files
-sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' host-libs/lua/*.rockspec
-sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' host-libs/lua/loaders/*/*.rockspec
-sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' guest-libs/lua/*.rockspec
-mv host-libs/lua/polyplug-0.1.0-1.rockspec host-libs/lua/polyplug-0.2.0-1.rockspec
-mv guest-libs/lua/polyplug-guest-0.1.0-1.rockspec guest-libs/lua/polyplug-guest-0.2.0-1.rockspec
+sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' sdks/lua/host/*.rockspec
+sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' sdks/lua/host/loaders/*/*.rockspec
+sed -i 's/version = "0.1.0-1"/version = "0.2.0-1"/g' sdks/lua/guest/*.rockspec
+mv sdks/lua/host/polyplug-0.1.0-1.rockspec sdks/lua/host/polyplug-0.2.0-1.rockspec
+mv sdks/lua/guest/polyplug-guest-0.1.0-1.rockspec sdks/lua/guest/polyplug-guest-0.2.0-1.rockspec
 for loader in native python lua js dotnet; do
-  mv host-libs/lua/loaders/polyplug-loaders-$loader/polyplug-loaders-$loader-0.1.0-1.rockspec \
-     host-libs/lua/loaders/polyplug-loaders-$loader/polyplug-loaders-$loader-0.2.0-1.rockspec 2>/dev/null || true
+  mv sdks/lua/host/loaders/polyplug-loaders-$loader/polyplug-loaders-$loader-0.1.0-1.rockspec \
+     sdks/lua/host/loaders/polyplug-loaders-$loader/polyplug-loaders-$loader-0.2.0-1.rockspec 2>/dev/null || true
 done
 ```
 

@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2
-INCLUDES = -I../../../host-libs/cpp
+INCLUDES = -I../../../sdks/cpp/host
 
 # Library paths
 LIBS_DIR = ../../../target/release/deps

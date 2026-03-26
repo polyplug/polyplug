@@ -7,7 +7,7 @@ contract in Rust.
 > **Who is this for?**
 > You are writing a shared library (`.so` / `.dylib` / `.dll`) that will be loaded by a
 > polyplug host at runtime. You are **not** writing a host application — see
-> `host-libs/rust/` for that.
+> `crates/polyplug/` for that.
 
 ---
 
