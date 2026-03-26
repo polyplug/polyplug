@@ -369,6 +369,20 @@ pub struct Runtime {
 - `OnceLock`, `LazyLock`, `Lazy` for runtime data
 - Any pattern that shares state across Runtime instances
 
+### Known Limitations (External Runtime Constraints)
+
+**Python Loader**: The CPython interpreter can only be initialized **once per process**. The `polyplug_python` loader uses `static PYTHON_INIT: OnceLock<()>` to ensure single initialization. This means:
+- Multiple `Runtime` instances in the same process share the same Python interpreter
+- Python plugins from different runtimes can see each other's modules/state
+- For full isolation with Python, use separate processes
+
+**CLR / .NET Loader**: The .NET CLR can only be initialized **once per process**. The `polyplug_dotnet` loader uses `static CLR_CONTEXT: OnceCell<...>` to ensure single initialization. This means:
+- Multiple `Runtime` instances in the same process share the same CLR runtime
+- .NET assemblies from different runtimes share the same loader cache
+- For full isolation with .NET, use separate processes
+
+**Lua, JavaScript (QuickJS), and Native loaders**: Fully compliant with runtime isolation. Each bundle gets its own isolated VM.
+
 ---
 
 ## Project Structure
