@@ -64,3 +64,40 @@ def split(sv: StringView, delimiter: str) -> list[str]:
         List of strings resulting from the split
     """
     return to_str(sv).split(delimiter)
+
+
+def str_as_view(s: str) -> StringView:
+    """Create StringView from Python str (borrowed).
+
+    Warning: The StringView is only valid while the Python string exists.
+
+    Args:
+        s: Python string
+
+    Returns:
+        StringView pointing to Python string memory
+    """
+    from polyplug_abi.abi import StringView
+
+    data: bytes = s.encode("utf-8")
+    return StringView(ctypes.cast(data, ctypes.POINTER(ctypes.c_uint8)), len(data))
+
+
+def str_as_view_owned(s: str) -> StringView:
+    """Create StringView from Python str (owned copy).
+
+    The returned StringView points to allocated memory that must be freed.
+
+    Args:
+        s: Python string
+
+    Returns:
+        StringView pointing to allocated memory
+    """
+    from polyplug_abi.abi import StringView
+
+    data: bytes = s.encode("utf-8")
+    ptr: ctypes.POINTER(ctypes.c_uint8) = ctypes.cast(
+        ctypes.create_string_buffer(data, len(data)), ctypes.POINTER(ctypes.c_uint8)
+    )
+    return StringView(ptr, len(data))

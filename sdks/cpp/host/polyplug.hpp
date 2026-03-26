@@ -15,7 +15,7 @@
 #pragma once
 
 #include "../abi/polyplug/abi.hpp"
+#include "../abi/polyplug/string_view_helper.hpp"
 #include "polyplug/handle.hpp"
 #include "polyplug/error.hpp"
 #include "polyplug/runtime.hpp"
-#include "polyplug/helpers.hpp"

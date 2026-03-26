@@ -421,6 +421,11 @@ fmt:
 check: fmt-check lint
     @echo "=== All Checks Passed ==="
 
+# Validate SDK consistency across all languages
+validate-sdks:
+    @echo "=== Validating SDK Consistency ==="
+    cargo run -p sdk-validator -- --config sdk-validator.yaml
+
 # ============================================================================
 # Examples
 # ============================================================================

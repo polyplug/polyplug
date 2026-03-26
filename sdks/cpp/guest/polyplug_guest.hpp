@@ -17,6 +17,6 @@
 #pragma once
 
 #include "../abi/polyplug/abi.hpp"
+#include "../abi/polyplug/string_view_helper.hpp"
 #include "polyplug/contract.hpp"
 #include "polyplug/guest.hpp"
-#include "polyplug/helpers.hpp"

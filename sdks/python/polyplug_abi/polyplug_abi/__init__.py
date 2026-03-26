@@ -39,11 +39,13 @@ from polyplug_abi.abi import (
     FNV_OFFSET,
     FNV_PRIME,
 )
-from polyplug_abi.helpers import (
+from polyplug_abi.string_view_helper import (
     to_str,
     strip_prefix,
     starts_with,
     split,
+    str_as_view,
+    str_as_view_owned,
 )
 
 
@@ -136,4 +138,6 @@ __all__ = [
     "strip_prefix",
     "starts_with",
     "split",
+    "str_as_view",
+    "str_as_view_owned",
 ]

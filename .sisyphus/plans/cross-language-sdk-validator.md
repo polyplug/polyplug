@@ -256,7 +256,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
 
 ## TODOs
 
-- [ ] 1. Create sdk-validator crate structure
+- [x] 1. Create sdk-validator crate structure
 
   **What to do**:
   - Create `crates/sdk-validator/` directory
@@ -301,7 +301,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): create sdk-validator crate structure`
   - Files: `crates/sdk-validator/**`
 
-- [ ] 2. Implement YAML config parser
+- [x] 2. Implement YAML config parser
 
   **What to do**:
   - Define Rust structs for config: version, methods (HashMap<String, Vec<String>>), naming (HashMap<String, String>), targets (HashMap<String, Vec<String>>)
@@ -346,7 +346,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement YAML config parser`
   - Files: `crates/sdk-validator/src/config.rs`, `crates/sdk-validator/src/main.rs`
 
-- [ ] 3. Design ast-grep CLI orchestrator
+- [x] 3. Design ast-grep CLI orchestrator
 
   **What to do**:
   - Define `AstGrepRunner` struct that runs ast-grep CLI via subprocess
@@ -390,7 +390,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): design ast-grep CLI orchestrator`
   - Files: `crates/sdk-validator/src/ast_grep.rs`, `crates/sdk-validator/src/naming.rs`
 
-- [ ] 4. Rust validator (ast-grep CLI)
+- [x] 4. Rust validator (ast-grep CLI)
 
   **What to do**:
   - Implement `RustValidator` struct
@@ -436,7 +436,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement Rust validator via ast-grep CLI`
   - Files: `crates/sdk-validator/src/languages/rust.rs`
 
-- [ ] 5. Python validator (ast-grep CLI)
+- [x] 5. Python validator (ast-grep CLI)
 
   **What to do**:
   - Implement `PythonValidator` struct
@@ -481,7 +481,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement Python validator via ast-grep CLI`
   - Files: `crates/sdk-validator/src/languages/python.rs`
 
-- [ ] 6. C# validator (ast-grep CLI)
+- [x] 6. C# validator (ast-grep CLI)
 
   **What to do**:
   - Implement `CSharpValidator` struct
@@ -526,7 +526,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement C# validator via ast-grep CLI`
   - Files: `crates/sdk-validator/src/languages/csharp.rs`
 
-- [ ] 7. C++ validator (ast-grep CLI)
+- [x] 7. C++ validator (ast-grep CLI)
 
   **What to do**:
   - Implement `CppValidator` struct
@@ -571,7 +571,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement C++ validator via ast-grep CLI`
   - Files: `crates/sdk-validator/src/languages/cpp.rs`
 
-- [ ] 8. JS/TS validator (ast-grep CLI)
+- [x] 8. JS/TS validator (ast-grep CLI)
 
   **What to do**:
   - Implement `JsValidator` struct
@@ -616,7 +616,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement JS/TS validator via ast-grep CLI`
   - Files: `crates/sdk-validator/src/languages/js.rs`
 
-- [ ] 9. Lua validator (tree-sitter)
+- [x] 9. Lua validator (tree-sitter)
 
   **What to do**:
   - Implement `LuaValidator` struct
@@ -661,7 +661,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement Lua validator via tree-sitter`
   - Files: `crates/sdk-validator/src/languages/lua.rs`
 
-- [ ] 10. Result aggregation logic
+- [x] 10. Result aggregation logic
 
   **What to do**:
   - Aggregate results from all 6 language validators
@@ -701,7 +701,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement result aggregation`
   - Files: `crates/sdk-validator/src/aggregator.rs`
 
-- [ ] 11. Report generator (table + JSON)
+- [x] 11. Report generator (table + JSON)
 
   **What to do**:
   - Implement `Reporter` struct
@@ -748,7 +748,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement report generator`
   - Files: `crates/sdk-validator/src/reporter.rs`
 
-- [ ] 12. CLI interface (args, exit codes)
+- [x] 12. CLI interface (args, exit codes)
 
   **What to do**:
   - Implement CLI using clap
@@ -789,7 +789,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `feat(validator): implement CLI interface`
   - Files: `crates/sdk-validator/src/main.rs`, `crates/sdk-validator/src/cli.rs`
 
-- [ ] 13. GitHub Actions workflow
+- [x] 13. GitHub Actions workflow
 
   **What to do**:
   - Create `.github/workflows/sdk-validation.yml`
@@ -834,7 +834,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `ci: add SDK validation workflow`
   - Files: `.github/workflows/sdk-validation.yml`
 
-- [ ] 14. Create sdk-validator.yaml config
+- [x] 14. Create sdk-validator.yaml config
 
   **What to do**:
   - Create root-level `sdk-validator.yaml`
@@ -875,7 +875,7 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
   - Message: `config: add sdk-validator.yaml`
   - Files: `sdk-validator.yaml`
 
-- [ ] 15. Documentation
+- [x] 15. Documentation
 
   **What to do**:
   - Add README.md for sdk-validator
@@ -919,17 +919,17 @@ Parallel Speedup: ~70% faster than sequential (6 validators in parallel)
 
 ## Final Verification Wave
 
-- [ ] F1. **End-to-end test** — `deep`
+- [x] F1. **End-to-end test** — `deep`
   Run complete validation: `cargo run --package sdk-validator -- --config sdk-validator.yaml --fail-on-missing`
   Verify: detects all current gaps, produces correct report, exits with code 1
   Output: `Exit code: 1 | StringView: 1/6 methods complete | ends_with missing in all languages`
 
-- [ ] F2. **Code quality review** — `unspecified-high`
+- [x] F2. **Code quality review** — `unspecified-high`
   Run `cargo clippy --package sdk-validator`, `cargo fmt --check`, `cargo test --package sdk-validator`
   Review: all validators follow patterns, no unwrap() in production code, proper error types
   Output: `Clippy: 0 warnings | Tests: N/N pass | VERDICT`
 
-- [ ] F3. **Final verification** — `oracle`
+- [x] F3. **Final verification** — `oracle`
   Verify: ALL 6 languages validated, YAML config correct, CI workflow present, exit codes correct
   Check: matches user's "simple struct→methods list" requirement
   Output: `Compliant: YES/NO | Issues: [list if any]`

@@ -68,5 +68,30 @@ inline std::vector<std::string_view> split(StringView sv, char delimiter) {
     return result;
 }
 
+/// Create StringView from string literal (borrowed)
+inline StringView string_view(const char* s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s), std::strlen(s)};
+}
+
+/// Create StringView from std::string (borrowed - ensure string outlives view)
+inline StringView string_view(const std::string& s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
+}
+
+/// Create StringView from std::string_view (borrowed)
+inline StringView string_view(std::string_view s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
+}
+
+/// Allocate StringView from std::string using host allocator
+inline StringView alloc_string(const std::string& s) {
+    auto* ptr = static_cast<uint8_t*>(polyplug_host_alloc(s.size(), 1));
+    if (!ptr) {
+        return StringView{nullptr, 0};
+    }
+    std::memcpy(ptr, s.data(), s.size());
+    return StringView{ptr, s.size()};
+}
+
 } // namespace abi
 } // namespace polyplug
