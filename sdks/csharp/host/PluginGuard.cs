@@ -5,55 +5,72 @@ namespace Polyplug.Host;
 
 /// <summary>
 /// Guard for a resolved plugin handle.
-/// Stores runtime + handle for hot-reload safety.
-/// Re-resolves vtable on each call to detect stale handles.
+/// Holds a ref-counted ResolveHandle that keeps the vtable alive.
+/// Must call Release() or let the finalizer release the handle.
 /// </summary>
-public readonly struct PluginGuard
+public sealed class PluginGuard : IDisposable
 {
-    private readonly nint _rt;
-    private readonly ulong _handle;
+    private nint _resolveHandle;
 
-    internal PluginGuard(nint rt, ulong handle)
+    internal PluginGuard(nint resolveHandle)
     {
-        _rt = rt;
-        _handle = handle;
+        _resolveHandle = resolveHandle;
     }
 
     /// <summary>
-    /// Re-resolves vtable on each call (hot-reload safe).
-    /// Returns nint.Zero if this is a null guard or resolution fails.
+    /// Get the vtable pointer from the ResolveHandle.
+    /// Returns nint.Zero if this guard is null or has been released.
     /// </summary>
-    public readonly nint GetVTable()
+    public nint GetVTable()
     {
-        if (_rt == nint.Zero || _handle == ulong.MaxValue)
+        if (_resolveHandle == nint.Zero)
         {
             return nint.Zero;
         }
 
-        return NativeMethods.PolyplugRuntimeResolvePlugin(_rt, _handle);
+        // ResolveHandle's first field is the vtable pointer (PluginInterface*)
+        unsafe
+        {
+            return *(nint*)_resolveHandle;
+        }
     }
 
     /// <summary>
-    /// Returns the stored handle.
+    /// Returns true if this guard is null (no resolve handle).
     /// </summary>
-    public readonly ulong GetHandle()
+    public bool IsNull()
     {
-        return _handle;
+        return _resolveHandle == nint.Zero;
     }
 
     /// <summary>
-    /// Returns true if this guard is null (no runtime or null handle).
+    /// Release the resolve handle.
     /// </summary>
-    public readonly bool IsNull()
+    public void Release()
     {
-        return _rt == nint.Zero || _handle == ulong.MaxValue;
+        if (_resolveHandle != nint.Zero)
+        {
+            NativeMethods.PolyplugRuntimeReleasePlugin(_resolveHandle);
+            _resolveHandle = nint.Zero;
+        }
     }
 
     /// <summary>
-    /// Returns a null guard (no runtime, null handle).
+    /// Returns a null guard (no resolve handle).
     /// </summary>
     public static PluginGuard Reset()
     {
-        return new PluginGuard(nint.Zero, ulong.MaxValue);
+        return new PluginGuard(nint.Zero);
+    }
+
+    ~PluginGuard()
+    {
+        Release();
+    }
+
+    public void Dispose()
+    {
+        Release();
+        GC.SuppressFinalize(this);
     }
 }

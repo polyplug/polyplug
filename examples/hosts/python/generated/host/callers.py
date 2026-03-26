@@ -7,20 +7,12 @@ import ctypes
 from typing import Callable, Optional, TypeAlias
 
 from polyplug import PluginGuard, Runtime
-from polyplug.abi import (
-    ABI_OK,
-    ABI_ERROR_GENERIC,
-    ABI_FUNCTION_NOT_AVAIL,
-    NULL_HANDLE,
-    StringView,
-)
-
+from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, ABI_FUNCTION_NOT_AVAIL, NULL_HANDLE, PluginInterface, StringView
 
 class ContractError(Exception):
     def __init__(self, message: str, code: int = ABI_ERROR_GENERIC) -> None:
         super().__init__(message)
         self.code: int = code
-
 
 # Contract ID constants
 PIPELINE_DECODER_CONTRACT_ID: int = 0x12F3C106B0C3DC1E
@@ -30,20 +22,16 @@ DATA_REPORTER_CONTRACT_ID: int = 0x81D41D43E511D297
 PIPELINE_VALIDATOR_CONTRACT_ID: int = 0xA553FAB5D11C7AF0
 
 POLYPLUG_ABI_VERSION: int = 1
-
-
 class _AbiError(ctypes.Structure):
     _fields_ = [
-        ("code", ctypes.c_uint32),
-        ("_pad", ctypes.c_uint32),
-        ("message_ptr", ctypes.c_void_p),
-        ("message_len", ctypes.c_size_t),
+        ('code', ctypes.c_uint32),
+        ('_pad', ctypes.c_uint32),
+        ('message_ptr', ctypes.c_void_p),
+        ('message_len', ctypes.c_size_t),
     ]
-
 
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]
-
 
 class PipelineDecoderContractCaller:
     """Host caller for contract `pipeline.Decoder` with hot-reload support."""
@@ -65,34 +53,24 @@ class PipelineDecoderContractCaller:
         return not self._guard.is_null()
 
     def reset(self) -> None:
-        self._guard = PluginGuard.__new__(PluginGuard)
-        self._guard._backend = None
-        self._guard._runtime = 0
-        self._guard._handle = NULL_HANDLE
+        self._guard.reset()
 
     def __bool__(self) -> bool:
         return self.is_valid()
 
     def decode(self, input: StringView) -> StringView:
-        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input), ctypes.c_void_p)
+        input_val: StringView = StringView(input)
+        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        function_count: int = ctypes.cast(
-            vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)
-        ).contents.value
-        if 0 >= function_count:
+        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
-        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        functions_ptr: int = ctypes.cast(
-            vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
-        fn_ptr: int = ctypes.cast(
-            functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
+        functions_ptr: int = vtable.dispatch.native.functions
+        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
         if err.code != ABI_OK:
@@ -120,37 +98,24 @@ class DataTransformerContractCaller:
         return not self._guard.is_null()
 
     def reset(self) -> None:
-        self._guard = PluginGuard.__new__(PluginGuard)
-        self._guard._backend = None
-        self._guard._runtime = 0
-        self._guard._handle = NULL_HANDLE
+        self._guard.reset()
 
     def __bool__(self) -> bool:
         return self.is_valid()
 
     def transform(self, input: StringView) -> StringView:
-        
-        args_ptr: ctypes.c_void_p = ctypes.cast(
-            ctypes.byref(input), ctypes.c_void_p
-        )
+        input_val: StringView = StringView(input)
+        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        function_count: int = ctypes.cast(
-            vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)
-        ).contents.value
-        if 0 >= function_count:
+        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
-        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        functions_ptr: int = ctypes.cast(
-            vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
-        fn_ptr: int = ctypes.cast(
-            functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
+        functions_ptr: int = vtable.dispatch.native.functions
+        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
         if err.code != ABI_OK:
@@ -178,37 +143,24 @@ class PipelineEncoderContractCaller:
         return not self._guard.is_null()
 
     def reset(self) -> None:
-        self._guard = PluginGuard.__new__(PluginGuard)
-        self._guard._backend = None
-        self._guard._runtime = 0
-        self._guard._handle = NULL_HANDLE
+        self._guard.reset()
 
     def __bool__(self) -> bool:
         return self.is_valid()
 
     def encode(self, input: StringView) -> StringView:
-        
-        args_ptr: ctypes.c_void_p = ctypes.cast(
-            ctypes.byref(input), ctypes.c_void_p
-        )
+        input_val: StringView = StringView(input)
+        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        function_count: int = ctypes.cast(
-            vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)
-        ).contents.value
-        if 0 >= function_count:
+        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
-        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        functions_ptr: int = ctypes.cast(
-            vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
-        fn_ptr: int = ctypes.cast(
-            functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
+        functions_ptr: int = vtable.dispatch.native.functions
+        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
         if err.code != ABI_OK:
@@ -236,37 +188,24 @@ class DataReporterContractCaller:
         return not self._guard.is_null()
 
     def reset(self) -> None:
-        self._guard = PluginGuard.__new__(PluginGuard)
-        self._guard._backend = None
-        self._guard._runtime = 0
-        self._guard._handle = NULL_HANDLE
+        self._guard.reset()
 
     def __bool__(self) -> bool:
         return self.is_valid()
 
     def report(self, input: StringView) -> StringView:
-        
-        args_ptr: ctypes.c_void_p = ctypes.cast(
-            ctypes.byref(input), ctypes.c_void_p
-        )
+        input_val: StringView = StringView(input)
+        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        function_count: int = ctypes.cast(
-            vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)
-        ).contents.value
-        if 0 >= function_count:
+        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
-        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        functions_ptr: int = ctypes.cast(
-            vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
-        fn_ptr: int = ctypes.cast(
-            functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
+        functions_ptr: int = vtable.dispatch.native.functions
+        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
         if err.code != ABI_OK:
@@ -294,39 +233,28 @@ class PipelineValidatorContractCaller:
         return not self._guard.is_null()
 
     def reset(self) -> None:
-        self._guard = PluginGuard.__new__(PluginGuard)
-        self._guard._backend = None
-        self._guard._runtime = 0
-        self._guard._handle = NULL_HANDLE
+        self._guard.reset()
 
     def __bool__(self) -> bool:
         return self.is_valid()
 
     def validate(self, input: StringView) -> StringView:
-        
-        args_ptr: ctypes.c_void_p = ctypes.cast(
-            ctypes.byref(input), ctypes.c_void_p
-        )
+        input_val: StringView = StringView(input)
+        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        # Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        function_count: int = ctypes.cast(
-            vtable_ptr + 12, ctypes.POINTER(ctypes.c_uint32)
-        ).contents.value
-        if 0 >= function_count:
+        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
-        # Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        functions_ptr: int = ctypes.cast(
-            vtable_ptr + 16, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
-        fn_ptr: int = ctypes.cast(
-            functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)
-        ).contents.value
+        functions_ptr: int = vtable.dispatch.native.functions
+        fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
         if err.code != ABI_OK:
             raise RuntimeError("polyplug call failed")
         return out_val
+
+

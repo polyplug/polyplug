@@ -9,16 +9,16 @@
 use super::types::*;
 use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_ERROR_GENERIC;
-use polyplug_abi::ABI_ERROR_NOT_FOUND;
-use polyplug_abi::ABI_ERROR_STALE_HANDLE;
-use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_ERROR_GENERIC;
+use polyplug_abi::ABI_ERROR_NOT_FOUND;
+use polyplug_abi::ABI_ERROR_STALE_HANDLE;
+use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
+use polyplug_abi::ABI_OK;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -75,12 +75,18 @@ impl PipelineDecoderContract {
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: ABI_FUNCTION_NOT_AVAIL,
-                    message: polyplug_abi::StringView::null(),
+                    message: polyplug_abi::StringView::from_static(
+                        b"function not available in vtable",
+                    ),
                 }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        // SAFETY: Transmuting *const () to a function pointer is sound because:
+                        // - Function pointers have the same size and alignment as data pointers on all supported platforms
+                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        //   with the exact signature: unsafe extern "C" fn(*const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                             core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
@@ -95,9 +101,30 @@ impl PipelineDecoderContract {
             }
         };
         if err.code != ABI_OK {
+            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
+                String::new()
+            } else {
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
+                // allocated by the plugin via host_alloc. We read it before freeing.
+                let s: String = unsafe {
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    core::str::from_utf8_unchecked(slice).to_owned()
+                };
+                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
+                // We must free it after reading to avoid memory leak.
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
+                s
+            };
             return Err(ContractError {
                 code: err.code,
-                message: String::new(),
+                message,
             });
         }
         Ok(out_val)
@@ -140,12 +167,18 @@ impl DataTransformerContract {
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: ABI_FUNCTION_NOT_AVAIL,
-                    message: polyplug_abi::StringView::null(),
+                    message: polyplug_abi::StringView::from_static(
+                        b"function not available in vtable",
+                    ),
                 }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        // SAFETY: Transmuting *const () to a function pointer is sound because:
+                        // - Function pointers have the same size and alignment as data pointers on all supported platforms
+                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        //   with the exact signature: unsafe extern "C" fn(*const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                             core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
@@ -160,9 +193,30 @@ impl DataTransformerContract {
             }
         };
         if err.code != ABI_OK {
+            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
+                String::new()
+            } else {
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
+                // allocated by the plugin via host_alloc. We read it before freeing.
+                let s: String = unsafe {
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    core::str::from_utf8_unchecked(slice).to_owned()
+                };
+                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
+                // We must free it after reading to avoid memory leak.
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
+                s
+            };
             return Err(ContractError {
                 code: err.code,
-                message: String::new(),
+                message,
             });
         }
         Ok(out_val)
@@ -205,12 +259,18 @@ impl PipelineEncoderContract {
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: ABI_FUNCTION_NOT_AVAIL,
-                    message: polyplug_abi::StringView::null(),
+                    message: polyplug_abi::StringView::from_static(
+                        b"function not available in vtable",
+                    ),
                 }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        // SAFETY: Transmuting *const () to a function pointer is sound because:
+                        // - Function pointers have the same size and alignment as data pointers on all supported platforms
+                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        //   with the exact signature: unsafe extern "C" fn(*const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                             core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
@@ -225,9 +285,30 @@ impl PipelineEncoderContract {
             }
         };
         if err.code != ABI_OK {
+            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
+                String::new()
+            } else {
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
+                // allocated by the plugin via host_alloc. We read it before freeing.
+                let s: String = unsafe {
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    core::str::from_utf8_unchecked(slice).to_owned()
+                };
+                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
+                // We must free it after reading to avoid memory leak.
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
+                s
+            };
             return Err(ContractError {
                 code: err.code,
-                message: String::new(),
+                message,
             });
         }
         Ok(out_val)
@@ -270,12 +351,18 @@ impl DataReporterContract {
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: ABI_FUNCTION_NOT_AVAIL,
-                    message: polyplug_abi::StringView::null(),
+                    message: polyplug_abi::StringView::from_static(
+                        b"function not available in vtable",
+                    ),
                 }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        // SAFETY: Transmuting *const () to a function pointer is sound because:
+                        // - Function pointers have the same size and alignment as data pointers on all supported platforms
+                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        //   with the exact signature: unsafe extern "C" fn(*const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                             core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
@@ -290,9 +377,30 @@ impl DataReporterContract {
             }
         };
         if err.code != ABI_OK {
+            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
+                String::new()
+            } else {
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
+                // allocated by the plugin via host_alloc. We read it before freeing.
+                let s: String = unsafe {
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    core::str::from_utf8_unchecked(slice).to_owned()
+                };
+                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
+                // We must free it after reading to avoid memory leak.
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
+                s
+            };
             return Err(ContractError {
                 code: err.code,
-                message: String::new(),
+                message,
             });
         }
         Ok(out_val)
@@ -335,12 +443,18 @@ impl PipelineValidatorContract {
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: ABI_FUNCTION_NOT_AVAIL,
-                    message: polyplug_abi::StringView::null(),
+                    message: polyplug_abi::StringView::from_static(
+                        b"function not available in vtable",
+                    ),
                 }
             } else {
                 match vtable.dispatch_type {
                     DispatchType::Native => {
                         let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        // SAFETY: Transmuting *const () to a function pointer is sound because:
+                        // - Function pointers have the same size and alignment as data pointers on all supported platforms
+                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        //   with the exact signature: unsafe extern "C" fn(*const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                             core::mem::transmute(fn_ptr);
                         dispatch_fn(args_ptr, out_ptr)
@@ -355,9 +469,30 @@ impl PipelineValidatorContract {
             }
         };
         if err.code != ABI_OK {
+            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {
+                String::new()
+            } else {
+                // SAFETY: err.message.ptr is valid for err.message.len bytes and points to UTF-8 data
+                // allocated by the plugin via host_alloc. We read it before freeing.
+                let s: String = unsafe {
+                    let slice: &[u8] =
+                        core::slice::from_raw_parts(err.message.ptr, err.message.len);
+                    core::str::from_utf8_unchecked(slice).to_owned()
+                };
+                // SAFETY: err.message.ptr was allocated by the plugin via host_alloc with align 1.
+                // We must free it after reading to avoid memory leak.
+                unsafe {
+                    polyplug_abi::ffi::polyplug_host_free(
+                        err.message.ptr as *mut u8,
+                        err.message.len,
+                        1,
+                    )
+                };
+                s
+            };
             return Err(ContractError {
                 code: err.code,
-                message: String::new(),
+                message,
             });
         }
         Ok(out_val)

@@ -44,6 +44,7 @@ const SYMBOLS = {
   polyplug_runtime_find_by_bundle: { parameters: ["pointer", "u64", "u64", "u32"], result: "u64" },
   polyplug_runtime_find_all_by_contract: { parameters: ["pointer", "u64", "u32", "pointer", "usize"], result: "usize" },
   polyplug_runtime_resolve_plugin: { parameters: ["pointer", "u64"], result: "pointer" },
+  polyplug_runtime_release_plugin: { parameters: ["pointer"], result: "void" },
   polyplug_runtime_last_error: { parameters: ["pointer", "pointer", "usize"], result: "usize" },
   polyplug_runtime_error_message_len: { parameters: ["pointer"], result: "usize" },
   polyplug_runtime_create_with_options: { parameters: ["pointer"], result: "pointer" },
@@ -264,43 +265,70 @@ export class Runtime {
 }
 
 /**
- * Guard stores runtime + handle for hot-reload safety.
- * Re-resolves vtable on each call to detect stale handles after hot-reload.
+ * Guard holds a ref-counted ResolveHandle that keeps the vtable alive.
+ * Must call reset() to release the handle when done.
  */
 export class Guard {
   #runtime;
-  #handle;
+  #resolveHandle;
 
   /**
    * @param {Runtime} runtime - Runtime instance
-   * @param {bigint} handle - Packed plugin handle
+   * @param {bigint} packedHandle - Packed plugin handle
    */
-  constructor(runtime, handle) {
+  constructor(runtime, packedHandle) {
     this.#runtime = runtime;
-    this.#handle = handle;
+    this.#resolveHandle = runtime.lib().symbols.polyplug_runtime_resolve_plugin(
+      runtime.ptr(),
+      packedHandle
+    );
   }
 
   /**
-   * Get the packed handle.
-   * @returns {bigint}
+   * Get the vtable pointer from the ResolveHandle.
+   * @returns {Deno.PointerValue | null}
    */
-  handle() {
-    return this.#handle;
+  vtable() {
+    if (this.#resolveHandle === null) {
+      return null;
+    }
+    // ResolveHandle's first field is the vtable pointer
+    const vtablePtr = new Deno.UnsafePointerView(this.#resolveHandle).getBigUint64(0);
+    return Deno.UnsafePointer.create(vtablePtr);
   }
 
   /**
-   * Internal: resolve vtable for this call (hot-reload safe).
+   * Check if this guard is valid.
+   * @returns {boolean}
+   */
+  isValid() {
+    return this.#resolveHandle !== null;
+  }
+
+  /**
+   * Release the resolve handle.
+   */
+  reset() {
+    if (this.#resolveHandle !== null) {
+      this.#runtime.lib().symbols.polyplug_runtime_release_plugin(this.#resolveHandle);
+      this.#resolveHandle = null;
+    }
+  }
+
+  [Symbol.dispose]() {
+    this.reset();
+  }
+
+  /**
+   * Internal: resolve vtable for call (backwards compat).
    * @returns {Deno.PointerValue}
    */
   #resolveVtable() {
-    const vtablePtr = this.#runtime.lib().symbols.polyplug_runtime_resolve_plugin(
-      this.#runtime.ptr(),
-      this.#handle
-    );
-    if (vtablePtr === null) {
-      throw new Error(`polyplug_runtime_resolve_plugin failed: ${this.#runtime.lastError()}`);
+    const vt = this.vtable();
+    if (vt === null) {
+      throw new Error(`polyplug: guard is not valid`);
     }
-    return vtablePtr;
+    return vt;
   }
 
 /**

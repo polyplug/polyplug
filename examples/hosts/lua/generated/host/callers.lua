@@ -7,6 +7,7 @@ local ffi = require("ffi")
 -- ABI constants
 local ABI_OK = 0
 local ABI_ERROR_GENERIC = 1
+local ABI_ERROR_INVALID_POINTER = 8
 
 -- Contract ID constants
 local PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EULL
@@ -33,29 +34,29 @@ local PipelineDecoderContract_methods = {
     end,
 
     reset = function(self)
-        self._guard = nil
+        if self._guard ~= nil then
+            self._guard:reset()
+            self._guard = nil
+        end
     end,
 
     decode = function(self, input)
         if self._guard == nil then
             error("invalid caller: guard is nil", 2)
         end
-        local vtable = self._guard:_resolve_vtable()
+        local vtable = self._guard:vtable()
         if vtable == nil then
-            error("failed to resolve vtable", 2)
+            error("guard is not valid", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        local function_count = ffi.cast("uint32_t*", vtable + 12)[0]
-        if 0 >= function_count then
+        local interface = ffi.cast("PluginInterface*", vtable)
+        if 0 >= interface.function_count then
             error("function not available in vtable", 2)
         end
-        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        local functions_ptr = ffi.cast("void**", vtable + 16)[0]
-        local fn_ptr = ffi.cast("void*", functions_ptr[0])
+        local fn_ptr = interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         local err = fn(args_ptr, out_ptr)
         if err ~= 0 then
@@ -96,29 +97,29 @@ local DataTransformerContract_methods = {
     end,
 
     reset = function(self)
-        self._guard = nil
+        if self._guard ~= nil then
+            self._guard:reset()
+            self._guard = nil
+        end
     end,
 
     transform = function(self, input)
         if self._guard == nil then
             error("invalid caller: guard is nil", 2)
         end
-        local vtable = self._guard:_resolve_vtable()
+        local vtable = self._guard:vtable()
         if vtable == nil then
-            error("failed to resolve vtable", 2)
+            error("guard is not valid", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        local function_count = ffi.cast("uint32_t*", vtable + 12)[0]
-        if 0 >= function_count then
+        local interface = ffi.cast("PluginInterface*", vtable)
+        if 0 >= interface.function_count then
             error("function not available in vtable", 2)
         end
-        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        local functions_ptr = ffi.cast("void**", vtable + 16)[0]
-        local fn_ptr = ffi.cast("void*", functions_ptr[0])
+        local fn_ptr = interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         local err = fn(args_ptr, out_ptr)
         if err ~= 0 then
@@ -159,29 +160,29 @@ local PipelineEncoderContract_methods = {
     end,
 
     reset = function(self)
-        self._guard = nil
+        if self._guard ~= nil then
+            self._guard:reset()
+            self._guard = nil
+        end
     end,
 
     encode = function(self, input)
         if self._guard == nil then
             error("invalid caller: guard is nil", 2)
         end
-        local vtable = self._guard:_resolve_vtable()
+        local vtable = self._guard:vtable()
         if vtable == nil then
-            error("failed to resolve vtable", 2)
+            error("guard is not valid", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        local function_count = ffi.cast("uint32_t*", vtable + 12)[0]
-        if 0 >= function_count then
+        local interface = ffi.cast("PluginInterface*", vtable)
+        if 0 >= interface.function_count then
             error("function not available in vtable", 2)
         end
-        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        local functions_ptr = ffi.cast("void**", vtable + 16)[0]
-        local fn_ptr = ffi.cast("void*", functions_ptr[0])
+        local fn_ptr = interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         local err = fn(args_ptr, out_ptr)
         if err ~= 0 then
@@ -222,29 +223,29 @@ local DataReporterContract_methods = {
     end,
 
     reset = function(self)
-        self._guard = nil
+        if self._guard ~= nil then
+            self._guard:reset()
+            self._guard = nil
+        end
     end,
 
     report = function(self, input)
         if self._guard == nil then
             error("invalid caller: guard is nil", 2)
         end
-        local vtable = self._guard:_resolve_vtable()
+        local vtable = self._guard:vtable()
         if vtable == nil then
-            error("failed to resolve vtable", 2)
+            error("guard is not valid", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        local function_count = ffi.cast("uint32_t*", vtable + 12)[0]
-        if 0 >= function_count then
+        local interface = ffi.cast("PluginInterface*", vtable)
+        if 0 >= interface.function_count then
             error("function not available in vtable", 2)
         end
-        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        local functions_ptr = ffi.cast("void**", vtable + 16)[0]
-        local fn_ptr = ffi.cast("void*", functions_ptr[0])
+        local fn_ptr = interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         local err = fn(args_ptr, out_ptr)
         if err ~= 0 then
@@ -285,29 +286,29 @@ local PipelineValidatorContract_methods = {
     end,
 
     reset = function(self)
-        self._guard = nil
+        if self._guard ~= nil then
+            self._guard:reset()
+            self._guard = nil
+        end
     end,
 
     validate = function(self, input)
         if self._guard == nil then
             error("invalid caller: guard is nil", 2)
         end
-        local vtable = self._guard:_resolve_vtable()
+        local vtable = self._guard:vtable()
         if vtable == nil then
-            error("failed to resolve vtable", 2)
+            error("guard is not valid", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        -- Read function_count at offset 12 (u32 after contract_id u64 + contract_version u32)
-        local function_count = ffi.cast("uint32_t*", vtable + 12)[0]
-        if 0 >= function_count then
+        local interface = ffi.cast("PluginInterface*", vtable)
+        if 0 >= interface.function_count then
             error("function not available in vtable", 2)
         end
-        -- Read functions pointer at offset 16 (after contract_id u64 + contract_version u32 + function_count u32)
-        local functions_ptr = ffi.cast("void**", vtable + 16)[0]
-        local fn_ptr = ffi.cast("void*", functions_ptr[0])
+        local fn_ptr = interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
         local err = fn(args_ptr, out_ptr)
         if err ~= 0 then

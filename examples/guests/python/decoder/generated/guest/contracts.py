@@ -5,15 +5,23 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
+from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
     ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]
 
 POLYPLUG_ABI_VERSION: int = 1
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
-_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]
+class _AbiError(ctypes.Structure):
+    _fields_ = [
+        ('code', ctypes.c_uint32),
+        ('_pad', ctypes.c_uint32),
+        ('message_ptr', ctypes.c_void_p),
+        ('message_len', ctypes.c_size_t),
+    ]
+
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]
 
 class DECODERPipelineDecoderPlugin:
     def decode(self, input: StringView) -> StringView:
@@ -36,16 +44,20 @@ DECODER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
     version_patch=0,
 )
 
-def decoder_decode_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> int:
+def decoder_decode_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
     impl: DECODERPipelineDecoderPlugin | None = _decoder_IMPL
     if impl is None:
-        return ABI_ERROR_GENERIC
+        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)
+    if args_ptr.value is None or args_ptr.value == 0:
+        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)
+    if out_ptr.value is None or out_ptr.value == 0:
+        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)
     args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
     input: StringView = args_ptr_t.contents
     result = impl.decode(input)
     out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
     out_ptr_t[0] = result
-    return ABI_OK
+    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)
 
 DECODER_decoder_decode_abi_CFUNC = _DISPATCH_FN_CTYPE(decoder_decode_abi)
 

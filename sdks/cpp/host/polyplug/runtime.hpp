@@ -20,6 +20,30 @@ static_assert(POLYPLUG_ABI_VERSION == 1,
 
 namespace polyplug {
 
+struct OpaqueRuntime;
+using RuntimeHandle = OpaqueRuntime*;
+
+struct ResolveHandle;
+
+} // namespace polyplug
+
+extern "C" {
+    RuntimeHandle polyplug_runtime_create();
+    void polyplug_runtime_destroy(RuntimeHandle rt);
+    uint32_t polyplug_runtime_load_bundle(RuntimeHandle rt, const uint8_t* path, size_t path_len);
+    uint32_t polyplug_runtime_reload_bundle(RuntimeHandle rt, const uint8_t* path, size_t path_len);
+    uint64_t polyplug_runtime_find_by_contract(RuntimeHandle rt, uint64_t contract_id, uint32_t min_version);
+    uint64_t polyplug_runtime_find_by_bundle(RuntimeHandle rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    size_t polyplug_runtime_find_all_by_contract(RuntimeHandle rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
+    const polyplug::ResolveHandle* polyplug_runtime_resolve_plugin(RuntimeHandle rt, uint64_t packed_handle);
+    void polyplug_runtime_release_plugin(const polyplug::ResolveHandle* handle);
+    size_t polyplug_runtime_last_error(RuntimeHandle rt, uint8_t* buf, size_t buf_len);
+    void polyplug_runtime_on_reload(void (*cb)(void* phase));
+    void polyplug_runtime_set_config(const void* config);
+}
+
+namespace polyplug {
+
 /// C-compatible runtime configuration for FFI boundary.
 struct RuntimeConfigC {
     uint8_t hot_reload_enabled;
@@ -29,77 +53,63 @@ struct RuntimeConfigC {
 };
 
 /// RAII guard for a resolved plugin handle.
-/// Stores runtime + handle for hot-reload safety.
-/// Re-resolves vtable on each call to detect stale handles.
+/// Holds a ref-counted ResolveHandle that keeps the vtable alive.
 /// Move-only; copy is disabled.
 class PluginGuard {
 public:
-    /// Constructs a null guard.
-    PluginGuard() noexcept : rt_(nullptr), handle_(UINT64_MAX) {}
+    PluginGuard() noexcept : handle_(nullptr) {}
 
-    /// Stores runtime + handle for hot-reload safety.
-    /// Does NOT cache vtable - re-resolves on each vtable() call.
-    PluginGuard(RuntimeHandle rt, uint64_t packed_handle) noexcept
-        : rt_(rt), handle_(packed_handle) {}
+    explicit PluginGuard(const ResolveHandle* handle) noexcept : handle_(handle) {}
 
-    /// No release needed — no owned resources.
-    ~PluginGuard() noexcept = default;
-
-    /// Move constructor.
-    PluginGuard(PluginGuard&& other) noexcept
-        : rt_(other.rt_), handle_(other.handle_) {
-        other.rt_ = nullptr;
-        other.handle_ = UINT64_MAX;
+    ~PluginGuard() noexcept {
+        release();
     }
 
-    /// Move assignment.
+    PluginGuard(PluginGuard&& other) noexcept : handle_(other.handle_) {
+        other.handle_ = nullptr;
+    }
+
     PluginGuard& operator=(PluginGuard&& other) noexcept {
         if (this != &other) {
-            rt_ = other.rt_;
+            release();
             handle_ = other.handle_;
-            other.rt_ = nullptr;
-            other.handle_ = UINT64_MAX;
+            other.handle_ = nullptr;
         }
         return *this;
     }
 
-    /// Copy is disabled.
     PluginGuard(const PluginGuard&) = delete;
     PluginGuard& operator=(const PluginGuard&) = delete;
 
-    /// Re-resolves vtable on each call (hot-reload safe).
-    /// Returns nullptr if this is a null guard or resolution fails.
     const PluginInterface* vtable() const noexcept {
-        if (rt_ == nullptr || handle_ == UINT64_MAX) {
+        if (handle_ == nullptr) {
             return nullptr;
         }
-        return static_cast<const PluginInterface*>(
-            polyplug_runtime_resolve_plugin(rt_, handle_));
+        // ResolveHandle's first field is the vtable pointer
+        return static_cast<const PluginInterface*>(static_cast<const void* const*>(static_cast<const void*>(handle_))[0]);
     }
 
-    /// Returns the stored handle.
-    uint64_t handle() const noexcept {
-        return handle_;
-    }
-
-    /// Returns true if this guard is null (no runtime or null handle).
     bool is_null() const noexcept {
-        return rt_ == nullptr || handle_ == UINT64_MAX;
+        return handle_ == nullptr;
     }
 
-    /// Returns true if this guard holds a valid plugin.
     explicit operator bool() const noexcept {
         return !is_null();
     }
 
     void reset() noexcept {
-        rt_ = nullptr;
-        handle_ = UINT64_MAX;
+        release();
     }
 
 private:
-    RuntimeHandle rt_;       ///< Runtime pointer (not owned)
-    uint64_t handle_;        ///< Packed plugin handle
+    void release() noexcept {
+        if (handle_ != nullptr) {
+            polyplug_runtime_release_plugin(handle_);
+            handle_ = nullptr;
+        }
+    }
+
+    const ResolveHandle* handle_;
 };
 
 class Runtime {
@@ -174,11 +184,12 @@ public:
         return handles;
     }
 
-    /// Resolves a packed handle to a PluginGuard.
-    /// Guard stores runtime + handle for hot-reload safety.
-    /// Returns a null guard if packed_handle is UINT64_MAX.
     PluginGuard resolve_plugin(uint64_t packed_handle) const noexcept {
-        return PluginGuard(handle_, packed_handle);
+        if (packed_handle == UINT64_MAX) {
+            return PluginGuard(nullptr);
+        }
+        const ResolveHandle* h = polyplug_runtime_resolve_plugin(handle_, packed_handle);
+        return PluginGuard(h);
     }
 
     RuntimeHandle handle() const noexcept {

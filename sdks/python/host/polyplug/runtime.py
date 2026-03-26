@@ -47,6 +47,7 @@ class Backend(Protocol):
         self, rt: int, contract_id: int, min_version: int, out: Any, cap: int
     ) -> int: ...
     def resolve_plugin(self, rt: int, handle: int) -> int: ...
+    def release_plugin(self, handle: int) -> None: ...
     def last_error(self, rt: int, buf: Any, buf_len: int) -> int: ...
     def error_message_len(self) -> int: ...
 
@@ -113,6 +114,11 @@ class CTypesBackend:
         ]
         self.lib.polyplug_runtime_resolve_plugin.restype = self.ctypes.c_void_p
 
+        self.lib.polyplug_runtime_release_plugin.argtypes = [
+            self.ctypes.c_void_p,
+        ]
+        self.lib.polyplug_runtime_release_plugin.restype = None
+
         self.lib.polyplug_runtime_last_error.argtypes = [
             self.ctypes.POINTER(self.ctypes.c_uint8),
             self.ctypes.c_size_t,
@@ -168,6 +174,10 @@ class CTypesBackend:
             or 0
         )
 
+    def release_plugin(self, handle: int) -> None:
+        if handle != 0:
+            self.lib.polyplug_runtime_release_plugin(handle)
+
     def last_error(self, rt: int, buf: Any, buf_len: int) -> int:
         return self.lib.polyplug_runtime_last_error(buf, buf_len)
 
@@ -190,6 +200,7 @@ class CFFIBackend:
         uint64_t polyplug_runtime_find_by_bundle(void* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
         size_t polyplug_runtime_find_all_by_contract(void* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
         void* polyplug_runtime_resolve_plugin(void* rt, uint64_t packed_handle);
+        void polyplug_runtime_release_plugin(void* handle);
         size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
         size_t polyplug_runtime_error_message_len(void);
         uint32_t polyplug_runtime_register_loader(void* rt, void* loader_ptr);
@@ -268,6 +279,10 @@ class CFFIBackend:
         )
         return int(self.ffi.cast("uintptr_t", result))
 
+    def release_plugin(self, handle: int) -> None:
+        if handle != 0:
+            self.lib.polyplug_runtime_release_plugin(self.ffi.cast("void*", handle))
+
     def last_error(self, rt: int, buf: Any, buf_len: int) -> int:
         return self.lib.polyplug_runtime_last_error(buf, buf_len)
 
@@ -306,34 +321,42 @@ def _create_backend(lib_path: str) -> Backend:
 class PluginGuard:
     """Guard for a resolved plugin handle.
 
-    Stores runtime + handle for hot-reload safety.
-    Re-resolves vtable on each call to detect stale handles.
+    Holds a ref-counted ResolveHandle that keeps the vtable alive.
+    Must call reset() or let __del__ release the handle.
     """
 
-    def __init__(self, backend: Backend, runtime_ptr: int, handle: int) -> None:
+    def __init__(self, backend: Backend, resolve_handle: int) -> None:
         self._backend: Backend = backend
-        self._runtime: int = runtime_ptr
-        self._handle: int = handle
+        self._handle: int = resolve_handle
 
     @property
     def vtable(self) -> int:
-        """Re-resolve vtable on each call (hot-reload safe)."""
-        if self._runtime == 0 or self._handle == _NULL_HANDLE:
+        """Return the vtable pointer from the ResolveHandle.
+
+        The first field of ResolveHandle is the vtable pointer.
+        """
+        if self._handle == 0:
             return 0
-        return self._backend.resolve_plugin(self._runtime, self._handle)
+        import ctypes
 
-    @property
-    def handle(self) -> int:
-        """Return the stored handle."""
-        return self._handle
-
-    def get_vtable(self) -> int:
-        """Deprecated: use guard.vtable property instead."""
-        return self.vtable
+        # ResolveHandle's first field is the vtable pointer (as PluginInterface*)
+        return (
+            ctypes.cast(self._handle, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            or 0
+        )
 
     def is_null(self) -> bool:
         """Return True if this guard is null."""
-        return self._runtime == 0 or self._handle == _NULL_HANDLE
+        return self._handle == 0
+
+    def reset(self) -> None:
+        """Release the handle."""
+        if self._handle != 0:
+            self._backend.release_plugin(self._handle)
+            self._handle = 0
+
+    def __del__(self) -> None:
+        self.reset()
 
 
 def _last_error(backend: Backend) -> str:
@@ -568,7 +591,8 @@ class Runtime:
         if packed_handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
         runtime_ptr: int = self._ensure_runtime()
-        return PluginGuard(self._backend, runtime_ptr, packed_handle)
+        resolve_handle: int = self._backend.resolve_plugin(runtime_ptr, packed_handle)
+        return PluginGuard(self._backend, resolve_handle)
 
     def get_extension(self, extension_id: int) -> None:
         _ = extension_id

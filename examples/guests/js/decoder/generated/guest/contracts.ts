@@ -35,6 +35,8 @@ function decoder_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_h
     if (!polyplug) return 1;
     var impl = DECODER_IMPL;
     if (!impl) return 1;
+    if (args_ptr_lo === 0 && args_ptr_hi === 0) return 8;
+    if (out_ptr_lo === 0 && out_ptr_hi === 0) return 8;
     var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;
     var input_ptr_lo = polyplug.readU32(args_ptr);
     var input_ptr_hi = polyplug.readU32(args_ptr + 4);

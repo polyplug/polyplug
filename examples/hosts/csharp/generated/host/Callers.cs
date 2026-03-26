@@ -35,7 +35,7 @@ public sealed class PipelineDecoderContractCaller : IDisposable {
     public bool IsValid => !_guard.IsNull();
 
     /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard = default; }
+    public void Reset() { _guard.Release(); }
 
     /// <summary>Dispose pattern for explicit cleanup.</summary>
     public void Dispose() { Reset(); }
@@ -47,7 +47,11 @@ public sealed class PipelineDecoderContractCaller : IDisposable {
         }
 
         unsafe {
-            nint funcsArray = *(nint*)(vtablePtr + 32);
+            var pluginInterface = *(PluginInterface*)vtablePtr;
+            if (0u >= pluginInterface.FunctionCount) {
+                throw new InvalidOperationException("function not available");
+            }
+            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
             var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
@@ -91,7 +95,7 @@ public sealed class DataTransformerContractCaller : IDisposable {
     public bool IsValid => !_guard.IsNull();
 
     /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard = default; }
+    public void Reset() { _guard.Release(); }
 
     /// <summary>Dispose pattern for explicit cleanup.</summary>
     public void Dispose() { Reset(); }
@@ -103,7 +107,11 @@ public sealed class DataTransformerContractCaller : IDisposable {
         }
 
         unsafe {
-            nint funcsArray = *(nint*)(vtablePtr + 32);
+            var pluginInterface = *(PluginInterface*)vtablePtr;
+            if (0u >= pluginInterface.FunctionCount) {
+                throw new InvalidOperationException("function not available");
+            }
+            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
             var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
@@ -147,7 +155,7 @@ public sealed class PipelineEncoderContractCaller : IDisposable {
     public bool IsValid => !_guard.IsNull();
 
     /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard = default; }
+    public void Reset() { _guard.Release(); }
 
     /// <summary>Dispose pattern for explicit cleanup.</summary>
     public void Dispose() { Reset(); }
@@ -159,7 +167,11 @@ public sealed class PipelineEncoderContractCaller : IDisposable {
         }
 
         unsafe {
-            nint funcsArray = *(nint*)(vtablePtr + 32);
+            var pluginInterface = *(PluginInterface*)vtablePtr;
+            if (0u >= pluginInterface.FunctionCount) {
+                throw new InvalidOperationException("function not available");
+            }
+            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
             var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
@@ -203,7 +215,7 @@ public sealed class DataReporterContractCaller : IDisposable {
     public bool IsValid => !_guard.IsNull();
 
     /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard = default; }
+    public void Reset() { _guard.Release(); }
 
     /// <summary>Dispose pattern for explicit cleanup.</summary>
     public void Dispose() { Reset(); }
@@ -215,7 +227,11 @@ public sealed class DataReporterContractCaller : IDisposable {
         }
 
         unsafe {
-            nint funcsArray = *(nint*)(vtablePtr + 32);
+            var pluginInterface = *(PluginInterface*)vtablePtr;
+            if (0u >= pluginInterface.FunctionCount) {
+                throw new InvalidOperationException("function not available");
+            }
+            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
             var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
@@ -259,7 +275,7 @@ public sealed class PipelineValidatorContractCaller : IDisposable {
     public bool IsValid => !_guard.IsNull();
 
     /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard = default; }
+    public void Reset() { _guard.Release(); }
 
     /// <summary>Dispose pattern for explicit cleanup.</summary>
     public void Dispose() { Reset(); }
@@ -271,7 +287,11 @@ public sealed class PipelineValidatorContractCaller : IDisposable {
         }
 
         unsafe {
-            nint funcsArray = *(nint*)(vtablePtr + 32);
+            var pluginInterface = *(PluginInterface*)vtablePtr;
+            if (0u >= pluginInterface.FunctionCount) {
+                throw new InvalidOperationException("function not available");
+            }
+            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
             var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;

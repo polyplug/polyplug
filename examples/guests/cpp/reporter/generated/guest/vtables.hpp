@@ -4,6 +4,7 @@
 #include "contracts.hpp"
 #include "polyplug/abi.hpp"
 #include <cstdint>
+#include <cstring>
 #include <exception>
 
 namespace polyplug_plugin {
@@ -23,13 +24,20 @@ DataReporterPlugin* create_reporter_impl();
 // ABI wrapper for report (function_id = 0)
 inline AbiError reporter_report_abi(const void* args, void* out) noexcept {
     try {
+        if (args == nullptr) {
+            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+        }
+        if (out == nullptr) {
+            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+        }
         auto result = g_reporter_impl->report(*static_cast<const StringView*>(args));
         *static_cast<StringView*>(out) = result;
         return AbiError{ABI_OK, StringView{nullptr, 0}};
-    } catch (const std::exception&) {
-        return AbiError{1U, StringView{nullptr, 0}};  // ABI_ERROR_GENERIC
+    } catch (const std::exception& e) {
+        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};  // ABI_ERROR_GENERIC
     } catch (...) {
-        return AbiError{3U, StringView{nullptr, 0}};  // ABI_ERROR_PANIC
+        static constexpr const char* panic_msg = "plugin panicked";
+        return AbiError{3U, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};  // ABI_ERROR_PANIC
     }
 }
 

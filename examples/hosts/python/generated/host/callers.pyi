@@ -7,7 +7,7 @@ import ctypes
 from typing import Callable, Optional
 
 from polyplug import PluginGuard, Runtime
-from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, StringView
+from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, PluginInterface, StringView
 
 class ContractError(Exception): ...
 

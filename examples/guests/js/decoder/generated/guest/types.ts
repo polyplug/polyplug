@@ -2,3 +2,8 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs
 
+export type pipeline_Decoder_decode = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
+export type data_Transformer_transform = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
+export type pipeline_Encoder_encode = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
+export type data_Reporter_report = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };
+export type pipeline_Validator_validate = (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number };

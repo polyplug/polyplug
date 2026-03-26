@@ -133,6 +133,10 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
     public static partial nint PolyplugRuntimeResolvePlugin(nint rt, ulong packedHandle);
 
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_release_plugin")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
+    public static partial void PolyplugRuntimeReleasePlugin(nint resolveHandle);
+
     // Error handling (error path only, no SuppressGCTransition)
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_last_error")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

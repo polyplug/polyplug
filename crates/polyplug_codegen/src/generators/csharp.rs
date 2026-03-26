@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -805,7 +805,7 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("    /// <summary>Check if this caller instance is still valid.</summary>\n");
         out.push_str("    public bool IsValid => !_guard.IsNull();\n\n");
         out.push_str("    /// <summary>Explicitly release the guard reference.</summary>\n");
-        out.push_str("    public void Reset() { _guard = default; }\n\n");
+        out.push_str("    public void Reset() { _guard.Release(); }\n\n");
         out.push_str("    /// <summary>Dispose pattern for explicit cleanup.</summary>\n");
         out.push_str("    public void Dispose() { Reset(); }\n\n");
 

@@ -6,21 +6,30 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::contracts::DataReporterPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::PipelineEncoderPlugin;
-use super::contracts::PipelineValidatorPlugin;
-use super::types::*;
+use std::sync::OnceLock;
 use polyplug_guest::AbiError;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
+use polyplug_guest::PluginError;
+use polyplug_guest::alloc_string;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_OK};
-use std::sync::OnceLock;
+use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};
+use super::types::*;
+/// Convert a PluginError to an AbiError, allocating the message via host_alloc.
+/// Falls back to a null message if allocation fails.
+fn plugin_error_to_abi_error(e: PluginError) -> AbiError {
+    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| StringView::null());
+    AbiError { code: e.code, message }
+}
+
+use super::contracts::PipelineDecoderPlugin;
+use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineEncoderPlugin;
+use super::contracts::DataReporterPlugin;
+use super::contracts::PipelineValidatorPlugin;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -38,38 +47,32 @@ pub const TRANSFORMER_CONTRACT_ID: u64 = 0x3D53C682F3F5A9EF;
 pub static TRANSFORMER_IMPL: OnceLock<Box<dyn DataTransformerPlugin>> = OnceLock::new();
 
 pub fn set_transformer_impl(impl_: Box<dyn DataTransformerPlugin>) -> Result<(), &'static str> {
-    TRANSFORMER_IMPL
-        .set(impl_)
-        .map_err(|_| "transformer already registered")
+    TRANSFORMER_IMPL.set(impl_).map_err(|_| "transformer already registered")
 }
 
 /// ABI wrapper for transform (function_id = 0).
-// SAFETY: args and out pointers are validated by the host runtime ABI contract.
+// SAFETY: args and out pointers are validated at entry before dereferencing.
 extern "C" fn transformer_transform_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn DataTransformerPlugin = match TRANSFORMER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => {
-                return AbiError {
-                    code: ABI_ERROR_GENERIC,
-                    message: StringView::null(),
-                };
-            }
+            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"implementation not registered") },
         };
+        if args.is_null() {
+            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"args pointer is null") };
+        }
+        if out.is_null() {
+            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"out pointer is null") };
+        }
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.transform(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe {
-                    std::ptr::write(out as *mut StringView, val);
-                }
+                unsafe { std::ptr::write(out as *mut StringView, val); }
                 AbiError::ok()
             }
-            Err(e) => AbiError {
-                code: e.code,
-                message: StringView::null(),
-            },
+            Err(e) => plugin_error_to_abi_error(e),
         }
     })) {
         Ok(err) => err,
@@ -77,7 +80,9 @@ extern "C" fn transformer_transform_abi(args: *const (), out: *mut ()) -> AbiErr
     }
 }
 
-static TRANSFORMER_FNS: [FnPtr; 1_usize] = [FnPtr(transformer_transform_abi as *const ())];
+static TRANSFORMER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(transformer_transform_abi as *const ()),
+];
 
 pub static TRANSFORMER_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -91,3 +96,4 @@ pub static TRANSFORMER_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
+

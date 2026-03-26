@@ -407,7 +407,10 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
 
     // reset method
     out.push_str("    reset = function(self)\n");
-    out.push_str("        self._guard = nil\n");
+    out.push_str("        if self._guard ~= nil then\n");
+    out.push_str("            self._guard:reset()\n");
+    out.push_str("            self._guard = nil\n");
+    out.push_str("        end\n");
     out.push_str("    end,\n\n");
 
     // Contract function methods
@@ -481,9 +484,9 @@ fn generate_host_caller_method(
     out.push_str("        end\n");
 
     // Get vtable from guard
-    out.push_str("        local vtable = self._guard:_resolve_vtable()\n");
+    out.push_str("        local vtable = self._guard:vtable()\n");
     out.push_str("        if vtable == nil then\n");
-    out.push_str("            error(\"failed to resolve vtable\", 2)\n");
+    out.push_str("            error(\"guard is not valid\", 2)\n");
     out.push_str("        end\n");
 
     // Setup args and out

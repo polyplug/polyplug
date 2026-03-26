@@ -7,6 +7,7 @@ local polyplug_guest = require("polyplug_guest")
 -- ABI constants
 local ABI_OK = 0
 local ABI_ERROR_GENERIC = 1
+local ABI_ERROR_INVALID_POINTER = 8
 
 -- No optional extensions requested.
 

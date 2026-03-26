@@ -8,6 +8,7 @@ local runtime_config = require('polyplug.runtime_config')
 
 ffi.cdef([[
     typedef struct OpaqueRuntime OpaqueRuntime;
+    typedef struct ResolveHandle ResolveHandle;
 
     OpaqueRuntime* polyplug_runtime_create(void);
     void polyplug_runtime_destroy(OpaqueRuntime* rt);
@@ -16,7 +17,8 @@ ffi.cdef([[
     uint64_t polyplug_runtime_find_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version);
     uint64_t polyplug_runtime_find_by_bundle(const OpaqueRuntime* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t polyplug_runtime_find_all_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
-    const void* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
+    const ResolveHandle* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
+    void polyplug_runtime_release_plugin(const ResolveHandle* handle);
     size_t polyplug_runtime_error_message_len(void);
     void polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
     void polyplug_host_free(void* ptr, size_t size, size_t align);
@@ -219,41 +221,51 @@ function M.Guard.new(runtime, packed_handle)
     if packed_handle == nil then
         error("polyplug: packed_handle is nil")
     end
+    local lib = runtime._lib
+    local resolve_handle = lib.polyplug_runtime_resolve_plugin(runtime._ptr, packed_handle)
+    if resolve_handle == nil then
+        return nil, M.last_error(lib)
+    end
     local self = {
         _runtime = runtime,
-        _handle = packed_handle,
+        _handle = resolve_handle,
     }
     return setmetatable(self, M.Guard)
 end
 
-function M.Guard:handle()
-    return self._handle
+function M.Guard:vtable()
+    if self._handle == nil then
+        return nil
+    end
+    -- ResolveHandle's first field is the vtable pointer (PluginInterface*)
+    return ffi.cast("const PluginInterface* const*", self._handle)[0]
 end
 
-function M.Guard:_resolve_interface()
-    local rt = self._runtime
-    if rt._destroyed then
-        return nil, "runtime destroyed"
+function M.Guard:is_valid()
+    return self._handle ~= nil
+end
+
+function M.Guard:reset()
+    if self._handle ~= nil then
+        self._runtime._lib.polyplug_runtime_release_plugin(self._handle)
+        self._handle = nil
     end
-    local lib = rt._lib
-    local interface_ptr = lib.polyplug_runtime_resolve_plugin(rt._ptr, self._handle)
-    if interface_ptr == nil then
-        return nil, M.last_error(lib)
-    end
-    return interface_ptr, nil
+end
+
+function M.Guard:__gc()
+    self:reset()
 end
 
 local DispatchFnType = ffi.typeof("AbiError (*)(const void*, void*)")
 local func_cache = {}
 
 function M.Guard:call(func_idx, input)
-    local interface_ptr, err = self:_resolve_interface()
-    if interface_ptr == nil then
-        error("polyplug: failed to resolve interface: " .. (err or "unknown"))
+    local vtable_ptr = self:vtable()
+    if vtable_ptr == nil then
+        error("polyplug: guard is not valid")
     end
 
-    local lib = self._runtime._lib
-    local interface = ffi.cast("const PluginInterface*", interface_ptr)
+    local interface = ffi.cast("const PluginInterface*", vtable_ptr)
 
     if func_idx >= interface.function_count then
         error("function index " .. func_idx .. " out of bounds")
@@ -285,7 +297,7 @@ function M.Guard:call(func_idx, input)
 
     if result.code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
         local output_str = ffi.string(output_sv.ptr, output_sv.len)
-        lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
+        self._runtime._lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
         return output_str
     else
         error("plugin returned error code=" .. result.code)

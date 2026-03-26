@@ -806,7 +806,10 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
     out.push_str("    }\n\n");
     out.push_str("    /** Explicitly release the guard reference. */\n");
     out.push_str("    reset(): void {\n");
-    out.push_str("        this.#guard = null;\n");
+    out.push_str("        if (this.#guard !== null) {\n");
+    out.push_str("            this.#guard.reset();\n");
+    out.push_str("            this.#guard = null;\n");
+    out.push_str("        }\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {

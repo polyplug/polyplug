@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -586,10 +586,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        return not self._guard.is_null()\n\n");
 
     out.push_str("    def reset(self) -> None:\n");
-    out.push_str("        self._guard = PluginGuard.__new__(PluginGuard)\n");
-    out.push_str("        self._guard._backend = None\n");
-    out.push_str("        self._guard._runtime = 0\n");
-    out.push_str("        self._guard._handle = NULL_HANDLE\n\n");
+    out.push_str("        self._guard.reset()\n\n");
 
     out.push_str("    def __bool__(self) -> bool:\n");
     out.push_str("        return self.is_valid()\n\n");

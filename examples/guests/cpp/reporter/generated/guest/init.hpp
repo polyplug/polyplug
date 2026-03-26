@@ -15,7 +15,10 @@ DataReporterPlugin* g_reporter_impl = nullptr;
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
 extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host, const PluginContext* ctx) {
-    if (!rt_ctx || !host || !ctx) return AbiError{1U, StringView{nullptr, 0}};
+    if (!rt_ctx || !host || !ctx) {
+        static constexpr const char* err_msg = "null parameter in polyplug_init";
+        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
+    }
 
     // Register plugin: reporter
     polyplug_plugin::set_reporter_impl(polyplug_plugin::create_reporter_impl());
