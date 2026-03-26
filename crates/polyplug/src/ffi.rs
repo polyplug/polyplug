@@ -629,16 +629,153 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_are_isolated() {
-        // Create two FFI runtimes - they should be completely independent
         let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
         let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
-        assert!(!rt1.is_null(), "first runtime must be created");
-        assert!(!rt2.is_null(), "second runtime must be created");
-        assert_ne!(rt1, rt2, "runtimes must be distinct pointers");
-        // SAFETY: both are valid non-null pointers returned by polyplug_runtime_create
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+        assert_ne!(rt1, rt2);
         unsafe {
             polyplug_runtime_destroy(rt1);
             polyplug_runtime_destroy(rt2);
         }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_with_config() {
+        let config1: RuntimeConfigC = RuntimeConfigC {
+            hot_reload_max_retries: 5,
+            hot_reload_retry_interval_ms: 1000,
+            hot_reload_abort_on_max_retries: 1,
+        };
+        let config2: RuntimeConfigC = RuntimeConfigC {
+            hot_reload_max_retries: 10,
+            hot_reload_retry_interval_ms: 2000,
+            hot_reload_abort_on_max_retries: 0,
+        };
+
+        let opts1: RuntimeCreateOptions = RuntimeCreateOptions {
+            config: &config1,
+            on_reload: None,
+        };
+        let opts2: RuntimeCreateOptions = RuntimeCreateOptions {
+            config: &config2,
+            on_reload: None,
+        };
+
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create_with_options(&opts1) };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create_with_options(&opts2) };
+
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+        assert_ne!(rt1, rt2);
+
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_error_isolation() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+
+        let result1: u32 =
+            unsafe { polyplug_runtime_load_bundle(rt1, b"/nonexistent/path1".as_ptr(), 18) };
+        let result2: u32 =
+            unsafe { polyplug_runtime_load_bundle(rt2, b"/nonexistent/path2".as_ptr(), 18) };
+
+        assert_eq!(result1, 1);
+        assert_eq!(result2, 1);
+
+        let len1: usize = unsafe { polyplug_runtime_error_message_len(rt1) };
+        let len2: usize = unsafe { polyplug_runtime_error_message_len(rt2) };
+
+        assert!(len1 > 0);
+        assert!(len2 > 0);
+
+        let mut buf1: [u8; 256] = [0; 256];
+        let mut buf2: [u8; 256] = [0; 256];
+
+        let actual_len1: usize =
+            unsafe { polyplug_runtime_last_error(rt1, buf1.as_mut_ptr(), buf1.len()) };
+        let actual_len2: usize =
+            unsafe { polyplug_runtime_last_error(rt2, buf2.as_mut_ptr(), buf2.len()) };
+
+        assert_eq!(actual_len1, len1);
+        assert_eq!(actual_len2, len2);
+
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_lifecycle_interleaved() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt1.is_null());
+        unsafe { polyplug_runtime_destroy(rt1) };
+
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt2.is_null());
+        unsafe { polyplug_runtime_destroy(rt2) };
+
+        let rt3: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt3.is_null());
+        unsafe { polyplug_runtime_destroy(rt3) };
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_find_operations_isolated() {
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+
+        assert!(!rt1.is_null());
+        assert!(!rt2.is_null());
+
+        let handle1: u64 = unsafe { polyplug_runtime_find_by_contract(rt1, 12345, 0) };
+        let handle2: u64 = unsafe { polyplug_runtime_find_by_contract(rt2, 12345, 0) };
+
+        assert_eq!(handle1, u64::MAX);
+        assert_eq!(handle2, u64::MAX);
+
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
+
+    #[test]
+    fn multiple_ffi_runtimes_concurrent_operations() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
+        let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<thread::JoinHandle<()>> = (0..4)
+            .map(|_| {
+                let success: Arc<AtomicUsize> = Arc::clone(&success_count);
+                thread::spawn(move || {
+                    for _ in 0..10 {
+                        let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+                        if !rt.is_null() {
+                            success.fetch_add(1, Ordering::SeqCst);
+                            unsafe { polyplug_runtime_destroy(rt) };
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+
+        assert_eq!(success_count.load(Ordering::SeqCst), 40);
     }
 }
