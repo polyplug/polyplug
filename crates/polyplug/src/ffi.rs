@@ -626,4 +626,19 @@ mod tests {
         let packed: u64 = pack_handle(null_h);
         assert_eq!(packed, u64::MAX);
     }
+
+    #[test]
+    fn multiple_ffi_runtimes_are_isolated() {
+        // Create two FFI runtimes - they should be completely independent
+        let rt1: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        let rt2: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
+        assert!(!rt1.is_null(), "first runtime must be created");
+        assert!(!rt2.is_null(), "second runtime must be created");
+        assert_ne!(rt1, rt2, "runtimes must be distinct pointers");
+        // SAFETY: both are valid non-null pointers returned by polyplug_runtime_create
+        unsafe {
+            polyplug_runtime_destroy(rt1);
+            polyplug_runtime_destroy(rt2);
+        }
+    }
 }
