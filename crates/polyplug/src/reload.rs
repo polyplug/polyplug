@@ -510,15 +510,32 @@ pub(crate) fn reload_bundle_impl(
     }
 
     drop(old_arcs);
-    let old_library: Option<libloading::Library> = runtime
+
+    // SAFETY: Keep old library alive in registry to prevent SIGSEGV from raw pointers.
+    //
+    // During hot-reload, callers may have extracted raw function pointers from the old vtable.
+    // The quiescence wait above only tracks Arc<VTableSlot> references, not raw pointers.
+    // If we unload the old library, those raw pointers become dangling and cause SIGSEGV.
+    //
+    // Solution: Never unload libraries. Push them to registry.loaded_libraries to keep them alive.
+    // Memory cost: One library handle per hot-reload event. This is acceptable because:
+    // - Hot-reload is typically used in development, not production
+    // - Library handles are small (just a dlopen handle, ~8-16 bytes)
+    // - Windows DLL limit (~1000-2000) is unlikely to be hit in practice
+    //
+    // Alternative (more complex): epoch-based reclamation via crossbeam-epoch.
+    if let Some(old_lib) = runtime
         .reload_libraries
         .lock()
         .unwrap_or_else(|e| {
             eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
             e.into_inner()
         })
-        .remove(&bundle_id_val);
-    drop(old_library);
+        .remove(&bundle_id_val)
+    {
+        // Keep the old library alive forever to prevent dangling pointers.
+        runtime.registry().push_library(old_lib);
+    }
 
     runtime
         .reload_libraries
