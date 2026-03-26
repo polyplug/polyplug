@@ -429,13 +429,13 @@ impl Runtime {
             .find_all_by_contract_packed(contract_id, min_version, out)
     }
 
-    /// Resolve a plugin handle to a vtable pointer.
+    /// Resolve a plugin handle to a vtable guard.
     #[inline(always)]
     pub fn resolve_plugin(
         &self,
         handle: PluginHandle,
-    ) -> Result<*const PluginInterface, RegistryError> {
-        self.registry.resolve(handle)
+    ) -> Result<crate::registry::PluginGuard, RegistryError> {
+        self.registry.resolve_guard(handle)
     }
 
     /// Get the HostVTable for use in plugin registrars.

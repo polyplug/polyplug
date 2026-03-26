@@ -13,11 +13,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
 use polyplug::registry::Registry;
 use polyplug::registry::VTableSlot;
 use polyplug::runtime::Runtime;
+use polyplug::ReloadPhase;
 use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -109,9 +109,8 @@ fn make_hot_reload_runtime() -> Runtime {
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable_ptr: *const PluginInterface = rt.resolve_plugin(handle).ok()?;
-    // SAFETY: vtable_ptr is from resolve_plugin and points to a valid vtable while
-    // the library is loaded; slot 0 is a compatible extern "C" fn in the fixture.
+    let guard: polyplug::registry::PluginGuard = rt.resolve_plugin(handle).ok()?;
+    let vtable_ptr: *const PluginInterface = guard.vtable();
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
@@ -368,12 +367,13 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
                 > = rt_clone.find_by_contract(contract_id, 0_u32);
 
                 if let Ok(plugin_handle) = handle_result {
-                    let vt_result: Result<*const PluginInterface, polyplug::error::RegistryError> =
-                        rt_clone.resolve_plugin(plugin_handle);
+                    let guard_result: Result<
+                        polyplug::registry::PluginGuard,
+                        polyplug::error::RegistryError,
+                    > = rt_clone.resolve_plugin(plugin_handle);
 
-                    if let Ok(vt_ptr) = vt_result {
-                        // SAFETY: vt_ptr is from resolve_plugin and points to a valid vtable
-                        // while the library is loaded; slot 0 is a compatible extern "C" fn.
+                    if let Ok(guard) = guard_result {
+                        let vt_ptr: *const PluginInterface = guard.vtable();
                         let version: u32 = unsafe {
                             let fn_ptr: *const () = *(*vt_ptr).dispatch.native.functions;
                             let version_fn: extern "C" fn() -> u32 = core::mem::transmute(fn_ptr);

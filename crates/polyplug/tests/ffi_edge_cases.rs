@@ -10,7 +10,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
@@ -18,6 +17,8 @@ use polyplug::ffi::polyplug_runtime_find_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::OpaqueRuntime;
+use polyplug::ffi::ResolveHandle;
 use polyplug::loader::manifest::ManifestData;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -35,7 +36,7 @@ const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 #[test]
 fn test_resolve_plugin_null_runtime() {
     // SAFETY: Passing null runtime is explicitly testing the null-safety contract.
-    let vtable: *const () =
+    let vtable: *const ResolveHandle =
         unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0x1234_5678_u64) };
     assert!(vtable.is_null(), "resolve_plugin(null rt) must return null");
 
@@ -59,7 +60,7 @@ fn test_resolve_plugin_null_handle() {
     assert!(!rt.is_null(), "runtime creation must succeed");
 
     // SAFETY: rt is valid; u64::MAX is the sentinel NULL_HANDLE value.
-    let vtable: *const () =
+    let vtable: *const ResolveHandle =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
         vtable.is_null(),
@@ -108,7 +109,7 @@ fn test_resolve_plugin_stale_handle() {
     let stale_packed: u64 = ((stale_generation as u64) << 32) | (index as u64);
 
     // SAFETY: rt is valid; stale_packed is a deliberately invalid handle.
-    let vtable: *const () =
+    let vtable: *const ResolveHandle =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, stale_packed) };
     assert!(
         vtable.is_null(),

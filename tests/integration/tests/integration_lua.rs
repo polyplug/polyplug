@@ -4,12 +4,12 @@ use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -41,7 +41,9 @@ fn get_vtable(rt: &Runtime) -> *const PluginInterface {
     let handle: PluginHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
-    rt.resolve_plugin(handle).expect("handle must be valid")
+    rt.resolve_plugin(handle)
+        .expect("handle must be valid")
+        .vtable()
 }
 
 unsafe fn call_vm_function(

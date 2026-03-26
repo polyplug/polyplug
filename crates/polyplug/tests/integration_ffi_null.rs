@@ -3,13 +3,13 @@
 //! Integration tests: null pointer safety of all C facade FFI functions.
 //! Every function that takes a pointer must handle null without panicking.
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::OpaqueRuntime;
 
 #[test]
 fn test_runtime_free_null() {
@@ -89,7 +89,7 @@ fn test_resolve_plugin_null_handle() {
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     // SAFETY: rt is valid (asserted above); u64::MAX is the sentinel NULL_HANDLE value.
-    let vtable: *const () =
+    let vtable: *const polyplug::ffi::ResolveHandle =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
         vtable.is_null(),

@@ -16,7 +16,6 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -24,6 +23,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -200,6 +200,7 @@ fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginInterface {
     runtime
         .resolve_plugin(handle)
         .expect("handle must be valid")
+        .vtable()
 }
 
 /// Dispatch add(3, 5) and verify the result equals 8.
@@ -1285,7 +1286,8 @@ fn test_csharp_host_csharp_guest() {
         .expect("test.add must be registered after load");
     let vtable_ptr: *const PluginInterface = runtime
         .resolve_plugin(handle)
-        .expect("handle must be valid");
+        .expect("handle must be valid")
+        .vtable();
     assert!(!vtable_ptr.is_null(), "vtable must be non-null");
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;

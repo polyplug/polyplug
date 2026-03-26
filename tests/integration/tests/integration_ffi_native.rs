@@ -8,10 +8,10 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::ffi::{
-    OpaqueRuntime, polyplug_runtime_create, polyplug_runtime_destroy,
-    polyplug_runtime_error_message_len, polyplug_runtime_find_all_by_contract,
-    polyplug_runtime_find_by_contract, polyplug_runtime_last_error, polyplug_runtime_load_bundle,
-    polyplug_runtime_resolve_plugin,
+    polyplug_runtime_create, polyplug_runtime_destroy, polyplug_runtime_error_message_len,
+    polyplug_runtime_find_all_by_contract, polyplug_runtime_find_by_contract,
+    polyplug_runtime_last_error, polyplug_runtime_load_bundle, polyplug_runtime_release_plugin,
+    polyplug_runtime_resolve_plugin, OpaqueRuntime, ResolveHandle,
 };
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
@@ -51,13 +51,17 @@ fn test_native_loader_ffi_workflow() {
         "Expected valid handle, got NULL_HANDLE"
     );
 
-    // 3. Resolve to vtable (returns vtable pointer directly, not a guard)
-    let vtable: *const () = unsafe { polyplug_runtime_resolve_plugin(rt, handle) };
+    // 3. Resolve to vtable (returns ResolveHandle, access .vtable field)
+    let resolve_handle: *const ResolveHandle =
+        unsafe { polyplug_runtime_resolve_plugin(rt, handle) };
     assert!(
-        !vtable.is_null(),
+        !resolve_handle.is_null(),
         "polyplug_runtime_resolve_plugin returned null: {}",
         read_last_error(rt)
     );
+    // SAFETY: resolve_handle is non-null and valid, vtable field is the PluginInterface pointer
+    let vtable: *const polyplug_abi::PluginInterface = unsafe { (*resolve_handle).vtable };
+    assert!(!vtable.is_null(), "vtable must be non-null");
 
     // 4. Find all by contract
     let mut out_buf: [u64; 8] = [0u64; 8];
@@ -69,6 +73,9 @@ fn test_native_loader_ffi_workflow() {
         "Expected at least 1 result for test.add contract"
     );
     assert_ne!(out_buf[0], NULL_HANDLE);
+
+    // 5. Release the resolve handle
+    unsafe { polyplug_runtime_release_plugin(resolve_handle) };
 
     // Cleanup runtime
     unsafe { polyplug_runtime_destroy(rt) };

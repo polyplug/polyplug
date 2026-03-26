@@ -6,12 +6,21 @@
 #![allow(clippy::std_instead_of_core)]
 
 use crate::loader::BundleLoader;
+use crate::registry::VTableSlot;
 use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
 use crate::runtime::RuntimeConfig;
 use polyplug_abi::PluginHandle;
+use polyplug_abi::PluginInterface;
+use std::sync::Arc;
 
 pub struct OpaqueRuntime(pub Runtime);
+
+#[repr(C)]
+pub struct ResolveHandle {
+    pub vtable: *const PluginInterface,
+    _arc: Arc<VTableSlot>,
+}
 
 // ─── C-compatible types for hot-reload notification ───────────────────────────
 
@@ -424,21 +433,24 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
     .unwrap_or(0usize)
 }
 
-/// Resolve a plugin handle and return the vtable pointer directly.
+/// Resolve a plugin handle and return an opaque vtable handle.
+///
+/// The returned pointer's first field is the vtable pointer (`*const PluginInterface`),
+/// so callers can cast and dereference it directly to access the vtable.
 ///
 /// # Safety
 /// - `rt` must be a valid pointer returned by `polyplug_runtime_create`.
-/// - The returned vtable pointer is valid as long as the runtime is alive and
-///   no hot-reload occurs for this plugin.
+/// - Caller MUST call `polyplug_runtime_release_plugin` when done.
+/// - The returned pointer is valid until `polyplug_runtime_release_plugin` is called.
 ///
 /// # Returns
-/// - Non-null pointer to `PluginInterface` on success
+/// - Non-null pointer on success (cast to `*const PluginInterface` to use)
 /// - Null on error (check `polyplug_runtime_last_error` for details)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
-) -> *const () {
+) -> *const ResolveHandle {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
             return core::ptr::null();
@@ -452,9 +464,10 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime.0.registry().resolve_guard(handle) {
             Ok(guard) => {
-                // SAFETY: vtable pointer points to 'static plugin data that remains
-                // valid for the lifetime of the loaded library.
-                guard.vtable() as *const ()
+                let vtable: *const PluginInterface = guard.vtable();
+                let arc: Arc<VTableSlot> = Arc::clone(&guard.slot);
+                let handle: Box<ResolveHandle> = Box::new(ResolveHandle { vtable, _arc: arc });
+                Box::into_raw(handle)
             }
             Err(e) => {
                 runtime.0.set_last_error(e.to_string());
@@ -465,13 +478,25 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
     .unwrap_or(core::ptr::null())
 }
 
-/// # Safety
-/// `buf` must be valid for writes of `buf_len` bytes when non-null.
-/// Get the last error message from a runtime.
+/// Release a plugin handle obtained from `polyplug_runtime_resolve_plugin`.
 ///
 /// # Safety
-/// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
-/// `buf` must be valid for writes of `buf_len` bytes when non-null.
+/// - `handle` must be a non-null pointer returned by `polyplug_runtime_resolve_plugin`.
+/// - `handle` must not be released twice (no double-free).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_release_plugin(handle: *const ResolveHandle) {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !handle.is_null() {
+            // SAFETY: handle was allocated by polyplug_runtime_resolve_plugin via Box::new.
+            let _: Box<ResolveHandle> = unsafe { Box::from_raw(handle as *mut ResolveHandle) };
+        }
+    }))
+    .unwrap_or(())
+}
+
+/// # Safety
+/// - `rt` must be a valid pointer returned by `polyplug_runtime_create`.
+/// - `buf` must be valid for writes of `buf_len` bytes when non-null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_last_error(
     rt: *const OpaqueRuntime,
@@ -757,8 +782,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -799,7 +824,8 @@ mod tests {
         let handle: u64 = unsafe { polyplug_runtime_find_by_contract(core::ptr::null(), 1, 0) };
         assert_eq!(handle, u64::MAX);
 
-        let vtable: *const () = unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0) };
+        let vtable: *const ResolveHandle =
+            unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0) };
         assert!(vtable.is_null());
 
         unsafe {
@@ -919,8 +945,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
