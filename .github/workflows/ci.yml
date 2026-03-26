@@ -16,6 +16,21 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Fast, cheap validation - run first to fail fast
+  sdk-validator:
+    name: SDK Consistency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install ast-grep
+        run: cargo install ast-grep
+      - name: Validate SDK consistency
+        run: cargo run -p sdk-validator -- --config sdk-validator.yaml --fail-on-missing
+
   fmt:
     name: cargo fmt --check
     runs-on: ubuntu-latest
@@ -71,7 +86,7 @@ jobs:
   ci:
     name: CI
     if: always()
-    needs: [fmt, clippy, test, test-download-nethost]
+    needs: [sdk-validator, fmt, clippy, test, test-download-nethost]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs passed
