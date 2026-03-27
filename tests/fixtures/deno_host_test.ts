@@ -5,6 +5,11 @@ const TEST_PLUGIN_DIR = Deno.env.get("TEST_PLUGIN_DIR") ?? "";
 const TEST_ADD_CONTRACT_ID = 0xCC4232FAB0410D2Bn;
 const NATIVE_AVAILABLE = Deno.env.get("POLYPLUG_NATIVE_LIB") !== undefined;
 
+if (!POLYPLUG_SO) {
+    console.error("FATAL: POLYPLUG_SO not set - libpolyplug.so not built. Run: cargo build -p polyplug");
+    Deno.exit(1);
+}
+
 let passed = 0;
 let failed = 0;
 

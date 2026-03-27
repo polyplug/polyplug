@@ -27,7 +27,12 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
-        run: cargo install ast-grep
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -sLO https://github.com/ast-grep/ast-grep/releases/download/0.42.0/app-x86_64-unknown-linux-gnu.zip
+          unzip -j app-x86_64-unknown-linux-gnu.zip sg -d $HOME/.local/bin
+          chmod +x $HOME/.local/bin/sg
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
       - name: Validate SDK consistency
         run: cargo run -p sdk-validator -- --config sdk-validator.yaml --fail-on-missing
 
@@ -66,11 +71,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install ast-grep
+        run: |
+          mkdir -p $HOME/.local/bin
+          curl -sLO https://github.com/ast-grep/ast-grep/releases/download/0.42.0/app-x86_64-unknown-linux-gnu.zip
+          unzip -j app-x86_64-unknown-linux-gnu.zip sg -d $HOME/.local/bin
+          chmod +x $HOME/.local/bin/sg
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
       - name: Build C# SDK (Polyplug.Host.dll for tests)
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
+      - name: Build libpolyplug.so (required for deno test)
+        run: cargo build -p polyplug
       - name: cargo test --workspace
         run: cargo test --workspace
 
