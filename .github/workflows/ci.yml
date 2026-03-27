@@ -50,9 +50,8 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
         run: |
-          curl -sLO https://github.com/ast-grep/ast-grep/releases/download/0.42.0/app-x86_64-unknown-linux-gnu.zip
-          unzip -j app-x86_64-unknown-linux-gnu.zip sg -d /usr/local/bin
-          chmod +x /usr/local/bin/sg
+          curl -fsSL https://raw.githubusercontent.com/ast-grep/ast-grep/main/crates/cli/install/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       - run: cargo run -p sdk-validator -- --config sdk-validator.yaml --fail-on-missing
 
   test:
@@ -70,12 +69,8 @@ jobs:
           python-version: '3.12'
       - name: Install ast-grep
         run: |
-          curl -sLO https://github.com/ast-grep/ast-grep/releases/download/0.42.0/app-x86_64-unknown-linux-gnu.zip
-          unzip -j app-x86_64-unknown-linux-gnu.zip sg -d /usr/local/bin
-          chmod +x /usr/local/bin/sg
-          /usr/local/bin/sg --version
-          echo "PATH=$PATH"
-          which sg || echo "sg not found in PATH"
+          curl -fsSL https://raw.githubusercontent.com/ast-grep/ast-grep/main/crates/cli/install/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
