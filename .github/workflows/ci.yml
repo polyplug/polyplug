@@ -49,9 +49,7 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install ast-grep
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/ast-grep/ast-grep/main/crates/cli/install/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        run: cargo install ast-grep --locked
       - run: cargo run -p sdk-validator -- --config sdk-validator.yaml --fail-on-missing
 
   test:
@@ -68,9 +66,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install ast-grep
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/ast-grep/ast-grep/main/crates/cli/install/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        run: cargo install ast-grep --locked
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
