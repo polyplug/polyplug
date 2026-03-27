@@ -16,7 +16,31 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Fast, cheap validation - run first to fail fast
+  # ─── Linting — fast fail ─────────────────────────────────────────────────────
+  fmt:
+    name: cargo fmt --check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace -- -D warnings
+
+  # ─── SDK Validation — cross-language consistency ─────────────────────────────
   sdk-validator:
     name: SDK Consistency Check
     runs-on: ubuntu-latest
@@ -31,36 +55,11 @@ jobs:
           curl -sLO https://github.com/ast-grep/ast-grep/releases/download/0.42.0/app-x86_64-unknown-linux-gnu.zip
           unzip -j app-x86_64-unknown-linux-gnu.zip sg -d /usr/local/bin
           chmod +x /usr/local/bin/sg
-      - name: Validate SDK consistency
-        run: cargo run -p sdk-validator -- --config sdk-validator.yaml --fail-on-missing
+      - run: cargo run -p sdk-validator -- --config sdk-validator.yaml --fail-on-missing
 
-  fmt:
-    name: cargo fmt --check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: cargo fmt --check
-        run: cargo fmt --check
-
-  clippy:
-    name: cargo clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: cargo clippy --workspace -- -D warnings
-        run: cargo clippy --workspace -- -D warnings
-
+  # ─── Tests — fast tests on PRs, all tests on main ────────────────────────────
   test:
-    name: cargo test --workspace
+    name: Tests
     runs-on: ubuntu-latest
     needs: [fmt, clippy]
     steps:
@@ -80,15 +79,108 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Build C# SDK (Polyplug.Host.dll for tests)
+      - name: Build C# SDK
         run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
-      - name: Build libpolyplug.so (required for deno test)
+      - name: Build libpolyplug.so
         run: cargo build -p polyplug
-      - name: cargo test --workspace
+      - name: Run tests
         run: cargo test --workspace
 
+  # ─── Coverage — fast tests only on PRs ───────────────────────────────────────
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Generate coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info -- --skip stress
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  # ─── Stress tests — main only ───────────────────────────────────────────────
+  stress-tests:
+    name: Stress Tests
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [fmt, clippy]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
+      - name: Run all tests including stress
+        run: cargo test --workspace -- --include-ignored
+
+  # ─── External toolchain tests — main only ───────────────────────────────────
+  external-toolchains:
+    name: External ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [fmt, clippy]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [dotnet, python, lua, js-quickjs]
+        include:
+          - toolchain: dotnet
+            test_cmd: cargo test -p integration --test integration_dotnet
+          - toolchain: python
+            setup: sudo apt-get install -y python3-dev python3-pip
+            test_cmd: cargo test -p integration --test integration_python
+          - toolchain: lua
+            setup: sudo apt-get install -y liblua5.4-dev
+            test_cmd: cargo test -p integration --test integration_lua
+          - toolchain: js-quickjs
+            test_cmd: cargo test -p integration --test integration_js
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.toolchain }}
+          save-if: true
+      - uses: actions/setup-dotnet@v4
+        if: matrix.toolchain == 'dotnet'
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build C# SDK
+        if: matrix.toolchain == 'dotnet'
+        run: dotnet build sdks/csharp/host/Polyplug.Host.csproj -c Debug
+      - name: Setup ${{ matrix.toolchain }}
+        if: matrix.setup != ''
+        run: ${{ matrix.setup }}
+      - name: Run ${{ matrix.toolchain }} tests
+        run: ${{ matrix.test_cmd }}
+
+  # ─── Download nethost feature build ─────────────────────────────────────────
   test-download-nethost:
-    name: cargo build --features download-nethost
+    name: Build with download-nethost
     runs-on: ubuntu-latest
     needs: [fmt, clippy]
     steps:
@@ -97,14 +189,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: cargo build -p polyplug_dotnet --features download-nethost
-        run: cargo build -p polyplug_dotnet --features download-nethost
-  # Single required status check — point branch protection rules at this job.
-  # Adding matrix entries in the future won't require updating branch rules.
+      - run: cargo build -p polyplug_dotnet --features download-nethost
+
+  # ─── Required status check for branch protection ─────────────────────────────
   ci:
     name: CI
     if: always()
-    needs: [sdk-validator, fmt, clippy, test, test-download-nethost]
+    needs: [fmt, clippy, sdk-validator, test, coverage]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all jobs passed

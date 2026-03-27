@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast_grep::{transform_name, AstGrepRunner, Language, NamingConvention};
+use crate::ast_grep::{AstGrepRunner, Language, NamingConvention, transform_name};
 use crate::languages::{LanguageValidator, ValidationResult};
 
 /// Validator for JavaScript/TypeScript SDK files.
@@ -158,7 +158,9 @@ export function toStr(sv: StringView | null | undefined): string {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();
@@ -188,7 +190,9 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();
@@ -220,7 +224,9 @@ export function stripPrefix(sv: StringView | string, prefix: string): string {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();
@@ -249,7 +255,9 @@ export function split(sv: StringView | string, delimiter: string): string[] {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();
@@ -278,7 +286,9 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();
@@ -307,7 +317,9 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();
@@ -340,7 +352,9 @@ export function startsWith(sv: StringView | string, prefix: string): boolean {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: JsValidator = JsValidator::new();

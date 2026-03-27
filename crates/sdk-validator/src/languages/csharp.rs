@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::ast_grep::{transform_name, AstGrepRunner, Language, NamingConvention};
+use crate::ast_grep::{AstGrepRunner, Language, NamingConvention, transform_name};
 use crate::languages::{LanguageValidator, ValidationResult};
 
 /// Validator for C# SDK files.
@@ -205,7 +205,9 @@ namespace Polyplug.Abi {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: CSharpValidator = CSharpValidator::new();
@@ -236,7 +238,9 @@ namespace Polyplug.Abi {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: CSharpValidator = CSharpValidator::new();
@@ -267,7 +271,9 @@ namespace Polyplug.Abi {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: CSharpValidator = CSharpValidator::new();
@@ -298,7 +304,9 @@ namespace Polyplug.Abi {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: CSharpValidator = CSharpValidator::new();
@@ -323,7 +331,9 @@ namespace Polyplug.Abi {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: CSharpValidator = CSharpValidator::new();
@@ -347,7 +357,9 @@ namespace Polyplug.Abi {
 
         let runner: AstGrepRunner = AstGrepRunner::new();
         if !runner.is_available() {
-            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+            panic!(
+                "ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html"
+            );
         }
 
         let validator: CSharpValidator = CSharpValidator::new();
