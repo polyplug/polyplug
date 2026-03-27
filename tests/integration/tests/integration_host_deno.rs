@@ -1,5 +1,11 @@
+//! Integration tests for Deno host library (FFI bindings).
+//!
+//! Tests that the Deno FFI bindings in sdks/js/host/ work correctly
+//! with the polyplug native library.
+
 #![allow(clippy::expect_used)]
 
+use std::path::PathBuf;
 use std::process::Command;
 
 const POLYPLUG_SO: &str = env!("POLYPLUG_SO");
@@ -16,18 +22,22 @@ fn deno_available() -> bool {
 #[test]
 fn test_deno_host_lib_integration() {
     if !deno_available() {
-        println!("[SKIP] deno not found on PATH — skipping integration_host_deno tests");
+        eprintln!("[SKIP] deno not found on PATH");
         return;
     }
 
-    let manifest_dir: std::path::PathBuf = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root: std::path::PathBuf = manifest_dir
+    if POLYPLUG_SO.is_empty() {
+        panic!("POLYPLUG_SO not set - libpolyplug.so not built. Run: cargo build -p polyplug");
+    }
+
+    let manifest_dir: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root: PathBuf = manifest_dir
         .parent()
-        .expect("parent of crates/polyplug")
+        .expect("parent of tests/integration")
         .parent()
         .expect("workspace root")
         .to_path_buf();
-    let fixture_ts: std::path::PathBuf = workspace_root
+    let fixture_ts: PathBuf = workspace_root
         .join("tests")
         .join("fixtures")
         .join("deno_host_test.ts");

@@ -25,7 +25,36 @@ fn main() {
         .expect("workspace root")
         .to_path_buf();
 
+    let target_dir: PathBuf = env::var("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join("target"));
+
+    // Determine profile from OUT_DIR components
+    let out_dir: PathBuf = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let profile: &str = if out_dir.components().any(|c| c.as_os_str() == "release") {
+        "release"
+    } else {
+        "debug"
+    };
+
     let fixtures_dir: PathBuf = workspace_root.join("tests").join("fixtures");
+
+    // Platform-specific shared library filename for polyplug
+    let polyplug_lib_filename: &str = if cfg!(target_os = "macos") {
+        "libpolyplug.dylib"
+    } else if cfg!(target_os = "windows") {
+        "polyplug.dll"
+    } else {
+        "libpolyplug.so"
+    };
+
+    // POLYPLUG_SO — main polyplug library (required for deno test)
+    let polyplug_so: PathBuf = target_dir.join(profile).join(polyplug_lib_filename);
+    if polyplug_so.exists() {
+        println!("cargo:rustc-env=POLYPLUG_SO={}", polyplug_so.display());
+    } else {
+        println!("cargo:rustc-env=POLYPLUG_SO=");
+    }
 
     // Platform-specific shared library filename for test_plugin
     let test_plugin_filename: &str = if cfg!(target_os = "macos") {
