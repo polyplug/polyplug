@@ -121,6 +121,17 @@ impl CodeGenerator for CppGenerator {
         }
         // When ir.bundle.is_none() (--api mode): NO manifest emitted here.
         // The root manifest.toml was already emitted by generate_host().
+
+        // ── File 5: host_contracts.hpp (guest-side callers) ─────────────────────
+        if !ir.host_contracts.is_empty() {
+            let host_contracts_hpp: String = generate_cpp_guest_host_contracts_file(ir);
+            files.files.push(GeneratedFile {
+                path: std::path::PathBuf::from("guest/host_contracts.hpp"),
+                content: host_contracts_hpp,
+                force_regenerate: false,
+            });
+        }
+
         Ok(())
     }
 }
@@ -1276,6 +1287,358 @@ fn generate_cpp_host_contract_trait(out: &mut String, contract: &ResolvedHostCon
     out.push_str("};\n\n");
 }
 
+// ─── Guest Host Contract Caller Generation ─────────────────────────────────────
+
+/// Convert host contract name to C++ guest caller class name.
+/// e.g. "host.logger" -> "HostLoggerContract", "host.fs.reader" -> "HostFsReaderContract"
+fn host_contract_name_to_cpp_caller(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal + "Contract"
+    } else {
+        "Host".to_owned() + &pascal + "Contract"
+    }
+}
+
+/// Generate C++ guest-side type name for caller method parameters.
+/// For guest callers, we use ergonomic C++ types:
+/// - StringView -> std::string_view (borrowed view)
+/// - Buffer -> Buffer (ABI type, passed by value)
+/// - UserDefined -> const TypeName& (passed by const reference)
+/// - Primitives -> T (passed by value)
+fn cpp_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "std::string_view".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => format!("const {name}&"),
+    }
+}
+
+/// Generate C++ guest-side return type name for caller methods.
+/// Return types are ABI types where appropriate:
+/// - StringView -> StringView (ABI type, caller must copy if needed)
+/// - Buffer -> Buffer (ABI type)
+/// - UserDefined -> TypeName (by value)
+/// - Primitives -> T (by value)
+fn cpp_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate one guest-side host contract caller class.
+fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_cpp_caller(&contract.name);
+
+    out.push_str(&format!(
+        "/// Guest caller for host contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str("/// Plugins use this class to call host-provided functionality.\n");
+    out.push_str(&format!("class {} {{\npublic:\n", class_name));
+
+    // Factory method - from_host
+    out.push_str(
+        "    /// Factory method - creates caller from HostVTable or nullopt if not found.\n",
+    );
+    out.push_str(&format!(
+        "    static std::optional<{}> from_host(const HostVTable* host, uint32_t min_version = 0) noexcept {{\n",
+        class_name
+    ));
+    out.push_str("        if (host == nullptr) {\n");
+    out.push_str("            return std::nullopt;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        const HostContractVTable* vtable = host->get_host_contract(nullptr, 0x{:016X}ULL, min_version);\n",
+        contract.contract_id
+    ));
+    out.push_str("        if (vtable == nullptr) {\n");
+    out.push_str("            return std::nullopt;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!("        return {}(vtable);\n", class_name));
+    out.push_str("    }\n\n");
+
+    // is_valid method
+    out.push_str("    /// Check if caller is valid (vtable is non-null).\n");
+    out.push_str("    bool is_valid() const noexcept { return vtable_ != nullptr; }\n\n");
+
+    // Explicit bool conversion
+    out.push_str("    /// Explicit bool conversion for validity check.\n");
+    out.push_str("    explicit operator bool() const noexcept { return vtable_ != nullptr; }\n\n");
+
+    // Methods for each function
+    for func in &contract.functions {
+        generate_cpp_guest_host_contract_method(out, func, &class_name);
+    }
+
+    // Private section
+    out.push_str("private:\n");
+    out.push_str(&format!(
+        "    explicit {}(const HostContractVTable* vtable) noexcept\n",
+        class_name
+    ));
+    out.push_str("        : vtable_(vtable) {}\n\n");
+    out.push_str("    const HostContractVTable* vtable_;\n");
+    out.push_str("};\n\n");
+}
+
+/// Generate one method for a guest-side host contract caller.
+fn generate_cpp_guest_host_contract_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    class_name: &str,
+) {
+    let fn_id: u32 = func.function_id;
+
+    let return_type: String = func
+        .returns
+        .as_ref()
+        .map(cpp_guest_caller_return_type_name)
+        .unwrap_or_else(|| "void".to_owned());
+
+    // Build parameter list
+    let params: Vec<String> = func
+        .params
+        .iter()
+        .map(|p| format!("{} {}", cpp_guest_caller_param_type_name(&p.ty), p.name))
+        .collect();
+    let params_str: String = params.join(", ");
+
+    out.push_str(&format!(
+        "    /// Call host contract function `{}` (function_id={})\n",
+        func.name, fn_id
+    ));
+    out.push_str(&format!(
+        "    {} {}({}) noexcept {{\n",
+        return_type, func.name, params_str
+    ));
+
+    // Null vtable check
+    out.push_str("        if (vtable_ == nullptr) {\n");
+    if func.returns.is_some() {
+        out.push_str(&format!("            return {}{{}};\n", return_type));
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n\n");
+
+    // Get header and check function count
+    out.push_str("        const HostContractVTableHeader* header = &vtable_->header;\n");
+    out.push_str(&format!(
+        "        if ({fn_id}_u32 >= header->function_count) {{\n"
+    ));
+    if func.returns.is_some() {
+        out.push_str(&format!("            return {}{{}};\n", return_type));
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n\n");
+
+    // Build args_ptr setup
+    emit_cpp_guest_host_contract_args_setup(out, func, class_name);
+
+    // Build out_ptr setup
+    emit_cpp_guest_host_contract_out_setup(out, &func.returns);
+
+    // Dispatch call
+    out.push_str("        AbiError err;\n");
+    out.push_str("        switch (header->dispatch_type) {\n");
+    out.push_str("            case DispatchType::Native: {\n");
+    out.push_str(&format!(
+        "                auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->dispatch.native.functions[{fn_id}_u32]);\n"
+    ));
+    out.push_str("                err = fn_(args_ptr, out_ptr);\n");
+    out.push_str("                break;\n");
+    out.push_str("            }\n");
+    out.push_str("            case DispatchType::VirtualMachine: {\n");
+    out.push_str(&format!(
+        "                err = (vtable_->dispatch.vm.call)(vtable_->dispatch.vm.bridge_data, {fn_id}_u32, args_ptr, out_ptr);\n"
+    ));
+    out.push_str("                break;\n");
+    out.push_str("            }\n");
+    out.push_str("        }\n\n");
+
+    // Error handling - for now, just return default on error
+    out.push_str("        if (err.code != ABI_OK) {\n");
+    if func.returns.is_some() {
+        out.push_str(&format!("            return {}{{}};\n", return_type));
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n\n");
+
+    // Return result
+    if func.returns.is_some() {
+        out.push_str("        return out;\n");
+    }
+
+    out.push_str("    }\n\n");
+}
+
+/// Emit the args_ptr setup for a C++ guest host contract method.
+fn emit_cpp_guest_host_contract_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    class_name: &str,
+) {
+    if func.params.is_empty() {
+        out.push_str("        const void* args_ptr = nullptr;\n");
+        return;
+    }
+
+    if func.params.len() == 1 {
+        let param: &crate::ir::ResolvedParam = &func.params[0];
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                // std::string_view -> StringView conversion
+                out.push_str(&format!(
+                    "        StringView {}_view{{ reinterpret_cast<const uint8_t*>({}.data()), {}.size() }};\n",
+                    param.name, param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "        const void* args_ptr = &{}_view;\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                // User-defined struct - pass pointer directly
+                out.push_str(&format!(
+                    "        const void* args_ptr = &{};\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
+                // Primitive or other ABI type - store in local and pass pointer
+                let cpp_ty: String = cpp_type_name(&param.ty);
+                out.push_str(&format!(
+                    "        const {cpp_ty} local_{name} = {name};\n",
+                    cpp_ty = cpp_ty,
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "        const void* args_ptr = &local_{name};\n",
+                    name = param.name
+                ));
+            }
+        }
+        return;
+    }
+
+    // Multiple params: pack into inline struct
+    let func_name_cap: String = capitalise_first(&func.name);
+    let struct_name: String = format!("{}{}Args", class_name, func_name_cap);
+
+    out.push_str(&format!("        struct {} {{", struct_name));
+    for param in &func.params {
+        let cpp_ty: String = cpp_guest_caller_abi_type_name(&param.ty);
+        out.push_str(&format!(" {} {};", cpp_ty, param.name));
+    }
+    out.push_str(" };\n");
+
+    // Initialize struct fields
+    let field_inits: Vec<String> = func
+        .params
+        .iter()
+        .map(|p| match &p.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                format!(
+                    "StringView{{ reinterpret_cast<const uint8_t*>({}.data()), {}.size() }}",
+                    p.name, p.name
+                )
+            }
+            _ => p.name.clone(),
+        })
+        .collect();
+
+    out.push_str(&format!(
+        "        {} args_val{{ {} }};\n",
+        struct_name,
+        field_inits.join(", ")
+    ));
+    out.push_str("        const void* args_ptr = &args_val;\n");
+}
+
+/// Get the ABI type name for packing into arg structs.
+/// For StringView parameters, we need the ABI type, not std::string_view.
+fn cpp_guest_caller_abi_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Emit the out_ptr setup for a C++ guest host contract method.
+fn emit_cpp_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if let Some(ret_ty) = returns {
+        let cpp_ty: String = cpp_guest_caller_return_type_name(ret_ty);
+        out.push_str(&format!("        {} out{{}};\n", cpp_ty));
+        out.push_str("        void* out_ptr = &out;\n");
+    } else {
+        out.push_str("        void* out_ptr = nullptr;\n");
+    }
+}
+
+/// Generate all guest-side host contract callers into a single file.
+fn generate_cpp_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str("// THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n");
+    out.push_str(
+        "// Re-generate with: polyplugc generate --bundle bundle.toml --lang cpp --out <dir>\n",
+    );
+    out.push_str("#pragma once\n");
+    out.push_str("#include \"types.hpp\"\n");
+    out.push_str("#include \"polyplug/abi.hpp\"\n");
+    out.push_str("#include <cstdint>\n");
+    out.push_str("#include <optional>\n");
+    out.push_str("#include <string_view>\n\n");
+    out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_cpp_guest_host_contract_caller(&mut out, contract);
+    }
+
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_cpp_caller(&contract.name);
+        let const_name: String = class_name.to_uppercase() + "_ID";
+        out.push_str(&format!(
+            "/// Contract ID constant for `{}` (FNV-1a of \"host_contract:{}@{}\")\n",
+            contract.name, contract.name, contract.version.major
+        ));
+        out.push_str(&format!(
+            "constexpr uint64_t {} = 0x{:016X}ULL;\n\n",
+            const_name, contract.contract_id
+        ));
+    }
+
+    out.push_str("}  // namespace polyplug_plugin\n");
+    out
+}
+
 /// Generate one pure virtual method for a host contract function.
 fn generate_cpp_host_trait_method(out: &mut String, func: &ResolvedFunction) {
     let return_type: String = func
@@ -1775,6 +2138,213 @@ mod tests {
         assert!(
             !names.contains(&"host/host_contracts.hpp".to_owned()),
             "unexpected host_contracts.hpp: {names:?}"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_cpp_caller_conversion() {
+        assert_eq!(
+            host_contract_name_to_cpp_caller("host.logger"),
+            "HostLoggerContract"
+        );
+        assert_eq!(
+            host_contract_name_to_cpp_caller("host.fs.reader"),
+            "HostFsReaderContract"
+        );
+        assert_eq!(
+            host_contract_name_to_cpp_caller("host.HostLogger"),
+            "HostLoggerContract"
+        );
+        assert_eq!(
+            host_contract_name_to_cpp_caller("logger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn cpp_guest_caller_param_type_name_mappings() {
+        assert_eq!(
+            cpp_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "uint32_t"
+        );
+        assert_eq!(
+            cpp_guest_caller_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "std::string_view"
+        );
+        assert_eq!(
+            cpp_guest_caller_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "Buffer"
+        );
+        assert_eq!(
+            cpp_guest_caller_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "const MyStruct&"
+        );
+    }
+
+    #[test]
+    fn cpp_guest_caller_return_type_name_mappings() {
+        assert_eq!(
+            cpp_guest_caller_return_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "uint32_t"
+        );
+        assert_eq!(
+            cpp_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "StringView"
+        );
+        assert_eq!(
+            cpp_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "Buffer"
+        );
+        assert_eq!(
+            cpp_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn generate_cpp_guest_host_contract_caller_produces_class() {
+        let contract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "message".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_cpp_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("class HostLoggerContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("const HostContractVTable* vtable_"),
+            "missing vtable member: {out}"
+        );
+        assert!(
+            out.contains("static std::optional<HostLoggerContract> from_host"),
+            "missing from_host method: {out}"
+        );
+        assert!(
+            out.contains("void log(std::string_view message) noexcept"),
+            "missing log method: {out}"
+        );
+        assert!(
+            out.contains("bool is_valid() const noexcept"),
+            "missing is_valid method: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cpp_guest_host_contracts_file_produces_file() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_cpp_guest_host_contracts_file(&ir);
+        assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
+        assert!(
+            out.contains("class HostLoggerContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("HOSTLOGGERCONTRACT_ID"),
+            "missing constant: {out}"
+        );
+        assert!(
+            out.contains("namespace polyplug_plugin"),
+            "missing namespace: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_with_host_contracts_produces_guest_host_contracts_file() {
+        let generator: CppGenerator = CppGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"guest/host_contracts.hpp".to_owned()),
+            "missing guest/host_contracts.hpp: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_without_host_contracts_no_guest_host_contracts_file() {
+        let generator: CppGenerator = CppGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"guest/host_contracts.hpp".to_owned()),
+            "unexpected guest/host_contracts.hpp: {names:?}"
         );
     }
 }

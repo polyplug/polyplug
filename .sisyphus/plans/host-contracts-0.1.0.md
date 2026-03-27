@@ -1032,7 +1032,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(cpp): generate host-side contract traits`
 
-- [ ] **Task 16**: Generate C++ guest-side host contract callers
+- [x] **Task 16**: Generate C++ guest-side host contract callers
   
   **Specification**:
   Generate C++ classes that plugins use to call host contracts.
