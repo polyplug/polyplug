@@ -407,6 +407,21 @@ impl AstGrepRunner {
             .unwrap_or(false)
     }
 
+    /// Get the path to the ast-grep binary being used.
+    pub fn binary_location(&self) -> &str {
+        self.binary_path.as_deref().unwrap_or("sg")
+    }
+
+    /// Check if ast-grep can be found in PATH.
+    pub fn can_find_in_path() -> bool {
+        std::env::var("PATH")
+            .map(|path| {
+                path.split(':')
+                    .any(|dir| std::path::Path::new(dir).join("sg").exists())
+            })
+            .unwrap_or(false)
+    }
+
     /// Run ast-grep with a pattern on a file.
     ///
     /// # Arguments

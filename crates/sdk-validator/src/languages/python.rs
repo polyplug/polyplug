@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::ast_grep::{AstGrepRunner, Language, NamingConvention, generate_rule};
+use crate::ast_grep::{generate_rule, AstGrepRunner, Language, NamingConvention};
 use crate::languages::{LanguageValidator, ValidationResult};
 
 /// Validator for Python SDK files.
@@ -119,13 +119,17 @@ mod tests {
 
     #[test]
     fn test_python_validator_detects_to_str() {
+        let runner: AstGrepRunner = AstGrepRunner::new();
+        if !runner.is_available() {
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+        }
+
         let python_code: &str = r#"
 def to_str(sv: StringView) -> str:
     """Convert StringView to Python str."""
     return ""
 "#;
         let file: NamedTempFile = create_temp_python_file(python_code);
-        let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -141,6 +145,11 @@ def to_str(sv: StringView) -> str:
 
     #[test]
     fn test_python_validator_detects_multiple_methods() {
+        let runner: AstGrepRunner = AstGrepRunner::new();
+        if !runner.is_available() {
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+        }
+
         let python_code: &str = r#"
 def to_str(sv: StringView) -> str:
     return ""
@@ -155,7 +164,6 @@ def split(sv: StringView, delimiter: str) -> list[str]:
     return []
 "#;
         let file: NamedTempFile = create_temp_python_file(python_code);
-        let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -184,13 +192,17 @@ def split(sv: StringView, delimiter: str) -> list[str]:
 
     #[test]
     fn test_python_validator_handles_type_annotated_functions() {
+        let runner: AstGrepRunner = AstGrepRunner::new();
+        if !runner.is_available() {
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+        }
+
         let python_code: &str = r#"
 def to_str(sv: StringView) -> str:
     """Function with type annotations."""
     return ""
 "#;
         let file: NamedTempFile = create_temp_python_file(python_code);
-        let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -205,12 +217,16 @@ def to_str(sv: StringView) -> str:
 
     #[test]
     fn test_python_validator_handles_functions_without_annotations() {
+        let runner: AstGrepRunner = AstGrepRunner::new();
+        if !runner.is_available() {
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+        }
+
         let python_code: &str = r#"
 def to_str(sv):
     return ""
 "#;
         let file: NamedTempFile = create_temp_python_file(python_code);
-        let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -262,6 +278,11 @@ def to_str(sv):
 
     #[test]
     fn test_python_validator_completion_percentage() {
+        let runner: AstGrepRunner = AstGrepRunner::new();
+        if !runner.is_available() {
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+        }
+
         let python_code: &str = r#"
 def to_str(sv):
     return ""
@@ -270,7 +291,6 @@ def starts_with(sv, prefix):
     return True
 "#;
         let file: NamedTempFile = create_temp_python_file(python_code);
-        let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(
@@ -290,6 +310,11 @@ def starts_with(sv, prefix):
 
     #[test]
     fn test_python_validator_all_methods_found() {
+        let runner: AstGrepRunner = AstGrepRunner::new();
+        if !runner.is_available() {
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
+        }
+
         let python_code: &str = r#"
 def to_str(sv):
     return ""
@@ -298,7 +323,6 @@ def starts_with(sv, prefix):
     return True
 "#;
         let file: NamedTempFile = create_temp_python_file(python_code);
-        let runner: AstGrepRunner = AstGrepRunner::new();
         let validator: PythonValidator = PythonValidator::new();
 
         let result: ValidationResult = validator.validate(

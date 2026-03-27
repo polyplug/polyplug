@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use crate::ast_grep::{AstGrepRunner, Language, NamingConvention, generate_rule};
+use crate::ast_grep::{generate_rule, AstGrepRunner, Language, NamingConvention};
 
 use super::{LanguageValidator, ValidationResult};
 
@@ -210,8 +210,7 @@ mod tests {
 
         // Skip test if ast-grep is not available
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep CLI not available");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: CppValidator = CppValidator::new();

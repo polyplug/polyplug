@@ -192,8 +192,7 @@ pub fn to_str(sv: StringView) -> &'static str {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep not installed");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: RustValidator = RustValidator::new();
@@ -233,8 +232,7 @@ pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep not installed");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: RustValidator = RustValidator::new();
@@ -259,8 +257,7 @@ fn internal_helper(x: i32) -> i32 {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep not installed");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: RustValidator = RustValidator::new();
@@ -270,11 +267,9 @@ fn internal_helper(x: i32) -> i32 {
         let result: ValidationResult =
             validator.validate(&runner, "StringView", &required_methods, &target_files);
 
-        assert!(
-            result
-                .found_methods
-                .contains(&"internal_helper".to_string())
-        );
+        assert!(result
+            .found_methods
+            .contains(&"internal_helper".to_string()));
     }
 
     #[test]
@@ -291,8 +286,7 @@ pub fn to_str(sv: StringView) -> &'static str {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep not installed");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: RustValidator = RustValidator::new();
@@ -317,8 +311,7 @@ pub fn to_str(sv: StringView) -> &'static str {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep not installed");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: RustValidator = RustValidator::new();
@@ -351,8 +344,7 @@ pub fn starts_with(sv: StringView, prefix: &str) -> bool {
         let runner: AstGrepRunner = AstGrepRunner::new();
 
         if !runner.is_available() {
-            eprintln!("Skipping test: ast-grep not installed");
-            return;
+            panic!("ast-grep CLI not found. Please install ast-grep: https://ast-grep.github.io/guide/introduction.html");
         }
 
         let validator: RustValidator = RustValidator::new();
