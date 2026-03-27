@@ -73,6 +73,9 @@ jobs:
           curl -sLO https://github.com/ast-grep/ast-grep/releases/download/0.42.0/app-x86_64-unknown-linux-gnu.zip
           unzip -j app-x86_64-unknown-linux-gnu.zip sg -d /usr/local/bin
           chmod +x /usr/local/bin/sg
+          /usr/local/bin/sg --version
+          echo "PATH=$PATH"
+          which sg || echo "sg not found in PATH"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
