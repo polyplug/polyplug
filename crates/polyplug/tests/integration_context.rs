@@ -8,14 +8,14 @@
 //!
 //! This test crate is the crate root for the `integration_context` test binary.
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -96,11 +96,12 @@ unsafe extern "C" fn noop_resolve_plugin(
     core::ptr::null()
 }
 
-/// No-op get_extension callback.
-unsafe extern "C" fn noop_get_extension(
+/// No-op get_host_contract callback.
+unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -148,7 +149,7 @@ fn rust_plugin_receives_bundle_path() {
         find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_plugin: noop_resolve_plugin,
-        get_extension: noop_get_extension,
+        get_host_contract: noop_get_host_contract,
     };
 
     // Build a PluginContext with a known bundle_path string.

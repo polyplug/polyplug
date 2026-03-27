@@ -15,7 +15,7 @@ polyplug is a plugin runtime that enables seamless cross-language plugin develop
 - **Hot Reload** — Reload plugins at runtime with notification system for seamless updates
 - **Zero/Minimal-Overhead FFI** — Direct function pointer dispatch with no runtime overhead for native languages, minimal overhead for VM-based languages
 - **Type-Safe Code Generation** — The `polyplugc` CLI generates type-safe bindings for all languages
-- **Factory Method Pattern** — Safe instance management with host-controlled lifecycles
+- **Singleton Plugin Implementations** — Each contract has one implementation; host creates caller wrappers with Arc-based lifecycle
 - **Multiple Loader Types** — Native, Python, Lua, JavaScript, Deno, and .NET loaders
 
 ## Quick Start

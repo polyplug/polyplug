@@ -105,6 +105,16 @@ pub enum PolyplugcError {
     GuestGenerationNotSupported { language: String, reason: String },
 
     #[error(
+        "host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")"
+    )]
+    HostContractNameMissingPrefix { name: String },
+
+    #[error(
+        "duplicate contract name `{name}`: contract names must be unique across both [[plugin_contract]] and [[host_contract]]"
+    )]
+    DuplicateContractName { name: String },
+
+    #[error(
         "version overflow: {component}={value} exceeds maximum 65535 in version `{version_str}`"
     )]
     VersionOverflow {
@@ -256,5 +266,27 @@ mod tests {
         assert!(s.contains("minor"), "got: {s}");
         assert!(s.contains("70000"), "got: {s}");
         assert!(s.contains("65535"), "got: {s}");
+    }
+
+    #[test]
+    fn host_contract_name_missing_prefix_display() {
+        let err: PolyplugcError = PolyplugcError::HostContractNameMissingPrefix {
+            name: "logger".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("logger"), "got: {s}");
+        assert!(s.contains("host."), "got: {s}");
+        assert!(s.contains("must start with"), "got: {s}");
+    }
+
+    #[test]
+    fn duplicate_contract_name_display() {
+        let err: PolyplugcError = PolyplugcError::DuplicateContractName {
+            name: "shared.api".to_owned(),
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("duplicate"), "got: {s}");
+        assert!(s.contains("shared.api"), "got: {s}");
+        assert!(s.contains("unique"), "got: {s}");
     }
 }

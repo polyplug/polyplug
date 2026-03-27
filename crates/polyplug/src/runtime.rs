@@ -19,12 +19,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::error::GraphError;
+use crate::error::HostContractError;
 use crate::error::LoaderError;
 use crate::error::PolyplugError;
 use crate::error::RegistryError;
 use crate::error::RuntimeError;
-use crate::extensions::Extension;
-use crate::extensions::SendPtr;
 use crate::graph::CapabilityGraph;
 use crate::loader::BundleLoader;
 use crate::loader::LoadedBundle;
@@ -32,6 +31,8 @@ use crate::loader::manifest::ManifestData;
 use crate::registry::Registry;
 use crate::version::Compatibility;
 use crate::version::Version;
+use polyplug_abi::HostContractVTable;
+use polyplug_abi::HostRuntime;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
@@ -99,8 +100,6 @@ pub struct Runtime {
     registry: Arc<Registry>,
     /// Loaded bundles, never dropped.
     _bundles: Vec<LoadedBundle>,
-    /// Extension impls. Never dropped — keeps vtable memory alive for the Runtime's lifetime.
-    _extensions: Vec<Box<dyn Extension>>,
     /// The static HostVTable given to plugins. Must be 'static.
     host_vtable: &'static HostVTable,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
@@ -119,15 +118,18 @@ pub struct Runtime {
     /// Stop flag sent to watcher thread.
     watcher_stop: std::sync::Mutex<Option<std::sync::Arc<core::sync::atomic::AtomicBool>>>,
     config: RuntimeConfig,
-    /// Extension map: extension_id -> raw vtable pointer.
-    /// Populated during RuntimeBuilder::build().
-    extension_map: HashMap<u32, SendPtr>,
     /// Optional warning callback. If None, warnings go to stderr.
     warning_cb: Option<WarningCb>,
     /// Last error message for FFI error reporting.
     last_error: std::sync::Mutex<String>,
     /// Captured vtables during hot-reload. Used by reload_register_callback.
     pub(crate) reload_captured_vtables: std::sync::Mutex<Vec<crate::reload::VTablePtr>>,
+    /// Registered host contracts, keyed by contract_id.
+    host_contracts: std::sync::RwLock<HashMap<u64, &'static HostContractVTable>>,
+    /// Host runtime type identifier.
+    host_runtime: HostRuntime,
+    // TODO: HostRuntimeBridge trait (Task 11)
+    // host_bridge: Option<Arc<dyn HostRuntimeBridge>>,
 }
 
 /// Options for `Runtime::load_bundle_with`.
@@ -143,11 +145,11 @@ pub struct LoadOptions {
 pub struct RuntimeBuilder {
     plugin_dirs: Vec<PathBuf>,
     loaders: Vec<Box<dyn BundleLoader>>,
-    extensions: Vec<Box<dyn Extension>>,
     compatibility: Compatibility,
     warning_cb: Option<WarningCb>,
     on_reload_cb: Option<ReloadCb>,
     config: RuntimeConfig,
+    host_runtime: HostRuntime,
 }
 
 impl RuntimeBuilder {
@@ -156,11 +158,11 @@ impl RuntimeBuilder {
         RuntimeBuilder {
             plugin_dirs: Vec::new(),
             loaders: Vec::new(),
-            extensions: Vec::new(),
             compatibility: Compatibility::default(),
             warning_cb: None,
             on_reload_cb: None,
             config: RuntimeConfig::default(),
+            host_runtime: HostRuntime::Rust,
         }
     }
 
@@ -180,14 +182,6 @@ impl RuntimeBuilder {
     /// unless a user-provided loader already claims that name.
     pub fn loader(mut self, loader: impl BundleLoader + 'static) -> RuntimeBuilder {
         self.loaders.push(Box::new(loader));
-        self
-    }
-
-    /// Register an extension. If two extensions share the same extension_id, the last one wins.
-    ///
-    /// Extensions provide optional host-side vtables queryable by plugins at init time.
-    pub fn extension(mut self, ext: Box<dyn Extension>) -> RuntimeBuilder {
-        self.extensions.push(ext);
         self
     }
 
@@ -223,6 +217,13 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Set the host runtime type.
+    /// Defaults to `HostRuntime::Rust`.
+    pub fn host_runtime(mut self, runtime: HostRuntime) -> RuntimeBuilder {
+        self.host_runtime = runtime;
+        self
+    }
+
     /// Build the runtime.
     //
     //  For MVP: scans plugin_dirs for .so/.dll/.dylib files,
@@ -230,14 +231,6 @@ impl RuntimeBuilder {
     //  Full capability graph resolution is a future enhancement.
     pub fn build(self) -> Result<Runtime, RuntimeError> {
         let registry: Arc<Registry> = Arc::new(Registry::new());
-
-        // Build extension map: extension_id -> vtable pointer.
-        let mut ext_map: HashMap<u32, SendPtr> = HashMap::new();
-        for ext in &self.extensions {
-            let id: u32 = ext.extension_id();
-            let ptr: *const () = ext.vtable_ptr();
-            ext_map.insert(id, SendPtr(ptr));
-        }
 
         // Build the static HostVTable. This must be 'static.
         let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
@@ -248,7 +241,7 @@ impl RuntimeBuilder {
             find_by_bundle: host_find_by_bundle,
             find_all_by_contract: host_find_all_by_contract,
             resolve_plugin: host_resolve_plugin,
-            get_extension: host_get_extension,
+            get_host_contract: host_get_host_contract,
         }));
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
@@ -297,17 +290,17 @@ impl RuntimeBuilder {
             _bundles: Vec::new(),
             host_vtable,
             loaders: loader_map,
-            _extensions: self.extensions,
             bundle_manifests: std::sync::Mutex::new(manifests_map),
             reload_libraries: std::sync::Mutex::new(HashMap::new()),
             on_reload_cb: self.on_reload_cb,
             watcher_thread: std::sync::Mutex::new(None),
             watcher_stop: std::sync::Mutex::new(None),
             config: self.config,
-            extension_map: ext_map,
             warning_cb: self.warning_cb,
             last_error: std::sync::Mutex::new(String::new()),
             reload_captured_vtables: std::sync::Mutex::new(Vec::new()),
+            host_contracts: std::sync::RwLock::new(HashMap::new()),
+            host_runtime: self.host_runtime,
         };
 
         // If nothing discovered, return Runtime with empty bundles (no graph needed)
@@ -436,6 +429,65 @@ impl Runtime {
         handle: PluginHandle,
     ) -> Result<crate::registry::PluginGuard, RegistryError> {
         self.registry.resolve_guard(handle)
+    }
+
+    /// Register a host contract vtable.
+    /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
+    pub fn register_host_contract(
+        &self,
+        contract_id: u64,
+        vtable: &'static HostContractVTable,
+    ) -> Result<(), HostContractError> {
+        let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractVTable>> =
+            self.host_contracts.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        if guard.contains_key(&contract_id) {
+            return Err(HostContractError::DuplicateContract { contract_id });
+        }
+        guard.insert(contract_id, vtable);
+        Ok(())
+    }
+
+    /// Unregister a host contract vtable.
+    /// Returns `true` if the contract was registered and removed, `false` if it was not found.
+    pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
+        let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractVTable>> =
+            self.host_contracts.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        guard.remove(&contract_id).is_some()
+    }
+
+    /// Get a host contract vtable by contract_id and minimum version.
+    /// Returns `None` if no matching contract is found or if the version is too low.
+    pub fn get_host_contract(
+        &self,
+        contract_id: u64,
+        min_version: u32,
+    ) -> Option<&'static HostContractVTable> {
+        let guard: std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractVTable>> =
+            self.host_contracts.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        guard.get(&contract_id).and_then(|vtable| {
+            let header: &polyplug_abi::HostContractVTableHeader = &vtable.header;
+            let version: u32 = (header.contract_major << 16) | header.contract_minor;
+            if version >= min_version {
+                Some(*vtable)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the host runtime type.
+    #[inline(always)]
+    pub fn host_runtime(&self) -> HostRuntime {
+        self.host_runtime
     }
 
     /// Get the HostVTable for use in plugin registrars.
@@ -1092,24 +1144,25 @@ pub(crate) unsafe extern "C" fn host_resolve_plugin(
     }
 }
 
-/// HostVTable.get_extension callback — returns the vtable pointer for a registered extension.
+/// HostVTable.get_host_contract callback — returns the vtable for a host contract.
 ///
 /// # Safety
-/// rt_ctx must be a valid pointer to a HostContext. extension_id must be a valid extension ID.
-pub(crate) unsafe extern "C" fn host_get_extension(
+/// rt_ctx must be a valid pointer to a HostContext.
+pub(crate) unsafe extern "C" fn host_get_host_contract(
     rt_ctx: *mut core::ffi::c_void,
-    extension_id: u32,
-) -> *const () {
+    contract_id: u64,
+    min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     if rt_ctx.is_null() {
         return core::ptr::null();
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
     let runtime: &Runtime = unsafe { &*ctx.runtime };
-    match runtime.extension_map.get(&extension_id) {
-        Some(ptr) => ptr.0,
+
+    match runtime.get_host_contract(contract_id, min_version) {
+        Some(vtable) => vtable as *const HostContractVTable,
         None => core::ptr::null(),
     }
 }
@@ -1143,13 +1196,6 @@ mod tests {
             handle.is_null(),
             "host_find_by_contract must return null when rt_ctx is null"
         );
-    }
-
-    #[test]
-    fn host_get_extension_null_rt_ctx_returns_null() {
-        // SAFETY: host_get_extension handles null rt_ctx gracefully
-        let ptr: *const () = unsafe { host_get_extension(core::ptr::null_mut(), 0xDEAD_BEEF_u32) };
-        assert!(ptr.is_null(), "unknown extension_id must return null");
     }
 
     #[test]
@@ -1583,5 +1629,174 @@ mod tests {
         if let Err(e) = inner_result {
             panic!("lazy inner load failed: {e}");
         }
+    }
+
+    // --- Host Contract Tests ---
+
+    fn create_host_contract_vtable(contract_id: u64, major: u32, minor: u32) -> &'static HostContractVTable {
+        Box::leak(Box::new(HostContractVTable {
+            header: polyplug_abi::HostContractVTableHeader {
+                vtable_version: 1,
+                contract_id,
+                contract_major: major,
+                contract_minor: minor,
+                function_count: 1,
+                dispatch_type: polyplug_abi::DispatchType::Native,
+            },
+            dispatch: polyplug_abi::HostContractDispatch {
+                native: polyplug_abi::NativeHostContractDispatch {
+                    functions: core::ptr::null(),
+                },
+            },
+        }))
+    }
+
+    #[test]
+    fn runtime_host_contracts_register_and_lookup() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
+        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+
+        let result: Result<(), HostContractError> = runtime.register_host_contract(contract_id, vtable);
+        assert!(result.is_ok(), "registration should succeed");
+
+        let found: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
+        assert!(found.is_some(), "contract should be found");
+        let found_vtable: &HostContractVTable = found.expect("contract should be present after is_some check");
+        assert_eq!(found_vtable.header.contract_id, contract_id);
+    }
+
+    #[test]
+    fn runtime_host_contracts_duplicate_registration_fails() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
+        let vtable1: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable2: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 1);
+
+        let result1: Result<(), HostContractError> = runtime.register_host_contract(contract_id, vtable1);
+        assert!(result1.is_ok(), "first registration should succeed");
+
+        let result2: Result<(), HostContractError> = runtime.register_host_contract(contract_id, vtable2);
+        assert!(result2.is_err(), "duplicate registration should fail");
+        match result2 {
+            Err(HostContractError::DuplicateContract { contract_id: id }) => {
+                assert_eq!(id, contract_id);
+            }
+            Err(other) => panic!("unexpected error: {other}"),
+            Ok(()) => panic!("expected error"),
+        }
+    }
+
+    #[test]
+    fn runtime_host_contracts_unregister() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
+        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+
+        runtime.register_host_contract(contract_id, vtable).expect("registration should succeed");
+
+        let removed: bool = runtime.unregister_host_contract(contract_id);
+        assert!(removed, "unregister should return true for existing contract");
+
+        let removed_again: bool = runtime.unregister_host_contract(contract_id);
+        assert!(!removed_again, "unregister should return false for non-existent contract");
+
+        let found: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
+        assert!(found.is_none(), "contract should not be found after unregister");
+    }
+
+    #[test]
+    fn runtime_host_contracts_version_check() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 2);
+        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 2, 5);
+
+        runtime.register_host_contract(contract_id, vtable).expect("registration should succeed");
+
+        let found_low: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
+        assert!(found_low.is_some(), "should find with min_version=0");
+
+        let found_exact: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, (2 << 16) | 5);
+        assert!(found_exact.is_some(), "should find with exact version");
+
+        let found_higher_minor: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, (2 << 16) | 3);
+        assert!(found_higher_minor.is_some(), "should find with lower minor version requirement");
+
+        let found_higher_major: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 3 << 16);
+        assert!(found_higher_major.is_none(), "should not find with higher major version requirement");
+    }
+
+    #[test]
+    fn runtime_host_runtime_default_is_rust() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+        assert_eq!(runtime.host_runtime(), HostRuntime::Rust);
+    }
+
+    #[test]
+    fn runtime_host_runtime_can_be_set() {
+        let runtime: Runtime = Runtime::builder()
+            .host_runtime(HostRuntime::Python)
+            .build()
+            .expect("runtime build should succeed");
+        assert_eq!(runtime.host_runtime(), HostRuntime::Python);
+    }
+
+    #[test]
+    fn host_get_host_contract_callback_returns_registered_contract() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_abi::host_contract_id("host.test", 1);
+        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+
+        runtime.register_host_contract(contract_id, vtable).expect("registration should succeed");
+
+        let host_ctx: HostContext = HostContext {
+            runtime: &runtime as *const Runtime as *mut Runtime,
+            bundle_id: 0,
+        };
+        let rt_ptr: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
+
+        // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
+        let result: *const HostContractVTable = unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
+        assert!(!result.is_null(), "callback should return non-null for registered contract");
+
+        // SAFETY: result is a valid HostContractVTable pointer
+        let found_vtable: &HostContractVTable = unsafe { &*result };
+        assert_eq!(found_vtable.header.contract_id, contract_id);
+    }
+
+    #[test]
+    fn host_get_host_contract_callback_returns_null_for_unregistered() {
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_abi::host_contract_id("host.nonexistent", 1);
+
+        let host_ctx: HostContext = HostContext {
+            runtime: &runtime as *const Runtime as *mut Runtime,
+            bundle_id: 0,
+        };
+        let rt_ptr: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
+
+        // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
+        let result: *const HostContractVTable = unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
+        assert!(result.is_null(), "callback should return null for unregistered contract");
     }
 }

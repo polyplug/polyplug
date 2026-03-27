@@ -165,7 +165,9 @@ public struct HostVTable
     public IntPtr FindByBundle;
     public IntPtr FindAllByContract;
     public IntPtr ResolvePlugin;
-    public IntPtr GetExtension;
+///  Get host contract vtable by contract_id and minimum version.
+///  Returns null if no host contract matches the criteria.
+    public IntPtr GetHostContract;
 }
 
 ///  Metadata about a plugin within a bundle.
@@ -200,20 +202,6 @@ public struct PluginContext
     public ulong BundleId;
 }
 
-///  A single extension entry in the runtime config.
-///
-///  OWNERSHIP: the `vtable` pointer must be `'static` (valid for the runtime
-///  lifetime). `ExtensionEntry` arrays are passed by pointer to `RuntimeConfig`
-///  and never owned or freed by the runtime.
-[StructLayout(LayoutKind.Sequential)]
-public struct ExtensionEntry
-{
-///  FNV-1a lower 32 bits of the extension name.
-    public uint ExtensionId;
-///  Pointer to the extension's vtable struct.
-    public IntPtr Vtable;
-}
-
 ///  Configuration passed to `polyplug_runtime_create` during runtime initialisation.
 ///
 ///  OWNERSHIP: borrowed for the duration of the runtime build only.
@@ -227,9 +215,6 @@ public struct RuntimeConfig
     public nuint PluginDirCount;
 ///  Compatibility mode: 0 = Strict (only mode implemented in MVP).
     public uint Compatibility;
-///  Extensions provided by the host (array of `extension_count` entries).
-    public IntPtr Extensions;
-    public nuint ExtensionCount;
 }
 
 // ─── ABI Enums ────────────────────────────────────────────────────────────────

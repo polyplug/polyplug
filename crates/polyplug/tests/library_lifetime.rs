@@ -12,14 +12,14 @@ use polyplug::loader::parse_manifest;
 use polyplug::registry::Registry;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
+use polyplug_abi::bundle_id;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
-use polyplug_abi::bundle_id;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 
@@ -97,12 +97,12 @@ unsafe extern "C" fn stub_resolve_plugin(
     core::ptr::null()
 }
 
-/// # Safety
-/// Stub callback — not called during this test.
-unsafe extern "C" fn stub_get_extension(
+/// Stub get_host_contract callback.
+unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -142,7 +142,7 @@ fn library_handle_outlives_load_call() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     }));
 
     let registry: Registry = Registry::new();

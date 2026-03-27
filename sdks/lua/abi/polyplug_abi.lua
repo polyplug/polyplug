@@ -200,7 +200,9 @@ ffi.cdef[[
         PluginHandle (*find_by_bundle )(void*, uint64_t, uint64_t, uint32_t);
         size_t (*find_all_by_contract )(void*, uint64_t, uint32_t, PluginHandle*, size_t);
         const PluginInterface* (*resolve_plugin )(void*, PluginHandle);
-        const void* (*get_extension )(void*, uint32_t);
+        //  Get host contract vtable by contract_id and minimum version.
+        //  Returns null if no host contract matches the criteria.
+        const HostContractVTable* (*get_host_contract )(void*, uint64_t, uint32_t);
     } HostVTable;
 
     //  Context passed to every guest `polyplug_init()` function.
@@ -216,18 +218,6 @@ ffi.cdef[[
         uint64_t bundle_id;
     } PluginContext;
 
-    //  A single extension entry in the runtime config.
-    // 
-    //  OWNERSHIP: the `vtable` pointer must be `'static` (valid for the runtime
-    //  lifetime). `ExtensionEntry` arrays are passed by pointer to `RuntimeConfig`
-    //  and never owned or freed by the runtime.
-    typedef struct ExtensionEntry {
-        //  FNV-1a lower 32 bits of the extension name.
-        uint32_t extension_id;
-        //  Pointer to the extension's vtable struct.
-        const void* vtable;
-    } ExtensionEntry;
-
     //  Configuration passed to `polyplug_runtime_create` during runtime initialisation.
     // 
     //  OWNERSHIP: borrowed for the duration of the runtime build only.
@@ -239,9 +229,6 @@ ffi.cdef[[
         size_t plugin_dir_count;
         //  Compatibility mode: 0 = Strict (only mode implemented in MVP).
         uint32_t compatibility;
-        //  Extensions provided by the host (array of `extension_count` entries).
-        const ExtensionEntry* extensions;
-        size_t extension_count;
     } RuntimeConfig;
 
 ]]

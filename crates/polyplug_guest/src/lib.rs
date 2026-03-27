@@ -160,9 +160,6 @@ pub use polyplug_abi::contract_id;
 /// Compute the FNV-1a 64-bit bundle ID for a bundle name.
 pub use polyplug_abi::bundle_id;
 
-/// Compute the FNV-1a 32-bit extension ID for an extension name.
-pub use polyplug_abi::extension_id;
-
 // ─── Allocator ────────────────────────────────────────────────────────────────
 
 /// Allocate memory via the host system allocator.

@@ -11,8 +11,8 @@ use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::PluginHandle;
@@ -154,7 +154,7 @@ _FindByContractFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_
 _FindByBundleFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32)
 _FindAllByContractFn = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t)
 _ResolvePluginFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
-_GetExtensionFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32)
+_GetHostContractFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 
 class _HostVTable(ctypes.Structure):
     _fields_ = [
@@ -165,7 +165,7 @@ class _HostVTable(ctypes.Structure):
         ("find_by_bundle", _FindByBundleFn),
         ("find_all_by_contract", _FindAllByContractFn),
         ("resolve_plugin", _ResolvePluginFn),
-        ("get_extension", _GetExtensionFn),
+        ("get_host_contract", _GetHostContractFn),
     ]
 
 def polyplug_init(rt_ctx: int, host_vtable: int, _ctx: int) -> None:

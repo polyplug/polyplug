@@ -153,7 +153,7 @@ class HostVTable(ctypes.Structure):
         ("find_by_bundle", ctypes.c_void_p),
         ("find_all_by_contract", ctypes.c_void_p),
         ("resolve_plugin", ctypes.c_void_p),
-        ("get_extension", ctypes.c_void_p),
+        ("get_host_contract", ctypes.c_void_p),
     ]
 
 
@@ -185,19 +185,6 @@ class PluginContext(ctypes.Structure):
     ]
 
 
-class ExtensionEntry(ctypes.Structure):
-    """ A single extension entry in the runtime config.
-    
-     OWNERSHIP: the `vtable` pointer must be `'static` (valid for the runtime
-     lifetime). `ExtensionEntry` arrays are passed by pointer to `RuntimeConfig`
-     and never owned or freed by the runtime.
-    """
-    _fields_ = [
-        ("extension_id", ctypes.c_uint32),
-        ("vtable", ctypes.c_void_p),
-    ]
-
-
 class RuntimeConfig(ctypes.Structure):
     """ Configuration passed to `polyplug_runtime_create` during runtime initialisation.
     
@@ -209,8 +196,6 @@ class RuntimeConfig(ctypes.Structure):
         ("plugin_dirs", ctypes.c_void_p),
         ("plugin_dir_count", ctypes.c_size_t),
         ("compatibility", ctypes.c_uint32),
-        ("extensions", ctypes.c_void_p),
-        ("extension_count", ctypes.c_size_t),
     ]
 
 # ─── ABI Enums ────────────────────────────────────────────────────────────────

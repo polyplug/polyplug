@@ -6,7 +6,7 @@
 // NO CHANGES to #[repr(C)] structs, function pointer signatures, or the field
 // order of HostVTable are permitted after this point.
 //
-// All new functionality must go through the extension mechanism (get_extension).
+// All new functionality must go through the host contract mechanism (get_host_contract).
 // For rationale and trust model, see TRUST_MODEL.md.
 // =============================================================================
 
@@ -29,6 +29,11 @@ pub const ABI_ERROR_STALE_HANDLE: u32 = 5; // PluginHandle generation mismatch
 pub const ABI_FUNCTION_NOT_AVAIL: u32 = 6; // function_id >= function_count
 pub const ABI_ERROR_DUPLICATE_PROVIDER: u32 = 7; // same bundle already provides this contract
 pub const ABI_ERROR_INVALID_POINTER: u32 = 8; // null or invalid pointer passed to ABI function
+
+// Host contract error codes (reserved: 100-199 host contracts)
+pub const ABI_HOST_CONTRACT_NOT_FOUND: u32 = 100; // host contract not found by contract_id
+pub const ABI_HOST_CONTRACT_VERSION_MISMATCH: u32 = 101; // host contract version mismatch
+pub const ABI_HOST_CONTRACT_CALL_FAILED: u32 = 102; // host contract function call failed
 
 /// Non-owning UTF-8 string view.
 ///
@@ -360,6 +365,151 @@ unsafe impl Send for PluginInterface {}
 // Concurrent reads are safe — no mutation occurs through shared references.
 unsafe impl Sync for PluginInterface {}
 
+// ─── Host Runtime and Contract Types ─────────────────────────────────────────
+
+/// Host runtime type identifier — identifies the language/runtime hosting plugins.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostRuntime {
+    Rust = 0,
+    Python = 1,
+    Lua = 2,
+    JavaScript = 3,
+}
+
+// SAFETY: HostRuntime is a simple C enum (Copy type). Safe to share across threads.
+unsafe impl Send for HostRuntime {}
+
+// SAFETY: HostRuntime is a simple C enum (Copy type). Concurrent reads are safe.
+unsafe impl Sync for HostRuntime {}
+
+/// Host contract vtable header — metadata for a host-provided contract.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct HostContractVTableHeader {
+    /// VTable format version (for future compatibility).
+    pub vtable_version: u32,
+    /// FNV-1a hash of "contract_name@major_version".
+    pub contract_id: u64,
+    /// Contract major version.
+    pub contract_major: u32,
+    /// Contract minor version.
+    pub contract_minor: u32,
+    /// Number of functions in this contract.
+    pub function_count: u32,
+    /// Dispatch mechanism type (Native or VirtualMachine).
+    pub dispatch_type: DispatchType,
+}
+
+// SAFETY: HostContractVTableHeader contains only plain data types (u32, u64, DispatchType).
+// All fields are Copy types safe to share across threads.
+unsafe impl Send for HostContractVTableHeader {}
+
+// SAFETY: HostContractVTableHeader contains only plain data types.
+// Concurrent reads are safe — no mutation occurs through shared references.
+unsafe impl Sync for HostContractVTableHeader {}
+
+/// Native dispatch for host contracts — direct function pointer array.
+///
+/// Used when `dispatch_type == DispatchType::Native`.
+/// The `functions` array contains `function_count` function pointers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeHostContractDispatch {
+    /// Pointer to a static array of function pointers, indexed by function_id.
+    pub functions: *const *const (),
+}
+
+// SAFETY: NativeHostContractDispatch contains only a pointer to static data.
+// The function pointers are 'static and safe to call from any thread.
+unsafe impl Send for NativeHostContractDispatch {}
+
+// SAFETY: NativeHostContractDispatch contains only a pointer to static data.
+// Concurrent reads of the pointer are safe.
+unsafe impl Sync for NativeHostContractDispatch {}
+
+/// VM dispatch for host contracts — call through a dispatch function.
+///
+/// Used when `dispatch_type == DispatchType::VirtualMachine`.
+/// The `call` function receives `bridge_data` which contains VM-specific state.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct VmHostContractDispatch {
+    /// Dispatch function called for every VM function invocation.
+    ///
+    /// # Arguments
+    /// - `bridge_data`: VM-specific data (cast from `*mut c_void`)
+    /// - `fn_id`: Function index within the contract
+    /// - `args`: Pointer to packed arguments (ABI-specific layout)
+    /// - `out`: Pointer to output buffer for return value
+    pub call: unsafe extern "C" fn(
+        bridge_data: *mut core::ffi::c_void,
+        fn_id: u32,
+        args: *const (),
+        out: *mut (),
+    ) -> AbiError,
+    /// VM-specific data (opaque to the host; interpreted by the dispatch function).
+    pub bridge_data: *mut core::ffi::c_void,
+}
+
+// SAFETY: VmHostContractDispatch contains a function pointer and a raw pointer.
+// The function pointer is safe to call from any thread (the dispatch function
+// must handle its own synchronization). The bridge_data pointer is owned by
+// the VM bridge and must be thread-safe.
+unsafe impl Send for VmHostContractDispatch {}
+
+// SAFETY: VmHostContractDispatch contains only a function pointer and a raw pointer.
+// Concurrent calls to the dispatch function must be safe (VM bridge's responsibility).
+unsafe impl Sync for VmHostContractDispatch {}
+
+/// Union of host contract dispatch mechanisms — use based on `dispatch_type`.
+///
+/// # Safety
+/// Access the correct variant based on `HostContractVTableHeader::dispatch_type`:
+/// - `dispatch_type == Native` → access `.native`
+/// - `dispatch_type == VirtualMachine` → access `.vm`
+#[repr(C)]
+pub union HostContractDispatch {
+    /// Native dispatch data (when dispatch_type == Native).
+    pub native: NativeHostContractDispatch,
+    /// VM dispatch data (when dispatch_type == VirtualMachine).
+    pub vm: VmHostContractDispatch,
+}
+
+// SAFETY: HostContractDispatch is a union of Send+Sync types.
+// The caller must access the correct variant based on dispatch_type.
+unsafe impl Send for HostContractDispatch {}
+
+// SAFETY: HostContractDispatch is a union of Send+Sync types.
+// Concurrent access requires the caller to use the correct variant.
+unsafe impl Sync for HostContractDispatch {}
+
+/// Host contract vtable — complete interface for a host-provided contract.
+///
+/// OWNERSHIP: Must be `'static` or intentionally leaked.
+/// Never stack-allocated. Never freed while runtime lives.
+///
+/// # Dispatch
+/// - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id]`
+/// - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(...)`
+#[repr(C)]
+pub struct HostContractVTable {
+    /// Header containing contract metadata.
+    pub header: HostContractVTableHeader,
+    /// Union of dispatch mechanisms — access based on dispatch_type.
+    pub dispatch: HostContractDispatch,
+}
+
+// SAFETY: HostContractVTable contains only data that is 'static or thread-safe.
+// - header: plain data types (Send+Sync)
+// - dispatch: union of Send+Sync types
+// Sending/sharing across threads only reads these values.
+unsafe impl Send for HostContractVTable {}
+
+// SAFETY: HostContractVTable contains only data that is 'static or thread-safe.
+// Concurrent reads are safe — no mutation occurs through shared references.
+unsafe impl Sync for HostContractVTable {}
+
 /// Host capabilities passed to every plugin at init time.
 ///
 /// OWNERSHIP: `'static`, lives as long as the runtime.
@@ -403,8 +553,13 @@ pub struct HostVTable {
         rt_ctx: *mut core::ffi::c_void,
         handle: PluginHandle,
     ) -> *const PluginInterface,
-    pub get_extension:
-        unsafe extern "C" fn(rt_ctx: *mut core::ffi::c_void, extension_id: u32) -> *const (),
+    /// Get host contract vtable by contract_id and minimum version.
+    /// Returns null if no host contract matches the criteria.
+    pub get_host_contract: unsafe extern "C" fn(
+        rt_ctx: *mut core::ffi::c_void,
+        contract_id: u64,
+        min_version: u32,
+    ) -> *const HostContractVTable,
 }
 
 // SAFETY: HostVTable contains only function pointers.
@@ -459,27 +614,6 @@ pub struct PluginContext {
     pub bundle_id: u64,
 }
 
-/// A single extension entry in the runtime config.
-///
-/// OWNERSHIP: the `vtable` pointer must be `'static` (valid for the runtime
-/// lifetime). `ExtensionEntry` arrays are passed by pointer to `RuntimeConfig`
-/// and never owned or freed by the runtime.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ExtensionEntry {
-    /// FNV-1a lower 32 bits of the extension name.
-    pub extension_id: u32,
-    /// Pointer to the extension's vtable struct.
-    pub vtable: *const (),
-}
-
-// SAFETY: ExtensionEntry holds a u32 and a pointer to a static vtable.
-unsafe impl Send for ExtensionEntry {}
-
-// SAFETY: ExtensionEntry holds a u32 and a pointer to a static vtable.
-// Sharing across threads only reads these values — no mutation after construction.
-unsafe impl Sync for ExtensionEntry {}
-
 /// Configuration passed to `polyplug_runtime_create` during runtime initialisation.
 ///
 /// OWNERSHIP: borrowed for the duration of the runtime build only.
@@ -492,9 +626,6 @@ pub struct RuntimeConfig {
     pub plugin_dir_count: usize,
     /// Compatibility mode: 0 = Strict (only mode implemented in MVP).
     pub compatibility: u32,
-    /// Extensions provided by the host (array of `extension_count` entries).
-    pub extensions: *const ExtensionEntry,
-    pub extension_count: usize,
 }
 
 // ─── FNV-1a Hash ─────────────────────────────────────────────────────────────
@@ -517,14 +648,20 @@ pub fn contract_id(name: &str, major_version: u32) -> u64 {
     fnv1a_64(canonical.as_bytes())
 }
 
-/// FNV-1a 32-bit hash (lower 32 bits) — used for extension IDs.
-pub(crate) fn fnv1a_32(data: &[u8]) -> u32 {
-    fnv1a_64(data) as u32
+/// Calculate host contract ID from name and major version.
+///
+/// Uses a distinct prefix `"host_contract:"` to avoid collisions with plugin contract IDs.
+pub fn host_contract_id(name: &str, major: u32) -> u64 {
+    let input: String = format!("host_contract:{}@{}", name, major);
+    fnv1a_64(input.as_bytes())
 }
 
-/// Compute an extension ID from its name using FNV-1a lower 32 bits.
-pub fn extension_id(name: &str) -> u32 {
-    fnv1a_32(name.as_bytes())
+/// Calculate plugin contract ID from name and major version.
+///
+/// Uses a distinct prefix `"plugin_contract:"` to avoid collisions with host contract IDs.
+pub fn plugin_contract_id(name: &str, major: u32) -> u64 {
+    let input: String = format!("plugin_contract:{}@{}", name, major);
+    fnv1a_64(input.as_bytes())
 }
 
 /// Compute a bundle ID from its name using FNV-1a 64-bit hash.
@@ -574,6 +711,41 @@ mod tests {
     }
 
     #[test]
+    fn contract_id_collision() {
+        // Host and plugin contract IDs must never collide for same name+major
+        let host_id: u64 = host_contract_id("logger", 1);
+        let plugin_id: u64 = plugin_contract_id("logger", 1);
+        assert_ne!(
+            host_id, plugin_id,
+            "host and plugin contract IDs must differ"
+        );
+
+        // Both must be deterministic
+        assert_eq!(host_contract_id("logger", 1), host_contract_id("logger", 1));
+        assert_eq!(
+            plugin_contract_id("logger", 1),
+            plugin_contract_id("logger", 1)
+        );
+
+        // Different names produce different IDs within same category
+        assert_ne!(
+            host_contract_id("logger", 1),
+            host_contract_id("metrics", 1)
+        );
+        assert_ne!(
+            plugin_contract_id("logger", 1),
+            plugin_contract_id("metrics", 1)
+        );
+
+        // Different major versions produce different IDs within same category
+        assert_ne!(host_contract_id("logger", 1), host_contract_id("logger", 2));
+        assert_ne!(
+            plugin_contract_id("logger", 1),
+            plugin_contract_id("logger", 2)
+        );
+    }
+
+    #[test]
     fn bundle_id_stability() {
         // Same input always yields same output
         assert_eq!(bundle_id("my-bundle"), bundle_id("my-bundle"));
@@ -583,18 +755,6 @@ mod tests {
         assert_eq!(bundle_id("polyplug-core"), 0x6ef4aee714f5f991_u64);
         // Different bundle names produce different IDs
         assert_ne!(bundle_id("bundle-a"), bundle_id("bundle-b"));
-    }
-
-    #[test]
-    fn extension_id_stability() {
-        // Same input always yields same output
-        assert_eq!(extension_id("trace"), extension_id("trace"));
-        // Golden: lower 32 bits of FNV-1a of "trace"
-        assert_eq!(extension_id("trace"), 0xc4eb9aee_u32);
-        // Golden: lower 32 bits of FNV-1a of "metrics"
-        assert_eq!(extension_id("metrics"), 0xb54e70d6_u32);
-        // Different names produce different IDs
-        assert_ne!(extension_id("trace"), extension_id("metrics"));
     }
 
     #[test]
@@ -713,7 +873,7 @@ mod tests {
         assert_eq!(offset_of!(HostVTable, find_by_bundle), 32);
         assert_eq!(offset_of!(HostVTable, find_all_by_contract), 40);
         assert_eq!(offset_of!(HostVTable, resolve_plugin), 48);
-        assert_eq!(offset_of!(HostVTable, get_extension), 56);
+        assert_eq!(offset_of!(HostVTable, get_host_contract), 56);
     }
 
     #[test]
@@ -730,25 +890,13 @@ mod tests {
     }
 
     #[test]
-    fn layout_extension_entry() {
-        // extension_id(4) + padding(4) + vtable ptr(8) = 16 bytes.
-        assert_eq!(size_of::<ExtensionEntry>(), 16);
-        assert_eq!(align_of::<ExtensionEntry>(), 8);
-        assert_eq!(offset_of!(ExtensionEntry, extension_id), 0);
-        assert_eq!(offset_of!(ExtensionEntry, vtable), 8);
-    }
-
-    #[test]
     fn layout_runtime_config() {
-        // plugin_dirs ptr(8) + plugin_dir_count(8) + compatibility(4) + padding(4)
-        // + extensions ptr(8) + extension_count(8) = 40 bytes.
-        assert_eq!(size_of::<RuntimeConfig>(), 40);
+        // plugin_dirs ptr(8) + plugin_dir_count(8) + compatibility(4) + padding(4) = 24 bytes.
+        assert_eq!(size_of::<RuntimeConfig>(), 24);
         assert_eq!(align_of::<RuntimeConfig>(), 8);
         assert_eq!(offset_of!(RuntimeConfig, plugin_dirs), 0);
         assert_eq!(offset_of!(RuntimeConfig, plugin_dir_count), 8);
         assert_eq!(offset_of!(RuntimeConfig, compatibility), 16);
-        assert_eq!(offset_of!(RuntimeConfig, extensions), 24);
-        assert_eq!(offset_of!(RuntimeConfig, extension_count), 32);
     }
 
     #[test]
@@ -760,5 +908,57 @@ mod tests {
         assert_eq!(offset_of!(PluginContext, bundle_path), 0);
         assert_eq!(offset_of!(PluginContext, host_abi_version), 16);
         assert_eq!(offset_of!(PluginContext, bundle_id), 24);
+    }
+
+    // ── Host Contract Layout Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn layout_host_runtime() {
+        assert_eq!(size_of::<HostRuntime>(), 1);
+        assert_eq!(align_of::<HostRuntime>(), 1);
+    }
+
+    #[test]
+    fn layout_host_contract_vtable_header() {
+        // vtable_version(4) + padding(4) + contract_id(8) + contract_major(4)
+        // + contract_minor(4) + function_count(4) + dispatch_type(4) = 32 bytes
+        assert_eq!(size_of::<HostContractVTableHeader>(), 32);
+        assert_eq!(align_of::<HostContractVTableHeader>(), 8);
+        assert_eq!(offset_of!(HostContractVTableHeader, vtable_version), 0);
+        assert_eq!(offset_of!(HostContractVTableHeader, contract_id), 8);
+        assert_eq!(offset_of!(HostContractVTableHeader, contract_major), 16);
+        assert_eq!(offset_of!(HostContractVTableHeader, contract_minor), 20);
+        assert_eq!(offset_of!(HostContractVTableHeader, function_count), 24);
+        assert_eq!(offset_of!(HostContractVTableHeader, dispatch_type), 28);
+    }
+
+    #[test]
+    fn layout_native_host_contract_dispatch() {
+        assert_eq!(size_of::<NativeHostContractDispatch>(), 8);
+        assert_eq!(align_of::<NativeHostContractDispatch>(), 8);
+        assert_eq!(offset_of!(NativeHostContractDispatch, functions), 0);
+    }
+
+    #[test]
+    fn layout_vm_host_contract_dispatch() {
+        assert_eq!(size_of::<VmHostContractDispatch>(), 16);
+        assert_eq!(align_of::<VmHostContractDispatch>(), 8);
+        assert_eq!(offset_of!(VmHostContractDispatch, call), 0);
+        assert_eq!(offset_of!(VmHostContractDispatch, bridge_data), 8);
+    }
+
+    #[test]
+    fn layout_host_contract_dispatch() {
+        assert_eq!(size_of::<HostContractDispatch>(), 16);
+        assert_eq!(align_of::<HostContractDispatch>(), 8);
+    }
+
+    #[test]
+    fn layout_host_contract_vtable() {
+        // header(32) + dispatch(16) = 48 bytes
+        assert_eq!(size_of::<HostContractVTable>(), 48);
+        assert_eq!(align_of::<HostContractVTable>(), 8);
+        assert_eq!(offset_of!(HostContractVTable, header), 0);
+        assert_eq!(offset_of!(HostContractVTable, dispatch), 32);
     }
 }

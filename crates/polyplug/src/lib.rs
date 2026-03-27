@@ -1,9 +1,9 @@
 //! polyplug — core plugin runtime for the polyplug platform.
 
 pub mod error;
-pub mod extensions;
 pub mod ffi;
 pub mod graph;
+pub mod host_bridge;
 pub mod loader;
 pub mod registry;
 pub mod reload;

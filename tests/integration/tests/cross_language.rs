@@ -16,14 +16,15 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
+use polyplug_abi::HostContractVTable;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -181,11 +182,12 @@ unsafe extern "C" fn stub_resolve_plugin(
     core::ptr::null()
 }
 
-/// Stub get_extension — returns null.
-unsafe extern "C" fn stub_get_extension(
+/// Stub get_host_contract — returns null.
+unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const HostContractVTable {
     core::ptr::null()
 }
 
@@ -280,7 +282,7 @@ fn test_rust_host_rust_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -359,7 +361,7 @@ fn test_cpp_host_rust_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -438,7 +440,7 @@ fn test_csharp_host_rust_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -517,7 +519,7 @@ fn test_python_host_rust_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -596,7 +598,7 @@ fn test_lua_host_rust_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -675,7 +677,7 @@ fn test_js_host_rust_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -760,7 +762,7 @@ fn test_rust_host_cpp_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -839,7 +841,7 @@ fn test_cpp_host_cpp_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -918,7 +920,7 @@ fn test_csharp_host_cpp_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -997,7 +999,7 @@ fn test_python_host_cpp_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -1076,7 +1078,7 @@ fn test_lua_host_cpp_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
@@ -1155,7 +1157,7 @@ fn test_js_host_cpp_guest() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),

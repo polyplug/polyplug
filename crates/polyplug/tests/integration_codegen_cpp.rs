@@ -7,17 +7,17 @@
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -165,11 +165,12 @@ unsafe extern "C" fn noop_resolve_plugin(
     core::ptr::null()
 }
 
-/// No-op get_extension callback.
-unsafe extern "C" fn noop_get_extension(
+/// No-op get_host_contract callback.
+unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -325,7 +326,7 @@ fn test_cpp_plugin_dispatch() {
         find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_plugin: noop_resolve_plugin,
-        get_extension: noop_get_extension,
+        get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
@@ -441,7 +442,7 @@ fn test_cpp_host_loads_rust_plugin() {
         find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_plugin: noop_resolve_plugin,
-        get_extension: noop_get_extension,
+        get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
@@ -555,7 +556,7 @@ fn test_exception_isolation_cpp() {
         find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_plugin: noop_resolve_plugin,
-        get_extension: noop_get_extension,
+        get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {

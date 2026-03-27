@@ -12,36 +12,38 @@ This document describes the hot-reload notification system for polyplug. The des
 
 ## Core Concepts
 
-### 1. Instance-Based Tracking
+### 1. Arc-Based Reference Tracking
 
-Each plugin contract instance holds an internal `PluginGuard` which contains an `Arc<VTableSlot>`. The Arc reference count IS the instance counter.
+Each caller wrapper holds an internal `PluginGuard` which contains an `Arc<VTableSlot>`. The Arc reference count tracks how many wrappers reference the vtable.
 
 ```
-Arc::strong_count == 1  →  No instances exist (only registry holds it)
-Arc::strong_count > 1   →  Instances exist (each instance holds an Arc)
+Arc::strong_count == 1  →  No wrappers exist (only registry holds Arc)
+Arc::strong_count > 1   →  Wrappers exist (each wrapper holds an Arc reference)
 ```
+
+**Critical clarification:** Plugins use `OnceLock<Box<dyn Trait>>` for singleton implementations. The "instances" are actually **caller wrappers** on the host side, not plugin instances. Multiple wrappers can reference the same singleton vtable.
 
 ### 2. Hidden Implementation
 
-The generated contract classes hide `PluginGuard` and `PluginInterface` from the application developer. They only see:
+The generated caller wrappers hide `PluginGuard` and `PluginInterface` from the application developer. They only see:
 
 ```cpp
-auto decoder = PipelineDecoder::create(rt, contract_id);
-auto result = decoder.decode(input);
-decoder.reset();  // Or let it go out of scope
+auto decoder = PipelineDecoder::create(rt, contract_id);  // Creates wrapper
+auto result = decoder.decode(input);  // Calls singleton plugin implementation
+decoder.reset();  // Or let it go out of scope (drops Arc reference)
 ```
 
 ### 3. Three-Phase Notification
 
 The runtime notifies the host before and after vtable swap, plus failure case:
 
-- **Preparing**: "I want to reload this bundle. Destroy your instances."
-- **Reloaded**: "Reload complete. You can create new instances."
-- **Failed**: "Reload aborted - instances not destroyed. Old vtable kept."
+- **Preparing**: "I want to reload this bundle. Destroy your caller wrappers (drop Arc references)."
+- **Reloaded**: "Reload complete. You can create new caller wrappers (pointing to new vtable)."
+- **Failed**: "Reload aborted - wrappers not destroyed. Old vtable kept."
 
 ### 4. Retry Mechanism
 
-If instances are still held after the initial `Preparing` notification:
+If caller wrappers are still held (Arc::strong_count > 1) after the initial `Preparing` notification:
 
 1. Runtime waits for `hot_reload_retry_interval` (default: 1 second)
 2. Fires `Preparing` again with incremented `retry_count`
@@ -49,11 +51,11 @@ If instances are still held after the initial `Preparing` notification:
 4. If `hot_reload_abort_on_max_retries=true`, fires `Failed` and aborts
 5. If `hot_reload_abort_on_max_retries=false`, continues retrying indefinitely
 
-This gives the host multiple chances to clean up leaked instances before the reload is aborted.
+This gives the host multiple chances to drop wrapper references before the reload is aborted.
 
 ### 5. Stuck Detection and Abort
 
-If the host doesn't destroy all instances after max retries, the runtime:
+If the host doesn't drop all wrapper references (Arc::strong_count still > 1) after max retries, the runtime:
 1. Sends `Failed` notification to host with reason string
 2. Keeps old vtable (no swap occurred)
 3. Logs warning via `on_warning` callback

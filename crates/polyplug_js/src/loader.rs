@@ -20,15 +20,13 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginDispatch;
@@ -36,6 +34,8 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::config::JsConfig;
 
@@ -44,9 +44,9 @@ use crate::config::JsConfig;
 use core::cell::RefCell;
 use std::rc::Rc;
 
-use rquickjs::JsLifetime;
 use rquickjs::runtime::UserDataError;
 use rquickjs::runtime::UserDataGuard;
+use rquickjs::JsLifetime;
 
 /// Registration data collected from the JS plugin during polyplug_init.
 ///
@@ -400,32 +400,33 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let get_extension_fn: Function<'js> = Function::new(
+    let get_host_contract_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, extension_id: u32| -> Option<u64> {
+        |ctx: Ctx<'js>, contract_id: u64, min_version: u32| -> Option<u64> {
             let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-            let ext_ptr: *const () = unsafe { ((*hvt).get_extension)(rt_ctx, extension_id) };
-            if ext_ptr.is_null() {
+            let contract_ptr: *const polyplug_abi::HostContractVTable =
+                unsafe { ((*hvt).get_host_contract)(rt_ctx, contract_id, min_version) };
+            if contract_ptr.is_null() {
                 None
             } else {
-                Some(ext_ptr as usize as u64)
+                Some(contract_ptr as usize as u64)
             }
         },
     )
     .map_err(|e: rquickjs::Error| {
         PolyplugError::Loader(LoaderError::JsRuntimePanic {
             runtime: "js-quickjs".to_owned(),
-            message: format!("getExtension function creation failed: {e}"),
+            message: format!("getHostContract function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
-        .set("getExtension", get_extension_fn)
+        .set("getHostContract", get_host_contract_fn)
         .map_err(|e: rquickjs::Error| {
             PolyplugError::Loader(LoaderError::JsRuntimePanic {
                 runtime: "js-quickjs".to_owned(),
-                message: format!("getExtension set failed: {e}"),
+                message: format!("getHostContract set failed: {e}"),
             })
         })?;
 

@@ -396,7 +396,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: All modified files
   - Pre-commit: `cargo test -p polyplug_codegen --lib`
 
-- [ ] **Task 2**: Add `HostRuntime` enum and ABI types
+- [x] **Task 2**: Add `HostRuntime` enum and ABI types
   
   **Specification**:
   Add the HostRuntime enum and HostContractVTable types to polyplug_abi.
@@ -477,7 +477,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `crates/polyplug_abi/src/lib.rs`
   - Pre-commit: `cargo test -p polyplug_abi`
 
-- [ ] **Task 3**: Add `get_host_contract` to HostVTable AND Remove Extensions
+- [x] **Task 3**: Add `get_host_contract` to HostVTable AND Remove Extensions
   
   **Specification**:
   Add the `get_host_contract` function pointer to HostVTable AND completely remove the `get_extension` field.
@@ -547,7 +547,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `crates/polyplug_abi/src/lib.rs`, `crates/polyplug/src/extensions/` (deleted), `runtime.rs`, all generators
   - Pre-commit: `cargo test -p polyplug_abi --lib`
 
-- [ ] **Task 4**: Implement host contract ID calculation
+- [x] **Task 4**: Implement host contract ID calculation
   
   **Specification**:
   Implement collision-free host contract ID generation.
@@ -590,7 +590,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 1
 **Blocks**: Wave 3
 
-- [ ] **Task 5**: Update parser to support `[[plugin_contract]]` and `[[host_contract]]`
+- [x] **Task 5**: Update parser to support `[[plugin_contract]]` and `[[host_contract]]`
   
   **Specification**:
   Update TOML parser to recognize both `[[plugin_contract]]` and `[[host_contract]]` sections.
@@ -645,7 +645,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `parser.rs`
   - Pre-commit: `cargo test -p polyplug_codegen parser`
 
-- [ ] **Task 6**: Update Intermediate Representation (IR)
+- [x] **Task 6**: Update Intermediate Representation (IR)
   
   **Specification**:
   Update IR to include HostContract alongside PluginContract.
@@ -683,7 +683,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 2
 **Blocks**: Wave 4, Wave 6
 
-- [ ] **Task 7**: Generate Rust host-side contract traits
+- [x] **Task 7**: Generate Rust host-side contract traits
   
   **Specification**:
   Generate Rust traits that hosts implement for host contracts.
@@ -733,7 +733,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `rust.rs`
   - Pre-commit: `cargo test -p polyplug_codegen rust_generator`
 
-- [ ] **Task 8**: Generate Rust guest-side host contract callers
+- [x] **Task 8**: Generate Rust guest-side host contract callers
   
   **Specification**:
   Generate Rust code that plugins use to call host contracts.
@@ -776,7 +776,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 3
 **Blocks**: Wave 5, Wave 6
 
-- [ ] **Task 9**: Implement host contract registration in Runtime
+- [x] **Task 9**: Implement host contract registration in Runtime
   
   **Specification**:
   Add host contract storage and registration to Runtime.
@@ -821,7 +821,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `runtime.rs`
   - Pre-commit: `cargo test -p polyplug --lib`
 
-- [ ] **Task 10**: Implement `get_host_contract` callback
+- [x] **Task 10**: Implement `get_host_contract` callback
   
   **Specification**:
   Implement the HostVTable callback that plugins call to get host contracts.
@@ -876,7 +876,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 4
 **Blocks**: Wave 6, Wave 8
 
-- [ ] **Task 11**: Define HostRuntimeBridge trait
+- [x] **Task 11**: Define HostRuntimeBridge trait
   
   **Specification**:
   Define the trait that bridges between runtime and VM-based hosts.
@@ -916,7 +916,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `host_bridge.rs` (new)
   - Pre-commit: `cargo build -p polyplug`
 
-- [ ] **Task 12**: Implement Python Host Bridge
+- [x] **Task 12**: Implement Python Host Bridge
   
   **Specification**:
   Implement the bridge that allows Python hosts to implement host contracts.
@@ -969,7 +969,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Files: `bridge.rs`, integration with `lib.rs`
   - Pre-commit: `cargo test -p polyplug_python`
 
-- [ ] **Task 13**: Implement Lua Host Bridge
+- [x] **Task 13**: Implement Lua Host Bridge
   
   **Specification**:
   Implement bridge for Lua hosts.
@@ -981,7 +981,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(lua): implement Lua Host Bridge`
 
-- [ ] **Task 14**: Implement JavaScript Host Bridge
+- [x] **Task 14**: Implement JavaScript Host Bridge
   
   **Specification**:
   Implement bridge for JavaScript hosts.
@@ -999,7 +999,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 3
 **Blocks**: Wave 8
 
-- [ ] **Task 15**: Generate C++ host-side contract traits
+- [x] **Task 15**: Generate C++ host-side contract traits
   
   **Specification**:
   Generate C++ abstract classes that hosts implement for host contracts.

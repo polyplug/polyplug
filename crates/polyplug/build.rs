@@ -661,6 +661,8 @@ struct PluginInterface {
 };
 struct PluginDescriptor { StringView name; StringView contract_name; uint32_t version_major; uint32_t version_minor; uint32_t version_patch; };
 struct PluginContext { StringView bundle_path; uint32_t host_abi_version; uint64_t bundle_id; };
+struct HostContractVTableHeader { uint32_t vtable_version; uint32_t _pad; uint64_t contract_id; uint32_t contract_major; uint32_t contract_minor; uint32_t function_count; uint32_t dispatch_type; };
+struct HostContractVTable { HostContractVTableHeader header; const void* functions; };
 struct HostVTable {
     AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginInterface*);
     void* (*alloc)(void* rt_ctx, size_t size, size_t align);
@@ -669,7 +671,7 @@ struct HostVTable {
     PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
     const PluginInterface* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
-    const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
+    const HostContractVTable* (*get_host_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
 };
 constexpr uint32_t ABI_OK = 0;
 // test.add contract_id = FNV-1a("test.add@1") = 0xCC4232FAB0410D2B
@@ -768,6 +770,8 @@ struct PluginInterface {
 };
 struct PluginDescriptor { StringView name; StringView contract_name; uint32_t version_major; uint32_t version_minor; uint32_t version_patch; };
 struct PluginContext { StringView bundle_path; uint32_t host_abi_version; uint64_t bundle_id; };
+struct HostContractVTableHeader { uint32_t vtable_version; uint32_t _pad; uint64_t contract_id; uint32_t contract_major; uint32_t contract_minor; uint32_t function_count; uint32_t dispatch_type; };
+struct HostContractVTable { HostContractVTableHeader header; const void* functions; };
 struct HostVTable {
     AbiError (*register_plugin)(void* rt_ctx, const PluginDescriptor*, const PluginInterface*);
     void* (*alloc)(void* rt_ctx, size_t size, size_t align);
@@ -776,7 +780,7 @@ struct HostVTable {
     PluginHandle (*find_by_bundle)(void* rt_ctx, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t (*find_all_by_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version, PluginHandle* out, size_t out_cap);
     const PluginInterface* (*resolve_plugin)(void* rt_ctx, PluginHandle handle);
-    const void* (*get_extension)(void* rt_ctx, uint32_t extension_id);
+    const HostContractVTable* (*get_host_contract)(void* rt_ctx, uint64_t contract_id, uint32_t min_version);
 };
 constexpr uint32_t ABI_OK = 0;
 constexpr uint32_t ABI_ERROR_GENERIC = 1;

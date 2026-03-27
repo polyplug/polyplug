@@ -18,6 +18,9 @@ pub enum RuntimeError {
     #[error(transparent)]
     Allocator(#[from] AllocatorError),
 
+    #[error(transparent)]
+    HostContract(#[from] HostContractError),
+
     #[error(
         "undeclared dependency: bundle_id={bundle_id:#x} attempted to resolve contract_id={contract_id:#x} without declaring it"
     )]
@@ -241,10 +244,31 @@ pub enum AllocatorError {
     InvalidLayout { size: usize, align: usize },
 }
 
+/// Errors from host contract registration.
+#[derive(Debug, Error)]
+pub enum HostContractError {
+    #[error("duplicate host contract registration: contract_id=0x{contract_id:016X}")]
+    DuplicateContract { contract_id: u64 },
+
+    #[error(
+        "host contract not found: contract_id=0x{contract_id:016X}, min_version={min_version}"
+    )]
+    ContractNotFound { contract_id: u64, min_version: u32 },
+
+    #[error("host contract version mismatch: contract_id=0x{contract_id:016X}, required={required}, found={found}")]
+    VersionMismatch {
+        contract_id: u64,
+        required: u32,
+        found: u32,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    use super::{AllocatorError, GraphError, LoaderError, PolyplugError, RegistryError};
+    use super::{
+        AllocatorError, GraphError, HostContractError, LoaderError, PolyplugError, RegistryError,
+    };
     use crate::version::Version;
 
     // --- PolyplugError / RuntimeError ---
@@ -576,5 +600,43 @@ mod tests {
         assert!(s.contains("invalid layout"), "got: {s}");
         assert!(s.contains('0'), "got: {s}");
         assert!(s.contains('3'), "got: {s}");
+    }
+
+    // --- HostContractError ---
+
+    #[test]
+    fn host_contract_error_duplicate_contract_display() {
+        let err: HostContractError = HostContractError::DuplicateContract {
+            contract_id: 0xABCD_EF01_2345_6789,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("duplicate"), "got: {s}");
+        assert!(s.to_lowercase().contains("abcdef01"), "got: {s}");
+    }
+
+    #[test]
+    fn host_contract_error_contract_not_found_display() {
+        let err: HostContractError = HostContractError::ContractNotFound {
+            contract_id: 0x1234_5678_9ABC_DEF0,
+            min_version: 2,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("not found"), "got: {s}");
+        assert!(s.to_lowercase().contains("12345678"), "got: {s}");
+        assert!(s.contains('2'), "got: {s}");
+    }
+
+    #[test]
+    fn host_contract_error_version_mismatch_display() {
+        let err: HostContractError = HostContractError::VersionMismatch {
+            contract_id: 0xCAFE_BABE_0000_0001,
+            required: 3,
+            found: 1,
+        };
+        let s: String = err.to_string();
+        assert!(s.contains("version mismatch"), "got: {s}");
+        assert!(s.to_lowercase().contains("cafebabe"), "got: {s}");
+        assert!(s.contains('3'), "got: {s}");
+        assert!(s.contains('1'), "got: {s}");
     }
 }

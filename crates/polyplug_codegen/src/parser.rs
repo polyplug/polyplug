@@ -9,6 +9,10 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::PolyplugcError;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::compute_host_contract_id;
+use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -17,15 +21,13 @@ use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedField;
 use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::resolve_type_ref;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -35,8 +37,13 @@ pub(crate) struct RawApiSchema {
     pub types: Vec<RawType>,
     #[serde(rename = "enum", default)]
     pub r#enum: Vec<RawEnum>,
+    /// Plugin contracts. Accepts both `[[plugin_contract]]` (preferred) and
+    /// `[[contract]]` (deprecated) via serde alias.
+    #[serde(default, alias = "contract")]
+    pub plugin_contract: Vec<RawContract>,
+    /// Host contracts from `[[host_contract]]` sections.
     #[serde(default)]
-    pub contract: Vec<RawContract>,
+    pub host_contract: Vec<RawHostContract>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +62,17 @@ pub(crate) struct RawField {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawContract {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub functions: Vec<RawFunction>,
+}
+
+/// Host contract definition from `[[host_contract]]` sections.
+/// Host contracts define APIs that the host provides to plugins.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct RawHostContract {
     pub name: String,
     pub version: String,
     #[serde(default)]
@@ -176,6 +194,9 @@ pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
 
 /// Parse an `api.toml` TOML string.
 pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
+    if content.contains("[[contract]]") && !content.contains("[[plugin_contract]]") {
+        eprintln!("warning: [[contract]] is deprecated, use [[plugin_contract]] instead");
+    }
     let raw: RawApiSchema =
         toml::from_str(content).map_err(|e| PolyplugcError::ValidationFailed {
             message: format!("TOML parse error: {e}"),
@@ -230,6 +251,7 @@ pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError>
             types: Vec::new(),
             enums: Vec::new(),
             contracts: Vec::new(),
+            host_contracts: Vec::new(),
             bundle: None,
         }
     };
@@ -240,6 +262,7 @@ pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError>
         types: api_ir.types,
         enums: api_ir.enums,
         contracts: api_ir.contracts,
+        host_contracts: api_ir.host_contracts,
         bundle: bundle_ir.bundle,
     })
 }
@@ -507,7 +530,7 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
 
     // Step 6: Resolve contracts
     let mut resolved_contracts: Vec<ResolvedContract> = Vec::new();
-    for raw_contract in &raw.contract {
+    for raw_contract in &raw.plugin_contract {
         let version: Version = Version::parse(&raw_contract.version)?;
         let contract_id: u64 = compute_contract_id(&raw_contract.name, version.major);
 
@@ -543,10 +566,82 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         });
     }
 
+    // Step 7: Resolve host contracts
+    let mut resolved_host_contracts: Vec<ResolvedHostContract> = Vec::new();
+    for raw_host_contract in &raw.host_contract {
+        let version: Version = Version::parse(&raw_host_contract.version)?;
+        let contract_id: u64 = compute_host_contract_id(&raw_host_contract.name, version.major);
+
+        let mut functions: Vec<ResolvedFunction> = Vec::new();
+        for (function_id, raw_fn) in raw_host_contract.functions.iter().enumerate() {
+            let mut params: Vec<ResolvedParam> = Vec::new();
+            for p in &raw_fn.params {
+                let ty: ResolvedTypeRef =
+                    resolve_type_ref(&p.ty, &raw_host_contract.name, &all_known_names)?;
+                params.push(ResolvedParam {
+                    name: p.name.clone(),
+                    ty,
+                });
+            }
+            let returns: Option<ResolvedTypeRef> = raw_fn
+                .returns
+                .as_deref()
+                .map(|r| resolve_type_ref(r, &raw_host_contract.name, &all_known_names))
+                .transpose()?;
+            functions.push(ResolvedFunction {
+                name: raw_fn.name.clone(),
+                function_id: function_id as u32,
+                params,
+                returns,
+            });
+        }
+
+        resolved_host_contracts.push(ResolvedHostContract {
+            name: raw_host_contract.name.clone(),
+            contract_id,
+            version,
+            functions,
+        });
+    }
+
+    // Step 8: Validate host contracts
+    // - Host contract names must start with "host."
+    // - No duplicate names across plugin_contracts and host_contracts
+    let plugin_contract_names: Vec<&str> = raw
+        .plugin_contract
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    for raw_host_contract in &raw.host_contract {
+        // Validate "host." prefix
+        if !raw_host_contract.name.starts_with("host.") {
+            return Err(PolyplugcError::HostContractNameMissingPrefix {
+                name: raw_host_contract.name.clone(),
+            });
+        }
+        // Check for duplicates across both contract types
+        if plugin_contract_names.contains(&raw_host_contract.name.as_str()) {
+            return Err(PolyplugcError::DuplicateContractName {
+                name: raw_host_contract.name.clone(),
+            });
+        }
+    }
+    // Check for duplicates within host_contracts
+    let mut seen_host_names: Vec<&str> = Vec::new();
+    for raw_host_contract in &raw.host_contract {
+        if seen_host_names.contains(&raw_host_contract.name.as_str()) {
+            return Err(PolyplugcError::DuplicateContractName {
+                name: raw_host_contract.name.clone(),
+            });
+        }
+        seen_host_names.push(&raw_host_contract.name);
+    }
+
     Ok(ValidatedIr {
         types: resolved_types,
         enums: resolved_enums,
         contracts: resolved_contracts,
+        host_contracts: resolved_host_contracts,
         bundle: None,
     })
 }
@@ -641,6 +736,7 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
         types: Vec::new(),
         enums: Vec::new(),
         contracts: Vec::new(),
+        host_contracts: Vec::new(),
         bundle: Some(ResolvedBundle {
             name: raw.bundle.name.clone(),
             version: bundle_version,
@@ -664,7 +760,7 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
 
-    const SAMPLE_API: &str = "[[contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[contract.functions]]\nname = \"decode\"\n\n[[contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
+    const SAMPLE_API: &str = "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n[[plugin_contract.functions]]\nname = \"decode\"\n\n[[plugin_contract.functions]]\nname = \"supported_formats\"\n    return = \"StringView\"";
 
     const SAMPLE_BUNDLE: &str = "[bundle]\nname = \"image-plugin\"\nversion = \"1.0.0\"\nfile = \"test.so\"\n\n[[plugin]]\nname = \"jpeg_decoder\"\nversion = \"1.0.0\"\nimplements = [\"image.decode@1.0\"]";
 
@@ -676,6 +772,14 @@ mod tests {
         assert_eq!(ir.contracts[0].functions.len(), 2);
         assert_eq!(ir.contracts[0].functions[0].function_id, 0);
         assert_eq!(ir.contracts[0].functions[1].function_id, 1);
+    }
+
+    #[test]
+    fn parse_api_with_deprecated_contract_syntax() {
+        let deprecated_api: &str = "[[contract]]\nname = \"test.add\"\nversion = \"1.0.0\"\n";
+        let ir: ValidatedIr = parse_api_str(deprecated_api).expect("parse deprecated api");
+        assert_eq!(ir.contracts.len(), 1);
+        assert_eq!(ir.contracts[0].name, "test.add");
     }
 
     #[test]
@@ -836,5 +940,60 @@ mod tests {
         let ir: ValidatedIr = parse_bundle_str(toml).expect("parse bundle with dep");
         let bundle: &ResolvedBundle = ir.bundle.as_ref().expect("bundle");
         assert_eq!(bundle.name, "audio-engine");
+    }
+
+    #[test]
+    fn parse_host_contract_valid() {
+        let toml: &str =
+            "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n[[host_contract.functions]]\nname = \"log\"\n[[host_contract.functions.params]]\nname = \"message\"\ntype = \"StringView\"";
+        let ir: ValidatedIr = parse_api_str(toml).expect("parse host contract");
+        assert_eq!(ir.contracts.len(), 0);
+    }
+
+    #[test]
+    fn parse_host_contract_missing_prefix_rejected() {
+        let toml: &str = "[[host_contract]]\nname = \"logger\"\nversion = \"1.0.0\"\n";
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::HostContractNameMissingPrefix { ref name }) if name == "logger"),
+            "expected HostContractNameMissingPrefix for 'logger', got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_host_contract_duplicate_with_plugin_contract_rejected() {
+        let toml: &str = concat!(
+            "[[plugin_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n",
+            "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n"
+        );
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::DuplicateContractName { ref name }) if name == "host.logger"),
+            "expected DuplicateContractName for 'host.logger', got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_host_contract_duplicate_within_host_contracts_rejected() {
+        let toml: &str = concat!(
+            "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n",
+            "[[host_contract]]\nname = \"host.logger\"\nversion = \"2.0.0\"\n"
+        );
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::DuplicateContractName { ref name }) if name == "host.logger"),
+            "expected DuplicateContractName for 'host.logger', got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_both_contract_types_valid() {
+        let toml: &str = concat!(
+            "[[plugin_contract]]\nname = \"image.decode\"\nversion = \"1.0.0\"\n\n",
+            "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n"
+        );
+        let ir: ValidatedIr = parse_api_str(toml).expect("parse both contract types");
+        assert_eq!(ir.contracts.len(), 1);
+        assert_eq!(ir.contracts[0].name, "image.decode");
     }
 }

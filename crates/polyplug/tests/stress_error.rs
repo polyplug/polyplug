@@ -12,19 +12,19 @@ use libloading::os::unix::RTLD_GLOBAL;
 use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_ERROR_PANIC;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::tracking::TrackingAllocator;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_abi::tracking::TrackingAllocator;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 // ─── Plugin environment variable ──────────────────────────────────────────────
 
@@ -115,14 +115,12 @@ unsafe extern "C" fn chain_resolve_plugin(
     })
 }
 
-/// Stub get_extension — returns null (no extensions implemented in MVP).
-///
-/// # Safety
-/// Always safe to call; returns null pointer.
-unsafe extern "C" fn stub_get_extension(
+/// Stub get_host_contract — returns null.
+unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -184,11 +182,12 @@ unsafe extern "C" fn noop_resolve_plugin(
     core::ptr::null()
 }
 
-/// No-op get_extension callback.
-unsafe extern "C" fn noop_get_extension(
+/// No-op get_host_contract callback.
+unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -299,7 +298,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginInterface {
         find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_plugin: noop_resolve_plugin,
-        get_extension: noop_get_extension,
+        get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
@@ -453,7 +452,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         find_by_bundle: chain_find_by_bundle,
         find_all_by_contract: chain_find_all_by_contract,
         resolve_plugin: chain_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
 
     // error.test contract_id is FNV-1a("error.test@1").

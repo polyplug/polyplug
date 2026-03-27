@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -504,10 +504,7 @@ fn generate_init_py(ir: &ValidatedIr) -> String {
             .any(|p: &ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
     });
     if has_trace {
-        out.push_str("EXT_TRACE_ID = 0xC4EB9AEE\n");
-        out.push_str("# Optional: trace extension\n");
-        out.push_str("trace_vtable_ptr = polyplug.get_extension(EXT_TRACE_ID)\n");
-        out.push_str("# trace_vtable_ptr is None/0 if not available\n");
+        out.push_str("# Optional: trace extension (host contracts will be used in future)\n");
     } else {
         out.push_str("# No optional extensions requested.\n");
     }

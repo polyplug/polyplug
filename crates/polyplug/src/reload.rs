@@ -344,7 +344,7 @@ pub(crate) fn reload_bundle_impl(
             find_by_bundle: crate::runtime::host_find_by_bundle,
             find_all_by_contract: crate::runtime::host_find_all_by_contract,
             resolve_plugin: crate::runtime::host_resolve_plugin,
-            get_extension: crate::runtime::host_get_extension,
+            get_host_contract: crate::runtime::host_get_host_contract,
         };
 
         let rt_ctx: *mut core::ffi::c_void =

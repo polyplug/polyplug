@@ -10,8 +10,8 @@ use super::{
 };
 use std::collections::HashSet;
 use syn::{
-    Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn, ItemStruct,
-    ItemUnion, Lit, Visibility, parse_file,
+    parse_file, Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn,
+    ItemStruct, ItemUnion, Lit, Visibility,
 };
 use thiserror::Error;
 
@@ -457,7 +457,6 @@ mod tests {
         assert!(struct_names.contains(&"HostVTable"));
         assert!(struct_names.contains(&"PluginDescriptor"));
         assert!(struct_names.contains(&"PluginContext"));
-        assert!(struct_names.contains(&"ExtensionEntry"));
         assert!(struct_names.contains(&"RuntimeConfig"));
     }
 
@@ -495,9 +494,7 @@ mod tests {
         let function_names: Vec<&str> = info.functions.iter().map(|f| f.name.as_str()).collect();
 
         assert!(function_names.contains(&"fnv1a_64"));
-        assert!(function_names.contains(&"fnv1a_32"));
         assert!(function_names.contains(&"contract_id"));
-        assert!(function_names.contains(&"extension_id"));
         assert!(function_names.contains(&"bundle_id"));
     }
 
@@ -635,13 +632,11 @@ mod tests {
             .expect("StringView should exist");
 
         assert!(string_view.doc.is_some());
-        assert!(
-            string_view
-                .doc
-                .as_ref()
-                .unwrap()
-                .contains("Non-owning UTF-8 string view")
-        );
+        assert!(string_view
+            .doc
+            .as_ref()
+            .unwrap()
+            .contains("Non-owning UTF-8 string view"));
     }
 
     #[test]

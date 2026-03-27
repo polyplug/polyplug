@@ -10,7 +10,6 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
@@ -18,6 +17,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_OK;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -275,10 +275,11 @@ unsafe extern "C" fn stub_resolve_plugin(
     core::ptr::null()
 }
 
-unsafe extern "C" fn stub_get_extension(
+unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -369,7 +370,7 @@ fn smoke_rust_codegen_dispatch() {
         find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_plugin: stub_resolve_plugin,
-        get_extension: stub_get_extension,
+        get_host_contract: stub_get_host_contract,
     };
 
     // SAFETY: init_fn is valid; host_vtable lives for the duration of the call.

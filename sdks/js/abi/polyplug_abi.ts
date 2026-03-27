@@ -236,7 +236,11 @@ export interface HostVTable {
     find_by_bundle: (rt_ctx: bigint, bundle_id: bigint, contract_id: bigint, min_version: number) => PluginHandle;
     find_all_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number, out: bigint, out_cap: number) => number;
     resolve_plugin: (rt_ctx: bigint, handle: PluginHandle) => bigint;
-    get_extension: (rt_ctx: bigint, extension_id: number) => bigint;
+    /**
+     *  Get host contract vtable by contract_id and minimum version.
+     *  Returns null if no host contract matches the criteria.
+     */
+    get_host_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number) => bigint;
 }
 
 /**
@@ -257,20 +261,6 @@ export interface PluginContext {
 }
 
 /**
- *  A single extension entry in the runtime config.
- * 
- *  OWNERSHIP: the `vtable` pointer must be `'static` (valid for the runtime
- *  lifetime). `ExtensionEntry` arrays are passed by pointer to `RuntimeConfig`
- *  and never owned or freed by the runtime.
- */
-export interface ExtensionEntry {
-    /**  FNV-1a lower 32 bits of the extension name. */
-    extension_id: number;
-    /**  Pointer to the extension's vtable struct. */
-    vtable: bigint;
-}
-
-/**
  *  Configuration passed to `polyplug_runtime_create` during runtime initialisation.
  * 
  *  OWNERSHIP: borrowed for the duration of the runtime build only.
@@ -283,9 +273,6 @@ export interface RuntimeConfig {
     plugin_dir_count: number;
     /**  Compatibility mode: 0 = Strict (only mode implemented in MVP). */
     compatibility: number;
-    /**  Extensions provided by the host (array of `extension_count` entries). */
-    extensions: bigint;
-    extension_count: number;
 }
 
 // ─── FNV-1a Hash Helpers ──────────────────────────────────────────────────────

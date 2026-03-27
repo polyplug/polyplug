@@ -5,7 +5,7 @@
 
 use polyplug_abi::bundle_id as runtime_bundle_id;
 use polyplug_abi::contract_id as runtime_contract_id;
-use polyplug_abi::extension_id as runtime_extension_id;
+use polyplug_abi::host_contract_id as runtime_host_contract_id;
 
 use crate::error::PolyplugcError;
 
@@ -281,6 +281,18 @@ pub struct ResolvedContract {
     pub functions: Vec<ResolvedFunction>,
 }
 
+/// A resolved host contract definition.
+/// Host contracts define APIs that the host provides to plugins.
+#[derive(Debug)]
+pub struct ResolvedHostContract {
+    pub name: String,
+    /// Precomputed FNV-1a hash of "host_contract:name@major".
+    pub contract_id: u64,
+    #[allow(dead_code)]
+    pub version: Version,
+    pub functions: Vec<ResolvedFunction>,
+}
+
 #[derive(Debug)]
 pub struct ResolvedPlugin {
     #[allow(dead_code)]
@@ -337,6 +349,7 @@ pub struct ValidatedIr {
     pub types: Vec<ResolvedType>,
     pub enums: Vec<EnumDef>,
     pub contracts: Vec<ResolvedContract>,
+    pub host_contracts: Vec<ResolvedHostContract>,
     #[allow(dead_code)]
     pub bundle: Option<ResolvedBundle>,
 }
@@ -348,15 +361,14 @@ pub(crate) fn compute_contract_id(name: &str, major: u32) -> u64 {
     runtime_contract_id(name, major)
 }
 
+/// Compute a host contract ID: FNV-1a of "host_contract:name@major".
+pub(crate) fn compute_host_contract_id(name: &str, major: u32) -> u64 {
+    runtime_host_contract_id(name, major)
+}
+
 /// Compute a bundle ID: FNV-1a hash of the bundle name.
 pub(crate) fn compute_bundle_id(name: &str) -> u64 {
     runtime_bundle_id(name)
-}
-
-/// Compute an extension ID: FNV-1a lower 32 bits of name.
-#[allow(dead_code)]
-pub(crate) fn compute_extension_id(name: &str) -> u32 {
-    runtime_extension_id(name)
 }
 
 // ─── Type Resolution ──────────────────────────────────────────────────────────────
@@ -388,7 +400,6 @@ mod tests {
     use super::*;
     use polyplug_abi::bundle_id as runtime_bundle_id;
     use polyplug_abi::contract_id as runtime_contract_id;
-    use polyplug_abi::extension_id as runtime_extension_id;
 
     #[test]
     fn version_parse() {
@@ -520,30 +531,6 @@ mod tests {
         // runtime polyplug_abi::bundle_id — both delegate to the same fn.
         let codegen_id: u64 = compute_bundle_id("my-bundle");
         let runtime_id: u64 = runtime_bundle_id("my-bundle");
-        assert_eq!(codegen_id, runtime_id);
-    }
-
-    #[test]
-    fn extension_id_stability() {
-        // Same input always yields same output
-        assert_eq!(compute_extension_id("trace"), compute_extension_id("trace"));
-        // Golden: lower 32 bits of FNV-1a of "trace"
-        assert_eq!(compute_extension_id("trace"), 0xc4eb9aee_u32);
-        // Golden: lower 32 bits of FNV-1a of "metrics"
-        assert_eq!(compute_extension_id("metrics"), 0xb54e70d6_u32);
-        // Different names produce different IDs
-        assert_ne!(
-            compute_extension_id("trace"),
-            compute_extension_id("metrics")
-        );
-    }
-
-    #[test]
-    fn codegen_extension_id_matches_runtime() {
-        // codegen compute_extension_id must produce identical results to the
-        // runtime polyplug_abi::extension_id — both delegate to the same fn.
-        let codegen_id: u32 = compute_extension_id("trace");
-        let runtime_id: u32 = runtime_extension_id("trace");
         assert_eq!(codegen_id, runtime_id);
     }
 

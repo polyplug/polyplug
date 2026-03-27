@@ -42,6 +42,7 @@ fn make_ir(contract_name: &str, major: u32, functions: Vec<ResolvedFunction>) ->
             },
             functions,
         }],
+        host_contracts: vec![],
         bundle: None,
     }
 }
@@ -537,6 +538,7 @@ fn multiple_contracts_have_independent_fns_arrays() {
                 functions: vec![make_fn("bar", 0, vec![], None)],
             },
         ],
+        host_contracts: vec![],
         bundle: None,
     };
     let vtables: String = run_guest_generator(ir, "multi_contracts_independent", "vtables.rs");

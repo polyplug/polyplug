@@ -6,14 +6,15 @@
 use core::cell::RefCell;
 use core::hint::black_box;
 
+use criterion::criterion_group;
+use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
-use criterion::criterion_group;
-use criterion::criterion_main;
 
 use polyplug::registry::Registry;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
 use polyplug_abi::DispatchType;
@@ -22,8 +23,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_abi::ABI_OK;
 
 // ─── Plugin paths from build.rs ──────────────────────────────────────────────
 
@@ -166,14 +166,12 @@ unsafe extern "C" fn bench_resolve_plugin(
     BENCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).unwrap_or(core::ptr::null()))
 }
 
-/// Returns a null extension pointer (extensions not used in benchmarks).
-///
-/// # Safety
-/// Always safe to call; always returns null.
-unsafe extern "C" fn bench_get_extension(
+/// Returns a null host contract pointer.
+unsafe extern "C" fn bench_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _extension_id: u32,
-) -> *const () {
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractVTable {
     core::ptr::null()
 }
 
@@ -235,7 +233,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         find_by_bundle: bench_find_by_bundle,
         find_all_by_contract: bench_find_all_by_contract,
         resolve_plugin: bench_resolve_plugin,
-        get_extension: bench_get_extension,
+        get_host_contract: bench_get_host_contract,
     };
 
     let plugin_ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
@@ -457,7 +455,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         find_by_bundle: bench_find_by_bundle,
         find_all_by_contract: bench_find_all_by_contract,
         resolve_plugin: bench_resolve_plugin,
-        get_extension: bench_get_extension,
+        get_host_contract: bench_get_host_contract,
     };
 
     // Input StringView pointing to a static byte string — no allocation needed.
@@ -520,39 +518,6 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     core::mem::forget(_memory_lib);
 }
 
-// ─── Benchmark 5 — absent extension null check ───────────────────────────────
-
-/// Measures host_get_extension overhead when the requested extension ID is not registered.
-fn bench_absent_extension_null_check(c: &mut Criterion) {
-    // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
-    });
-
-    let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
-
-    let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
-        c.benchmark_group("dispatch");
-    group.throughput(Throughput::Elements(1));
-
-    group.bench_function(
-        BenchmarkId::new("absent_extension_null_check", "unknown_id"),
-        |b| {
-            b.iter(|| {
-                // SAFETY: bench_get_extension is a safe no-op stub that always returns null.
-                // No pointer preconditions; the argument is a plain integer.
-                let result: *const () = unsafe {
-                    bench_get_extension(core::ptr::null_mut(), black_box(0xDEAD_0000_u32))
-                };
-                black_box(result);
-            });
-        },
-    );
-
-    group.finish();
-    core::mem::forget(_library);
-}
-
 // ─── criterion_group / criterion_main ────────────────────────────────────────
 
 criterion_group!(
@@ -561,6 +526,5 @@ criterion_group!(
     bench_dispatch_buffer_arg,
     bench_dispatch_struct_arg_and_return,
     bench_dispatch_cross_plugin,
-    bench_absent_extension_null_check,
 );
 criterion_main!(benches);

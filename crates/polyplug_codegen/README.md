@@ -7,9 +7,9 @@ Code generator for polyplug host-side contract callers. Generates type-safe, hot
 `polyplug_codegen` reads a bundle manifest and generates host-side caller code that:
 
 - Provides type-safe access to plugin contract functions
-- Implements the factory method pattern for safe hot-reload handling
+- Implements the **caller wrapper pattern** for safe hot-reload handling
 - Hides internal `PluginGuard` and vtable details from application code
-- Supports automatic instance tracking via RAII/guard patterns
+- Uses Arc-backed guards to keep vtables alive during hot-reload
 
 ## Supported Target Languages
 
@@ -20,6 +20,8 @@ Code generator for polyplug host-side contract callers. Generates type-safe, hot
 - **Lua** — LuaJIT FFI with table-based OOP and factory functions
 - **JavaScript (Deno)** — Deno FFI with private fields and factory methods
 - **JavaScript (QuickJS)** — QuickJS FFI with function pointer caching
+
+**Note on terminology:** The "factory methods" create **caller wrappers**, not plugin instances. Each plugin contract has exactly ONE implementation (stored in `OnceLock` on the plugin side). The generated callers are wrappers that hold `Arc` references to the shared vtable.
 
 ## Installation
 
@@ -55,48 +57,64 @@ polyplugc generate --bundle bundle.toml --lang js_deno --out js_deno_out
 polyplugc generate --bundle bundle.toml --lang js_quickjs --out js_quickjs_out
 ```
 
-## Factory Method Pattern
+## Caller Wrapper Pattern (Singleton Implementations)
 
-All generated code uses the **factory method pattern** for safe hot-reload handling. This pattern ensures:
+All generated code uses the **caller wrapper pattern** for safe hot-reload handling. 
 
-- Instances can only be created if a plugin implementing the contract exists
-- Instances hold a guard that keeps the vtable alive during hot-reload
-- Instances can be validated before use
-- Instances can be explicitly reset during hot-reload
+**Critical clarification:** Each plugin contract has **exactly ONE implementation** stored in a `static OnceLock<Box<dyn Trait>>` on the plugin side. The host CANNOT create multiple plugin instances.
+
+What the generated code provides:
+- **Caller wrappers** that hold `Arc<VTableSlot>` references to the shared vtable
+- Factory methods that check if a plugin implementing the contract exists
+- Validation methods to check if the wrapper is still valid
+- Reset methods to explicitly drop the Arc reference
+
+**Architecture:**
+```
+Plugin side (singleton):
+  static VALIDATOR_IMPL: OnceLock<Box<dyn ValidatorPlugin>>  // ONE implementation
+
+Host side (caller wrappers):
+  let wrapper1 = ValidatorContract::new(handle, runtime)  // Wrapper 1 → Arc to vtable
+  let wrapper2 = ValidatorContract::new(handle, runtime)  // Wrapper 2 → Arc to SAME vtable
+  let wrapper3 = ValidatorContract::new(handle, runtime)  // Wrapper 3 → Arc to SAME vtable
+```
+
+Multiple wrappers can exist simultaneously, but they all call the **same singleton implementation**.
 
 ### Rust Pattern
 
 ```rust
 pub struct ImageDecodeContract {
-    guard: PluginGuard,
+    guard: PluginGuard,  // Holds Arc<VTableSlot> to SHARED singleton vtable
 }
 
 impl ImageDecodeContract {
-    /// Factory method - creates instance or None if not found
+    /// Factory method - creates caller wrapper or None if plugin not found
     pub fn create(runtime: &'static Runtime, min_version: u32) -> Option<Self> {
         let handle: PluginHandle = runtime.find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version).ok()?;
         let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
-        Some(Self { guard })
+        Some(Self { guard })  // New wrapper, but points to SAME singleton vtable
     }
     
-    /// Check if instance is valid (always true for Rust - guard holds Arc)
+    /// Check if wrapper is valid (always true for Rust - guard holds Arc)
     pub fn is_valid(&self) -> bool { true }
     
-    /// Reset instance (no-op for Rust - guard holds Arc)
+    /// Reset wrapper (drops Arc reference - no-op if other wrappers exist)
     pub fn reset(&mut self) { /* no-op */ }
     
     pub fn decode(&self, input: &[u8]) -> Result<Vec<u8>, ContractError> {
         let vtable_ptr: *const PluginInterface = self.guard.vtable();
-        // ... ABI call
+        // ... ABI call through singleton implementation
     }
 }
 
 // Usage
 if let Some(decoder) = ImageDecodeContract::create(runtime, 1) {
     if decoder.is_valid() {
-        let result = decoder.decode(&input)?;
+        let result = decoder.decode(&input)?;  // Calls singleton plugin implementation
     }
-    decoder.reset();  // Optional
+    decoder.reset();  // Optional - drops this wrapper's Arc reference
 }
 ```
 
@@ -105,7 +123,7 @@ if let Some(decoder) = ImageDecodeContract::create(runtime, 1) {
 ```cpp
 class ImageDecodeContract {
 public:
-    /// Factory method - creates instance or nullopt if not found
+    /// Factory method - creates caller wrapper or nullopt if plugin not found
     static std::optional<ImageDecodeContract> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {
         uint64_t handle = rt.find(IMAGE_DECODE_CONTRACT_ID, min_version);
         if (handle == UINT64_MAX) {
@@ -117,7 +135,7 @@ public:
             return std::nullopt;
         }
         
-        return ImageDecodeContract(std::move(guard));
+        return ImageDecodeContract(std::move(guard));  // Wrapper with Arc to singleton vtable
     }
     
     // Move-only (guard is not copyable)
@@ -126,21 +144,21 @@ public:
     ImageDecodeContract(const ImageDecodeContract&) = delete;
     ImageDecodeContract& operator=(const ImageDecodeContract&) = delete;
     
-    /// Check if instance is valid
+    /// Check if wrapper is valid
     explicit operator bool() const noexcept { return static_cast<bool>(guard_); }
     bool is_valid() const noexcept { return static_cast<bool>(guard_); }
     
-    /// Explicitly destroy instance (optional - destructor does this too)
+    /// Explicitly drop wrapper (optional - destructor does this too)
     void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
     
     std::string decode(std::string_view input) {
         const PluginInterface* vt = guard_.vtable();
-        // ... ABI call
+        // ... ABI call through singleton implementation
     }
     
 private:
     explicit ImageDecodeContract(polyplug::PluginGuard guard) noexcept
-        : guard_(std::move(guard)) {}
+        : guard_(std::move(guard)) {}  // Holds Arc to singleton vtable
     
     polyplug::PluginGuard guard_;
 };
@@ -148,32 +166,32 @@ private:
 // Usage
 auto decoder = ImageDecodeContract::create(rt, 1);
 if (decoder && decoder->is_valid()) {
-    auto result = decoder->decode(input);
+    auto result = decoder.decode(input);  // Calls singleton plugin implementation
 }
-decoder->reset();  // Optional
+decoder->reset();  // Optional - drops this wrapper's Arc reference
 ```
 
 ### C# Pattern
 
 ```csharp
 /// <summary>
-/// Host caller for contract `image.decode`
+/// Host caller wrapper for contract `image.decode`
 /// </summary>
 public sealed class ImageDecodeContractCaller : IDisposable {
-    private PluginGuard _guard;
+    private PluginGuard _guard;  // Holds reference to singleton vtable
 
     private ImageDecodeContractCaller(PluginGuard guard) { _guard = guard; }
 
-    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>
+    /// <summary>Factory method - creates caller wrapper if plugin is found.</summary>
     public static ImageDecodeContractCaller? Create(Runtime rt, uint minVersion = 0) {
         var handle = rt.FindByContract(ImageDecodeContractConstants.IMAGE_DECODE_CONTRACT_ID, minVersion);
         if (!handle.IsValid) { return null; }
         var guard = rt.GetGuard(handle);
         if (!guard.IsValid) { return null; }
-        return new ImageDecodeContractCaller(guard);
+        return new ImageDecodeContractCaller(guard);  // Wrapper with reference to singleton
     }
 
-    /// <summary>Check if this caller instance is still valid.</summary>
+    /// <summary>Check if this caller wrapper is still valid.</summary>
     public bool IsValid => _guard.IsValid;
 
     /// <summary>Explicitly release the guard reference.</summary>
@@ -184,26 +202,26 @@ public sealed class ImageDecodeContractCaller : IDisposable {
 
     public byte[] Decode(byte[] input) {
         var vtable = _guard.VTable;
-        // ... ABI call
+        // ... ABI call through singleton implementation
     }
 }
 
 // Usage
 using var decoder = ImageDecodeContractCaller.Create(rt, 1);
 if (decoder?.IsValid == true) {
-    var result = decoder.Decode(input);
+    var result = decoder.Decode(input);  // Calls singleton plugin implementation
 }
-decoder?.Reset();  // Optional - Dispose does this
+decoder?.Reset();  // Optional - Dispose drops the reference
 ```
 
 ### Python Pattern
 
 ```python
 class ImageDecodeContractCaller:
-    """Host caller for contract with hot-reload support."""
+    """Host caller wrapper for contract with hot-reload support."""
     
     def __init__(self, guard: PluginGuard) -> None:
-        self._guard: PluginGuard = guard
+        self._guard: PluginGuard = guard  # Reference to singleton vtable
     
     @classmethod
     def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
@@ -213,7 +231,7 @@ class ImageDecodeContractCaller:
         guard: PluginGuard = rt.resolve_plugin(handle)
         if guard.is_null():
             return None
-        return cls(guard)
+        return cls(guard)  # Wrapper with reference to singleton
     
     def is_valid(self) -> bool:
         return not self._guard.is_null()
@@ -229,26 +247,26 @@ class ImageDecodeContractCaller:
     
     def decode(self, input: bytes) -> bytes:
         vtable_ptr: int = self._guard.vtable
-        # ... ABI call
+        # ... ABI call through singleton implementation
 
 # Usage
 decoder = ImageDecodeContractCaller.create(rt, min_version=1)
 if decoder and decoder.is_valid():
-    result = decoder.decode(input)
-decoder.reset()  # Optional
+    result = decoder.decode(input)  # Calls singleton plugin implementation
+decoder.reset()  # Optional - drops this wrapper's reference
 ```
 
 ### Lua Pattern
 
 ```lua
--- Methods for ImageDecodeContract
+-- Methods for ImageDecodeContract wrapper
 local ImageDecodeContract_methods = {
     is_valid = function(self)
         return self._guard ~= nil
     end,
 
     reset = function(self)
-        self._guard = nil
+        self._guard = nil  -- Drop reference to singleton vtable
     end,
 
     decode = function(self, input)
@@ -256,7 +274,7 @@ local ImageDecodeContract_methods = {
         if vtable == nil then
             error("invalid guard", 2)
         end
-        -- ... ABI call
+        -- ... ABI call through singleton implementation
     end,
 }
 
@@ -265,7 +283,7 @@ local ImageDecodeContract_mt = {
     __index = ImageDecodeContract_methods
 }
 
--- Factory function for ImageDecodeContract
+-- Factory function for ImageDecodeContract wrapper
 function M.ImageDecodeContract_create(runtime, min_version)
     if min_version == nil then min_version = 0 end
     local handle = runtime:find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version)
@@ -276,26 +294,26 @@ function M.ImageDecodeContract_create(runtime, min_version)
     if guard == nil then
         return nil
     end
-    local instance = {
+    local wrapper = {  -- Caller wrapper (not instance!)
         _guard = guard
     }
-    setmetatable(instance, ImageDecodeContract_mt)
-    return instance
+    setmetatable(wrapper, ImageDecodeContract_mt)
+    return wrapper
 end
 
 -- Usage
 local decoder = M.ImageDecodeContract_create(runtime, 1)
 if decoder and decoder:is_valid() then
-    local result = decoder:decode(input)
+    local result = decoder:decode(input)  -- Calls singleton plugin implementation
 end
-decoder:reset()  -- Optional
+decoder:reset()  -- Optional - drops this wrapper's reference
 ```
 
 ### JavaScript (Deno) Pattern
 
 ```typescript
 export class ImageDecodeContract {
-    #guard: any;
+    #guard: any;  // Reference to singleton vtable
 
     private constructor(guard: any) {
         this.#guard = guard;
@@ -310,7 +328,7 @@ export class ImageDecodeContract {
         if (!guard) {
             return null;
         }
-        return new ImageDecodeContract(guard);
+        return new ImageDecodeContract(guard);  // Wrapper with reference to singleton
     }
 
     isValid(): boolean {
@@ -318,22 +336,22 @@ export class ImageDecodeContract {
     }
 
     reset(): void {
-        this.#guard = null;
+        this.#guard = null;  // Drop reference
     }
 
     decode(input: Uint8Array): Uint8Array {
         const vtable = this.#guard?.vtable?.();
         if (!vtable) throw new Error('caller is not valid');
-        // ... ABI call
+        // ... ABI call through singleton implementation
     }
 }
 
 // Usage
 const decoder = ImageDecodeContract.create(runtime, 1);
 if (decoder && decoder.isValid()) {
-    const result = decoder.decode(input);
+    const result = decoder.decode(input);  // Calls singleton plugin implementation
 }
-decoder.reset();  // Optional
+decoder.reset();  // Optional - drops this wrapper's reference
 ```
 
 ## Hot-Reload Integration
@@ -356,44 +374,46 @@ Runtime::Builder()
     .build();
 ```
 
-### 2. Track Instances Per Bundle
+### 2. Track Caller Wrappers Per Bundle
 
-**Instance tracking is flexible** - use whatever approach fits your application:
+**Wrapper tracking is flexible** - use whatever approach fits your application:
 
-- **Map/Dictionary**: `Map<bundle_id, List<Instance>>` - most common, easy cleanup
+**Important:** You're tracking **caller wrappers**, not plugin instances. Each plugin has ONE implementation (singleton via `OnceLock`). Multiple wrappers can reference the same vtable.
+
+- **Map/Dictionary**: `Map<bundle_id, List<Wrapper>>` - most common, easy cleanup
 - **Per-contract tracking**: Separate maps per contract type for fine-grained control
 - **Weak references**: Let the GC clean up automatically (Python, C#, Lua, JS)
 - **RAII guards**: Let the guard's lifetime manage cleanup (Rust, C++)
-- **No tracking**: If you don't hold instances across reloads, no cleanup needed
+- **No tracking**: If you don't hold wrappers across reloads, no cleanup needed
 
 ```python
-# Python example - Map-based tracking
+# Python example - Map-based tracking of caller wrappers
 class PluginManager:
     def __init__(self):
-        self._instances = {}  # bundle_id -> list of instances
+        self._wrappers = {}  # bundle_id -> list of caller wrappers
         
     def create_decoder(self, bundle_id: int):
         decoder = ImageDecodeContractCaller.create(self.rt, 1)
         if decoder:
-            self._instances.setdefault(bundle_id, []).append(decoder)
+            self._wrappers.setdefault(bundle_id, []).append(decoder)
         return decoder
     
     def _on_reload(self, phase: ReloadPhase):
         if phase.is_preparing():
-            # Clear all instances for this bundle
-            self._instances.pop(phase.bundle_id, None)
+            # Clear all wrappers for this bundle (drops Arc references)
+            self._wrappers.pop(phase.bundle_id, None)
 ```
 
 ```rust
 // Rust example - No explicit tracking needed!
 // PluginGuard uses Arc, so old vtables stay alive until all guards are dropped.
-// Just destroy your contract instances in the Preparing callback.
-static INSTANCES: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>> = ...;
+// Just destroy your caller wrappers in the Preparing callback.
+static WRAPPERS: LazyLock<Mutex<HashMap<u64, Vec<Box<dyn Any + Send>>>> = ...;
 
 Runtime::builder()
     .on_reload(|phase| {
         if let ReloadPhase::Preparing { bundle_id, .. } = phase {
-            INSTANCES.lock().unwrap().remove(&bundle_id);
+            WRAPPERS.lock().unwrap().remove(&bundle_id);  // Drop wrapper Arc references
         }
     })
     .build();
@@ -401,13 +421,13 @@ Runtime::builder()
 
 ### 3. Use Factory Methods for Re-Creation
 
-After reload completes, use factory methods to create new instances:
+After reload completes, use factory methods to create new caller wrappers:
 
 ```csharp
 // C# example
 Runtime.OnReload(phase => {
     if (phase.IsReloaded()) {
-        // Re-create instances with factory method
+        // Re-create caller wrapper (points to new vtable after reload)
         _decoder = ImageDecodeContractCaller.Create(_rt, 1);
     }
 });
@@ -423,12 +443,12 @@ Runtime.OnReload(phase => {
 ### C++
 - Generated callers are move-only, not copyable
 - `PluginGuard` is move-only
-- Safe to move between threads, but each thread should create its own instances
+- Safe to move between threads, but each thread should create its own wrappers
 
 ### C#
 - Generated callers are reference types
 - `PluginGuard` is a readonly struct
-- Thread-safe for reading, but instances should not be shared across threads during hot-reload
+- Thread-safe for reading, but wrappers should not be shared across threads during hot-reload
 
 ### Python/Lua/JavaScript
 - Single-threaded by design (GIL for Python, single-threaded for Lua/JS)
@@ -510,12 +530,13 @@ Generated code handles errors appropriately for each target language:
 ### Vtable Access
 - All generated code caches the vtable pointer in the guard
 - No FFI overhead on vtable access after initial resolution
-- Hot-reload safe: guard re-resolves vtable on each call (Python) or holds Arc (Rust/C++)
+- Hot-reload safe: guard holds Arc to vtable (Rust/C++) or re-resolves on each call (Python)
+- **Singleton vtable**: All wrappers for the same contract share ONE vtable pointer
 
 ### Function Dispatch
 - Direct vtable dispatch after guard resolution
 - No per-call overhead for contract ID lookup
-- Minimal indirection: guard → vtable → function pointer
+- Minimal indirection: wrapper → guard → vtable → singleton implementation
 
 ## Testing
 

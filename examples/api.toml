@@ -4,11 +4,11 @@
 # pipeline.Decoder: Parses CSV input into pipe-delimited format
 # Input: "name,value,42"
 # Output: "DECODED:name|value|42"
-[[contract]]
+[[plugin_contract]]
 name = "pipeline.Decoder"
 version = "1.0.0"
 
-[[contract.functions]]
+[[plugin_contract.functions]]
 name = "decode"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -16,11 +16,11 @@ return = "StringView"
 # data.Transformer: Transforms decoded data
 # Input: "DECODED:name|value|42"
 # Output: "TRANSFORMED:NAME|value (transformed)|43"
-[[contract]]
+[[plugin_contract]]
 name = "data.Transformer"
 version = "1.0.0"
 
-[[contract.functions]]
+[[plugin_contract.functions]]
 name = "transform"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -28,11 +28,11 @@ return = "StringView"
 # pipeline.Encoder: Encodes transformed data back to CSV
 # Input: "TRANSFORMED:NAME|value (transformed)|43"
 # Output: "NAME,value (transformed),43"
-[[contract]]
+[[plugin_contract]]
 name = "pipeline.Encoder"
 version = "1.0.0"
 
-[[contract.functions]]
+[[plugin_contract.functions]]
 name = "encode"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -40,11 +40,11 @@ return = "StringView"
 # data.Reporter: Generates human-readable report
 # Input: "TRANSFORMED:NAME|value (transformed)|43"
 # Output: "Report: NAME has value 'value (transformed)' with count 43"
-[[contract]]
+[[plugin_contract]]
 name = "data.Reporter"
 version = "1.0.0"
 
-[[contract.functions]]
+[[plugin_contract.functions]]
 name = "report"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
@@ -52,11 +52,11 @@ return = "StringView"
 # pipeline.Validator: Validates data format
 # Input: "DECODED:name|value|42"
 # Output: "VALID:name|value|42" or "INVALID:reason"
-[[contract]]
+[[plugin_contract]]
 name = "pipeline.Validator"
 version = "1.0.0"
 
-[[contract.functions]]
+[[plugin_contract.functions]]
 name = "validate"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
