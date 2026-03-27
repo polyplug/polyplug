@@ -1149,7 +1149,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(python): generate host-side contract ABCs`
 
-- [ ] **Task 35**: Generate Python guest-side host contract callers
+- [ ] **Task 20**: Generate Python guest-side host contract callers
   
   **Specification**:
   Generate Python classes that plugins use to call host contracts.
@@ -1180,7 +1180,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(python): generate guest-side host contract callers`
 
-- [ ] **Task 36**: Generate Lua host-side contract metatables
+- [ ] **Task 21**: Generate Lua host-side contract metatables
   
   **Specification**:
   Generate Lua metatables that hosts implement for host contracts.
@@ -1221,7 +1221,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(lua): generate host-side contract metatables`
 
-- [ ] **Task 37**: Generate Lua guest-side host contract callers
+- [ ] **Task 22**: Generate Lua guest-side host contract callers
   
   **Specification**:
   Generate Lua functions that plugins use to call host contracts.
@@ -1253,7 +1253,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(lua): generate guest-side host contract callers`
 
-- [ ] **Task 38**: Generate JavaScript host-side contract interfaces
+- [ ] **Task 23**: Generate JavaScript host-side contract interfaces
   
   **Specification**:
   Generate JavaScript/TypeScript interfaces that hosts implement.
@@ -1283,7 +1283,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(js): generate host-side contract interfaces`
 
-- [ ] **Task 39**: Generate JavaScript guest-side host contract callers
+- [ ] **Task 24**: Generate JavaScript guest-side host contract callers
   
   **Specification**:
   Generate JavaScript classes that plugins use to call host contracts.
@@ -1319,7 +1319,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 6
 **Blocks**: Wave 8
 
-- [ ] **Task 35**: Update Rust SDK with host contract registration
+- [ ] **Task 25**: Update Rust SDK with host contract registration
   
   **Specification**:
   Update `polyplug` crate with host contract registration API.
@@ -1336,29 +1336,142 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(rust-sdk): add host contract registration API`
 
-- [ ] **Task 36**: Update Python SDK with host contract registration
+- [ ] **Task 26**: Update Python SDK with host contract registration
+  
+  **Specification**:
+  Update Python host SDK with host contract registration API.
+  
+  **Implementation**:
+  ```python
+  # Generated: host/contracts.py
+  class Runtime:
+      def register_host_logger(self, impl_: HostLogger) -> None:
+          """Register a HostLogger implementation with the runtime."""
+          # Creates PythonHostBridge, registers with runtime
+          pass
+  
+      def get_host_logger(self) -> Optional[HostLogger]:
+          """Get registered HostLogger for plugin calls."""
+          pass
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] `register_host_logger()` method added to Runtime
+  - [ ] Bridge created between Python implementation and C ABI
+  - [ ] GIL handling implemented correctly
+  - [ ] Generated code compiles and runs
   
   **Files**: `sdks/python/host/polyplug/`
   
   **Commit**:
   - Message: `feat(python-sdk): add host contract registration`
 
-- [ ] **Task 37**: Update C# SDK with host contract registration
+- [ ] **Task 27**: Update C# SDK with host contract registration
+  
+  **Specification**:
+  Update C# host SDK with host contract registration API.
+  
+  **Implementation**:
+  ```csharp
+  // Generated: Host/Contracts.cs
+  public partial class Runtime {
+      public void RegisterHostLogger(IHostLogger impl_) {
+          // Creates vtable, registers with runtime
+      }
+      
+      public IHostLogger GetHostLogger() {
+          // Returns registered implementation for plugin calls
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] `RegisterHostLogger()` method added to Runtime
+  - [ ] Interface vtable created
+  - [ ] Generated code compiles
+  
+  **Files**: `sdks/csharp/host/Polyplug/`
   
   **Commit**:
   - Message: `feat(csharp-sdk): add host contract registration`
 
-- [ ] **Task 38**: Update Lua SDK with host contract registration
+- [ ] **Task 28**: Update Lua SDK with host contract registration
+  
+  **Specification**:
+  Update Lua host SDK with host contract registration API.
+  
+  **Implementation**:
+  ```lua
+  -- Generated: host/contracts.lua
+  function Runtime:register_host_logger(impl_)
+      -- Creates LuaHostBridge, registers with runtime
+  end
+  
+  function Runtime:get_host_logger()
+      -- Returns registered implementation for plugin calls
+  end
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] `register_host_logger()` function added to Runtime
+  - [ ] Bridge created between Lua implementation and C ABI
+  - [ ] Generated code runs
+  
+  **Files**: `sdks/lua/host/polyplug/`
   
   **Commit**:
   - Message: `feat(lua-sdk): add host contract registration`
 
-- [ ] **Task 39**: Update JavaScript SDK with host contract registration
+- [ ] **Task 29**: Update JavaScript SDK with host contract registration
+  
+  **Specification**:
+  Update JavaScript host SDK with host contract registration API.
+  
+  **Implementation**:
+  ```typescript
+  // Generated: host/contracts.ts
+  export class Runtime {
+      registerHostLogger(impl_: HostLogger): void {
+          // Creates JavaScriptHostBridge, registers with runtime
+      }
+      
+      getHostLogger(): HostLogger | null {
+          // Returns registered implementation for plugin calls
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] `registerHostLogger()` method added to Runtime
+  - [ ] Bridge created between JS implementation and C ABI
+  - [ ] Generated code compiles
+  
+  **Files**: `sdks/js/host/polyplug/`
   
   **Commit**:
   - Message: `feat(js-sdk): add host contract registration`
 
-- [ ] **Task 35**: Update C++ SDK with host contract registration
+- [ ] **Task 30**: Update C++ SDK with host contract registration
+  
+  **Specification**:
+  Update C++ host SDK with host contract registration API.
+  
+  **Implementation**:
+  ```cpp
+  // Generated: host/contracts.hpp
+  class Runtime {
+  public:
+      void register_host_logger(std::shared_ptr<HostLogger> impl_);
+      std::shared_ptr<HostLogger> get_host_logger();
+  };
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] `register_host_logger()` method added to Runtime
+  - [ ] Vtable created and registered with runtime
+  - [ ] Generated code compiles
+  
+  **Files**: `sdks/cpp/host/polyplug/`
   
   **Commit**:
   - Message: `feat(cpp-sdk): add host contract registration`
@@ -1369,7 +1482,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 7
 **Blocks**: Wave 9
 
-- [ ] **Task 36**: Create Host Contracts examples
+- [ ] **Task 31**: Create Host Contracts examples
   
   **Specification**:
   Create examples demonstrating host contracts in all 6 languages.
@@ -1402,7 +1515,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Message: `feat(examples): add host contracts examples`
   - Files: `examples/host_contracts/`
 
-- [ ] **Task 37**: Update existing examples to use `[[plugin_contract]]`
+- [ ] **Task 32**: Update existing examples to use `[[plugin_contract]]`
   
   **Specification**:
   Update all existing examples to use new syntax.
@@ -1412,7 +1525,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `refactor(examples): update to use [[plugin_contract]]`
 
-- [ ] **Task 38**: Write Host Contracts tutorial documentation
+- [ ] **Task 33**: Write Host Contracts tutorial documentation
   
   **Specification**:
   Write comprehensive documentation for host contracts.
@@ -1431,7 +1544,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 8
 **Blocks**: Completion
 
-- [ ] **Task 39**: Write unit tests for host contract types
+- [ ] **Task 34**: Write unit tests for host contract types
   
   **Specification**:
   Test all host contract types in polyplug_abi.
@@ -1624,12 +1737,12 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 | 9-10 | 2, 3, 7, 8 | Wave 5 |
 | 11 | 9-10 | Wave 6, 8 |
 | 12-14 | 11 | Wave 6, 8 |
-| 15-19 | 5-6 | Wave 7 |
-| 20 | 7-8, 11 | Wave 8 |
-| 21-25 | 15-19, 12-14 | Wave 8 |
-| 26-28 | 20-25 | Wave 9 |
-| 29-34 | 26-28 | F1-F4 |
-| F1-F4 | 29-34 | — |
+| 15-24 | 5-6, 7-8 | Wave 7 |
+| 25 | 7-8, 11 | Wave 8 |
+| 26-30 | 15-24, 12-14 | Wave 8 |
+| 31-33 | 25-30 | Wave 9 |
+| 34-39 | 31-33 | F1-F4 |
+| F1-F4 | 39 | — |
 
 ---
 
