@@ -1,135 +1,1615 @@
 # Host Contracts Implementation Plan for 0.1.0
 
+## CRITICAL RULES - ENFORCED
+
+### Rule 1: All Tasks Required - No Priority Levels
+**THERE IS NO LOWER PRIORITY TASKS. THERE IS NO OPTIONAL TASKS.**
+All tasks must be completed in the exact order specified. No task may be skipped, deferred, or marked as optional.
+
+### Rule 2: Plan Execution As-Is
+**PLAN MEANT TO BE EXECUTED AS-IS. DO NOT EDIT TASK DESCRIPTIONS.**
+Only mark tasks as completed (`[x]`) when fully completed. Never modify task descriptions, requirements, or acceptance criteria during execution.
+
+### Rule 3: Gap Discovery Protocol
+**IF EXECUTOR FINDS A GAP, STOP AND ASK USER.**
+Never take decisions independently. When encountering undefined behavior, missing specification, or unclear requirements, STOP execution and ask the user for clarification.
+
+### Rule 4: Extensions Are Being Removed
+**EXTENSIONS ARE COMPLETELY REMOVED AND REPLACED BY HOST CONTRACTS.**
+- The old `Extension` system (`get_extension`) is **deleted**, not deprecated
+- Host Contracts are the **replacement**, not coexistence
+- No backwards compatibility for Extensions
+- All extension-related code removed from codebase
+
+---
+
 ## TL;DR
 
-Implement **Host Contracts** - a reverse of Plugin Contracts where plugins call host-provided functions. This enables type-safe, bidirectional communication between hosts and plugins.
+Implement **Host Contracts** - a reverse of Plugin Contracts where plugins call host-provided functions bidirectionally with full type safety.
 
 **Key Changes:**
 - Break ABI (pre-1.0, no backwards compatibility constraint)
 - Rename existing `[[contract]]` to `[[plugin_contract]]` in `api.toml`
 - Add new `[[host_contract]]` section to `api.toml`
-- Full code generation for all 6 languages
-- Update all examples to use Host Contracts
+- Add `HostRuntime` enum for VM host support
+- Implement Host Runtime Bridge for VM-based hosts (Python/Lua/JS)
+- Full code generation for all 6 languages (both host-side and guest-side)
+- Update all examples with Host Contracts
 
-**Estimated Effort:** 3-4 weeks
-**Critical Path:** ABI changes → Parser → Codegen → Examples
-
----
-
-## Context
-
-### Current State (Plugin Contracts Only)
-```
-Host → calls → Plugin (via Plugin Contracts)
-```
-
-Plugin Contracts work via:
-1. Plugin implements trait at compile time
-2. Plugin registers vtable at init via `host.register_plugin()`
-3. Host discovers plugins via `find_by_contract()`
-4. Host calls plugin through generated caller code
-
-### Target State (Bidirectional)
-```
-Host ↔ Plugin
-  ↕         ↕
- Plugin    Host
-Contracts   Contracts
-```
-
-Host Contracts work via:
-1. Host implements trait at compile time
-2. Host registers vtable at runtime build via `RuntimeBuilder::host_contract()`
-3. Plugin discovers host contracts via `host.get_host_contract()`
-4. Plugin calls host through generated caller code
+**Estimated Effort:** 5-6 weeks
+**Critical Path:** Wave 0 (Design) → Wave 1 (ABI) → Wave 5 (Bridge) → Wave 6 (Examples)
 
 ---
 
-## Work Objectives
+## Architecture Overview
 
-### Core Objective
-Implement complete Host Contracts system with:
-- Type-safe ABI for host→plugin calls
-- Full code generation in all 6 languages
-- Examples demonstrating bidirectional communication
-- Comprehensive test coverage
+### Symmetric Contract System
 
-### Deliverables
-1. Updated ABI layer with `get_host_contract()` function
-2. `api.toml` parser supporting `[[plugin_contract]]` and `[[host_contract]]`
-3. Code generators for all 6 languages (guest-side host callers, host-side vtable registration)
-4. Updated examples with Host Contracts (logger, metrics)
-5. Documentation updates
-6. Test suite covering all scenarios
+```
+Bidirectional Communication:
 
-### Definition of Done
-- [ ] All 6 languages can implement and call Host Contracts
-- [ ] Examples run successfully with bidirectional communication
-- [ ] All tests pass (unit + integration)
-- [ ] Documentation complete
-- [ ] SDK validator passes
+┌─────────────────┐         Host Contracts         ┌─────────────────┐
+│   Host          │◄────────────────────────────────│   Plugin        │
+│ (Rust/Python/   │         (Plugin calls Host)      │ (Any Language)  │
+│  Lua/JS)        │                                │                 │
+└─────────────────┘                                └─────────────────┘
+         │                                                  │
+         │         Plugin Contracts                         │
+         │─────────────────────────────────────────────────►│
+         │         (Host calls Plugin)                      │
+         ▼                                                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Rust Runtime Core                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────────┐   │
+│  │   Registry   │  │  Host Bridge │  │  Plugin Loaders         │   │
+│  │              │  │  (VM support)│  │  (Native/VM)            │   │
+│  └──────────────┘  └──────────────┘  └─────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Host Runtime Types
+
+```rust
+pub enum HostRuntime {
+    Rust = 0,       // Native Rust host
+    Python = 1,     // Python host via ctypes/cffi
+    Lua = 2,        // Lua host via FFI
+    JavaScript = 3, // JavaScript host (Deno/Node)
+}
+```
+
+### Host Contract Flow
+
+```
+Native Plugin calling Host Contract:
+1. Plugin calls HostLoggerContract::log() via generated code
+2. Generated code calls host.get_host_contract(HOST_LOGGER_ID)
+3. Runtime returns vtable pointer
+4. If Host is Native: Direct function call
+5. If Host is VM: Runtime Bridge translates to VM call
+
+VM Plugin calling Host Contract:
+1. Python plugin calls host_logger.log()
+2. Python generated code calls through ctypes
+3. Runtime receives C ABI call
+4. If Host is Native: Direct function call  
+5. If Host is VM: Runtime Bridge translates to VM call
+```
 
 ---
 
-## Verification Strategy
+## Execution Waves
 
-### Test Decision
-- **Infrastructure exists**: YES (existing test framework)
-- **Automated tests**: TDD approach - write tests first, then implementation
-- **Framework**: `cargo test` with integration tests
-- **Agent-Executed QA**: Every task includes verification steps
+### Wave 0: Design (BLOCKS ALL OTHER WAVES)
+**Status**: Must complete before Wave 1
 
-### QA Policy
-Every task MUST include agent-executed QA scenarios:
-- Compile tests: `cargo build --release` succeeds
-- Unit tests: `cargo test -p <crate>` passes
-- Integration tests: Full pipeline test with examples
-- Cross-language tests: Verify all 6 language generators
+These tasks produce design documents that guide all implementation. STOP and ask user if any design decision is unclear.
+
+- [x] **Task D1**: Define HostContractVTable Base Struct
+  
+  **Specification**:
+  Define the C ABI structure for host contract vtables with support for both native and VM dispatch.
+  
+  **Requirements**:
+  ```rust
+  #[repr(C)]
+  pub struct HostContractVTableHeader {
+      pub vtable_version: u32,      // Structure version for ABI evolution
+      pub contract_id: u64,         // fnv1a_64("host.logger@1")
+      pub contract_major: u32,      // Major version
+      pub contract_minor: u32,      // Minor version
+      pub function_count: u32,      // Number of functions
+      pub dispatch_type: DispatchType,  // Native or VirtualMachine
+  }
+  
+  #[repr(C)]
+  pub struct NativeHostContractDispatch {
+      pub functions: *const *const (),  // Array of function pointers
+  }
+  
+  #[repr(C)]
+  pub struct VmHostContractDispatch {
+      pub call: unsafe extern "C" fn(
+          bridge_data: *mut c_void,
+          fn_id: u32,
+          args: *const (),
+          out: *mut (),
+      ) -> AbiError,
+      pub bridge_data: *mut c_void,
+  }
+  
+  #[repr(C)]
+  pub union HostContractDispatch {
+      pub native: NativeHostContractDispatch,
+      pub vm: VmHostContractDispatch,
+  }
+  
+  #[repr(C)]
+  pub struct HostContractVTable {
+      pub header: HostContractVTableHeader,
+      pub dispatch: HostContractDispatch,
+  }
+  ```
+  
+  **Design Decisions Required**:
+  - Function pointer signatures for host contract functions
+  - Memory ownership rules for parameters/returns
+  - Error propagation mechanism
+  
+  **Deliverable**: `.sisyphus/designs/host-contract-vtable.md`
+  
+  **Acceptance Criteria**:
+  - [ ] All struct layouts documented with sizes and alignments
+  - [ ] Function signatures defined for example host contracts
+  - [ ] Memory ownership rules specified
+  - [ ] Version negotiation protocol defined
+  
+  **QA Verification**:
+  ```bash
+  # Verify design document exists and is complete
+  test -f .sisyphus/designs/host-contract-vtable.md
+  grep -q "struct HostContractVTable" .sisyphus/designs/host-contract-vtable.md
+  grep -q "Memory Ownership" .sisyphus/designs/host-contract-vtable.md
+  ```
+
+- [x] **Task D2**: Define Host Runtime Bridge Architecture
+  
+  **Specification**:
+  Design the bridge system that allows VM-based hosts (Python/Lua/JS) to implement host contracts.
+  
+  **Key Insight**: When host is VM-based, the Rust runtime must act as a bridge between plugin (any language) and host (VM).
+  
+  **Architecture**:
+  ```
+  Plugin (any language) → Runtime Bridge → Host (VM)
+  
+  For VM Host:
+  1. Plugin calls host contract via C ABI
+  2. Runtime receives call
+  3. Runtime Bridge translates to VM call
+  4. Bridge calls into VM (Python ctypes, Lua FFI, JS Deno FFI)
+  5. Host implementation executes
+  ```
+  
+  **Bridge Trait Design**:
+  ```rust
+  pub trait HostRuntimeBridge: Send + Sync {
+      fn runtime_type(&self) -> HostRuntime;
+      
+      /// Call a host contract function
+      fn call_host_contract(
+          &self,
+          contract_id: u64,
+          fn_id: u32,
+          args: *const (),
+          out: *mut (),
+      ) -> AbiError;
+  }
+  
+  // For Python host
+  pub struct PythonHostBridge {
+      // Stores Python callable objects for each host contract
+      contracts: HashMap<u64, PyObject>,
+  }
+  
+  impl HostRuntimeBridge for PythonHostBridge {
+      fn call_host_contract(...) -> AbiError {
+          // Acquire GIL
+          // Call Python implementation
+          // Handle Python exceptions
+          // Return AbiError
+      }
+  }
+  ```
+  
+  **Deliverable**: `.sisyphus/designs/host-runtime-bridge.md`
+  
+  **Acceptance Criteria**:
+  - [ ] Bridge trait defined
+  - [ ] Python bridge design documented
+  - [ ] Lua bridge design documented  
+  - [ ] JavaScript bridge design documented
+  - [ ] GIL/thread safety rules specified
+  - [ ] Exception handling strategy defined
+
+- [x] **Task D3**: Design Code Generation for Host Contracts
+  
+  **Specification**:
+  Design what code is generated for both host-side and guest-side.
+  
+  **Generated for Host** (what host implements):
+  - Rust: Trait definition
+  - Python: Abstract base class
+  - Lua: Metatable with methods
+  - JS: Interface/abstract class
+  - C++: Pure virtual class
+  - C#: Interface
+  
+  **Generated for Guest** (what plugin uses to call host):
+  - All languages: Contract caller with `from_host()` factory
+  
+  **Example - Rust Host**:
+  ```rust
+  // Generated in host/contracts.rs
+  pub trait HostLogger: Send + Sync {
+      fn log(&self, level: u32, message: &str);
+      fn logf(&self, level: u32, format: &str, args: &[Value]);
+  }
+  
+  // Registration helper
+  impl Runtime {
+      pub fn register_host_logger(&self, impl_: Box<dyn HostLogger>) {
+          // Creates vtable, registers with runtime
+      }
+  }
+  ```
+  
+  **Example - Python Host**:
+  ```python
+  # Generated in host/contracts.py
+  from abc import ABC, abstractmethod
+  
+  class HostLogger(ABC):
+      @abstractmethod
+      def log(self, level: int, message: str) -> None:
+          pass
+      
+      @abstractmethod
+      def logf(self, level: int, format: str, args: list) -> None:
+          pass
+  
+  class Runtime:
+      def register_host_logger(self, impl_: HostLogger) -> None:
+          # Creates bridge, registers with runtime
+          pass
+  ```
+  
+  **Example - Rust Guest**:
+  ```rust
+  // Generated in guest/host_contracts.rs
+  pub struct HostLoggerContract {
+      vtable: &'static HostLoggerVTable,
+  }
+  
+  impl HostLoggerContract {
+      pub fn from_host(host: &HostVTable) -> Option<Self> {
+          let ptr = host.get_host_contract(HOST_LOGGER_ID)?;
+          Some(Self { vtable: unsafe { &*(ptr as *const _) } })
+      }
+      
+      pub fn log(&self, level: u32, message: &str) -> Result<(), ContractError> {
+          // Calls through vtable
+      }
+  }
+  ```
+  
+  **Deliverable**: `.sisyphus/designs/host-contract-codegen.md`
+  
+  **Acceptance Criteria**:
+  - [ ] Host-side generated code shown for all 6 languages
+  - [ ] Guest-side generated code shown for all 6 languages
+  - [ ] Registration API designed for all 6 languages
+  - [ ] VM bridge integration specified
+
+- [x] **Task D4**: Design Host Contract ID Scheme
+  
+  **Specification**:
+  Design collision-free contract ID generation for host contracts.
+  
+  **Problem**: Plugin contracts and host contracts must never collide.
+  
+  **Solution**: Namespace prefix in hash input
+  ```rust
+  // Host contract ID
+  host_contract_id = fnv1a_64(b"host_contract:logger@1")
+  
+  // Plugin contract ID  
+  plugin_contract_id = fnv1a_64(b"plugin_contract:logger@1")
+  ```
+  
+  **Deliverable**: Documented in design files
+  
+  **Acceptance Criteria**:
+  - [ ] Collision test case designed
+  - [ ] No overlap possible between host and plugin contract IDs
+
+**Wave 0 Completion Gate**:
+All 4 design documents must be complete and reviewed before proceeding to Wave 1. If any design decision is unclear, STOP and ask user.
 
 ---
 
-## Execution Strategy
+### Wave 1: ABI Layer (FOUNDATION)
+**Status**: Blocked by Wave 0
+**Blocks**: Wave 2, Wave 3, Wave 5
 
-### Parallel Execution Waves
+- [x] **Task 1**: Rename `[[contract]]` to `[[plugin_contract]]` in all api.toml files
+  
+  **Specification**:
+  Globally rename all occurrences of `[[contract]]` to `[[plugin_contract]]` in:
+  - All api.toml files
+  - Parser code (RawApiSchema)
+  - IR (Intermediate Representation)
+  - All code generators
+  - Documentation
+  
+  **Files to Modify**:
+  - `examples/api.toml`
+  - `crates/polyplug_codegen/src/parser.rs`
+  - `crates/polyplug_codegen/src/ir.rs`
+  - All generator files in `crates/polyplug_codegen/src/generators/`
+  - Documentation files
+  
+  **Backwards Compatibility**:
+  - Phase 1 (this release): Accept both `[[contract]]` and `[[plugin_contract]]`, emit deprecation warning for `[[contract]]`
+  - Parser should normalize both to internal `PluginContract` type
+  
+  **Acceptance Criteria**:
+  - [ ] `grep -r "^\[\[contract\]\]" --include="*.toml" .` returns 0 results (except in test fixtures)
+  - [ ] `grep -r "^\[\[plugin_contract\]\]" --include="*.toml" .` returns expected results
+  - [ ] Parser accepts both syntaxes
+  - [ ] Deprecation warning emitted for old syntax
+  - [ ] All existing tests pass
+  
+  **QA Verification**:
+  ```bash
+  # Test new syntax
+  cat > /tmp/test_new.toml << 'EOF'
+  [[plugin_contract]]
+  name = "test.decoder"
+  version = "1.0.0"
+  EOF
+  cargo run -p polyplugc -- validate --api /tmp/test_new.toml
+  # Expected: OK
+  
+  # Test old syntax with warning
+  cat > /tmp/test_old.toml << 'EOF'
+  [[contract]]
+  name = "test.decoder"
+  version = "1.0.0"
+  EOF
+  cargo run -p polyplugc -- validate --api /tmp/test_old.toml 2>&1
+  # Expected: OK with deprecation warning
+  ```
+  
+  **Commit**:
+  - Message: `refactor(abi): rename [[contract]] to [[plugin_contract]]`
+  - Files: All modified files
+  - Pre-commit: `cargo test -p polyplug_codegen --lib`
 
-**Wave 1: Foundation (ABI + Core Types)**
-- Task 1: Rename `[[contract]]` to `[[plugin_contract]]` in all files
-- Task 2: Update ABI layer with HostContract support
-- Task 3: Add HostContractVTable types to polyplug_abi
+- [ ] **Task 2**: Add `HostRuntime` enum and ABI types
+  
+  **Specification**:
+  Add the HostRuntime enum and HostContractVTable types to polyplug_abi.
+  
+  **Implementation**:
+  In `crates/polyplug_abi/src/lib.rs`:
+  ```rust
+  /// Host runtime type identifier
+  #[repr(u8)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  pub enum HostRuntime {
+      Rust = 0,
+      Python = 1,
+      Lua = 2,
+      JavaScript = 3,
+  }
+  
+  /// Host contract vtable header
+  #[repr(C)]
+  pub struct HostContractVTableHeader {
+      pub vtable_version: u32,
+      pub contract_id: u64,
+      pub contract_major: u32,
+      pub contract_minor: u32,
+      pub function_count: u32,
+      pub dispatch_type: DispatchType,
+  }
+  
+  /// Native dispatch for host contracts
+  #[repr(C)]
+  pub struct NativeHostContractDispatch {
+      pub functions: *const *const (),
+  }
+  
+  /// VM dispatch for host contracts
+  #[repr(C)]
+  pub struct VmHostContractDispatch {
+      pub call: unsafe extern "C" fn(
+          bridge_data: *mut c_void,
+          fn_id: u32,
+          args: *const (),
+          out: *mut (),
+      ) -> AbiError,
+      pub bridge_data: *mut c_void,
+  }
+  
+  #[repr(C)]
+  pub union HostContractDispatch {
+      pub native: NativeHostContractDispatch,
+      pub vm: VmHostContractDispatch,
+  }
+  
+  #[repr(C)]
+  pub struct HostContractVTable {
+      pub header: HostContractVTableHeader,
+      pub dispatch: HostContractDispatch,
+  }
+  
+  /// Error codes for host contracts
+  pub const ABI_HOST_CONTRACT_NOT_FOUND: u32 = 100;
+  pub const ABI_HOST_CONTRACT_VERSION_MISMATCH: u32 = 101;
+  pub const ABI_HOST_CONTRACT_CALL_FAILED: u32 = 102;
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] All types compile
+  - [ ] Sizes and alignments verified via tests
+  - [ ] SAFETY impls for Send/Sync
+  
+  **QA Verification**:
+  ```bash
+  cargo test -p polyplug_abi host_contract_types
+  # Expected: All layout tests pass
+  ```
+  
+  **Commit**:
+  - Message: `feat(abi): add HostRuntime enum and HostContractVTable types`
+  - Files: `crates/polyplug_abi/src/lib.rs`
+  - Pre-commit: `cargo test -p polyplug_abi`
 
-**Wave 2: Parser + IR (MAX PARALLEL)**
-- Task 4: Update parser to support `[[plugin_contract]]` and `[[host_contract]]`
-- Task 5: Update Intermediate Representation (IR)
-- Task 6: Add validation for host contracts
+- [ ] **Task 3**: Add `get_host_contract` to HostVTable AND Remove Extensions
+  
+  **Specification**:
+  Add the `get_host_contract` function pointer to HostVTable AND completely remove the `get_extension` field.
+  
+  **Implementation**:
+  In `crates/polyplug_abi/src/lib.rs`:
+  
+  **REMOVE**:
+  ```rust
+  // DELETE THIS ENTIRELY:
+  pub get_extension: unsafe extern "C" fn(rt_ctx: *mut c_void, extension_id: u32) -> *const (),
+  ```
+  
+  **ADD**:
+  ```rust
+  #[repr(C)]
+  pub struct HostVTable {
+      // ... existing fields ...
+      pub resolve_plugin: unsafe extern "C" fn(...),
+      
+      // NEW: Get host contract vtable (REPLACES get_extension)
+      pub get_host_contract: unsafe extern "C" fn(
+          rt_ctx: *mut c_void,
+          contract_id: u64,
+          min_version: u32,
+      ) -> *const HostContractVTable,
+  }
+  ```
+  
+  **Files to Modify for Extension Removal**:
+  - `crates/polyplug_abi/src/lib.rs` - Remove `get_extension` from HostVTable
+  - `crates/polyplug/src/extensions/` - DELETE ENTIRE DIRECTORY
+  - `crates/polyplug/src/runtime.rs` - Remove extension registration, remove `host_get_extension` callback
+  - `crates/polyplug/src/lib.rs` - Remove extension module export
+  - All code generators - Remove EXT_TRACE_ID generation
+  - All SDKs - Remove extension-related code
+  
+  **Breaking Change**: This is a complete ABI break. Extensions are gone.
+  
+  **Acceptance Criteria**:
+  - [ ] `get_extension` field removed from HostVTable
+  - [ ] `crates/polyplug/src/extensions/` directory deleted
+  - [ ] No `Extension` trait references remaining
+  - [ ] No `EXT_TRACE_ID` generation in code generators
+  - [ ] HostVTable updated with `get_host_contract`
+  - [ ] Size/layout tests updated
+  - [ ] All usages updated
+  - [ ] `grep -r "get_extension" --include="*.rs" .` returns 0 results
+  - [ ] `grep -r "Extension" --include="*.rs" crates/polyplug/src/` returns 0 results (except in comments explaining removal)
+  
+  **QA Verification**:
+  ```bash
+  # Verify extension removal
+  grep -r "get_extension" --include="*.rs" crates/
+  # Expected: No results (or only in CHANGELOG/historical docs)
+  
+  # Verify new field exists
+  grep -q "get_host_contract" crates/polyplug_abi/src/lib.rs
+  # Expected: Found
+  
+  cargo test -p polyplug_abi host_vtable_layout
+  # Expected: New size verified
+  ```
+  
+  **Commit**:
+  - Message: `feat(abi)!: replace get_extension with get_host_contract, remove Extension system`
+  - Files: `crates/polyplug_abi/src/lib.rs`, `crates/polyplug/src/extensions/` (deleted), `runtime.rs`, all generators
+  - Pre-commit: `cargo test -p polyplug_abi --lib`
 
-**Wave 3: Code Generation (MAX PARALLEL)**
-- Task 7: Rust generator (guest host callers + host vtable traits)
-- Task 8: C++ generator
-- Task 9: C# generator
-- Task 10: Python generator
-- Task 11: Lua generator
-- Task 12: JavaScript generator
+- [ ] **Task 4**: Implement host contract ID calculation
+  
+  **Specification**:
+  Implement collision-free host contract ID generation.
+  
+  **Implementation**:
+  In `crates/polyplug_abi/src/lib.rs`:
+  ```rust
+  /// Calculate host contract ID from name and major version
+  pub fn host_contract_id(name: &str, major: u32) -> u64 {
+      let input = format!("host_contract:{}@{}", name, major);
+      fnv1a_64(input.as_bytes())
+  }
+  
+  /// Calculate plugin contract ID from name and major version
+  pub fn plugin_contract_id(name: &str, major: u32) -> u64 {
+      let input = format!("plugin_contract:{}@{}", name, major);
+      fnv1a_64(input.as_bytes())
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Functions implemented
+  - [ ] No collision between host and plugin IDs for same name
+  - [ ] Tests verify collision avoidance
+  
+  **QA Verification**:
+  ```bash
+  cargo test -p polyplug_abi contract_id_collision
+  # Expected: Test passes, no collisions
+  ```
+  
+  **Commit**:
+  - Message: `feat(abi): add host_contract_id and plugin_contract_id functions`
+  - Files: `crates/polyplug_abi/src/lib.rs`
+  - Pre-commit: `cargo test -p polyplug_abi`
 
-**Wave 4: Runtime + SDK Updates**
-- Task 13: Runtime host contract registration
-- Task 14: Update host SDKs with host contract traits
-- Task 15: Update guest SDKs with host contract accessors
+---
 
-**Wave 5: Examples + Documentation**
-- Task 16: Create host contract examples (logger, metrics)
-- Task 17: Update existing examples to use renamed `[[plugin_contract]]`
-- Task 18: Documentation updates
+### Wave 2: Parser and IR
+**Status**: Blocked by Wave 1
+**Blocks**: Wave 3
 
-**Wave 6: Testing + Verification**
-- Task 19: Integration tests for host contracts
-- Task 20: Cross-language tests
-- Task 21: Final verification
+- [ ] **Task 5**: Update parser to support `[[plugin_contract]]` and `[[host_contract]]`
+  
+  **Specification**:
+  Update TOML parser to recognize both `[[plugin_contract]]` and `[[host_contract]]` sections.
+  
+  **Files**: `crates/polyplug_codegen/src/parser.rs`
+  
+  **Implementation**:
+  ```rust
+  // Raw API schema
+  pub struct RawApiSchema {
+      pub plugin_contracts: Vec<RawPluginContract>,  // Renamed from contracts
+      pub host_contracts: Vec<RawHostContract>,      // NEW
+      // ... other fields ...
+  }
+  
+  pub struct RawHostContract {
+      pub name: String,
+      pub version: String,
+      pub functions: Vec<RawFunction>,
+  }
+  ```
+  
+  **Validation Rules**:
+  - Host contract names must start with "host."
+  - No duplicate contract names across both types
+  - Version format must be semantic
+  
+  **Acceptance Criteria**:
+  - [ ] Parser accepts `[[plugin_contract]]`
+  - [ ] Parser accepts `[[host_contract]]`
+  - [ ] Backwards compatibility for `[[contract]]` with warning
+  - [ ] Validation rules enforced
+  
+  **QA Verification**:
+  ```bash
+  cat > /tmp/test_host_contract.toml << 'EOF'
+  [[host_contract]]
+  name = "host.logger"
+  version = "1.0.0"
+  
+  [[host_contract.functions]]
+  name = "log"
+  params = [{ name = "level", type = "u32" }, { name = "message", type = "StringView" }]
+  returns = "void"
+  EOF
+  cargo run -p polyplugc -- validate --api /tmp/test_host_contract.toml
+  # Expected: OK
+  ```
+  
+  **Commit**:
+  - Message: `feat(parser): add support for [[plugin_contract]] and [[host_contract]]`
+  - Files: `parser.rs`
+  - Pre-commit: `cargo test -p polyplug_codegen parser`
 
-**Wave FINAL: Review**
-- Task F1: Plan compliance audit
-- Task F2: Code quality review
-- Task F3: Real manual QA
-- Task F4: Scope fidelity check
+- [ ] **Task 6**: Update Intermediate Representation (IR)
+  
+  **Specification**:
+  Update IR to include HostContract alongside PluginContract.
+  
+  **Files**: `crates/polyplug_codegen/src/ir.rs`
+  
+  **Implementation**:
+  ```rust
+  pub struct ResolvedApiSchema {
+      pub plugin_contracts: Vec<ResolvedPluginContract>,  // Renamed
+      pub host_contracts: Vec<ResolvedHostContract>,      // NEW
+      // ... other fields ...
+  }
+  
+  pub struct ResolvedHostContract {
+      pub name: String,
+      pub id: u64,  // host_contract_id(name, major)
+      pub version: Version,
+      pub functions: Vec<ResolvedFunction>,
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] IR types updated
+  - [ ] All IR consumers compile
+  
+  **Commit**:
+  - Message: `refactor(ir): add HostContract to IR`
+  - Files: `ir.rs`, all files that use IR
+  - Pre-commit: `cargo build -p polyplug_codegen`
+
+---
+
+### Wave 3: Rust Code Generation
+**Status**: Blocked by Wave 2
+**Blocks**: Wave 4, Wave 6
+
+- [ ] **Task 7**: Generate Rust host-side contract traits
+  
+  **Specification**:
+  Generate Rust traits that hosts implement for host contracts.
+  
+  **Files**: `crates/polyplug_codegen/src/generators/rust.rs`
+  
+  **Generated Code Example**:
+  ```rust
+  // Generated: host/contracts.rs
+  pub trait HostLogger: Send + Sync {
+      fn log(&self, level: u32, message: &str);
+      fn logf(&self, level: u32, format: &str, args: &[serde_json::Value]);
+  }
+  
+  // Registration helper
+  impl Runtime {
+      pub fn register_host_logger(&self, impl_: Box<dyn HostLogger>) -> Result<(), RegistrationError> {
+          // Creates vtable, registers
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Trait generated for each host contract
+  - [ ] Registration helper generated
+  - [ ] Generated code compiles
+  
+  **QA Verification**:
+  ```bash
+  cat > /tmp/test_api.toml << 'EOF'
+  [[host_contract]]
+  name = "host.logger"
+  version = "1.0.0"
+  
+  [[host_contract.functions]]
+  name = "log"
+  params = [{ name = "level", type = "u32" }, { name = "message", type = "StringView" }]
+  returns = "void"
+  EOF
+  cargo run -p polyplugc -- generate --api /tmp/test_api.toml --lang rust --out /tmp/rust_out
+  test -f /tmp/rust_out/host/contracts.rs
+  grep -q "trait HostLogger" /tmp/rust_out/host/contracts.rs
+  ```
+  
+  **Commit**:
+  - Message: `feat(rust): generate host-side contract traits`
+  - Files: `rust.rs`
+  - Pre-commit: `cargo test -p polyplug_codegen rust_generator`
+
+- [ ] **Task 8**: Generate Rust guest-side host contract callers
+  
+  **Specification**:
+  Generate Rust code that plugins use to call host contracts.
+  
+  **Generated Code Example**:
+  ```rust
+  // Generated: guest/host_contracts.rs
+  pub struct HostLoggerContract {
+      vtable: &'static HostLoggerVTable,
+  }
+  
+  impl HostLoggerContract {
+      pub fn from_host(host: &HostVTable) -> Option<Self> {
+          let ptr = host.get_host_contract(HOST_LOGGER_CONTRACT_ID, 0)?;
+          if ptr.is_null() {
+              return None;
+          }
+          Some(Self { vtable: unsafe { &*ptr } })
+      }
+      
+      pub fn log(&self, level: u32, message: &str) -> Result<(), ContractError> {
+          // Marshal args, call through vtable
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Guest caller struct generated
+  - [ ] `from_host()` factory method generated
+  - [ ] Methods for each contract function generated
+  
+  **Commit**:
+  - Message: `feat(rust): generate guest-side host contract callers`
+  - Files: `rust.rs`
+  - Pre-commit: `cargo test -p polyplug_codegen rust_generator`
+
+---
+
+### Wave 4: Runtime Host Contract Support
+**Status**: Blocked by Wave 3
+**Blocks**: Wave 5, Wave 6
+
+- [ ] **Task 9**: Implement host contract registration in Runtime
+  
+  **Specification**:
+  Add host contract storage and registration to Runtime.
+  
+  **Files**: `crates/polyplug/src/runtime.rs`
+  
+  **Implementation**:
+  ```rust
+  pub struct Runtime {
+      // ... existing fields ...
+      host_contracts: RwLock<HashMap<u64, &'static HostContractVTable>>,
+      host_runtime: HostRuntime,
+      host_bridge: Option<Box<dyn HostRuntimeBridge>>,  // For VM hosts
+  }
+  
+  impl RuntimeBuilder {
+      pub fn host_runtime(mut self, runtime: HostRuntime) -> Self {
+          self.host_runtime = runtime;
+          self
+      }
+      
+      pub fn host_bridge(mut self, bridge: Box<dyn HostRuntimeBridge>) -> Self {
+          self.host_bridge = Some(bridge);
+          self
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Runtime stores host contracts
+  - [ ] Runtime stores host runtime type
+  - [ ] Runtime stores host bridge (for VM hosts)
+  - [ ] `get_host_contract` callback implemented
+  
+  **QA Verification**:
+  ```bash
+  cargo test -p polyplug runtime_host_contracts
+  ```
+  
+  **Commit**:
+  - Message: `feat(runtime): add host contract registration`
+  - Files: `runtime.rs`
+  - Pre-commit: `cargo test -p polyplug --lib`
+
+- [ ] **Task 10**: Implement `get_host_contract` callback
+  
+  **Specification**:
+  Implement the HostVTable callback that plugins call to get host contracts.
+  
+  **Implementation**:
+  ```rust
+  pub(crate) unsafe extern "C" fn host_get_host_contract(
+      rt_ctx: *mut c_void,
+      contract_id: u64,
+      min_version: u32,
+  ) -> *const HostContractVTable {
+      if rt_ctx.is_null() {
+          return core::ptr::null();
+      }
+      
+      let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
+      let runtime: &Runtime = unsafe { &*ctx.runtime };
+      
+      match runtime.host_contracts.read() {
+          Ok(contracts) => {
+              match contracts.get(&contract_id) {
+                  Some(vtable) => {
+                      // Check version compatibility
+                      if vtable.header.contract_minor >= min_version {
+                          *vtable
+                      } else {
+                          core::ptr::null()
+                      }
+                  }
+                  None => core::ptr::null(),
+              }
+          }
+          Err(_) => core::ptr::null(),
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Callback implemented
+  - [ ] Version checking works
+  - [ ] Null returned for missing contracts
+  - [ ] Thread-safe
+  
+  **Commit**:
+  - Message: `feat(runtime): implement get_host_contract callback`
+  - Files: `runtime.rs`
+  - Pre-commit: `cargo test -p polyplug`
+
+---
+
+### Wave 5: Host Runtime Bridge (VM Support)
+**Status**: Blocked by Wave 4
+**Blocks**: Wave 6, Wave 8
+
+- [ ] **Task 11**: Define HostRuntimeBridge trait
+  
+  **Specification**:
+  Define the trait that bridges between runtime and VM-based hosts.
+  
+  **Files**: `crates/polyplug/src/host_bridge.rs` (new file)
+  
+  **Implementation**:
+  ```rust
+  pub trait HostRuntimeBridge: Send + Sync {
+      fn runtime_type(&self) -> HostRuntime;
+      
+      /// Register a host contract implementation
+      fn register_host_contract(
+          &mut self,
+          contract_id: u64,
+          implementation: Box<dyn Any>,  // VM-specific implementation
+      ) -> Result<(), BridgeError>;
+      
+      /// Call a host contract function
+      fn call_host_contract(
+          &self,
+          contract_id: u64,
+          fn_id: u32,
+          args: *const (),
+          out: *mut (),
+      ) -> AbiError;
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Trait defined
+  - [ ] Error types defined
+  - [ ] Documentation complete
+  
+  **Commit**:
+  - Message: `feat(bridge): define HostRuntimeBridge trait`
+  - Files: `host_bridge.rs` (new)
+  - Pre-commit: `cargo build -p polyplug`
+
+- [ ] **Task 12**: Implement Python Host Bridge
+  
+  **Specification**:
+  Implement the bridge that allows Python hosts to implement host contracts.
+  
+  **Files**: `crates/polyplug_python/src/bridge.rs` (new file)
+  
+  **Implementation**:
+  ```rust
+  pub struct PythonHostBridge {
+      contracts: HashMap<u64, PyObject>,  // Python callable objects
+  }
+  
+  impl HostRuntimeBridge for PythonHostBridge {
+      fn call_host_contract(
+          &self,
+          contract_id: u64,
+          fn_id: u32,
+          args: *const (),
+          out: *mut (),
+      ) -> AbiError {
+          Python::with_gil(|py| {
+              // Get Python implementation
+              let impl_ = match self.contracts.get(&contract_id) {
+                  Some(obj) => obj,
+                  None => return AbiError { code: ABI_HOST_CONTRACT_NOT_FOUND, ... },
+              };
+              
+              // Convert args to Python types
+              // Call Python function
+              // Handle Python exceptions
+              // Convert result back
+          })
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Bridge implemented
+  - [ ] GIL handled correctly
+  - [ ] Python exceptions converted to AbiError
+  - [ ] Type conversion works for all primitive types
+  
+  **QA Verification**:
+  ```bash
+  cargo test -p polyplug_python host_bridge
+  ```
+  
+  **Commit**:
+  - Message: `feat(python): implement Python Host Bridge`
+  - Files: `bridge.rs`, integration with `lib.rs`
+  - Pre-commit: `cargo test -p polyplug_python`
+
+- [ ] **Task 13**: Implement Lua Host Bridge
+  
+  **Specification**:
+  Implement bridge for Lua hosts.
+  
+  **Files**: `crates/polyplug_lua/src/bridge.rs`
+  
+  **Similar structure to Task 12**
+  
+  **Commit**:
+  - Message: `feat(lua): implement Lua Host Bridge`
+
+- [ ] **Task 14**: Implement JavaScript Host Bridge
+  
+  **Specification**:
+  Implement bridge for JavaScript hosts.
+  
+  **Files**: `crates/polyplug_js/src/bridge.rs`
+  
+  **Similar structure to Task 12**
+  
+  **Commit**:
+  - Message: `feat(js): implement JavaScript Host Bridge`
+
+---
+
+### Wave 6: Other Language Code Generators
+**Status**: Blocked by Wave 3
+**Blocks**: Wave 8
+
+- [ ] **Task 15**: Generate C++ host-side contract traits
+  
+  **Specification**:
+  Generate C++ abstract classes that hosts implement for host contracts.
+  
+  **Files**: `crates/polyplug_codegen/src/generators/cpp.rs`
+  
+  **Generated Code**:
+  ```cpp
+  // Generated: host/contracts.hpp
+  class HostLogger {
+  public:
+      virtual void log(uint32_t level, StringView message) = 0;
+      virtual void logf(uint32_t level, StringView format, Buffer args) = 0;
+      virtual ~HostLogger() = default;
+  };
+  
+  // Registration helper
+  class Runtime {
+  public:
+      void register_host_logger(std::shared_ptr<HostLogger> impl_);
+  };
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Abstract class generated for each host contract
+  - [ ] Virtual destructor included
+  - [ ] Registration helper generated
+  - [ ] Generated code compiles
+  
+  **Commit**:
+  - Message: `feat(cpp): generate host-side contract traits`
+
+- [ ] **Task 16**: Generate C++ guest-side host contract callers
+  
+  **Specification**:
+  Generate C++ classes that plugins use to call host contracts.
+  
+  **Generated Code**:
+  ```cpp
+  // Generated: guest/host_contracts.hpp
+  class HostLoggerContract {
+  public:
+      static std::optional<HostLoggerContract> from_host(const HostVTable* host);
+      void log(uint32_t level, std::string_view message);
+      void logf(uint32_t level, std::string_view format, std::vector<Value> args);
+  private:
+      const HostLoggerVTable* vtable_;
+  };
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Guest caller class generated
+  - [ ] `from_host()` factory method generated
+  - [ ] Methods for each contract function generated
+  - [ ] Generated code compiles
+  
+  **Commit**:
+  - Message: `feat(cpp): generate guest-side host contract callers`
+
+- [ ] **Task 17**: Generate C# host-side contract interfaces
+  
+  **Specification**:
+  Generate C# interfaces that hosts implement for host contracts.
+  
+  **Files**: `crates/polyplug_codegen/src/generators/csharp.rs`
+  
+  **Generated Code**:
+  ```csharp
+  // Generated: host/Contracts.cs
+  public interface IHostLogger {
+      void Log(uint level, string message);
+      void Logf(uint level, string format, object[] args);
+  }
+  
+  // Registration helper
+  public partial class Runtime {
+      public void RegisterHostLogger(IHostLogger impl_);
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Interface generated for each host contract
+  - [ ] Registration helper generated
+  - [ ] Generated code compiles
+  
+  **Commit**:
+  - Message: `feat(csharp): generate host-side contract interfaces`
+
+- [ ] **Task 18**: Generate C# guest-side host contract callers
+  
+  **Specification**:
+  Generate C# classes that plugins use to call host contracts.
+  
+  **Generated Code**:
+  ```csharp
+  // Generated: guest/HostContracts.cs
+  public class HostLoggerContract {
+      private readonly HostLoggerVTable _vtable;
+      
+      public static HostLoggerContract FromHost(HostVTable host) { ... }
+      public void Log(uint level, string message);
+      public void Logf(uint level, string format, object[] args);
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Guest caller class generated
+  - [ ] `FromHost()` factory method generated
+  - [ ] Methods for each contract function generated
+  - [ ] Generated code compiles
+  
+  **Commit**:
+  - Message: `feat(csharp): generate guest-side host contract callers`
+
+- [ ] **Task 19**: Generate Python host-side contract ABCs
+  
+  **Specification**:
+  Generate Python abstract base classes that hosts implement.
+  
+  **Files**: `crates/polyplug_codegen/src/generators/python.rs`
+  
+  **Generated Code**:
+  ```python
+  # Generated: host/contracts.py
+  from abc import ABC, abstractmethod
+  
+  class HostLogger(ABC):
+      @abstractmethod
+      def log(self, level: int, message: str) -> None:
+          pass
+      
+      @abstractmethod
+      def logf(self, level: int, format: str, args: list) -> None:
+          pass
+  
+  class Runtime:
+      def register_host_logger(self, impl_: HostLogger) -> None:
+          # Creates bridge, registers with runtime
+          pass
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Abstract base class generated for each host contract
+  - [ ] Registration helper generated
+  - [ ] Generated code runs
+  
+  **Commit**:
+  - Message: `feat(python): generate host-side contract ABCs`
+
+- [ ] **Task 35**: Generate Python guest-side host contract callers
+  
+  **Specification**:
+  Generate Python classes that plugins use to call host contracts.
+  
+  **Generated Code**:
+  ```python
+  # Generated: guest/host_contracts.py
+  class HostLoggerContract:
+      def __init__(self, vtable: ctypes.c_void_p):
+          self._vtable = vtable
+      
+      @classmethod
+      def from_host(cls, host) -> Optional[HostLoggerContract]:
+          # Call host.get_host_contract()
+          pass
+      
+      def log(self, level: int, message: str) -> None:
+          # Call through vtable
+          pass
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Guest caller class generated
+  - [ ] `from_host()` factory method generated
+  - [ ] Methods for each contract function generated
+  - [ ] Generated code runs
+  
+  **Commit**:
+  - Message: `feat(python): generate guest-side host contract callers`
+
+- [ ] **Task 36**: Generate Lua host-side contract metatables
+  
+  **Specification**:
+  Generate Lua metatables that hosts implement for host contracts.
+  
+  **Files**: `crates/polyplug_codegen/src/generators/lua.rs`
+  
+  **Generated Code**:
+  ```lua
+  -- Generated: host/contracts.lua
+  HostLogger = {}
+  HostLogger.__index = HostLogger
+  
+  function HostLogger:new()
+      local obj = {}
+      setmetatable(obj, self)
+      return obj
+  end
+  
+  function HostLogger:log(level, message)
+      error("abstract method")
+  end
+  
+  function HostLogger:logf(level, format, args)
+      error("abstract method")
+  end
+  
+  -- Registration helper
+  function Runtime:register_host_logger(impl_)
+      -- Creates bridge, registers with runtime
+  end
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Metatable generated for each host contract
+  - [ ] Registration helper generated
+  - [ ] Generated code runs
+  
+  **Commit**:
+  - Message: `feat(lua): generate host-side contract metatables`
+
+- [ ] **Task 37**: Generate Lua guest-side host contract callers
+  
+  **Specification**:
+  Generate Lua functions that plugins use to call host contracts.
+  
+  **Generated Code**:
+  ```lua
+  -- Generated: guest/host_contracts.lua
+  HostLoggerContract = {}
+  HostLoggerContract.__index = HostLoggerContract
+  
+  function HostLoggerContract.from_host(host)
+      -- Call host.get_host_contract()
+      local vtable = host.get_host_contract(HOST_LOGGER_ID)
+      if not vtable then return nil end
+      return setmetatable({vtable = vtable}, HostLoggerContract)
+  end
+  
+  function HostLoggerContract:log(level, message)
+      -- Call through vtable
+  end
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Guest caller metatable generated
+  - [ ] `from_host()` factory function generated
+  - [ ] Methods for each contract function generated
+  - [ ] Generated code runs
+  
+  **Commit**:
+  - Message: `feat(lua): generate guest-side host contract callers`
+
+- [ ] **Task 38**: Generate JavaScript host-side contract interfaces
+  
+  **Specification**:
+  Generate JavaScript/TypeScript interfaces that hosts implement.
+  
+  **Files**: `crates/polyplug_codegen/src/generators/js_quickjs.rs`
+  
+  **Generated Code**:
+  ```typescript
+  // Generated: host/contracts.ts
+  export interface HostLogger {
+      log(level: number, message: string): void;
+      logf(level: number, format: string, args: any[]): void;
+  }
+  
+  export class Runtime {
+      registerHostLogger(impl_: HostLogger): void {
+          // Creates bridge, registers with runtime
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Interface generated for each host contract
+  - [ ] Registration helper generated
+  - [ ] Generated code compiles
+  
+  **Commit**:
+  - Message: `feat(js): generate host-side contract interfaces`
+
+- [ ] **Task 39**: Generate JavaScript guest-side host contract callers
+  
+  **Specification**:
+  Generate JavaScript classes that plugins use to call host contracts.
+  
+  **Generated Code**:
+  ```typescript
+  // Generated: guest/host_contracts.ts
+  export class HostLoggerContract {
+      private vtable: bigint;
+      
+      static fromHost(host: HostVTable): HostLoggerContract | null {
+          // Call host.get_host_contract()
+      }
+      
+      log(level: number, message: string): void {
+          // Call through vtable
+      }
+  }
+  ```
+  
+  **Acceptance Criteria**:
+  - [ ] Guest caller class generated
+  - [ ] `fromHost()` factory method generated
+  - [ ] Methods for each contract function generated
+  - [ ] Generated code compiles
+  
+  **Commit**:
+  - Message: `feat(js): generate guest-side host contract callers`
+
+---
+
+### Wave 7: SDK Updates
+**Status**: Blocked by Wave 6
+**Blocks**: Wave 8
+
+- [ ] **Task 35**: Update Rust SDK with host contract registration
+  
+  **Specification**:
+  Update `polyplug` crate with host contract registration API.
+  
+  **Implementation**:
+  ```rust
+  impl Runtime {
+      pub fn register_host_contract<T: HostContract>(&self, impl_: T) {
+          // Implementation
+      }
+  }
+  ```
+  
+  **Commit**:
+  - Message: `feat(rust-sdk): add host contract registration API`
+
+- [ ] **Task 36**: Update Python SDK with host contract registration
+  
+  **Files**: `sdks/python/host/polyplug/`
+  
+  **Commit**:
+  - Message: `feat(python-sdk): add host contract registration`
+
+- [ ] **Task 37**: Update C# SDK with host contract registration
+  
+  **Commit**:
+  - Message: `feat(csharp-sdk): add host contract registration`
+
+- [ ] **Task 38**: Update Lua SDK with host contract registration
+  
+  **Commit**:
+  - Message: `feat(lua-sdk): add host contract registration`
+
+- [ ] **Task 39**: Update JavaScript SDK with host contract registration
+  
+  **Commit**:
+  - Message: `feat(js-sdk): add host contract registration`
+
+- [ ] **Task 35**: Update C++ SDK with host contract registration
+  
+  **Commit**:
+  - Message: `feat(cpp-sdk): add host contract registration`
+
+---
+
+### Wave 8: Examples and Documentation
+**Status**: Blocked by Wave 7
+**Blocks**: Wave 9
+
+- [ ] **Task 36**: Create Host Contracts examples
+  
+  **Specification**:
+  Create examples demonstrating host contracts in all 6 languages.
+  
+  **Examples**:
+  1. `examples/host_contracts/logger/` - Simple logging host contract
+  2. `examples/host_contracts/metrics/` - Metrics recording host contract
+  3. `examples/host_contracts/bidirectional/` - Host calls plugin, plugin calls host
+  
+  **Each example includes**:
+  - api.toml with both plugin_contract and host_contract
+  - Host implementation in each language
+  - Plugin implementation in each language
+  - Build and run instructions
+  
+  **Acceptance Criteria**:
+  - [ ] Logger example in all 6 languages
+  - [ ] Metrics example in all 6 languages
+  - [ ] Bidirectional example in all 6 languages
+  - [ ] All examples build and run correctly
+  
+  **QA Verification**:
+  ```bash
+  just build-examples
+  just verify-examples
+  # Expected: All examples pass
+  ```
+  
+  **Commit**:
+  - Message: `feat(examples): add host contracts examples`
+  - Files: `examples/host_contracts/`
+
+- [ ] **Task 37**: Update existing examples to use `[[plugin_contract]]`
+  
+  **Specification**:
+  Update all existing examples to use new syntax.
+  
+  **Files**: All `examples/*/api.toml` files
+  
+  **Commit**:
+  - Message: `refactor(examples): update to use [[plugin_contract]]`
+
+- [ ] **Task 38**: Write Host Contracts tutorial documentation
+  
+  **Specification**:
+  Write comprehensive documentation for host contracts.
+  
+  **Documents**:
+  - `docs/HOST_CONTRACTS.md` - Full tutorial
+  - `docs/HOST_CONTRACTS_API.md` - API reference
+  - `MIGRATION.md` - Migration guide from old syntax
+  
+  **Commit**:
+  - Message: `docs: add host contracts documentation`
+
+---
+
+### Wave 9: Testing and Verification
+**Status**: Blocked by Wave 8
+**Blocks**: Completion
+
+- [ ] **Task 39**: Write unit tests for host contract types
+  
+  **Specification**:
+  Test all host contract types in polyplug_abi.
+  
+  **Tests**:
+  - Layout tests (size, alignment, offsets)
+  - Send/Sync tests
+  - ID collision tests
+  
+  **Commit**:
+  - Message: `test(abi): add host contract unit tests`
+
+- [ ] **Task 35**: Write parser tests for host contracts
+  
+  **Specification**:
+  Test parser with host contract syntax.
+  
+  **Tests**:
+  - Valid host contract parsing
+  - Invalid name rejection (no "host." prefix)
+  - Duplicate name rejection
+  - Version validation
+  
+  **Commit**:
+  - Message: `test(parser): add host contract parser tests`
+
+- [ ] **Task 36**: Write code generator tests
+  
+  **Specification**:
+  Test code generation for all 6 languages.
+  
+  **Tests**:
+  - Generated code compiles
+  - Generated code runs correctly
+  - Host-side and guest-side both tested
+  
+  **Commit**:
+  - Message: `test(codegen): add host contract codegen tests`
+
+- [ ] **Task 37**: Write runtime integration tests
+  
+  **Specification**:
+  Test runtime host contract functionality.
+  
+  **Tests**:
+  - Registration
+  - Lookup
+  - Version checking
+  - Thread safety
+  - VM bridge integration
+  
+  **Commit**:
+  - Message: `test(runtime): add host contract integration tests`
+
+- [ ] **Task 38**: Write cross-language tests
+  
+  **Specification**:
+  Test cross-language host contract calls.
+  
+  **Test Matrix**:
+  - Rust host + all 6 plugin languages
+  - Python host + all 6 plugin languages
+  - Lua host + all 6 plugin languages
+  - Total: 18 combinations (not 36, host is single language)
+  
+  **Commit**:
+  - Message: `test(integration): add cross-language host contract tests`
+
+- [ ] **Task 39**: Final verification
+  
+  **Specification**:
+  Complete final verification of entire implementation.
+  
+  **Verification Checklist**:
+  - [ ] `cargo test --workspace` passes
+  - [ ] `cargo clippy -- -D warnings` clean
+  - [ ] `cargo fmt --check` clean
+  - [ ] All examples build and run
+  - [ ] SDK validator passes
+  - [ ] Documentation complete and accurate
+  - [ ] No `[[contract]]` syntax remaining (except deprecated support)
+  - [ ] **NO EXTENSION SYSTEM REMAINING** - `get_extension` completely removed
+  - [ ] **NO EXTENSION CODE** - `crates/polyplug/src/extensions/` deleted
+  - [ ] **NO EXT_TRACE_ID** in generated code
+  - [ ] **NO EXTENSION REFERENCES** in codebase
+  
+  **QA Verification**:
+  ```bash
+  # Full test suite
+  cargo test --workspace
+  
+  # Linting
+  cargo clippy -- -D warnings
+  cargo fmt --check
+  
+  # Examples
+  just build-examples
+  just verify-examples
+  
+  # SDK validator
+  just validate-sdks
+  
+  # Check for old contract syntax
+  grep -r "^\[\[contract\]\]" --include="*.toml" . | grep -v "test.*deprecated"
+  # Expected: Only deprecation test fixtures
+  
+  # Verify EXTENSION SYSTEM COMPLETELY REMOVED
+  grep -r "get_extension" --include="*.rs" crates/
+  # Expected: No results
+  
+  grep -r "EXT_TRACE_ID" --include="*.rs" crates/
+  # Expected: No results
+  
+  test -d crates/polyplug/src/extensions/
+  # Expected: Directory does not exist
+  
+  grep -r "mod extensions" crates/polyplug/src/lib.rs
+  # Expected: No results
+  
+  grep -r "Extension" --include="*.rs" crates/polyplug/src/ | grep -v "// Extension system was removed"
+  # Expected: Only historical comments
+  ```
+  
+  **DO NOT COMMIT** - This is final verification only
+
+---
+
+### Final Verification Wave
+**Status**: Blocked by Task 39
+
+- [ ] **Task F1**: Plan Compliance Audit — `oracle`
+  
+  **Specification**:
+  Verify all tasks completed according to plan.
+  
+  **Check**:
+  - All tasks marked complete
+  - No tasks skipped
+  - No deviations from plan
+  
+  **If Gaps Found**: STOP and ask user
+
+- [ ] **Task F2**: Code Quality Review — `oracle`
+  
+  **Specification**:
+  Review code quality across all changes.
+  
+  **Check**:
+  - All clippy warnings resolved
+  - No unsafe code without SAFETY comments
+  - No TODO/FIXME comments remaining
+  - Consistent naming conventions
+  
+  **If Issues Found**: STOP and ask user
+
+- [ ] **Task F3**: Real Manual QA — `oracle`
+  
+  **Specification**:
+  Manually verify all examples work correctly.
+  
+  **Verify**:
+  - Run each example manually
+  - Verify bidirectional communication
+  - Check error handling
+  
+  **If Issues Found**: STOP and ask user
+
+- [ ] **Task F4**: Scope Fidelity Check — `oracle`
+  
+  **Specification**:
+  Verify no scope creep occurred.
+  
+  **Check**:
+  - No features added beyond plan
+  - No unnecessary refactoring
+  - All changes relate to host contracts
+  
+  **If Scope Creep Found**: STOP and ask user
 
 ---
 
@@ -137,981 +1617,98 @@ Every task MUST include agent-executed QA scenarios:
 
 | Task | Depends On | Blocks |
 |------|-----------|--------|
-| 1 | — | 2, 4 |
-| 2 | 1 | 3, 13 |
-| 3 | 2 | 4 |
-| 4 | 1, 3 | 5, 7-12 |
-| 5 | 4 | 7-12 |
-| 6 | 4 | 7-12 |
-| 7 | 5 | 16, 19 |
-| 8 | 5 | 16, 19 |
-| 9 | 5 | 16, 19 |
-| 10 | 5 | 16, 19 |
-| 11 | 5 | 16, 19 |
-| 12 | 5 | 16, 19 |
-| 13 | 2 | 14, 16 |
-| 14 | 13 | 16 |
-| 15 | 7-12 | 16 |
-| 16 | 7-15 | 17, 19 |
-| 17 | 1, 16 | 20 |
-| 18 | 1-17 | 21 |
-| 19 | 7-17 | 20 |
-| 20 | 17, 19 | 21 |
-| 21 | 18, 20 | F1-F4 |
-
-**Critical Path**: 1 → 2 → 3 → 4 → 5 → 7 → 13 → 14 → 16 → 17 → 19 → 20 → 21 → F1-F4
-
----
-
-## TODOs
-
-- [ ] 1. Rename `[[contract]]` to `[[plugin_contract]]` across codebase
-
-  **What to do**:
-  - Find all occurrences of `[[contract]]` in api.toml files
-  - Update parser to recognize `[[plugin_contract]]`
-  - Maintain backwards compatibility (accept both during transition)
-  - Update all documentation references
-  - Update examples
-
-  **Must NOT do**:
-  - Break existing functionality
-  - Change any runtime behavior
-  - Skip any files
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick` (rename operation)
-  - **Skills**: []
-  - **Reason**: Simple find/replace with validation
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO (must be sequential to avoid conflicts)
-  - **Parallel Group**: Sequential
-  - **Blocks**: Tasks 2, 4
-  - **Blocked By**: None
-
-  **References**:
-  - `examples/api.toml` - Example schema file
-  - `crates/polyplug_codegen/src/parser.rs` - Parser implementation
-  - `PRD.md` - Documentation references
-
-  **Acceptance Criteria**:
-  - [ ] `grep -r "\[\[contract\]\]" --include="*.toml"` returns 0 results (except in comments)
-  - [ ] `grep -r "\[\[plugin_contract\]\]" --include="*.toml"` returns expected results
-  - [ ] `cargo test -p polyplug_codegen` passes
-  - [ ] All examples updated and building
-
-  **QA Scenarios**:
-  ```
-  Scenario: Parser accepts new syntax
-    Tool: Bash
-    Preconditions: Task 1 code changes applied
-    Steps:
-      1. cat > /tmp/test_api.toml << 'EOF'
-         [[plugin_contract]]
-         name = "test.decoder"
-         version = "1.0.0"
-         EOF
-      2. cargo run -p polyplugc -- validate --api /tmp/test_api.toml
-    Expected Result: Command exits with status 0, outputs "OK"
-    Evidence: terminal output screenshot
-  
-  Scenario: Backwards compatibility maintained
-    Tool: Bash
-    Preconditions: Task 1 code changes applied
-    Steps:
-      1. Create api.toml with old [[contract]] syntax
-      2. Run polyplugc validate
-    Expected Result: Warning displayed but validation succeeds
-    Evidence: terminal output showing deprecation warning
-  ```
-
-  **Commit**: YES
-  - Message: `refactor(abi): rename [[contract]] to [[plugin_contract]]`
-  - Files: All `*.toml` files, parser.rs, documentation
-  - Pre-commit: `cargo test -p polyplug_codegen`
-
----
-
-- [ ] 2. Update ABI layer with HostContract support
-
-  **What to do**:
-  - Add `get_host_contract()` function to `HostVTable`
-  - Define `HostContractVTable` base structure
-  - Add host contract ID calculation (fnv1a_64)
-  - Update frozen ABI comment to reflect changes
-  - Bump ABI version if needed
-
-  **Must NOT do**:
-  - Keep `get_extension()` (we're removing extensions entirely)
-  - Break existing HostVTable field order (add new field at end)
-  - Skip SAFETY comments
-
-  **Recommended Agent Profile**:
-  - **Category**: `unspecified-high` (ABI changes are critical)
-  - **Skills**: []
-  - **Reason**: Requires deep understanding of ABI safety
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Sequential
-  - **Blocks**: Tasks 3, 13
-  - **Blocked By**: Task 1
-
-  **References**:
-  - `crates/polyplug_abi/src/lib.rs` - ABI definitions
-  - `PRD.md` - ABI design documentation
-  - `TRUST_MODEL.md` - Safety requirements
-
-  **Acceptance Criteria**:
-  - [ ] `HostVTable` has `get_host_contract` field
-  - [ ] `HostContractVTable` struct defined with `version: u32` field
-  - [ ] Host contract ID calculation function exists
-  - [ ] All SAFETY comments present
-  - [ ] `cargo test -p polyplug_abi` passes
-
-  **QA Scenarios**:
-  ```
-  Scenario: HostVTable has correct size
-    Tool: Bash
-    Preconditions: Task 2 code changes applied
-    Steps:
-      1. cargo test -p polyplug_abi -- --test-threads=1 host_vtable_size
-    Expected Result: Test passes, size is correct for ABI
-    Evidence: test output
-  
-  Scenario: Host contract ID calculation
-    Tool: Bash
-    Preconditions: Task 2 code changes applied
-    Steps:
-      1. cargo test -p polyplug_abi host_contract_id
-    Expected Result: Test passes with expected hash value
-    Evidence: test output showing hash computation
-  ```
-
-  **Commit**: YES
-  - Message: `feat(abi): add HostContract support to HostVTable`
-  - Files: `crates/polyplug_abi/src/lib.rs`
-  - Pre-commit: `cargo test -p polyplug_abi`
-
----
-
-- [ ] 3. Add HostContractVTable types to polyplug_abi
-
-  **What to do**:
-  - Define `HostContractVTable` base struct with version field
-  - Define `HostLoggerVTable` example (for testing)
-  - Add `HOST_CONTRACT_OK` and error codes
-  - Document memory ownership rules
-
-  **Must NOT do**:
-  - Define concrete host contracts here (those go in api.toml)
-  - Skip documentation
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick`
-  - **Skills**: []
-  - **Reason**: Type definitions only
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Sequential
-  - **Blocks**: Task 4
-  - **Blocked By**: Task 2
-
-  **References**:
-  - `crates/polyplug_abi/src/lib.rs`
-  - Task 2 output
-
-  **Acceptance Criteria**:
-  - [ ] `HostContractVTable` struct defined
-  - [ ] Example `HostLoggerVTable` defined for testing
-  - [ ] Error codes defined
-  - [ ] Documentation complete
-
-  **QA Scenarios**:
-  ```
-  Scenario: HostContractVTable size is correct
-    Tool: Bash
-    Steps:
-      1. cargo test -p polyplug_abi host_contract_vtable_size
-    Expected Result: Size matches expected (8 bytes for version + function pointers)
-    Evidence: test output
-  ```
-
-  **Commit**: YES
-  - Message: `feat(abi): add HostContractVTable types`
-  - Files: `crates/polyplug_abi/src/lib.rs`
-  - Pre-commit: `cargo test -p polyplug_abi`
-
----
-
-- [ ] 4. Update parser to support `[[plugin_contract]]` and `[[host_contract]]`
-
-  **What to do**:
-  - Update TOML parser to recognize both sections
-  - Create `HostContract` struct in IR
-  - Parse host contract functions, params, returns
-  - Update `PluginContract` struct name (from `Contract`)
-  - Add validation: host_contract names must start with "host."
-
-  **Must NOT do**:
-  - Remove old `[[contract]]` support yet (deprecation phase)
-  - Skip validation
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep` (parser changes)
-  - **Skills**: []
-  - **Reason**: Complex parsing logic
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Sequential
-  - **Blocks**: Tasks 5, 6, 7-12
-  - **Blocked By**: Tasks 1, 3
-
-  **References**:
-  - `crates/polyplug_codegen/src/parser.rs`
-  - `crates/polyplug_codegen/src/ir.rs`
-  - Task 1 output
-
-  **Acceptance Criteria**:
-  - [ ] Parser accepts `[[plugin_contract]]`
-  - [ ] Parser accepts `[[host_contract]]`
-  - [ ] IR has separate `PluginContract` and `HostContract` types
-  - [ ] Validation: host contracts start with "host."
-  - [ ] Tests pass
-
-  **QA Scenarios**:
-  ```
-  Scenario: Parse api.toml with both contract types
-    Tool: Bash
-    Steps:
-      1. Create test api.toml with [[plugin_contract]] and [[host_contract]]
-      2. cargo run -p polyplugc -- validate --api test.toml
-    Expected Result: Validation succeeds
-    Evidence: terminal output
-  
-  Scenario: Reject invalid host contract name
-    Tool: Bash
-    Steps:
-      1. Create api.toml with [[host_contract]] name = "invalid.name"
-      2. cargo run -p polyplugc -- validate --api test.toml
-    Expected Result: Validation fails with error about "host." prefix
-    Evidence: terminal output showing error
-  ```
-
-  **Commit**: YES
-  - Message: `feat(parser): support [[plugin_contract]] and [[host_contract]]`
-  - Files: `parser.rs`, `ir.rs`
-  - Pre-commit: `cargo test -p polyplug_codegen`
-
----
-
-- [ ] 5. Update Intermediate Representation (IR)
-
-  **What to do**:
-  - Rename `Contract` to `PluginContract` in IR
-  - Add `HostContract` struct to IR
-  - Update all IR consumers (generators)
-  - Ensure serialization/deserialization works
-
-  **Must NOT do**:
-  - Change IR structure unnecessarily
-  - Break existing generators
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Sequential
-  - **Blocks**: Tasks 7-12
-  - **Blocked By**: Task 4
-
-  **References**:
-  - `crates/polyplug_codegen/src/ir.rs`
-  - All generator files
-
-  **Acceptance Criteria**:
-  - [ ] IR compiles without errors
-  - [ ] All generators compile
-  - [ ] Tests pass
-
-  **Commit**: YES
-  - Message: `refactor(ir): rename Contract to PluginContract, add HostContract`
-  - Files: `ir.rs`, all generator files
-
----
-
-- [ ] 6. Add validation for host contracts
-
-  **What to do**:
-  - Validate host contract function signatures
-  - Ensure no duplicate host contract names
-  - Validate parameter types are supported
-  - Check version format
-
-  **Must NOT do**:
-  - Skip any validation
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Sequential with 5
-  - **Blocks**: Tasks 7-12
-  - **Blocked By**: Task 4
-
-  **Acceptance Criteria**:
-  - [ ] Duplicate names rejected
-  - [ ] Invalid types rejected
-  - [ ] Tests pass
-
-  **Commit**: YES
-  - Message: `feat(parser): add host contract validation`
-  - Files: `parser.rs`
-
----
-
-- [ ] 7. Rust generator (guest host callers + host vtable traits)
-
-  **What to do**:
-  - Generate `HostXxxContract` struct for plugins
-  - Generate `HostXxxVTable` struct
-  - Generate `from_host()` factory method
-  - Generate trait for host implementation
-  - Handle errors and null checks
-
-  **Must NOT do**:
-  - Skip error handling
-  - Forget SAFETY comments
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep` (codegen)
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES (with 8-12)
-  - **Parallel Group**: Wave 3
-  - **Blocks**: Tasks 16, 19
-  - **Blocked By**: Task 5
-
-  **References**:
-  - `crates/polyplug_codegen/src/generators/rust.rs`
-  - Existing plugin contract generation as template
-
-  **Acceptance Criteria**:
-  - [ ] Generated code compiles
-  - [ ] Guest can call host contract
-  - [ ] Host can implement trait
-  - [ ] Tests pass
-
-  **QA Scenarios**:
-  ```
-  Scenario: Generate Rust host contract code
-    Tool: Bash
-    Steps:
-      1. Create api.toml with [[host_contract]]
-      2. cargo run -p polyplugc -- generate --api api.toml --lang rust --out /tmp/rust_out
-      3. Check generated files exist
-    Expected Result: host_contracts.rs generated with HostXxxContract
-    Evidence: ls -la /tmp/rust_out/
-  ```
-
-  **Commit**: YES
-  - Message: `feat(rust): generate host contract code`
-  - Files: `rust.rs`
-
----
-
-- [ ] 8. C++ generator
-
-  **What to do**:
-  - Same as Task 7 but for C++
-  - Generate header files
-  - Handle C++ specific patterns (optional, unique_ptr, etc.)
-
-  **Must NOT do**:
-  - Skip memory safety
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES (with 7, 9-12)
-  - **Parallel Group**: Wave 3
-
-  **References**:
-  - `crates/polyplug_codegen/src/generators/cpp.rs`
-
-  **Acceptance Criteria**:
-  - [ ] Generated headers compile
-  - [ ] Tests pass
-
-  **Commit**: YES
-
----
-
-- [ ] 9. C# generator
-
-  **What to do**:
-  - Generate C# interfaces and classes
-  - Handle nullable types
-  - Generate proper P/Invoke signatures
-
-  **Must NOT do**:
-  - Use unsafe code in generated code
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-
-  **References**:
-  - `crates/polyplug_codegen/src/generators/csharp.rs`
-
-  **Acceptance Criteria**:
-  - [ ] Generated C# compiles
-  - [ ] Tests pass
-
-  **Commit**: YES
-
----
-
-- [ ] 10. Python generator
-
-  **What to do**:
-  - Generate Python classes
-  - Handle ctypes bindings
-  - Manage memory correctly
-
-  **Must NOT do**:
-  - Skip type hints
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-
-  **References**:
-  - `crates/polyplug_codegen/src/generators/python.rs`
-
-  **Acceptance Criteria**:
-  - [ ] Generated Python runs
-  - [ ] Tests pass
-
-  **Commit**: YES
-
----
-
-- [ ] 11. Lua generator
-
-  **What to do**:
-  - Generate Lua FFI code
-  - Handle metatables
-
-  **Must NOT do**:
-  - Skip nil checks
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-
-  **References**:
-  - `crates/polyplug_codegen/src/generators/lua.rs`
-
-  **Acceptance Criteria**:
-  - [ ] Generated Lua runs
-  - [ ] Tests pass
-
-  **Commit**: YES
-
----
-
-- [ ] 12. JavaScript generator
-
-  **What to do**:
-  - Generate TypeScript/JavaScript code
-  - Handle Deno/QuickJS FFI
-  - Manage BigInt for u64
-
-  **Must NOT do**:
-  - Skip type definitions
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-
-  **References**:
-  - `crates/polyplug_codegen/src/generators/js_quickjs.rs`
-
-  **Acceptance Criteria**:
-  - [ ] Generated JS runs
-  - [ ] Tests pass
-
-  **Commit**: YES
-
----
-
-- [ ] 13. Runtime host contract registration
-
-  **What to do**:
-  - Add `RuntimeBuilder::host_contract()` method
-  - Store host contract vtables in runtime
-  - Implement `get_host_contract()` callback
-  - Handle host contract lookup
-
-  **Must NOT do**:
-  - Skip thread safety
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 4
-  - **Blocks**: Tasks 14, 16
-  - **Blocked By**: Task 2
-
-  **References**:
-  - `crates/polyplug/src/runtime.rs`
-  - `crates/polyplug/src/extensions/mod.rs` (reference for Extension trait)
-
-  **Acceptance Criteria**:
-  - [ ] Host can register contracts
-  - [ ] Plugin can query contracts
-  - [ ] Tests pass
-
-  **QA Scenarios**:
-  ```
-  Scenario: Register and query host contract
-    Tool: Bash
-    Steps:
-      1. Create test registering HostLogger
-      2. Query from mock plugin
-    Expected Result: Contract found and callable
-    Evidence: test output
-  ```
-
-  **Commit**: YES
-
----
-
-- [ ] 14. Update host SDKs with host contract traits
-
-  **What to do**:
-  - Add traits to Rust host SDK
-  - Add interfaces to C# host SDK
-  - Add abstract classes to Python host SDK
-  - etc.
-
-  **Must NOT do**:
-  - Skip any language
-
-  **Recommended Agent Profile**:
-  - **Category**: `unspecified-high`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES (per language)
-  - **Parallel Group**: Wave 4
-  - **Blocks**: Task 16
-  - **Blocked By**: Task 13
-
-  **Acceptance Criteria**:
-  - [ ] All SDKs updated
-  - [ ] Examples compile
-
-  **Commit**: YES (per SDK)
-
----
-
-- [ ] 15. Update guest SDKs with host contract accessors
-
-  **What to do**:
-  - Add host contract accessors to guest SDKs
-  - Provide convenience methods
-
-  **Must NOT do**:
-  - Break existing guest code
-
-  **Recommended Agent Profile**:
-  - **Category**: `unspecified-high`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 4
-  - **Blocks**: Task 16
-  - **Blocked By**: Tasks 7-12
-
-  **Acceptance Criteria**:
-  - [ ] All guest SDKs updated
-  - [ ] Examples compile
-
-  **Commit**: YES
-
----
-
-- [ ] 16. Create host contract examples (logger, metrics)
-
-  **What to do**:
-  - Create example api.toml with host contracts
-  - Implement logger host contract in Rust
-  - Create plugin that uses host logger
-  - Add to examples/ directory
-
-  **Must NOT do**:
-  - Skip any language examples
-  - Use old `[[contract]]` syntax
-
-  **Recommended Agent Profile**:
-  - **Category**: `visual-engineering` (examples)
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 5
-  - **Blocks**: Tasks 17, 19
-  - **Blocked By**: Tasks 7-15
-
-  **References**:
-  - `examples/` directory
-  - Existing examples as templates
-
-  **Acceptance Criteria**:
-  - [ ] Logger example works
-  - [ ] Metrics example works
-  - [ ] Bidirectional communication demonstrated
-  - [ ] All languages have examples
-
-  **QA Scenarios**:
-  ```
-  Scenario: Run logger example
-    Tool: Bash
-    Steps:
-      1. cd examples/host_contracts/logger
-      2. cargo build --release
-      3. Run host and plugin
-    Expected Result: Plugin logs messages via host
-    Evidence: console output showing log messages
-  ```
-
-  **Commit**: YES
-
----
-
-- [ ] 17. Update existing examples to use renamed `[[plugin_contract]]`
-
-  **What to do**:
-  - Update all api.toml files in examples
-  - Update any code references
-  - Verify everything still works
-
-  **Must NOT do**:
-  - Skip any examples
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 5
-  - **Blocks**: Task 20
-  - **Blocked By**: Task 1, 16
-
-  **Acceptance Criteria**:
-  - [ ] All examples use `[[plugin_contract]]`
-  - [ ] All examples build
-  - [ ] All examples run
-
-  **Commit**: YES
-
----
-
-- [ ] 18. Documentation updates
-
-  **What to do**:
-  - Update PRD.md with Host Contracts
-  - Update README.md
-  - Add Host Contracts tutorial
-  - Update API reference
-
-  **Must NOT do**:
-  - Leave outdated docs
-
-  **Recommended Agent Profile**:
-  - **Category**: `writing`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 5
-  - **Blocks**: Task 21
-  - **Blocked By**: Tasks 1-17
-
-  **Acceptance Criteria**:
-  - [ ] All docs updated
-  - [ ] Examples in docs work
-  - [ ] No broken links
-
-  **Commit**: YES
-
----
-
-- [ ] 19. Integration tests for host contracts
-
-  **What to do**:
-  - Test host contract registration
-  - Test host contract discovery
-  - Test host contract calls
-  - Test error handling
-  - Test cross-language scenarios
-
-  **Must NOT do**:
-  - Skip edge cases
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 6
-  - **Blocks**: Task 20
-  - **Blocked By**: Tasks 7-17
-
-  **Acceptance Criteria**:
-  - [ ] All integration tests pass
-  - [ ] Coverage > 80%
-
-  **QA Scenarios**:
-  ```
-  Scenario: Full integration test
-    Tool: Bash
-    Steps:
-      1. cargo test --test integration_host_contracts
-    Expected Result: All tests pass
-    Evidence: test output
-  ```
-
-  **Commit**: YES
-
----
-
-- [ ] 20. Cross-language tests
-
-  **What to do**:
-  - Test Rust host + Python plugin
-  - Test C# host + Lua plugin
-  - Test all 6x6 combinations
-  - Focus on Host Contracts
-
-  **Must NOT do**:
-  - Skip any language pair
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 6
-  - **Blocks**: Task 21
-  - **Blocked By**: Tasks 17, 19
-
-  **Acceptance Criteria**:
-  - [ ] All combinations tested
-  - [ ] All pass
-
-  **Commit**: YES
-
----
-
-- [ ] 21. Final verification
-
-  **What to do**:
-  - Run full test suite
-  - Run examples
-  - Verify documentation
-  - Check SDK validator
-  - Build release
-
-  **Must NOT do**:
-  - Skip any verification step
-
-  **Recommended Agent Profile**:
-  - **Category**: `quick`
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO
-  - **Parallel Group**: Wave 6
-  - **Blocks**: F1-F4
-  - **Blocked By**: Tasks 18, 20
-
-  **Acceptance Criteria**:
-  - [ ] `cargo test --workspace` passes
-  - [ ] All examples run
-  - [ ] Documentation complete
-  - [ ] SDK validator passes
-  - [ ] `cargo clippy -- -D warnings` clean
-
-  **QA Scenarios**:
-  ```
-  Scenario: Full verification
-    Tool: Bash
-    Steps:
-      1. cargo test --workspace
-      2. just build-examples
-      3. just verify-examples
-      4. cargo clippy -- -D warnings
-      5. cargo fmt --check
-    Expected Result: All pass
-    Evidence: terminal output
-  ```
-
-  **Commit**: NO (final verification)
-
----
-
-## Final Verification Wave
-
-- [ ] F1. Plan Compliance Audit — `oracle`
-  Verify all tasks completed, all "Must NOT do" rules followed, all acceptance criteria met.
-
-- [ ] F2. Code Quality Review — `unspecified-high`
-  Run `cargo clippy -- -D warnings`, `cargo fmt --check`, check for AI slop.
-
-- [ ] F3. Real Manual QA — `unspecified-high`
-  Manually run all examples, verify bidirectional communication works.
-
-- [ ] F4. Scope Fidelity Check — `deep`
-  Verify no scope creep, all changes align with Host Contracts design.
+| D1-D4 | — | Wave 1 |
+| 1-4 | D1-D4 | Wave 2 |
+| 5-6 | 1-4 | Wave 3 |
+| 7-8 | 5-6 | Wave 4 |
+| 9-10 | 2, 3, 7, 8 | Wave 5 |
+| 11 | 9-10 | Wave 6, 8 |
+| 12-14 | 11 | Wave 6, 8 |
+| 15-19 | 5-6 | Wave 7 |
+| 20 | 7-8, 11 | Wave 8 |
+| 21-25 | 15-19, 12-14 | Wave 8 |
+| 26-28 | 20-25 | Wave 9 |
+| 29-34 | 26-28 | F1-F4 |
+| F1-F4 | 29-34 | — |
 
 ---
 
 ## Commit Strategy
 
-- **Per Task**: `type(scope): description`
-  - Types: `feat`, `refactor`, `fix`, `docs`, `test`
-  - Scopes: `abi`, `parser`, `codegen`, `rust`, `cpp`, `csharp`, `python`, `lua`, `js`, `runtime`, `sdk`, `examples`, `docs`
-- **Pre-commit**: Relevant tests must pass
-- **Final**: No commit, just verification
+- **One commit per task** (unless task spans multiple files logically)
+- **Commit message format**: `type(scope): description`
+- **Pre-commit hooks**: Run relevant tests before each commit
+- **No merge commits**: Rebase workflow
 
 ---
 
 ## Success Criteria
 
-### Must Have
+### Must Have (All Required)
 - [ ] `[[plugin_contract]]` and `[[host_contract]]` work in api.toml
-- [ ] All 6 languages support both contract types
-- [ ] Examples demonstrate bidirectional communication
-- [ ] Tests pass
+- [ ] All 6 languages support both contract types (host and guest)
+- [ ] Host Runtime Bridge works for Python, Lua, JavaScript
+- [ ] Examples run successfully with bidirectional communication
+- [ ] All tests pass
 - [ ] Documentation complete
 
-### Must NOT Have
-- [ ] No `[[contract]]` (old syntax) in any files
-- [ ] No `get_extension` (removed entirely)
-- [ ] No async support (deferred)
-- [ ] No backwards compatibility code
+### Must NOT Have (Prohibited)
+- [ ] No `[[contract]]` syntax in any non-test files
+- [ ] **NO EXTENSION SYSTEM REMAINING** - `get_extension` completely removed
+- [ ] No `Extension` trait or types remaining
+- [ ] No extension-related code in generators
+- [ ] No async support (out of scope)
+- [ ] No scope creep
 
 ---
 
-## Notes
+## Execution Rules Reminder
 
-### ABI Breaking Changes
-Since we're pre-1.0 and explicitly breaking ABI:
-1. Remove `get_extension` from HostVTable entirely
-2. Add `get_host_contract` in its place or at end
-3. Update all ABI version constants
-4. Document breaking change
+### Rule 1: All Tasks Required
+**THERE IS NO LOWER PRIORITY TASKS. THERE IS NO OPTIONAL TASKS.**
+Every task from D1 to F4 must be completed in order.
 
-### Timeline Estimate
-- Week 1: Tasks 1-6 (Foundation + Parser)
-- Week 2: Tasks 7-12 (Code Generation)
-- Week 3: Tasks 13-18 (Runtime + Examples + Docs)
-- Week 4: Tasks 19-21 + F1-F4 (Testing + Verification)
+### Rule 2: Plan Execution As-Is
+**DO NOT EDIT TASK DESCRIPTIONS.**
+Only mark tasks as completed (`[x]`). Never modify requirements.
 
-### Risk Mitigation
-- **Risk**: Codegen complexity for 6 languages
-  - **Mitigation**: Start with Rust only, verify pattern, then replicate
-- **Risk**: Cross-language compatibility issues
-  - **Mitigation**: Integration tests early and often
-- **Risk**: Example complexity
-  - **Mitigation**: Simple logger example first, then metrics
+### Rule 3: Gap Discovery Protocol
+**IF EXECUTOR FINDS A GAP, STOP AND ASK USER.**
+Never take decisions independently.
 
----
-
-## Appendix: api.toml Example
-
-```toml
-# api.toml - Pipeline API with Host Contracts
-
-# Plugin Contracts (host calls plugins)
-[[plugin_contract]]
-name = "pipeline.Decoder"
-version = "1.0.0"
-
-[[plugin_contract.functions]]
-name = "decode"
-params = [{ name = "input", type = "StringView" }]
-returns = "StringView"
-
-# Host Contracts (plugins call host)
-[[host_contract]]
-name = "host.logger"
-version = "1.0.0"
-
-[[host_contract.functions]]
-name = "log"
-params = [
-    { name = "level", type = "u32" },
-    { name = "message", type = "StringView" }
-]
-returns = "void"
-
-[[host_contract.functions]]
-name = "logf"
-params = [
-    { name = "level", type = "u32" },
-    { name = "format", type = "StringView" },
-    { name = "args", type = "Buffer" }
-]
-returns = "void"
-
-[[host_contract]]
-name = "host.metrics"
-version = "1.0.0"
-
-[[host_contract.functions]]
-name = "record_counter"
-params = [
-    { name = "name", type = "StringView" },
-    { name = "value", type = "u64" },
-    { name = "labels", type = "Buffer" }
-]
-returns = "void"
-```
+### Rule 4: Extensions Are Being Removed - ENFORCED
+**EXTENSIONS ARE COMPLETELY REMOVED AND REPLACED BY HOST CONTRACTS.**
+- `get_extension` field **REMOVED** from HostVTable
+- `crates/polyplug/src/extensions/` directory **DELETED**
+- `Extension` trait **REMOVED**
+- All extension code in generators **REMOVED**
+- `EXT_TRACE_ID` generation **REMOVED**
+- Host Contracts are the **REPLACEMENT**, not coexistence
+- **NO BACKWARDS COMPATIBILITY** for Extensions
 
 ---
 
-*Plan generated for polyplug 0.1.0 Host Contracts implementation.*
-*Ready for execution via `/start-work` command.*
+## Extension System Removal Notice
+
+**THE EXTENSION SYSTEM IS COMPLETELY REMOVED BY THIS PLAN**
+
+### What Is Being Deleted:
+1. `crates/polyplug/src/extensions/` - **ENTIRE DIRECTORY DELETED**
+2. `HostVTable.get_extension` field - **REMOVED**
+3. `Extension` trait - **REMOVED**
+4. `ExtensionEntry` struct - **REMOVED**
+5. All `EXT_TRACE_ID` generation in code generators - **REMOVED**
+6. Runtime extension registration - **REMOVED**
+
+### What Replaces It:
+**Host Contracts** provide the same capability (plugins calling host) with proper type safety, schema declarations, and full code generation.
+
+### Migration:
+- Old: `optional = ["trace"]` in bundle.toml + `get_extension(EXT_TRACE_ID)`
+- New: `[[host_contract]]` in api.toml + `HostLoggerContract::from_host(host)`
+
+---
+
+*Plan Version: 3.0*
+*Last Updated: After user correction - Extensions fully removed, not coexisting*
+*Ready for Execution: YES*
