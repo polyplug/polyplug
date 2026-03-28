@@ -1319,7 +1319,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 6
 **Blocks**: Wave 8
 
-- [ ] **Task 25**: Update Rust SDK with host contract registration
+- [x] **Task 25**: Update Rust SDK with host contract registration
   
   **Specification**:
   Update `polyplug` crate with host contract registration API.
