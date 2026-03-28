@@ -111,15 +111,21 @@ fn register_multiple_contracts() {
     let vtable2: &'static HostContractVTable = create_static_vtable(contract_id2, 1, 0, 2);
     let vtable3: &'static HostContractVTable = create_static_vtable(contract_id3, 2, 0, 3);
 
-    assert!(runtime
-        .register_host_contract(contract_id1, vtable1)
-        .is_ok());
-    assert!(runtime
-        .register_host_contract(contract_id2, vtable2)
-        .is_ok());
-    assert!(runtime
-        .register_host_contract(contract_id3, vtable3)
-        .is_ok());
+    assert!(
+        runtime
+            .register_host_contract(contract_id1, vtable1)
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .register_host_contract(contract_id2, vtable2)
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .register_host_contract(contract_id3, vtable3)
+            .is_ok()
+    );
 }
 
 // ─── Lookup Tests ─────────────────────────────────────────────────────────────

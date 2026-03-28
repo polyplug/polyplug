@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
 use std::path::Path;
 use std::path::PathBuf;
 
