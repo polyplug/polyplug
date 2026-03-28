@@ -1713,221 +1713,304 @@ Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-
 
 ---
 
-- [ ] 9. Update C++ host and reporter
+- [ ] 9. Regenerate and update Rust example
 
   **What to do**:
-  **REQUIRED - NO DEFERRAL**
-  
-  Implement C++ generator vtable factory support:
-  - Add `generate_host_vtable_factories()` to `crates/polyplug_codegen/src/generators/cpp.rs`
-  - Generate BOTH:
-    - NATIVE: `create_logger_vtable<T: HostLogger>(std::unique_ptr<T>)`
-    - VM: `create_logger_vtable_vm(void* bridge_data, VmDispatchFn dispatch_fn)`
-  - Update C++ host to use generated code
+  Regenerate code and update Rust host/reporter to use generated vtable factories.
   
   **Files to modify**:
-  - `crates/polyplug_codegen/src/generators/cpp.rs` - Add vtable factory generation
-  - `examples/hosts/cpp/main.cpp` - Use generated code
-  - `examples/guests/cpp/reporter/reporter.cpp` - Use generated callers
+  - `examples/hosts/rust/src/main.rs` - Use generated vtable factory
+  - `examples/guests/rust/reporter/src/main.rs` - Use generated caller (if needed)
   
-  **Generated output**:
-  - `generated/host/vtable_factories.hpp` - C++ vtable factories
+  **Update host to use generated code**:
+  ```rust
+  // OLD: Manual vtable creation
+  let dispatch = HostContractDispatch { ... };
   
-  **Implementation pattern**:
-  Follow Rust generator pattern, adapted for C++:
-  - Use `std::unique_ptr` instead of `Box`
-  - Use `static const` for function pointer arrays
-  - Use `std::launder` for pointer casting (C++17)
-
-  **Recommended Agent Profile**:
-  - **Category**: `ultrabrain`
-  - **Reason**: Complex C++ code generation
-
-  **Acceptance Criteria**:
-  - [ ] C++ generator generates NATIVE vtable factories
-  - [ ] C++ generator generates VM vtable factories
-  - [ ] C++ host uses generated code (no manual vtable)
-  - [ ] All C++ code compiles with `g++ -std=c++20`
-
-  **QA Scenarios**:
-  ```
-  Scenario: C++ generator produces vtable factories
-    Tool: bash
-    Steps:
-      1. grep -n "create_logger_vtable" crates/polyplug_codegen/src/generators/cpp.rs
-      2. ./target/release/polyplugc generate --api examples/api.toml --lang cpp --out /tmp/cpp_gen
-      3. ls /tmp/cpp_gen/host/vtable_factories.hpp
-    Expected: Generator has code, output file exists
-    Evidence: .sisyphus/evidence/task-9-cpp.txt
+  // NEW: Use generated vtable factory
+  use generated::host::vtable_factories::create_logger_vtable;
+  let vtable = create_logger_vtable(Box::new(ConsoleLogger));
+  runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable);
   ```
 
-  **Commit**: YES (if implementing) or NO (if deferring)
-
----
-
-- [ ] 10. Update C# host and reporter
-
-  **What to do**:
-  **REQUIRED - NO DEFERRAL**
-  
-  Implement C# generator vtable factory support:
-  - Add `generate_host_vtable_factories()` to `crates/polyplug_codegen/src/generators/csharp.rs`
-  - Generate BOTH:
-    - NATIVE: `CreateLoggerVTable<T: IHostLogger>(T implementation)`
-    - VM: `CreateLoggerVTableVm(IntPtr bridgeData, VmDispatchDelegate dispatchFn)`
-  - Update C# host to use generated code
-  
-  **Files to modify**:
-  - `crates/polyplug_codegen/src/generators/csharp.rs`
-  - `examples/hosts/csharp/Program.cs`
-  - `examples/guests/csharp/reporter/Reporter.cs`
-
-  **Recommended Agent Profile**:
-  - **Category**: `ultrabrain`
-
-  **Acceptance Criteria**:
-  - [ ] C# generator generates NATIVE and VM vtable factories
-  - [ ] C# host uses generated code (no manual vtable)
-  - [ ] All C# code builds with `dotnet build`
-
-  **Commit**: YES
-
----
-
-- [ ] 11. Update Python host and reporter
-
-  **What to do**:
-  **REQUIRED - NO DEFERRAL**
-  
-  Implement Python generator vtable factory support:
-  - Add `generate_host_vtable_factories()` to `crates/polyplug_codegen/src/generators/python.rs`
-  - Generate BOTH:
-    - NATIVE: Python C API factories for native extensions
-    - VM: VM factories for VM-based hosts
-  - Update Python host to use generated code
-  
-  **Files to modify**:
-  - `crates/polyplug_codegen/src/generators/python.rs`
-  - `examples/hosts/python/host.py`
-  - `examples/guests/python/reporter/reporter.py`
-
-  **Recommended Agent Profile**:
-  - **Category**: `ultrabrain`
-
-  **Acceptance Criteria**:
-  - [ ] Python generator generates NATIVE and VM vtable factories
-  - [ ] Python host uses generated code (no manual vtable)
-  - [ ] All Python code runs without errors
-
-  **Commit**: YES
-  
   **Recommended Agent Profile**:
   - **Category**: `quick`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 10-14)
+  - **Parallel Group**: Wave 5
+  - **Blocks**: Final Verification
+  - **Blocked By**: Tasks 1, 1.5, 2.75, 8
 
   **Acceptance Criteria**:
-  - [ ] Python host uses generated code **OR** explicitly marked "deferred"
+  - [ ] Rust host uses `create_logger_vtable(Box::new(impl))`
+  - [ ] No manual vtable creation code
+  - [ ] Rust example compiles and runs
 
-  **Commit**: YES (if implementing) or NO (if deferring)
+  **QA Scenarios**:
+  ```
+  Scenario: Rust host uses generated code
+    Tool: bash
+    Steps:
+      1. grep "create_logger_vtable" examples/hosts/rust/src/main.rs
+      2. cd examples/hosts/rust && cargo build
+    Expected: Uses generated function, build succeeds
+    Evidence: .sisyphus/evidence/task-9-rust-example.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(examples/rust): use generated vtable factory`
 
 ---
 
-- [ ] 12. Update Lua host and reporter
+- [ ] 10. Regenerate and update C++ example
 
   **What to do**:
-  **REQUIRED - NO DEFERRAL**
-  
-  Implement Lua generator vtable factory support:
-  - Add `generate_host_vtable_factories()` to `crates/polyplug_codegen/src/generators/lua.rs`
-  - Generate BOTH:
-    - NATIVE: Lua C API factories for native modules
-    - VM: VM factories for VM-based hosts
-  - Update Lua host to use generated code
+  Regenerate code and update C++ host/reporter to use generated vtable factories.
   
   **Files to modify**:
-  - `crates/polyplug_codegen/src/generators/lua.rs`
-  - `examples/hosts/lua/host.lua`
-  - `examples/guests/lua/reporter/reporter.lua`
+  - `examples/hosts/cpp/main.cpp` - Use generated vtable factory
+  - `examples/guests/cpp/reporter/reporter.cpp` - Use generated caller
+  
+  **Update host to use generated code**:
+  ```cpp
+  // Use generated vtable factory
+  #include "generated/host/vtable_factories.hpp"
+  auto vtable = create_logger_vtable(std::make_unique<ConsoleLogger>());
+  runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable);
+  ```
 
   **Recommended Agent Profile**:
-  - **Category**: `ultrabrain`
+  - **Category**: `quick`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 9, 11-14)
+  - **Parallel Group**: Wave 5
+  - **Blocks**: Final Verification
+  - **Blocked By**: Tasks 3, 2.75, 8
 
   **Acceptance Criteria**:
-  - [ ] Lua generator generates NATIVE and VM vtable factories
-  - [ ] Lua host uses generated code (no manual vtable)
-  - [ ] All Lua code runs without errors
+  - [ ] C++ host uses generated vtable factory
+  - [ ] No manual vtable creation code
+  - [ ] C++ example compiles with `g++ -std=c++20`
+
+  **QA Scenarios**:
+  ```
+  Scenario: C++ host uses generated code
+    Tool: bash
+    Steps:
+      1. grep "create_logger_vtable" examples/hosts/cpp/main.cpp
+      2. cd examples/hosts/cpp && g++ -std=c++20 main.cpp -o host
+    Expected: Uses generated function, compiles
+    Evidence: .sisyphus/evidence/task-10-cpp-example.txt
+  ```
 
   **Commit**: YES
+  - Message: `feat(examples/cpp): use generated vtable factory`
 
 ---
 
-- [ ] 13. Update JS host and FIX reporter
+- [ ] 11. Regenerate and update C# example
 
   **What to do**:
-  **REQUIRED - NO DEFERRAL**
+  Regenerate code and update C# host/reporter to use generated vtable factories.
   
-  **Part 1: Implement JS generator vtable factory support**
-  - Add `generate_host_vtable_factories()` to:
-    - `crates/polyplug_codegen/src/generators/js_deno.rs`
-    - `crates/polyplug_codegen/src/generators/js_quickjs.rs`
-  - Generate BOTH:
-    - NATIVE: JS native bindings for Deno/QuickJS
-    - VM: VM factories for VM-based hosts
-  - Update JS host to use generated code
+  **Files to modify**:
+  - `examples/hosts/csharp/Program.cs` - Use generated vtable factory
+  - `examples/guests/csharp/reporter/Reporter.cs` - Use generated caller
+  
+  **Update host to use generated code**:
+  ```csharp
+  // Use generated vtable factory
+  using Generated.Host.VtableFactories;
+  var vtable = VtableFactories.CreateLoggerVTable(new ConsoleLogger());
+  runtime.RegisterHostContract(HOSTLOGGER_CONTRACT_ID, vtable);
+  ```
+
+  **Recommended Agent Profile**:
+  - **Category**: `quick`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 9-10, 12-14)
+  - **Parallel Group**: Wave 5
+  - **Blocks**: Final Verification
+  - **Blocked By**: Tasks 4, 2.75, 8
+
+  **Acceptance Criteria**:
+  - [ ] C# host uses generated vtable factory
+  - [ ] No manual vtable creation code
+  - [ ] C# example builds with `dotnet build`
+
+  **QA Scenarios**:
+  ```
+  Scenario: C# host uses generated code
+    Tool: bash
+    Steps:
+      1. grep "CreateLoggerVTable" examples/hosts/csharp/Program.cs
+      2. cd examples/hosts/csharp && dotnet build
+    Expected: Uses generated function, build succeeds
+    Evidence: .sisyphus/evidence/task-11-csharp-example.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(examples/csharp): use generated vtable factory`
+
+---
+
+- [ ] 12. Regenerate and update Python example
+
+  **What to do**:
+  Regenerate code and update Python host/reporter to use generated vtable factories.
+  
+  **Files to modify**:
+  - `examples/hosts/python/host.py` - Use generated vtable factory
+  - `examples/guests/python/reporter/reporter.py` - Use generated caller
+  
+  **Update host to use generated code**:
+  ```python
+  # Use generated vtable factory
+  from generated.host.vtable_factories import create_logger_vtable_vm
+  vtable = create_logger_vtable_vm(bridge_data, dispatch_fn)
+  runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
+  ```
+
+  **Recommended Agent Profile**:
+  - **Category**: `quick`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 9-11, 13-14)
+  - **Parallel Group**: Wave 5
+  - **Blocks**: Final Verification
+  - **Blocked By**: Tasks 5, 2.75, 8
+
+  **Acceptance Criteria**:
+  - [ ] Python host uses generated vtable factory
+  - [ ] No manual vtable creation code
+  - [ ] Python example runs without errors
+
+  **QA Scenarios**:
+  ```
+  Scenario: Python host uses generated code
+    Tool: bash
+    Steps:
+      1. grep "create_logger_vtable" examples/hosts/python/host.py
+      2. python3 examples/hosts/python/host.py
+    Expected: Uses generated function, runs successfully
+    Evidence: .sisyphus/evidence/task-12-python-example.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(examples/python): use generated vtable factory`
+
+---
+
+- [ ] 13. Regenerate and update Lua example
+
+  **What to do**:
+  Regenerate code and update Lua host/reporter to use generated vtable factories.
+  
+  **Files to modify**:
+  - `examples/hosts/lua/host.lua` - Use generated vtable factory
+  - `examples/guests/lua/reporter/reporter.lua` - Use generated caller
+  
+  **Update host to use generated code**:
+  ```lua
+  -- Use generated vtable factory
+  local vtable_factories = require("generated.host.vtable_factories")
+  local vtable = vtable_factories.create_logger_vtable_vm(bridge_data, dispatch_fn)
+  runtime:register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
+  ```
+
+  **Recommended Agent Profile**:
+  - **Category**: `quick`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 9-12, 14)
+  - **Parallel Group**: Wave 5
+  - **Blocks**: Final Verification
+  - **Blocked By**: Tasks 6, 2.75, 8
+
+  **Acceptance Criteria**:
+  - [ ] Lua host uses generated vtable factory
+  - [ ] No manual vtable creation code
+  - [ ] Lua example runs without errors
+
+  **QA Scenarios**:
+  ```
+  Scenario: Lua host uses generated code
+    Tool: bash
+    Steps:
+      1. grep "create_logger_vtable" examples/hosts/lua/host.lua
+      2. lua examples/hosts/lua/host.lua
+    Expected: Uses generated function, runs successfully
+    Evidence: .sisyphus/evidence/task-13-lua-example.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(examples/lua): use generated vtable factory`
+
+---
+
+- [ ] 14. Regenerate and update JavaScript example
+
+  **What to do**:
+  Regenerate code and update JavaScript host/reporter to use generated vtable factories.
+  
+  **Part 1: Update JS host to use generated code**
+  - `examples/hosts/js/host.js` - Use generated vtable factory
   
   **Part 2: FIX the broken reporter**
-  - Current `examples/guests/js/reporter/reporter.js` just returns input
-  - Must implement actual report logic matching other languages
-  - Parse "TRANSFORMED:name|value|count" format
-  - Generate "Report: name has value 'value' with count count"
+  - `examples/guests/js/reporter/reporter.js` - Fix reporter logic
+  - Current reporter just returns input
+  - Must implement actual report logic:
+    ```javascript
+    // Parse "TRANSFORMED:name|value|count" format
+    // Generate "Report: name has value 'value' with count count"
+    ```
   
-  **Part 2: Update JS host (DEFERRED)**
-  - Check if JS generator has vtable factory support
-  - **IF YES**: Update JS host to use generated code
-  - **IF NO**: Skip/Defer (mark as "deferred")
-  
-  **Decision criteria**:
-  - Check: `crates/polyplug_codegen/src/generators/js_deno.rs` or `js_quickjs.rs` has `generate_host_vtable_factories()`
-  
-  **Note**: Part 1 (fixing reporter) is REQUIRED even if Part 2 is deferred
+  **Update host to use generated code**:
+  ```javascript
+  // Use generated vtable factory
+  import { createLoggerVtableVm } from "./generated/host/vtable_factories.js";
+  const vtable = createLoggerVtableVm(bridgeData, dispatchFn);
+  runtime.registerHostContract(HOSTLOGGER_CONTRACT_ID, vtable);
+  ```
 
   **Recommended Agent Profile**:
-  - **Category**: `unspecified-high`
+  - **Category**: `quick`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 9-13)
+  - **Parallel Group**: Wave 5
+  - **Blocks**: Final Verification
+  - **Blocked By**: Tasks 7, 2.75, 8
 
   **Acceptance Criteria**:
+  - [ ] JS host uses generated vtable factory
   - [ ] JS reporter properly transforms data (REQUIRED)
-  - [ ] JS host uses generated code **OR** explicitly marked "deferred"
+  - [ ] No manual vtable creation code
+  - [ ] JS example runs without errors
 
   **QA Scenarios**:
   ```
-  Scenario: JS reporter fixed
+  Scenario: JS host uses generated code and reporter fixed
     Tool: bash
     Steps:
-      1. cat examples/guests/js/reporter/reporter.js | grep -E "Report:|split|transform"
-    Expected: Shows actual report logic, not just "return input"
+      1. grep "createLoggerVtable" examples/hosts/js/host.js
+      2. grep -E "Report:|split" examples/guests/js/reporter/reporter.js
+      3. node examples/hosts/js/host.js
+    Expected: Uses generated function, reporter has actual logic, runs successfully
+    Evidence: .sisyphus/evidence/task-14-js-example.txt
   ```
 
   **Commit**: YES
-
----
-
-- [ ] 14. Final verification
-
-  **What to do**:
-  - Run `./examples/verify_hosts.sh`
-  - Verify all available hosts pass
-  - Check `[PLUGIN LOG]` in output
-
-  **QA Scenarios**:
-  ```
-  Scenario: All hosts verify
-    Tool: bash
-    Steps:
-      1. cd examples && ./verify_hosts.sh
-    Expected: All available hosts pass
-    Evidence: .sisyphus/evidence/task-14-final.txt
-  ```
-
-  **Commit**: NO
+  - Message: `feat(examples/js): use generated vtable factory and fix reporter`
 
 ---
 
