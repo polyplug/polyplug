@@ -3,8 +3,10 @@ name = "worker"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-polyplug_guest = { path = "../../../crates/polyplug_guest" }
+polyplug_guest = { path = "../../../../../crates/polyplug_guest" }

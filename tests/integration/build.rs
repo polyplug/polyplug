@@ -191,4 +191,93 @@ fn main() {
         "cargo:rustc-env=DEPENDER_PLUGIN_DIR={}",
         fixtures_dir.join("depender_plugin").display()
     );
+
+    // ─── Host contract test fixtures (from examples/host_contracts/logger/) ─────
+    // These are built by the examples build script, we just locate them here.
+
+    let host_contracts_dir: PathBuf = workspace_root
+        .join("examples")
+        .join("host_contracts")
+        .join("logger")
+        .join("plugins");
+
+    // HOST_CONTRACT_RUST_PLUGIN — Rust worker plugin with host contract
+    let rust_worker_dir: PathBuf = host_contracts_dir.join("rust_worker");
+    if rust_worker_dir.join("manifest.toml").exists() {
+        println!(
+            "cargo:rustc-env=HOST_CONTRACT_RUST_PLUGIN={}",
+            rust_worker_dir.display()
+        );
+    } else {
+        println!("cargo:rustc-env=HOST_CONTRACT_RUST_PLUGIN=");
+    }
+
+    // HOST_CONTRACT_CPP_PLUGIN — C++ worker plugin with host contract
+    let cpp_worker_dir: PathBuf = host_contracts_dir.join("cpp_worker");
+    if cpp_worker_dir.join("manifest.toml").exists() {
+        println!(
+            "cargo:rustc-env=HOST_CONTRACT_CPP_PLUGIN={}",
+            cpp_worker_dir.display()
+        );
+    } else {
+        println!("cargo:rustc-env=HOST_CONTRACT_CPP_PLUGIN=");
+    }
+
+    // HOST_CONTRACT_CSHARP_PLUGIN — C# worker plugin with host contract
+    let csharp_worker_dir: PathBuf = host_contracts_dir.join("csharp_worker");
+    let csharp_worker_available: bool = csharp_worker_dir.join("manifest.toml").exists()
+        && csharp_worker_dir.join("CsharpWorker.dll").exists()
+        && Command::new("dotnet")
+            .arg("--version")
+            .output()
+            .map(|o: std::process::Output| o.status.success())
+            .unwrap_or(false);
+    if csharp_worker_available {
+        println!(
+            "cargo:rustc-env=HOST_CONTRACT_CSHARP_PLUGIN={}",
+            csharp_worker_dir.display()
+        );
+    } else {
+        println!("cargo:rustc-env=HOST_CONTRACT_CSHARP_PLUGIN=DOTNET_NOT_AVAILABLE");
+    }
+
+    // HOST_CONTRACT_PYTHON_PLUGIN — Python worker plugin with host contract
+    let python_worker_dir: PathBuf = host_contracts_dir.join("python_worker");
+    let python_worker_available: bool = python_worker_dir.join("manifest.toml").exists()
+        && python_worker_dir.join("plugin.py").exists()
+        && Command::new("python3")
+            .arg("--version")
+            .output()
+            .map(|o: std::process::Output| o.status.success())
+            .unwrap_or(false);
+    if python_worker_available {
+        println!(
+            "cargo:rustc-env=HOST_CONTRACT_PYTHON_PLUGIN={}",
+            python_worker_dir.display()
+        );
+    } else {
+        println!("cargo:rustc-env=HOST_CONTRACT_PYTHON_PLUGIN=PYTHON_NOT_AVAILABLE");
+    }
+
+    // HOST_CONTRACT_LUA_PLUGIN — Lua worker plugin with host contract
+    let lua_worker_dir: PathBuf = host_contracts_dir.join("lua_worker");
+    if lua_worker_dir.join("manifest.toml").exists() {
+        println!(
+            "cargo:rustc-env=HOST_CONTRACT_LUA_PLUGIN={}",
+            lua_worker_dir.display()
+        );
+    } else {
+        println!("cargo:rustc-env=HOST_CONTRACT_LUA_PLUGIN=");
+    }
+
+    // HOST_CONTRACT_JS_PLUGIN — JavaScript worker plugin with host contract
+    let js_worker_dir: PathBuf = host_contracts_dir.join("js_worker");
+    if js_worker_dir.join("manifest.toml").exists() {
+        println!(
+            "cargo:rustc-env=HOST_CONTRACT_JS_PLUGIN={}",
+            js_worker_dir.display()
+        );
+    } else {
+        println!("cargo:rustc-env=HOST_CONTRACT_JS_PLUGIN=");
+    }
 }

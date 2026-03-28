@@ -1,9 +1,11 @@
 [bundle]
 name = "js_worker"
 version = "0.1.0"
+api = "../../api.toml"
+runtime = "quickjs"
+file = "plugin.js"
 
-[[provides]]
-contract = "example.worker@1"
-
-[api]
-path = "../api.toml"
+[[plugin]]
+name = "worker"
+version = "1.0.0"
+implements = ["example.worker@1.0"]

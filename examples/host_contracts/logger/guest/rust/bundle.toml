@@ -1,9 +1,13 @@
 [bundle]
 name = "rust_worker"
 version = "0.1.0"
+api = "../../api.toml"
+runtime = "native"
 
-[[provides]]
-contract = "example.worker@1"
+[bundle.file]
+linux.x86_64 = "libworker.so"
 
-[api]
-path = "../api.toml"
+[[plugin]]
+name = "worker"
+version = "1.0.0"
+implements = ["example.worker@1.0"]

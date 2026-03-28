@@ -1,9 +1,11 @@
 [bundle]
 name = "lua_worker"
 version = "0.1.0"
+api = "../../api.toml"
+runtime = "lua"
+file = "plugin.lua"
 
-[[provides]]
-contract = "example.worker@1"
-
-[api]
-path = "../api.toml"
+[[plugin]]
+name = "worker"
+version = "1.0.0"
+implements = ["example.worker@1.0"]
