@@ -1451,7 +1451,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(js-sdk): add host contract registration`
 
-- [ ] **Task 30**: Update C++ SDK with host contract registration
+- [x] **Task 30**: Update C++ SDK with host contract registration
   
   **Specification**:
   Update C++ host SDK with host contract registration API.

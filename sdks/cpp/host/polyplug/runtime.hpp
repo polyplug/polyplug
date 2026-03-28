@@ -40,6 +40,7 @@ extern "C" {
     size_t polyplug_runtime_last_error(RuntimeHandle rt, uint8_t* buf, size_t buf_len);
     void polyplug_runtime_on_reload(void (*cb)(void* phase));
     void polyplug_runtime_set_config(const void* config);
+    uint32_t polyplug_runtime_register_host_contract(RuntimeHandle rt, const HostContractVTable* vtable);
 }
 
 namespace polyplug {
@@ -209,6 +210,16 @@ public:
         uint32_t result = polyplug_runtime_reload_bundle(handle_, bytes, path.size());
         if (result != 0) {
             throw std::runtime_error("Failed to reload bundle: " + std::string(path));
+        }
+    }
+
+    void register_host_contract(const HostContractVTable* vtable) {
+        if (vtable == nullptr) {
+            throw std::runtime_error("register_host_contract: null vtable pointer");
+        }
+        uint32_t result = polyplug_runtime_register_host_contract(handle_, vtable);
+        if (result != 0) {
+            throw std::runtime_error("Failed to register host contract: error " + std::to_string(result));
         }
     }
 
