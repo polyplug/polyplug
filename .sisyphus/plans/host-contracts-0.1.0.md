@@ -1221,7 +1221,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(lua): generate host-side contract metatables`
 
-- [ ] **Task 22**: Generate Lua guest-side host contract callers
+- [x] **Task 22**: Generate Lua guest-side host contract callers
   
   **Specification**:
   Generate Lua functions that plugins use to call host contracts.

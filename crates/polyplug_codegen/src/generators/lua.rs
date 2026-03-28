@@ -91,6 +91,15 @@ impl CodeGenerator for LuaGenerator {
             });
         }
 
+        if !ir.host_contracts.is_empty() {
+            let host_contracts_lua: String = generate_guest_host_contracts_file(ir);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/host_contracts.lua"),
+                content: host_contracts_lua,
+                force_regenerate: false,
+            });
+        }
+
         Ok(())
     }
 }
@@ -996,6 +1005,30 @@ fn host_contract_name_to_lua_class(name: &str) -> String {
     }
 }
 
+/// Convert host contract name to Lua guest caller class name.
+/// e.g. "host.logger" -> "HostLoggerContract", "host.fs.reader" -> "HostFsReaderContract"
+fn host_contract_name_to_lua_caller(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal + "Contract"
+    } else {
+        format!("Host{}Contract", pascal)
+    }
+}
+
 /// Generate Lua type annotation for host contract method parameters.
 /// For host interfaces, we use ergonomic Lua types:
 /// - StringView -> string
@@ -1015,6 +1048,37 @@ fn lua_host_param_type_annotation(ty: &ResolvedTypeRef) -> String {
 
 /// Generate Lua return type annotation for host contract methods.
 fn lua_host_return_type_annotation(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
+        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
+    }
+}
+
+/// Generate Lua type annotation for guest caller method parameters.
+/// For guest callers, we use ergonomic Lua types:
+/// - StringView -> string (converted to StringView at ABI boundary)
+/// - Buffer -> string (Lua uses strings for byte buffers)
+/// - UserDefined -> userdata
+/// - Primitives -> number (Lua's numeric type)
+#[allow(dead_code)]
+fn lua_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
+        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
+    }
+}
+
+/// Generate Lua return type annotation for guest caller methods.
+#[allow(dead_code)]
+fn lua_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(_) => "number".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
@@ -1106,6 +1170,301 @@ fn generate_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("-- Export host contract classes\n");
     for contract in &ir.host_contracts {
         let class_name: String = host_contract_name_to_lua_class(&contract.name);
+        out.push_str(&format!("M.{} = {}\n", class_name, class_name));
+    }
+    out.push('\n');
+
+    out.push_str("return M\n");
+    out
+}
+
+// ─── Guest Host Contract Caller Generation ─────────────────────────────────────
+
+/// Generate one guest-side host contract caller class.
+fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_lua_caller(&contract.name);
+
+    out.push_str(&format!(
+        "-- Guest caller for host contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("{} = {{}}\n", class_name));
+    out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
+
+    out.push_str(&format!("function {}:new(vtable)\n", class_name));
+    out.push_str("    local obj = { _vtable = vtable }\n");
+    out.push_str("    setmetatable(obj, self)\n");
+    out.push_str("    return obj\n");
+    out.push_str("end\n\n");
+
+    out.push_str(&format!("function {}.from_host(host_ptr, min_version)\n", class_name));
+    out.push_str("    if min_version == nil then min_version = 0 end\n");
+    out.push_str("    if host_ptr == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    out.push_str("    local host = ffi.cast(\"HostVTable*\", host_ptr)\n");
+    out.push_str(&format!(
+        "    local vtable_ptr = host.get_host_contract(nil, 0x{:016X}ULL, min_version)\n",
+        contract.contract_id
+    ));
+    out.push_str("    if vtable_ptr == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    out.push_str(&format!("    return {}:new(vtable_ptr)\n", class_name));
+    out.push_str("end\n\n");
+
+    out.push_str(&format!("function {}:is_valid()\n", class_name));
+    out.push_str("    return self._vtable ~= nil\n");
+    out.push_str("end\n\n");
+
+    for func in &contract.functions {
+        generate_lua_guest_host_contract_method(out, func, &class_name);
+    }
+
+    out.push('\n');
+}
+
+/// Generate one method for a guest-side host contract caller.
+fn generate_lua_guest_host_contract_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    class_name: &str,
+) {
+    let fn_id: u32 = func.function_id;
+    let has_return: bool = func.returns.is_some();
+
+    let params_str: String = if func.params.is_empty() {
+        "self".to_owned()
+    } else {
+        let params: Vec<String> = func
+            .params
+            .iter()
+            .map(|p: &ResolvedParam| p.name.clone())
+            .collect();
+        format!("self, {}", params.join(", "))
+    };
+
+    out.push_str(&format!("function {}:{}({})\n", class_name, func.name, params_str));
+
+    out.push_str("    if self._vtable == nil then\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    out.push_str("    local header = ffi.cast(\"HostContractVTable*\", self._vtable).header\n");
+    out.push_str(&format!("    if {fn_id} >= header.function_count then\n"));
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    out.push_str("    local dispatch_type = header.dispatch_type\n");
+
+    emit_lua_guest_host_contract_args_setup(out, func);
+    emit_lua_guest_host_contract_out_setup(out, &func.returns);
+
+    out.push_str("    local err\n");
+    out.push_str("    if dispatch_type == 0 then\n");
+    out.push_str(&format!(
+        "        local fn_ptr = header.dispatch.native.functions[{fn_id}]\n"
+    ));
+    out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
+    out.push_str("        err = fn(args_ptr, out_ptr)\n");
+    out.push_str("    elseif dispatch_type == 1 then\n");
+    out.push_str(&format!(
+        "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
+    ));
+    out.push_str("    else\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    out.push_str("    if err ~= 0 then\n");
+    if has_return {
+        out.push_str("        return nil\n");
+    } else {
+        out.push_str("        return\n");
+    }
+    out.push_str("    end\n");
+
+    if has_return {
+        out.push_str("    return out_val\n");
+    }
+    out.push_str("end\n\n");
+}
+
+/// Emit the args_ptr setup for a Lua guest host contract method.
+fn emit_lua_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunction) {
+    if func.params.is_empty() {
+        out.push_str("    local args_ptr = nil\n");
+        return;
+    }
+
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "    local {name}_bytes = tostring({name})\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local {name}_view = ffi.new(\"StringView\")\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_view.ptr = ffi.cast(\"const char*\", {name}_bytes)\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_view.len = #{name}_bytes\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {name}_view)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "    local {name}_buf = ffi.new(\"Buffer\")\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_buf.ptr = ffi.cast(\"void*\", {name})\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    {name}_buf.len = #{name}\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {name}_buf)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {})\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
+                let ty_name: String = lua_type_name(&param.ty);
+                out.push_str(&format!(
+                    "    local {name}_val = ffi.new(\"{ty}\", {name})\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+                out.push_str(&format!(
+                    "    local args_ptr = ffi.cast(\"const void*\", {name}_val)\n",
+                    name = param.name
+                ));
+            }
+        }
+        return;
+    }
+
+    // Multiple params: pack into inline struct
+    out.push_str("    local args_val = {}\n");
+    for param in &func.params {
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "    local {name}_bytes = tostring({name})\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    args_val.{name} = ffi.new(\"StringView\")\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    args_val.{name}.ptr = ffi.cast(\"const char*\", {name}_bytes)\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    args_val.{name}.len = #{name}_bytes\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "    args_val.{name} = ffi.new(\"Buffer\")\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    args_val.{name}.ptr = ffi.cast(\"void*\", {name})\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "    args_val.{name}.len = #{name}\n",
+                    name = param.name
+                ));
+            }
+            _ => {
+                out.push_str(&format!("    args_val.{0} = {0}\n", param.name));
+            }
+        }
+    }
+    out.push_str("    local args_ptr = ffi.cast(\"const void*\", args_val)\n");
+}
+
+/// Emit the out_ptr setup for a Lua guest host contract method.
+fn emit_lua_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if let Some(ret_ty) = returns {
+        if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+            out.push_str("    local out_val = ffi.new(\"StringView\")\n");
+            out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+        } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) {
+            out.push_str("    local out_val = ffi.new(\"Buffer\")\n");
+            out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+        } else {
+            let ty_name: String = lua_type_name(ret_ty);
+            out.push_str(&format!("    local out_val = ffi.new(\"{ty_name}\")\n"));
+            out.push_str("    local out_ptr = ffi.cast(\"void*\", out_val)\n");
+        }
+    } else {
+        out.push_str("    local out_ptr = nil\n");
+    }
+}
+
+/// Generate `guest/host_contracts.lua` — caller classes for guest-side host contract callers.
+fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("local ffi = require(\"ffi\")\n\n");
+
+    out.push_str("local M = {}\n\n");
+
+    out.push_str("-- Cached FFI types for hot path performance\n");
+    out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, void*)\")\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_lua_guest_host_contract_caller(&mut out, contract);
+    }
+
+    out.push_str("-- Contract ID constants\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_lua_caller(&contract.name);
+        let const_name: String = format!("{}_ID", class_name.to_uppercase());
+        out.push_str(&format!(
+            "M.{} = 0x{:016X}ULL\n",
+            const_name, contract.contract_id
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("-- Export guest caller classes\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_lua_caller(&contract.name);
         out.push_str(&format!("M.{} = {}\n", class_name, class_name));
     }
     out.push('\n');
@@ -1391,5 +1750,211 @@ mod tests {
         assert!(result.contains("HostLogger = {}"));
         assert!(result.contains("M.HOSTLOGGER_CONTRACT_ID = 0x123456789ABCDEF0ULL"));
         assert!(result.contains("M.HostLogger = HostLogger"));
+    }
+
+    // ─── Guest Host Contract Caller Tests ─────────────────────────────────────────
+
+    #[test]
+    fn host_contract_name_to_lua_caller_basic() {
+        assert_eq!(
+            host_contract_name_to_lua_caller("host.logger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_lua_caller_nested() {
+        assert_eq!(
+            host_contract_name_to_lua_caller("host.fs.reader"),
+            "HostFsReaderContract"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_lua_caller_already_has_host() {
+        assert_eq!(
+            host_contract_name_to_lua_caller("host.HostLogger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn lua_guest_caller_param_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(lua_guest_caller_param_type_name(&ty), "string");
+    }
+
+    #[test]
+    fn lua_guest_caller_param_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(lua_guest_caller_param_type_name(&ty), "string");
+    }
+
+    #[test]
+    fn lua_guest_caller_param_type_primitives() {
+        assert_eq!(
+            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "number"
+        );
+        assert_eq!(
+            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
+            "number"
+        );
+        assert_eq!(
+            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
+            "number"
+        );
+        assert_eq!(
+            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
+            "number"
+        );
+    }
+
+    #[test]
+    fn lua_guest_caller_return_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(lua_guest_caller_return_type_name(&ty), "string");
+    }
+
+    #[test]
+    fn lua_guest_caller_return_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(lua_guest_caller_return_type_name(&ty), "string");
+    }
+
+    #[test]
+    fn generate_lua_guest_host_contract_caller_basic() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![
+                    ResolvedParam {
+                        name: "level".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    },
+                    ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    },
+                ],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_lua_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("HostLoggerContract = {}"),
+            "missing class table: {out}"
+        );
+        assert!(
+            out.contains("HostLoggerContract.__index = HostLoggerContract"),
+            "missing __index: {out}"
+        );
+        assert!(
+            out.contains("function HostLoggerContract:new(vtable)"),
+            "missing new method: {out}"
+        );
+        assert!(
+            out.contains("function HostLoggerContract.from_host(host_ptr, min_version)"),
+            "missing from_host: {out}"
+        );
+        assert!(
+            out.contains("function HostLoggerContract:is_valid()"),
+            "missing is_valid: {out}"
+        );
+        assert!(
+            out.contains("function HostLoggerContract:log(self, level, message)"),
+            "missing log method: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_lua_guest_host_contract_caller_with_return() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.fs.reader".to_owned(),
+            contract_id: 0xDEADBEEF,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "read".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "path".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_lua_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("HostFsReaderContract = {}"),
+            "missing class table: {out}"
+        );
+        assert!(
+            out.contains("function HostFsReaderContract:read(self, path)"),
+            "missing read method: {out}"
+        );
+        assert!(
+            out.contains("return out_val"),
+            "missing return statement: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_host_contracts_file_empty() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let result: String = generate_guest_host_contracts_file(&ir);
+        assert!(result.contains("local ffi = require(\"ffi\")"));
+        assert!(result.contains("local M = {}"));
+        assert!(result.contains("return M"));
+        assert!(!result.contains("HostLoggerContract"));
+    }
+
+    #[test]
+    fn generate_guest_host_contracts_file_with_contract() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: None,
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![contract],
+            bundle: None,
+        };
+        let result: String = generate_guest_host_contracts_file(&ir);
+        assert!(result.contains("HostLoggerContract = {}"));
+        assert!(result.contains("M.HOSTLOGGERCONTRACT_ID = 0x123456789ABCDEF0ULL"));
+        assert!(result.contains("M.HostLoggerContract = HostLoggerContract"));
     }
 }
