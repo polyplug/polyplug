@@ -1438,23 +1438,24 @@ Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-
 
 ---
 
-- [ ] 7. Implement JavaScript host vtable generators
+- [ ] 7. Implement JavaScript host vtable generator
 
   **What to do**:
-  Add host vtable factory generation to BOTH JavaScript generators.
+  Add host vtable factory generation to JavaScript generator.
   
   **Files**: 
-  - `crates/polyplug_codegen/src/generators/js_deno.rs`
   - `crates/polyplug_codegen/src/generators/js_quickjs.rs`
   
   **Generate**:
-  - NATIVE: Native bindings for each engine
-  - VM: VM factories for Deno/QuickJS runtime
+  - NATIVE: Native bindings for QuickJS engine
+  - VM: VM factories for QuickJS runtime
   
-  **Pattern**: Deno/QuickJS specific:
-  - Use engine-specific FFI mechanisms
+  **Pattern**: QuickJS specific:
+  - Use QuickJS FFI mechanisms
   - Handle JS value conversions
-  - Manage engine lifecycle
+  - Manage QuickJS runtime lifecycle
+  
+  **Note**: Only `js_quickjs.rs` exists. If Deno support is needed later, create `js_deno.rs` separately.
   
   **Reference**: Task 1 (Rust) provides the pattern
   
