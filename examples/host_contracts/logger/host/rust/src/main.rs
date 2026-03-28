@@ -1,5 +1,8 @@
 use polyplug::runtime::Runtime;
-use polyplug_abi::{HostContractVTable, HostContractVTableHeader, HostContractDispatch, NativeHostContractDispatch, DispatchType, StringView, ABI_OK, AbiError};
+use polyplug_abi::{
+    AbiError, DispatchType, HostContractDispatch, HostContractVTable, HostContractVTableHeader,
+    NativeHostContractDispatch, StringView, ABI_OK,
+};
 use polyplug_native::{NativeConfig, NativeLoader};
 use std::env;
 use std::path::PathBuf;
@@ -47,7 +50,10 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     if !plugin_path.exists() {
-        return Err(format!("plugin path does not exist: {}", plugin_path.display()));
+        return Err(format!(
+            "plugin path does not exist: {}",
+            plugin_path.display()
+        ));
     }
 
     for entry in std::fs::read_dir(&plugin_path).map_err(|e| e.to_string())? {
@@ -68,7 +74,9 @@ fn run() -> Result<(), String> {
     let input: &str = "hello world";
     println!("Input: \"{input}\"\n");
 
-    if let Some(worker) = find_contract::<ExampleWorkerContract>(runtime, EXAMPLE_WORKER_CONTRACT_ID) {
+    if let Some(worker) =
+        find_contract::<ExampleWorkerContract>(runtime, EXAMPLE_WORKER_CONTRACT_ID)
+    {
         let result_sv: StringView = worker
             .do_work(StringView {
                 ptr: input.as_ptr(),
@@ -110,9 +118,14 @@ impl ContractCaller for ExampleWorkerContract {
 fn create_logger_vtable(logger: Box<ConsoleLogger>) -> &'static HostContractVTable {
     let logger_ptr: *mut ConsoleLogger = Box::into_raw(logger);
 
-    let log_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = log_dispatch;
+    // Host contract dispatch function signature:
+    // fn(impl_ptr: *const (), args: *const (), out: *mut ()) -> AbiError
+    // - impl_ptr: Pointer to implementation (from vtable.dispatch.native.impl_ptr)
+    // - args: Function arguments (e.g., StringView)
+    // - out: Output buffer for return value
+    let log_fn: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError = log_dispatch;
 
-    let functions: [unsafe extern "C" fn(*const (), *mut ()) -> AbiError; 1] = [log_fn];
+    let functions: [unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError; 1] = [log_fn];
 
     let header: HostContractVTableHeader = HostContractVTableHeader {
         vtable_version: 1,
@@ -120,38 +133,44 @@ fn create_logger_vtable(logger: Box<ConsoleLogger>) -> &'static HostContractVTab
         contract_major: 1,
         contract_minor: 0,
         function_count: 1,
-        dispatch_type: DispatchType::Native as u32,
-        _padding: [0; 4],
+        dispatch_type: DispatchType::Native,
     };
 
     let dispatch: HostContractDispatch = HostContractDispatch {
         native: NativeHostContractDispatch {
             impl_ptr: logger_ptr as *const (),
-            functions: functions.as_ptr() as *const (),
+            functions: functions.as_ptr() as *const *const (),
         },
     };
 
-    let vtable: HostContractVTable = HostContractVTable {
-        header,
-        dispatch,
-    };
+    let vtable: HostContractVTable = HostContractVTable { header, dispatch };
 
     Box::leak(Box::new(vtable))
 }
 
-unsafe extern "C" fn log_dispatch(args: *const (), out: *mut ()) -> AbiError {
-    let args_ptr: *const StringView = args as *const StringView;
-    let message_sv: StringView = unsafe { *args_ptr };
+unsafe extern "C" fn log_dispatch(impl_ptr: *const (), args: *const (), _out: *mut ()) -> AbiError {
+    // SAFETY: impl_ptr is set by create_logger_vtable to point to a valid ConsoleLogger
+    // that was leaked via Box::leak. The pointer remains valid for the lifetime of the vtable.
+    let logger: &ConsoleLogger = unsafe { &*(impl_ptr as *const ConsoleLogger) };
 
+    // SAFETY: args is a pointer to a StringView passed by the caller.
+    // The caller guarantees the pointer is valid and points to properly initialized data.
+    let message_sv: StringView = unsafe { *(args as *const StringView) };
+
+    // SAFETY: StringView.ptr and StringView.len describe a valid UTF-8 string slice
+    // allocated by the host allocator, guaranteed by the ABI contract.
     let message: &str = unsafe {
         std::str::from_utf8(std::slice::from_raw_parts(message_sv.ptr, message_sv.len))
+            .unwrap_or("")
     };
 
-    let logger: &ConsoleLogger = unsafe { &*(args as *const ConsoleLogger) };
     logger.log(message);
 
     AbiError {
         code: ABI_OK,
-        message: StringView { ptr: std::ptr::null(), len: 0 },
+        message: StringView {
+            ptr: std::ptr::null(),
+            len: 0,
+        },
     }
 }

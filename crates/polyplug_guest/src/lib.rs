@@ -143,6 +143,42 @@ pub use polyplug_abi::PluginDescriptor;
 /// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
 pub use polyplug_abi::PluginContext;
 
+// ─── Host Contract Types (for guest-side host contract calls) ─────────────────
+
+/// Header for host contract vtables — identifies the contract and function count.
+///
+/// Used by guests when calling host contracts via generated callers.
+pub use polyplug_abi::HostContractVTableHeader;
+
+/// Native dispatch for host contracts — contains impl_ptr and function pointer array.
+///
+/// Used when `dispatch_type == DispatchType::Native`.
+pub use polyplug_abi::NativeHostContractDispatch;
+
+/// VM dispatch for host contracts — contains bridge_data and dispatch function.
+///
+/// Used when `dispatch_type == DispatchType::VirtualMachine`.
+pub use polyplug_abi::VmHostContractDispatch;
+
+/// Union of dispatch mechanisms for host contracts.
+pub use polyplug_abi::HostContractDispatch;
+
+/// Host contract vtable — registered by hosts, called by guests.
+///
+/// OWNERSHIP: `'static` vtable registered by the host runtime.
+pub use polyplug_abi::HostContractVTable;
+
+// ─── Host Contract Error Codes ────────────────────────────────────────────────
+
+/// Host contract not found — guest requested a host contract that isn't registered.
+pub use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
+
+/// Host contract version mismatch — guest's required version doesn't match host's.
+pub use polyplug_abi::ABI_HOST_CONTRACT_VERSION_MISMATCH;
+
+/// Host contract call failed — generic error from host contract invocation.
+pub use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
+
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 
 /// Compute the FNV-1a 64-bit contract ID for `"name@major_version"`.

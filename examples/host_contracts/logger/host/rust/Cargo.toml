@@ -3,10 +3,12 @@ name = "logger_host"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [dependencies]
-polyplug = { path = "../../../crates/polyplug" }
-polyplug_abi = { path = "../../../crates/polyplug_abi" }
-polyplug_native = { path = "../../../crates/polyplug_native" }
-polyplug_python = { path = "../../../crates/polyplug_python" }
-polyplug_lua = { path = "../../../crates/polyplug_lua" }
-polyplug_js = { path = "../../../crates/polyplug_js" }
+polyplug = { path = "../../../../../crates/polyplug" }
+polyplug_abi = { path = "../../../../../crates/polyplug_abi" }
+polyplug_native = { path = "../../../../../crates/polyplug_native" }
+polyplug_python = { path = "../../../../../crates/polyplug_python" }
+polyplug_lua = { path = "../../../../../crates/polyplug_lua" }
+polyplug_js = { path = "../../../../../crates/polyplug_js" }
