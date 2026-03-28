@@ -1395,7 +1395,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(csharp-sdk): add host contract registration`
 
-- [ ] **Task 28**: Update Lua SDK with host contract registration
+- [x] **Task 28**: Update Lua SDK with host contract registration
   
   **Specification**:
   Update Lua host SDK with host contract registration API.

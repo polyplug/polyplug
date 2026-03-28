@@ -70,6 +70,7 @@ M.ABI_FUNCTION_NOT_AVAIL = abi.ABI_FUNCTION_NOT_AVAIL
 M.contract_id = abi.contract_id
 M.bundle_id = abi.bundle_id
 M.extension_id = abi.extension_id
+M.host_contract_id = runtime.host_contract_id
 
 M.Runtime = runtime.Runtime
 M.Guard = runtime.Guard

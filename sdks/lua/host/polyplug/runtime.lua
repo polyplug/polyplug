@@ -46,9 +46,44 @@ ffi.cdef([[
     } RuntimeCreateOptions;
 
     OpaqueRuntime* polyplug_runtime_create_with_options(const RuntimeCreateOptions* options);
+
+    // Host Contract VTable types
+    typedef struct HostContractVTableHeader {
+        uint32_t vtable_version;
+        uint64_t contract_id;
+        uint32_t contract_major;
+        uint32_t contract_minor;
+        uint32_t function_count;
+        DispatchType dispatch_type;
+    } HostContractVTableHeader;
+
+    typedef struct NativeHostContractDispatch {
+        void* const* functions;
+    } NativeHostContractDispatch;
+
+    typedef struct VmHostContractDispatch {
+        AbiError (*call)(void*, uint32_t, const void*, void*);
+        void* bridge_data;
+    } VmHostContractDispatch;
+
+    typedef union HostContractDispatch {
+        NativeHostContractDispatch native;
+        VmHostContractDispatch vm;
+    } HostContractDispatch;
+
+    typedef struct HostContractVTable {
+        HostContractVTableHeader header;
+        HostContractDispatch dispatch;
+    } HostContractVTable;
+
+    uint32_t polyplug_runtime_register_host_contract(OpaqueRuntime* rt, const HostContractVTable* vtable);
 ]])
 
 local M = {}
+
+local bit = require("bit")
+local FNV_OFFSET = 0xcbf29ce484222325ULL
+local FNV_PRIME = 0x00000100000001B3ULL
 
 M.NULL_HANDLE = ffi.cast("uint64_t", "0xFFFFFFFFFFFFFFFF")
 M.ABI_OK = abi.ABI_OK
@@ -60,6 +95,21 @@ M.ABI_FUNCTION_NOT_AVAIL = abi.ABI_FUNCTION_NOT_AVAIL
 M.contract_id = abi.contract_id
 M.bundle_id = abi.bundle_id
 M.extension_id = abi.extension_id
+
+--- Compute the host contract ID for "host_contract:name@major_version" using FNV-1a 64-bit.
+-- @param name string         The host contract name (must start with "host.").
+-- @param major_version number The major version.
+-- @return number             The host contract ID.
+function M.host_contract_id(name, major_version)
+    local s = "host_contract:" .. name .. "@" .. tostring(major_version)
+    local h = FNV_OFFSET
+    for i = 1, #s do
+        local b = s:byte(i)
+        h = bit.bxor(h, b)
+        h = h * FNV_PRIME
+    end
+    return h
+end
 
 local function get_lib()
     if not M._lib then
@@ -194,6 +244,19 @@ function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
         table.insert(result, out[i])
     end
     return result
+end
+
+function M.Runtime:register_host_contract(vtable)
+    local lib = self._lib
+    local result = lib.polyplug_runtime_register_host_contract(self._ptr, vtable)
+    if result == 1 then
+        error("polyplug_runtime_register_host_contract: null runtime or vtable pointer")
+    elseif result == 2 then
+        error("polyplug_runtime_register_host_contract: duplicate contract registration")
+    elseif result == 3 then
+        local err_msg = M.last_error(lib)
+        error("polyplug_runtime_register_host_contract failed: " .. err_msg)
+    end
 end
 
 function M.Runtime:resolve_plugin(packed_handle)
