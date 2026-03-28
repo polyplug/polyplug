@@ -48,6 +48,7 @@ const SYMBOLS = {
   polyplug_runtime_last_error: { parameters: ["pointer", "pointer", "usize"], result: "usize" },
   polyplug_runtime_error_message_len: { parameters: ["pointer"], result: "usize" },
   polyplug_runtime_create_with_options: { parameters: ["pointer"], result: "pointer" },
+  polyplug_runtime_register_host_contract: { parameters: ["pointer", "pointer"], result: "u32" },
   polyplug_host_free: { parameters: ["pointer", "usize", "usize"], result: "void" },
 };
 
@@ -97,6 +98,17 @@ export function fnv1a64(data) {
  */
 export function contractId(name, majorVersion) {
     return fnv1a64(`${name}@${majorVersion}`);
+}
+
+/**
+ * Compute host contract ID using FNV-1a 64-bit hash.
+ * Host contract IDs use a distinct prefix to avoid collisions with plugin contracts.
+ * @param {string} name - Host contract name (must start with "host.", e.g., "host.logger")
+ * @param {number} majorVersion - Major version number
+ * @returns {bigint} 64-bit host contract ID
+ */
+export function hostContractId(name, majorVersion) {
+    return fnv1a64(`host_contract:${name}@${majorVersion}`);
 }
 
 /**
@@ -248,6 +260,28 @@ export class Runtime {
     const ptr = Deno.UnsafePointer.of(buf);
     const count = Number(this.#lib.symbols.polyplug_runtime_find_all_by_contract(this.#ptr, contractId, minVersion, ptr, BigInt(cap)));
     return Array.from(buf.slice(0, Math.min(count, cap)));
+  }
+
+  /**
+   * Register a host contract vtable with the runtime.
+   * This allows VM-based hosts (JavaScript) to register host contract implementations.
+   * @param {Deno.PointerValue} vtable - Pointer to a HostContractVTable struct
+   * @throws {Error} If registration fails (null pointer, duplicate, or other error)
+   */
+  registerHostContract(vtable) {
+    const result = this.#lib.symbols.polyplug_runtime_register_host_contract(this.#ptr, vtable);
+    if (result === 1) {
+      throw new Error("registerHostContract failed: null runtime or vtable pointer");
+    }
+    if (result === 2) {
+      throw new Error("registerHostContract failed: duplicate contract registration");
+    }
+    if (result === 3) {
+      throw new Error(`registerHostContract failed: ${this.lastError()}`);
+    }
+    if (result !== 0) {
+      throw new Error(`registerHostContract failed: unknown error code ${result}`);
+    }
   }
 
   /**

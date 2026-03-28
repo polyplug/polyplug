@@ -1422,7 +1422,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(lua-sdk): add host contract registration`
 
-- [ ] **Task 29**: Update JavaScript SDK with host contract registration
+- [x] **Task 29**: Update JavaScript SDK with host contract registration
   
   **Specification**:
   Update JavaScript host SDK with host contract registration API.
