@@ -582,6 +582,52 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
     .unwrap_or(1u32)
 }
 
+/// Register a host contract vtable with the runtime.
+///
+/// This function allows VM-based hosts (Python, Lua, JavaScript) to register
+/// host contract implementations through a HostContractVTable.
+///
+/// # Safety
+/// - `rt` must be a valid non-null pointer returned by `polyplug_runtime_create`.
+/// - `vtable` must be a valid non-null pointer to a `HostContractVTable` that:
+///   - Has correct header fields (contract_id, version, function_count)
+///   - Uses `DispatchType::VirtualMachine` for VM-based hosts
+///   - Has a valid `dispatch.vm.call` function pointer
+///   - Has valid `dispatch.vm.bridge_data` (owned by the caller, must remain valid)
+/// - The vtable must remain valid for the lifetime of the runtime.
+/// - Do not register the same contract_id twice (returns error code 2).
+///
+/// # Returns
+/// - 0: Success
+/// - 1: Null runtime or vtable pointer
+/// - 2: Duplicate contract registration
+/// - 3: Other error (check last_error for details)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn polyplug_runtime_register_host_contract(
+    rt: *mut OpaqueRuntime,
+    vtable: *const polyplug_abi::HostContractVTable,
+) -> u32 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if rt.is_null() || vtable.is_null() {
+            return 1u32;
+        }
+        // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
+        let runtime: &mut Runtime = unsafe { &mut (*rt).0 };
+        // SAFETY: vtable is a valid *const HostContractVTable per ABI contract.
+        // The caller guarantees the vtable remains valid for the runtime's lifetime.
+        let vtable_ref: &'static polyplug_abi::HostContractVTable = unsafe { &*vtable };
+        match runtime.register_host_contract(vtable_ref.header.contract_id, vtable_ref) {
+            Ok(()) => 0u32,
+            Err(crate::error::HostContractError::DuplicateContract { .. }) => 2u32,
+            Err(e) => {
+                runtime.set_last_error(e.to_string());
+                3u32
+            }
+        }
+    }))
+    .unwrap_or(1u32)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -782,8 +828,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -945,8 +991,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));

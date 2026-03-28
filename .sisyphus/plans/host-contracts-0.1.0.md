@@ -1336,7 +1336,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(rust-sdk): add host contract registration API`
 
-- [ ] **Task 26**: Update Python SDK with host contract registration
+- [x] **Task 26**: Update Python SDK with host contract registration
   
   **Specification**:
   Update Python host SDK with host contract registration API.
