@@ -1515,7 +1515,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   - Message: `feat(examples): add host contracts examples`
   - Files: `examples/host_contracts/`
 
-- [ ] **Task 32**: Update existing examples to use `[[plugin_contract]]`
+- [x] **Task 32**: Update existing examples to use `[[plugin_contract]]`
   
   **Specification**:
   Update all existing examples to use new syntax.
@@ -1525,7 +1525,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `refactor(examples): update to use [[plugin_contract]]`
 
-- [ ] **Task 33**: Write Host Contracts tutorial documentation
+- [x] **Task 33**: Write Host Contracts tutorial documentation
   
   **Specification**:
   Write comprehensive documentation for host contracts.
@@ -1544,7 +1544,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 8
 **Blocks**: Completion
 
-- [ ] **Task 34**: Write unit tests for host contract types
+- [x] **Task 34**: Write unit tests for host contract types
   
   **Specification**:
   Test all host contract types in polyplug_abi.
@@ -1557,7 +1557,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `test(abi): add host contract unit tests`
 
-- [ ] **Task 35**: Write parser tests for host contracts
+- [x] **Task 35**: Write parser tests for host contracts
   
   **Specification**:
   Test parser with host contract syntax.
@@ -1571,7 +1571,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `test(parser): add host contract parser tests`
 
-- [ ] **Task 36**: Write code generator tests
+- [x] **Task 36**: Write code generator tests
   
   **Specification**:
   Test code generation for all 6 languages.
@@ -1584,7 +1584,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `test(codegen): add host contract codegen tests`
 
-- [ ] **Task 37**: Write runtime integration tests
+- [x] **Task 37**: Write runtime integration tests
   
   **Specification**:
   Test runtime host contract functionality.
@@ -1613,7 +1613,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `test(integration): add cross-language host contract tests`
 
-- [ ] **Task 39**: Final verification
+- [x] **Task 39**: Final verification
   
   **Specification**:
   Complete final verification of entire implementation.
