@@ -394,6 +394,10 @@ impl CppGenerator {
 
         output.push_str("extern \"C\" {\n\n");
 
+        // Forward declaration for HostContractVTable (referenced by HostVTable)
+        output.push_str("// Forward declaration for host contract vtable\n");
+        output.push_str("struct HostContractVTable;\n\n");
+
         let struct_names: &[&str] = &[
             "PluginDescriptor",
             "PluginInterface",

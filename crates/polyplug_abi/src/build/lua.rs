@@ -424,6 +424,10 @@ impl AbiGenerator for LuaGenerator {
 
         output.push_str("ffi.cdef[[\n");
 
+        // Forward declaration for HostContractVTable (referenced by HostVTable)
+        output.push_str("    // Forward declaration for host contract vtable\n");
+        output.push_str("    typedef struct HostContractVTable HostContractVTable;\n\n");
+
         let struct_names_after: &[&str] = &[
             "PluginDescriptor",
             "PluginInterface",

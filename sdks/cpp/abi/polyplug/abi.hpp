@@ -143,6 +143,9 @@ union PluginDispatch {
 
 extern "C" {
 
+// Forward declaration for host contract vtable
+struct HostContractVTable;
+
 ///  Metadata about a plugin within a bundle.
 ///
 ///  OWNERSHIP: value type passed by pointer during init. The `name` and
