@@ -475,7 +475,8 @@ Implement polyplugc vtable factory generation, then migrate examples to use it.
 ```
 Wave 0 (Foundation - Must Complete First):
 ├── Task 0: FIX ABI - Add impl_ptr field [ultrabrain]
-└── Task 0.5: FIX examples - Use impl_ptr correctly [quick]
+├── Task 0.5: FIX examples - Use impl_ptr correctly [quick]
+└── Task 0.75: Add get_host_vtable() to polyplug_guest [unspecified-high]
 
 Wave 1 (Core Generation - Can Parallelize):
 ├── Task 1: Implement vtable generation [ultrabrain]
@@ -516,10 +517,11 @@ Wave FINAL (Verification - After ALL):
 
 | Task | Blocked By | Blocks |
 |------|-----------|--------|
-| 0 | — | 0.5, 1, 1.5, 2, 2.5, 2.75, 3-7, 8 |
-| 0.5 | 0 | 2.75, 3-7, 9-14 |
-| 1 | 0 | 2, 2.75, 3-7 |
-| 1.5 | 0 | 2.75, 3-7, 9-14 |
+| 0 | — | 0.5, 0.75, 1, 1.5, 2, 2.5, 2.75, 3-7, 8 |
+| 0.5 | 0 | 0.75, 2.75, 3-7, 9-14 |
+| 0.75 | 0.5 | 1, 2.75, 3-7, 9-14 |
+| 1 | 0, 0.75 | 2, 2.75, 3-7 |
+| 1.5 | 0, 0.75 | 2.75, 3-7, 9-14 |
 | 2 | 1 | — |
 | 2.5 | — | — (independent) |
 | 2.75 | 1, 1.5 | 9-14 |
@@ -529,7 +531,7 @@ Wave FINAL (Verification - After ALL):
 | F1-F4 | 9-14 | — |
 
 ### Critical Path
-Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-F4
+Task 0 → Task 0.5 → Task 0.75 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-F4
 
 ---
 
@@ -635,7 +637,7 @@ Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-
 
 ---
 
-- [ ] 0.5. FIX broken examples - Update dispatch functions to use impl_ptr from vtable
+- [x] 0.5. FIX broken examples - Update dispatch functions to use impl_ptr from vtable
 
   **CRITICAL** - Must complete AFTER Task 0 (ABI fix)
   
@@ -734,6 +736,123 @@ Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-
 
 ---
 
+- [ ] 0.75. Add get_host_vtable() to polyplug_guest for host contract access
+
+  **CRITICAL MISSING PIECE**: Guest code needs to access host vtables!
+  
+  **The Problem**:
+  The logger example guest code uses `polyplug_guest::ffi::get_host_vtable()` at line 17:
+  ```rust
+  HostLoggerCaller::from_host(polyplug_guest::ffi::get_host_vtable(), 1)
+  ```
+  
+  But this function **does NOT exist** in polyplug_guest!
+  
+  **What to do**:
+  
+  **Step 1: Add thread-local storage for host vtable**
+  - File: `crates/polyplug_guest/src/lib.rs`
+  - Add thread-local static:
+    ```rust
+    use std::cell::RefCell;
+    
+    thread_local! {
+        static HOST_VTABLE: RefCell<*const ()> = RefCell::new(std::ptr::null());
+    }
+    ```
+  
+  **Step 2: Store host vtable during polyplug_init**
+  - In `polyplug_init()` function, add:
+    ```rust
+    #[no_mangle]
+    pub extern "C" fn polyplug_init(
+        rt_ctx: *mut c_void,
+        host: *const HostVTable,
+        ctx: *const PluginContext,
+    ) -> AbiError {
+        // ... existing init code ...
+        
+        // Store host vtable for guest access
+        HOST_VTABLE.with(|vtable| {
+            *vtable.borrow_mut() = host as *const ();
+        });
+        
+        // ... rest of init ...
+    }
+    ```
+  
+  **Step 3: Add get_host_vtable() function**
+  - File: `crates/polyplug_guest/src/ffi.rs` (or appropriate module)
+  - Add function:
+    ```rust
+    /// Get the host vtable that was passed during polyplug_init
+    /// 
+    /// # Safety
+    /// This returns a pointer to the host vtable stored during initialization.
+    /// The pointer is valid for the lifetime of the plugin.
+    pub fn get_host_vtable() -> *const () {
+        HOST_VTABLE.with(|vtable| *vtable.borrow())
+    }
+    ```
+  
+  **Step 4: Export in polyplug_guest**
+  - File: `crates/polyplug_guest/src/lib.rs`
+  - Add to public exports:
+    ```rust
+    pub mod ffi {
+        pub use super::get_host_vtable;
+    }
+    ```
+  
+  **Step 5: Update generated code to use it**
+  - Generated `HostLoggerCaller::from_host()` should work with the returned pointer
+  
+  **Must NOT do**:
+  - Use global/static without thread-local (violates Runtime Isolation rule)
+  - Return mutable pointer (should be immutable access)
+  - Skip SAFETY comments
+  
+  **Recommended Agent Profile**:
+  - **Category**: `unspecified-high`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: NO
+  - **Blocks**: Task 1, all guest code compilation
+  - **Blocked By**: Task 0.5
+
+  **Acceptance Criteria**:
+  - [ ] `get_host_vtable()` function exists in `polyplug_guest::ffi`
+  - [ ] Function returns `*const ()` (pointer to host vtable)
+  - [ ] Host vtable stored during `polyplug_init()`
+  - [ ] Thread-local storage used (not global)
+  - [ ] Guest code can compile: `polyplug_guest::ffi::get_host_vtable()`
+  - [ ] Logger example guest compiles successfully
+
+  **QA Scenarios**:
+  ```
+  Scenario: get_host_vtable() exists
+    Tool: bash
+    Steps:
+      1. grep -n "pub fn get_host_vtable" crates/polyplug_guest/src/*.rs
+      2. cargo build -p polyplug_guest
+    Expected: Function found, build succeeds
+    Evidence: .sisyphus/evidence/task-0-75-guest.txt
+  
+  Scenario: Logger guest compiles
+    Tool: bash
+    Steps:
+      1. cd examples/host_contracts/logger/guest/rust
+      2. cargo build
+    Expected: Build succeeds
+    Evidence: .sisyphus/evidence/task-0-75-logger.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(polyplug_guest): add get_host_vtable() for host contract access`
+
+---
+
 - [ ] 1. Implement host vtable generation in polyplugc
 
   **What to do**:
@@ -776,6 +895,56 @@ Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-
     ```rust
     pub mod vtable_factories;
     pub use vtable_factories::*;
+    ```
+  
+  **PART B: Guest Host Vtable Accessor (polyplug_guest)**
+  
+  **CRITICAL MISSING PIECE**: Guest code needs to access host vtables after initialization!
+  
+  **Step 4: Add `get_host_vtable()` to polyplug_guest::ffi**
+  - File: `crates/polyplug_guest/src/ffi.rs`
+  - Add function:
+    ```rust
+    /// Get the host vtable that was passed during polyplug_init
+    /// 
+    /// # Safety
+    /// This function returns a pointer to the host vtable stored during initialization.
+    /// The pointer is valid for the lifetime of the plugin.
+    pub unsafe fn get_host_vtable() -> *const HostVTable {
+        // Access the stored host vtable from thread-local or static storage
+        // This was set during polyplug_init() when the host called register_plugin
+        HOST_VTABLE.with(|vtable| *vtable.borrow())
+    }
+    ```
+  
+  **Step 5: Store host vtable during initialization**
+  - File: `crates/polyplug_guest/src/lib.rs`
+  - In `polyplug_init()`, store the host vtable for later access:
+    ```rust
+    thread_local! {
+        static HOST_VTABLE: RefCell<*const HostVTable> = RefCell::new(std::ptr::null());
+    }
+    
+    #[no_mangle]
+    pub extern "C" fn polyplug_init(...) -> AbiError {
+        // ... existing init code ...
+        
+        // Store host vtable for guest access
+        HOST_VTABLE.with(|vtable| {
+            *vtable.borrow_mut() = host_vtable;
+        });
+        
+        // ... rest of init ...
+    }
+    ```
+  
+  **Step 6: Export in polyplug_guest**
+  - File: `crates/polyplug_guest/src/lib.rs`
+  - Add to public exports:
+    ```rust
+    pub mod ffi {
+        pub use super::get_host_vtable;
+    }
     ```
   
   **Generated output structure**:
