@@ -476,10 +476,12 @@ Implement polyplugc vtable factory generation, then migrate examples to use it.
 Wave 0 (Foundation - Must Complete First):
 ├── Task 0: FIX ABI - Add impl_ptr field [ultrabrain]
 ├── Task 0.5: FIX examples - Use impl_ptr correctly [quick]
-└── Task 0.75: Add get_host_vtable() to polyplug_guest [unspecified-high]
+├── Task 0.75: Add get_host_vtable() to polyplug_guest [unspecified-high]
+├── Task 0.8: Update guest caller generation [ultrabrain]
+└── Task 0.85: Update init.rs to store HostVTable [unspecified-high]
 
-Wave 1 (Core Generation - Can Parallelize):
-├── Task 1: Implement vtable generation [ultrabrain]
+Wave 1 (Core Generation - After Wave 0):
+├── Task 1: Implement host vtable generation [ultrabrain]
 ├── Task 1.5: Update runtime for new thunk signature [unspecified-high]
 └── Task 2: Add tests for vtable generation [quick]
 
@@ -517,21 +519,23 @@ Wave FINAL (Verification - After ALL):
 
 | Task | Blocked By | Blocks |
 |------|-----------|--------|
-| 0 | — | 0.5, 0.75, 1, 1.5, 2, 2.5, 2.75, 3-7, 8 |
-| 0.5 | 0 | 0.75, 2.75, 3-7, 9-14 |
-| 0.75 | 0.5 | 1, 2.75, 3-7, 9-14 |
-| 1 | 0, 0.75 | 2, 2.75, 3-7 |
-| 1.5 | 0, 0.75 | 2.75, 3-7, 9-14 |
+| 0 | — | 0.5, 0.75, 0.8, 0.85, 1, 1.5, 2, 2.5, 2.75, 3-7, 8 |
+| 0.5 | 0 | 0.75, 0.8, 0.85, 2.75, 3-7, 9-14 |
+| 0.75 | 0.5 | 0.85, 2.75, 9-14 |
+| 0.8 | 0 | 0.85, 1, 2.75, 9-14 |
+| 0.85 | 0.75, 0.8 | 2.75, 9-14 |
+| 1 | 0, 0.8 | 2, 2.75, 3-7 |
+| 1.5 | 0, 0.8 | 2.75, 3-7, 9-14 |
 | 2 | 1 | — |
 | 2.5 | — | — (independent) |
-| 2.75 | 1, 1.5 | 9-14 |
+| 2.75 | 1, 1.5, 0.85 | 9-14 |
 | 3-7 | 1, 1.5, 0.5 | 9-14 |
 | 8 | — | — (independent) |
 | 9-14 | 2.75, 3-7, 8 | F1-F4 |
 | F1-F4 | 9-14 | — |
 
 ### Critical Path
-Task 0 → Task 0.5 → Task 0.75 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-F4
+Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-F4
 
 ---
 
@@ -750,65 +754,55 @@ Task 0 → Task 0.5 → Task 0.75 → Task 1 → Task 1.5 → Task 2.75 → Task
   
   **What to do**:
   
-  **Step 1: Add thread-local storage for host vtable**
+  **Step 1: Add static storage for host vtable**
   - File: `crates/polyplug_guest/src/lib.rs`
-  - Add thread-local static:
+  - Add static OnceLock:
     ```rust
-    use std::cell::RefCell;
+    use std::sync::OnceLock;
     
-    thread_local! {
-        static HOST_VTABLE: RefCell<*const ()> = RefCell::new(std::ptr::null());
-    }
+    static HOST_VTABLE: OnceLock<*const ()> = OnceLock::new();
     ```
   
-  **Step 2: Store host vtable during polyplug_init**
-  - In `polyplug_init()` function, add:
+  **Step 2: Add function to store host vtable**
+  - File: `crates/polyplug_guest/src/lib.rs`
+  - Add internal function (called by generated init.rs):
     ```rust
-    #[no_mangle]
-    pub extern "C" fn polyplug_init(
-        rt_ctx: *mut c_void,
-        host: *const HostVTable,
-        ctx: *const PluginContext,
-    ) -> AbiError {
-        // ... existing init code ...
-        
-        // Store host vtable for guest access
-        HOST_VTABLE.with(|vtable| {
-            *vtable.borrow_mut() = host as *const ();
-        });
-        
-        // ... rest of init ...
+    /// Store the host vtable during initialization
+    /// 
+    /// # Safety
+    /// Must be called exactly once during polyplug_init, before any host contract access.
+    pub unsafe fn store_host_vtable(vtable: *const ()) {
+        let _ = HOST_VTABLE.set(vtable);
     }
     ```
   
   **Step 3: Add get_host_vtable() function**
-  - File: `crates/polyplug_guest/src/ffi.rs` (or appropriate module)
-  - Add function:
+  - File: `crates/polyplug_guest/src/lib.rs`
+  - Add public function:
     ```rust
     /// Get the host vtable that was passed during polyplug_init
     /// 
     /// # Safety
     /// This returns a pointer to the host vtable stored during initialization.
     /// The pointer is valid for the lifetime of the plugin.
+    /// Returns null if called before polyplug_init completes.
     pub fn get_host_vtable() -> *const () {
-        HOST_VTABLE.with(|vtable| *vtable.borrow())
+        HOST_VTABLE.get().copied().unwrap_or(std::ptr::null())
     }
     ```
   
   **Step 4: Export in polyplug_guest**
   - File: `crates/polyplug_guest/src/lib.rs`
-  - Add to public exports:
+  - Add to existing exports (ffi module doesn't exist, add to lib.rs directly):
     ```rust
-    pub mod ffi {
-        pub use super::get_host_vtable;
-    }
+    pub use get_host_vtable;
     ```
   
-  **Step 5: Update generated code to use it**
-  - Generated `HostLoggerCaller::from_host()` should work with the returned pointer
+  **Note**: The generated init.rs (Task 0.85) will call `store_host_vtable()` during initialization.
   
   **Must NOT do**:
-  - Use global/static without thread-local (violates Runtime Isolation rule)
+  - Use thread-local storage (use static OnceLock per AGENTS.md Runtime Isolation rule)
+  - Use mutable static without synchronization
   - Return mutable pointer (should be immutable access)
   - Skip SAFETY comments
   
@@ -818,16 +812,17 @@ Task 0 → Task 0.5 → Task 0.75 → Task 1 → Task 1.5 → Task 2.75 → Task
   
   **Parallelization**:
   - **Can Run In Parallel**: NO
-  - **Blocks**: Task 1, all guest code compilation
+  - **Blocks**: Tasks 0.85, 2.75, 9-14 (examples need guest access)
   - **Blocked By**: Task 0.5
 
   **Acceptance Criteria**:
-  - [ ] `get_host_vtable()` function exists in `polyplug_guest::ffi`
+  - [ ] `HOST_VTABLE` static OnceLock exists in `polyplug_guest`
+  - [ ] `store_host_vtable()` function exists (internal, unsafe)
+  - [ ] `get_host_vtable()` function exists and is public
   - [ ] Function returns `*const ()` (pointer to host vtable)
-  - [ ] Host vtable stored during `polyplug_init()`
-  - [ ] Thread-local storage used (not global)
-  - [ ] Guest code can compile: `polyplug_guest::ffi::get_host_vtable()`
-  - [ ] Logger example guest compiles successfully
+  - [ ] Returns null if called before initialization
+  - [ ] Guest code can compile: `polyplug_guest::get_host_vtable()`
+  - [ ] `cargo build -p polyplug_guest` succeeds
 
   **QA Scenarios**:
   ```
@@ -850,6 +845,182 @@ Task 0 → Task 0.5 → Task 0.75 → Task 1 → Task 1.5 → Task 2.75 → Task
 
   **Commit**: YES
   - Message: `feat(polyplug_guest): add get_host_vtable() for host contract access`
+
+---
+
+- [ ] 0.8. Update guest-side host contract caller generation
+
+  **CRITICAL**: Guest-side callers use OLD thunk signature (missing impl_ptr)!
+  
+  **The Problem**:
+  The generated `host_contract_callers.rs` in guests uses the WRONG dispatch signature:
+  ```rust
+  // CURRENT (WRONG - missing impl_ptr):
+  let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = 
+      core::mem::transmute(fn_ptr);
+  dispatch_fn(args_ptr, out_ptr);  // Missing impl_ptr!
+  ```
+  
+  **Must be updated to**:
+  ```rust
+  // CORRECT (with impl_ptr):
+  let dispatch_fn: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError = 
+      core::mem::transmute(fn_ptr);
+  dispatch_fn(vtable.dispatch.native.impl_ptr, args_ptr, out_ptr);
+  ```
+  
+  **What to do**:
+  
+  **Step 1: Update Rust guest caller generator**
+  - File: `crates/polyplug_codegen/src/generators/rust.rs`
+  - Find: `generate_host_contract_callers()` function
+  - Update thunk signature to include impl_ptr as first parameter
+  - Update dispatch call to pass impl_ptr
+  
+  **Step 2: Update ALL language generators**
+  - Same fix needed for: cpp.rs, csharp.rs, python.rs, lua.rs, js_quickjs.rs
+  - Update guest-side host contract caller generation
+  - Each must pass impl_ptr from vtable.dispatch.native
+  
+  **Files to modify**:
+  - `crates/polyplug_codegen/src/generators/rust.rs` - Update caller generation
+  - `crates/polyplug_codegen/src/generators/cpp.rs` - Update C++ caller generation
+  - `crates/polyplug_codegen/src/generators/csharp.rs` - Update C# caller generation
+  - `crates/polyplug_codegen/src/generators/python.rs` - Update Python caller generation
+  - `crates/polyplug_codegen/src/generators/lua.rs` - Update Lua caller generation
+  - `crates/polyplug_codegen/src/generators/js_quickjs.rs` - Update JS caller generation
+  
+  **Must NOT do**:
+  - Skip any language
+  - Use old signature in generated code
+  - Forget to pass impl_ptr from vtable
+  
+  **Recommended Agent Profile**:
+  - **Category**: `ultrabrain`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: NO
+  - **Blocks**: Task 0.85, Task 1, Task 2.75, Tasks 9-14
+  - **Blocked By**: Task 0 (impl_ptr ABI change)
+
+  **Acceptance Criteria**:
+  - [ ] Rust caller generator uses new thunk signature
+  - [ ] All 6 language generators updated
+  - [ ] Generated code passes impl_ptr as first argument
+  - [ ] Generated callers compile successfully
+  - [ ] Logger example guest compiles with generated callers
+
+  **QA Scenarios**:
+  ```
+  Scenario: Generated callers use correct signature
+    Tool: bash
+    Steps:
+      1. polyplugc generate --bundle examples/api.toml --lang rust --out /tmp/test
+      2. cat /tmp/test/guest/host_contract_callers.rs | grep -A 5 "dispatch_fn"
+    Expected: Shows fn(*const (), *const (), *mut ()) signature
+    Evidence: .sisyphus/evidence/task-0-8-signature.txt
+  
+  Scenario: Logger guest compiles
+    Tool: bash
+    Steps:
+      1. cd examples/host_contracts/logger/guest/rust
+      2. rm -rf generated && polyplugc generate --bundle bundle.toml --lang rust --out generated
+      3. cargo build
+    Expected: Build succeeds with updated callers
+    Evidence: .sisyphus/evidence/task-0-8-build.txt
+  ```
+
+  **Commit**: YES
+  - Message: `fix(polyplugc): update guest callers to use impl_ptr in thunk`
+
+---
+
+- [ ] 0.85. Update generated init.rs to store HostVTable
+
+  **CRITICAL**: Generated init.rs must call store_host_vtable() during initialization!
+  
+  **The Problem**:
+  Task 0.75 adds `store_host_vtable()`, but generated init.rs doesn't call it yet.
+  The guest needs this to make host vtable accessible via `get_host_vtable()`.
+  
+  **What to do**:
+  
+  **Step 1: Update Rust init.rs generator**
+  - File: `crates/polyplug_codegen/src/generators/rust.rs`
+  - Find: `generate_guest_init()` or similar function
+  - Add call to `store_host_vtable(host)` at start of `polyplug_init()`:
+    ```rust
+    #[no_mangle]
+    pub extern "C" fn polyplug_init(
+        rt_ctx: *mut c_void,
+        host: *const HostVTable,
+        ctx: *const PluginContext,
+    ) -> AbiError {
+        // SAFETY: Called once during plugin init, before any host access
+        unsafe { store_host_vtable(host as *const ()) };
+        
+        // ... rest of init ...
+        polyplug_user_init();
+        // ...
+    }
+    ```
+  
+  **Step 2: Update ALL language init.rs generators**
+  - Same update needed for: cpp.rs, csharp.rs, python.rs, lua.rs, js_quickjs.rs
+  - Each generated init must store host vtable before calling user init
+  
+  **Files to modify**:
+  - `crates/polyplug_codegen/src/generators/rust.rs` - Update init.rs generation
+  - `crates/polyplug_codegen/src/generators/cpp.rs` - Update C++ init generation
+  - `crates/polyplug_codegen/src/generators/csharp.rs` - Update C# init generation
+  - `crates/polyplug_codegen/src/generators/python.rs` - Update Python init generation
+  - `crates/polyplug_codegen/src/generators/lua.rs` - Update Lua init generation
+  - `crates/polyplug_codegen/src/generators/js_quickjs.rs` - Update JS init generation
+  
+  **Must NOT do**:
+  - Skip any language
+  - Call after user init (must be before)
+  - Skip SAFETY comment
+  
+  **Recommended Agent Profile**:
+  - **Category**: `unspecified-high`
+  - **Skills**: []
+  
+  **Parallelization**:
+  - **Can Run In Parallel**: NO
+  - **Blocks**: Task 0.75 completion, Tasks 2.75, 9-14
+  - **Blocked By**: Task 0.75 (store_host_vtable must exist), Task 0.8 (guest generation)
+
+  **Acceptance Criteria**:
+  - [ ] Rust init.rs generator calls store_host_vtable()
+  - [ ] All 6 language init generators updated
+  - [ ] store_host_vtable called before polyplug_user_init()
+  - [ ] Generated init.rs compiles
+  - [ ] get_host_vtable() returns non-null after init
+
+  **QA Scenarios**:
+  ```
+  Scenario: Generated init stores vtable
+    Tool: bash
+    Steps:
+      1. polyplugc generate --bundle examples/api.toml --lang rust --out /tmp/test
+      2. cat /tmp/test/guest/init.rs | grep -A 3 "polyplug_init"
+    Expected: Shows store_host_vtable() call
+    Evidence: .sisyphus/evidence/task-0-85-init.txt
+  
+  Scenario: Vtable accessible after init
+    Tool: bash
+    Steps:
+      1. cd examples/host_contracts/logger/guest/rust
+      2. cargo build
+      3. Run with host, verify get_host_vtable() returns non-null
+    Expected: Vtable accessible, logger calls work
+    Evidence: .sisyphus/evidence/task-0-85-runtime.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(polyplugc): store host vtable in generated init.rs`
 
 ---
 
