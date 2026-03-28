@@ -535,7 +535,7 @@ Task 0 → Task 0.5 → Task 1 → Task 1.5 → Task 2.75 → Tasks 9-14 → F1-
 
 ## TODOs
 
-- [ ] 0. FIX ABI - Add `impl_ptr` field to `NativeHostContractDispatch`
+- [x] 0. FIX ABI - Add `impl_ptr` field to `NativeHostContractDispatch`
 
   **CRITICAL FOUNDATIONAL TASK** - ALL other tasks depend on this!
   

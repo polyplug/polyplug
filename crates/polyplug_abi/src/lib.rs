@@ -416,16 +416,20 @@ unsafe impl Sync for HostContractVTableHeader {}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeHostContractDispatch {
+    /// Pointer to the implementation (e.g., Box<ConsoleLogger> as *const ()).
+    /// This is passed as the first argument to all native dispatch functions.
+    pub impl_ptr: *const (),
     /// Pointer to a static array of function pointers, indexed by function_id.
     pub functions: *const *const (),
 }
 
-// SAFETY: NativeHostContractDispatch contains only a pointer to static data.
+// SAFETY: NativeHostContractDispatch contains only pointers to static data.
+// The impl_ptr points to a 'static implementation or one owned by the host.
 // The function pointers are 'static and safe to call from any thread.
 unsafe impl Send for NativeHostContractDispatch {}
 
-// SAFETY: NativeHostContractDispatch contains only a pointer to static data.
-// Concurrent reads of the pointer are safe.
+// SAFETY: NativeHostContractDispatch contains only pointers to static data.
+// Concurrent reads of the pointers are safe.
 unsafe impl Sync for NativeHostContractDispatch {}
 
 /// VM dispatch for host contracts — call through a dispatch function.
@@ -934,9 +938,11 @@ mod tests {
 
     #[test]
     fn layout_native_host_contract_dispatch() {
-        assert_eq!(size_of::<NativeHostContractDispatch>(), 8);
+        // impl_ptr(8) + functions(8) = 16 bytes
+        assert_eq!(size_of::<NativeHostContractDispatch>(), 16);
         assert_eq!(align_of::<NativeHostContractDispatch>(), 8);
-        assert_eq!(offset_of!(NativeHostContractDispatch, functions), 0);
+        assert_eq!(offset_of!(NativeHostContractDispatch, impl_ptr), 0);
+        assert_eq!(offset_of!(NativeHostContractDispatch, functions), 8);
     }
 
     #[test]

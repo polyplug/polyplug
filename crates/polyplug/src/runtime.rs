@@ -1647,6 +1647,7 @@ mod tests {
             },
             dispatch: polyplug_abi::HostContractDispatch {
                 native: polyplug_abi::NativeHostContractDispatch {
+                    impl_ptr: core::ptr::null(),
                     functions: core::ptr::null(),
                 },
             },
