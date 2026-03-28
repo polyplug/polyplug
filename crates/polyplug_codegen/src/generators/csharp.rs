@@ -928,7 +928,7 @@ fn generate_host_manifest(ir: &ValidatedIr) -> String {
     );
     for contract in &ir.contracts {
         out.push_str(&format!(
-            "[[contract]]\nname = \"{}\"\nversion = \"{}.{}.{}\"\n\n",
+            "[[plugin_contract]]\nname = \"{}\"\nversion = \"{}.{}.{}\"\n\n",
             contract.name, contract.version.major, contract.version.minor, contract.version.patch
         ));
     }
