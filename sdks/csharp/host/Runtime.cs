@@ -144,6 +144,17 @@ public sealed class Runtime
         return NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
     }
 
+    public void RegisterHostContract(nint vtable)
+    {
+        EnsureHandle();
+
+        uint result = NativeMethods.PolyplugRuntimeRegisterHostContract(Handle, vtable);
+        if (result != 0u)
+        {
+            ThrowLastError("Failed to register host contract.");
+        }
+    }
+
     public void LoadBundle(string path)
     {
         EnsureHandle();

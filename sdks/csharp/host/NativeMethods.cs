@@ -159,4 +159,9 @@ internal static partial class NativeMethods
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_set_config")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial uint PolyplugRuntimeSetConfig(ref RuntimeConfigC config);
+
+    // Host contract registration
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_host_contract")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial uint PolyplugRuntimeRegisterHostContract(nint rt, nint vtable);
 }
