@@ -1,0 +1,9 @@
+[bundle]
+name = "cpp_worker"
+version = "0.1.0"
+
+[[provides]]
+contract = "example.worker@1"
+
+[api]
+path = "../api.toml"

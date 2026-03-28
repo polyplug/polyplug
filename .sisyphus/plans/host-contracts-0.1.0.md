@@ -1482,7 +1482,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
 **Status**: Blocked by Wave 7
 **Blocks**: Wave 9
 
-- [ ] **Task 31**: Create Host Contracts examples
+- [x] **Task 31**: Create Host Contracts examples
   
   **Specification**:
   Create examples demonstrating host contracts in all 6 languages.
