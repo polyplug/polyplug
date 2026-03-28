@@ -1059,7 +1059,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(cpp): generate guest-side host contract callers`
 
-- [ ] **Task 17**: Generate C# host-side contract interfaces
+- [x] **Task 17**: Generate C# host-side contract interfaces
   
   **Specification**:
   Generate C# interfaces that hosts implement for host contracts.

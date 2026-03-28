@@ -14,6 +14,7 @@ use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
@@ -1065,6 +1066,168 @@ needs_reinit_on_dep_reload = {reinit}\n\
     )
 }
 
+// ─── Host Contract Interface Generation ────────────────────────────────────────
+
+/// Convert host contract name to C# interface name.
+/// e.g. "host.logger" -> "IHostLogger", "host.fs.reader" -> "IHostFsReader"
+fn host_contract_name_to_cs_interface(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        format!("I{}", pascal)
+    } else {
+        format!("IHost{}", pascal)
+    }
+}
+
+/// Generate ergonomic C# type name for host interface method parameters.
+/// For host interfaces, we use ergonomic C# types:
+/// - StringView -> string (more ergonomic for host implementers)
+/// - Buffer -> byte[] (more ergonomic for host implementers)
+/// - UserDefined -> ref TypeName (passed by reference)
+/// - Primitives -> T (passed by value)
+fn cs_host_param_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 => "byte".to_owned(),
+            PrimitiveType::U16 => "ushort".to_owned(),
+            PrimitiveType::U32 => "uint".to_owned(),
+            PrimitiveType::U64 => "ulong".to_owned(),
+            PrimitiveType::I8 => "sbyte".to_owned(),
+            PrimitiveType::I16 => "short".to_owned(),
+            PrimitiveType::I32 => "int".to_owned(),
+            PrimitiveType::I64 => "long".to_owned(),
+            PrimitiveType::F32 => "float".to_owned(),
+            PrimitiveType::F64 => "double".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "byte[]".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => format!("ref {}", name),
+    }
+}
+
+/// Generate C# return type name for host interface methods.
+/// Return types are owned where appropriate:
+/// - StringView -> string (owned)
+/// - Buffer -> byte[] (owned)
+/// - UserDefined -> TypeName (owned)
+/// - Primitives -> T (by value)
+fn cs_host_return_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 => "byte".to_owned(),
+            PrimitiveType::U16 => "ushort".to_owned(),
+            PrimitiveType::U32 => "uint".to_owned(),
+            PrimitiveType::U64 => "ulong".to_owned(),
+            PrimitiveType::I8 => "sbyte".to_owned(),
+            PrimitiveType::I16 => "short".to_owned(),
+            PrimitiveType::I32 => "int".to_owned(),
+            PrimitiveType::I64 => "long".to_owned(),
+            PrimitiveType::F32 => "float".to_owned(),
+            PrimitiveType::F64 => "double".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "byte[]".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate one interface method for a host contract function.
+fn generate_cs_host_interface_method(out: &mut String, func: &ResolvedFunction) {
+    let return_type: String = match &func.returns {
+        Some(ty) => cs_host_return_type_name(ty),
+        None => "void".to_owned(),
+    };
+
+    let method_name: String = pascal_case(&func.name);
+
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let cs_ty: String = cs_host_param_type_name(&p.ty);
+                format!("{} {}", cs_ty, p.name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    out.push_str(&format!(
+        "    {} {}({});\n",
+        return_type, method_name, params_str
+    ));
+}
+
+/// Generate the interface definition for one host contract.
+fn generate_cs_host_contract_interface(out: &mut String, contract: &ResolvedHostContract) {
+    let iface_name: String = host_contract_name_to_cs_interface(&contract.name);
+    out.push_str(&format!(
+        "/// <summary>\n/// Host interface for contract `{}` (id=0x{:016X})\n/// Hosts implement this interface to provide functionality to plugins.\n/// </summary>\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("public interface {} {{\n", iface_name));
+
+    for func in &contract.functions {
+        generate_cs_host_interface_method(out, func);
+    }
+
+    out.push_str("}\n\n");
+}
+
+/// Generate `host/Contracts.cs` — host interfaces for each host contract.
+fn generate_cs_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(CS_HEADER);
+    out.push_str("using Polyplug.Host;\n");
+    out.push_str("using Polyplug.Abi;\n\n");
+    out.push_str("namespace Polyplug.Generated;\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_cs_host_contract_interface(&mut out, contract);
+    }
+
+    // Emit contract ID constants
+    for contract in &ir.host_contracts {
+        let iface_name: String = host_contract_name_to_cs_interface(&contract.name);
+        let const_name: String = iface_name.to_uppercase().replace('.', "_") + "_CONTRACT_ID";
+        out.push_str(&format!(
+            "/// <summary>\n/// Contract ID constant for `{}` (FNV-1a of \"host_contract:{}@{}\")\n/// </summary>\n",
+            contract.name, contract.name, contract.version.major
+        ));
+        out.push_str(&format!(
+            "public static class {}Constants {{\n",
+            iface_name.trim_start_matches('I')
+        ));
+        out.push_str(&format!(
+            "    public const ulong {} = 0x{:016X}UL;\n",
+            const_name, contract.contract_id
+        ));
+        out.push_str("}\n\n");
+    }
+
+    out
+}
+
 impl CodeGenerator for CSharpGenerator {
     fn language_name(&self) -> &'static str {
         "csharp"
@@ -1090,6 +1253,14 @@ impl CodeGenerator for CSharpGenerator {
             content: generate_host_manifest(ir),
             force_regenerate: true,
         });
+        // Emit host_contracts.cs if there are host contracts
+        if !ir.host_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/Contracts.cs"),
+                content: generate_cs_host_contracts_file(ir),
+                force_regenerate: false,
+            });
+        }
         Ok(())
     }
 
@@ -1252,6 +1423,222 @@ mod tests {
         assert!(
             !out.contains("unsafe struct"),
             "Vtables.cs must not contain 'unsafe struct': {out}"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_cs_interface_conversion() {
+        assert_eq!(
+            host_contract_name_to_cs_interface("host.logger"),
+            "IHostLogger"
+        );
+        assert_eq!(
+            host_contract_name_to_cs_interface("host.fs.reader"),
+            "IHostFsReader"
+        );
+        assert_eq!(
+            host_contract_name_to_cs_interface("host.HostLogger"),
+            "IHostLogger"
+        );
+        assert_eq!(host_contract_name_to_cs_interface("logger"), "IHostLogger");
+    }
+
+    #[test]
+    fn cs_host_param_type_name_mappings() {
+        assert_eq!(
+            cs_host_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "uint"
+        );
+        assert_eq!(
+            cs_host_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            cs_host_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "byte[]"
+        );
+        assert_eq!(
+            cs_host_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "ref MyStruct"
+        );
+    }
+
+    #[test]
+    fn cs_host_return_type_name_mappings() {
+        assert_eq!(
+            cs_host_return_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "uint"
+        );
+        assert_eq!(
+            cs_host_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            cs_host_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "byte[]"
+        );
+        assert_eq!(
+            cs_host_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn generate_cs_host_contract_interface_produces_interface() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![
+                ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                },
+                ResolvedFunction {
+                    name: "logf".to_owned(),
+                    function_id: 1,
+                    params: vec![
+                        ResolvedParam {
+                            name: "level".to_owned(),
+                            ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        },
+                        ResolvedParam {
+                            name: "format".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        },
+                    ],
+                    returns: None,
+                },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_cs_host_contract_interface(&mut out, &contract);
+        assert!(
+            out.contains("public interface IHostLogger"),
+            "missing interface: {out}"
+        );
+        assert!(
+            out.contains("void Log(string message)"),
+            "missing Log method: {out}"
+        );
+        assert!(
+            out.contains("void Logf(uint level, string format)"),
+            "missing Logf method: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cs_host_contracts_file_produces_file() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_cs_host_contracts_file(&ir);
+        assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
+        assert!(
+            out.contains("public interface IHostLogger"),
+            "missing interface: {out}"
+        );
+        assert!(
+            out.contains("HOSTLOGGER_CONTRACT_ID"),
+            "missing constant: {out}"
+        );
+        assert!(
+            out.contains("namespace Polyplug.Generated"),
+            "missing namespace: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_host_with_host_contracts_produces_contracts_file() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"host/Contracts.cs".to_owned()),
+            "missing host/Contracts.cs: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_host_without_host_contracts_no_contracts_file() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"host/Contracts.cs".to_owned()),
+            "unexpected host/Contracts.cs: {names:?}"
         );
     }
 }
