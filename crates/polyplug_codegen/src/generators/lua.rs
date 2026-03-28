@@ -12,6 +12,7 @@ use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
@@ -43,6 +44,16 @@ impl CodeGenerator for LuaGenerator {
             content: callers_lua,
             force_regenerate: false,
         });
+
+        // Emit host/contracts.lua if there are host contracts
+        if !ir.host_contracts.is_empty() {
+            let contracts_lua: String = generate_host_contracts_file(ir);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/contracts.lua"),
+                content: contracts_lua,
+                force_regenerate: false,
+            });
+        }
 
         Ok(())
     }
@@ -959,6 +970,150 @@ fn generate_lua_enum(out: &mut String, e: &EnumDef) {
     out.push_str("}\n");
 }
 
+// ─── Host Contract Metatable Generation ────────────────────────────────────────
+
+/// Convert host contract name to Lua class name.
+/// e.g. "host.logger" -> "HostLogger", "host.fs.reader" -> "HostFsReader"
+fn host_contract_name_to_lua_class(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal
+    } else {
+        format!("Host{}", pascal)
+    }
+}
+
+/// Generate Lua type annotation for host contract method parameters.
+/// For host interfaces, we use ergonomic Lua types:
+/// - StringView -> string
+/// - Buffer -> string (Lua uses strings for byte buffers)
+/// - UserDefined -> userdata
+/// - Primitives -> number (Lua's numeric type)
+fn lua_host_param_type_annotation(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
+        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
+    }
+}
+
+/// Generate Lua return type annotation for host contract methods.
+fn lua_host_return_type_annotation(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
+        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
+    }
+}
+
+/// Generate the metatable definition for one host contract.
+fn generate_lua_host_contract_metatable(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_lua_class(&contract.name);
+
+    out.push_str(&format!(
+        "-- Host contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("{} = {{}}\n", class_name));
+    out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
+
+    out.push_str(&format!("--- @return {}\n", class_name));
+    out.push_str(&format!("function {}:new()\n", class_name));
+    out.push_str("    local obj = {}\n");
+    out.push_str("    setmetatable(obj, self)\n");
+    out.push_str("    return obj\n");
+    out.push_str("end\n\n");
+
+    for func in &contract.functions {
+        let return_type: String = match &func.returns {
+            Some(ty) => lua_host_return_type_annotation(ty),
+            None => "nil".to_owned(),
+        };
+
+        out.push_str("--- @param self table\n");
+        for param in &func.params {
+            out.push_str(&format!(
+                "--- @param {} {}\n",
+                param.name,
+                lua_host_param_type_annotation(&param.ty)
+            ));
+        }
+        out.push_str(&format!("--- @return {}\n", return_type));
+        out.push_str(&format!(
+            "function {}:{}({})\n",
+            class_name,
+            func.name,
+            if func.params.is_empty() {
+                "self".to_owned()
+            } else {
+                func.params
+                    .iter()
+                    .map(|p: &ResolvedParam| p.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        ));
+        out.push_str(&format!(
+            "    error(\"abstract method: {} must be implemented by host\", 2)\n",
+            func.name
+        ));
+        out.push_str("end\n\n");
+    }
+
+    out.push('\n');
+}
+
+/// Generate `host/contracts.lua` — metatables for each host contract.
+fn generate_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("local M = {}\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_lua_host_contract_metatable(&mut out, contract);
+    }
+
+    out.push_str("-- Contract ID constants\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_lua_class(&contract.name);
+        let const_name: String = format!("{}_CONTRACT_ID", class_name.to_uppercase());
+        out.push_str(&format!(
+            "M.{} = 0x{:016X}ULL\n",
+            const_name, contract.contract_id
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("-- Export host contract classes\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_lua_class(&contract.name);
+        out.push_str(&format!("M.{} = {}\n", class_name, class_name));
+    }
+    out.push('\n');
+
+    out.push_str("return M\n");
+    out
+}
+
 // Compile-time assertion that lua_type_name compiles for primitive types.
 const _: fn() = || {
     let _: String = lua_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
@@ -1035,5 +1190,206 @@ mod tests {
             out.contains("bit.bor("),
             "missing bit.bor for CompressedHdr: {out}"
         );
+    }
+
+    // ─── Host Contract Metatable Tests ─────────────────────────────────────────────
+
+    #[test]
+    fn host_contract_name_to_lua_class_basic() {
+        assert_eq!(
+            host_contract_name_to_lua_class("host.logger"),
+            "HostLogger"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_lua_class_nested() {
+        assert_eq!(
+            host_contract_name_to_lua_class("host.fs.reader"),
+            "HostFsReader"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_lua_class_already_has_host() {
+        assert_eq!(
+            host_contract_name_to_lua_class("host.HostLogger"),
+            "HostLogger"
+        );
+    }
+
+    #[test]
+    fn lua_host_param_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(lua_host_param_type_annotation(&ty), "string");
+    }
+
+    #[test]
+    fn lua_host_param_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(lua_host_param_type_annotation(&ty), "string");
+    }
+
+    #[test]
+    fn lua_host_param_type_primitives() {
+        assert_eq!(
+            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "number"
+        );
+        assert_eq!(
+            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
+            "number"
+        );
+        assert_eq!(
+            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
+            "number"
+        );
+        assert_eq!(
+            lua_host_param_type_annotation(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
+            "number"
+        );
+    }
+
+    #[test]
+    fn lua_host_return_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(lua_host_return_type_annotation(&ty), "string");
+    }
+
+    #[test]
+    fn lua_host_return_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(lua_host_return_type_annotation(&ty), "string");
+    }
+
+    #[test]
+    fn generate_lua_host_contract_metatable_basic() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![
+                    ResolvedParam {
+                        name: "level".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    },
+                    ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    },
+                ],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_lua_host_contract_metatable(&mut out, &contract);
+        assert!(
+            out.contains("HostLogger = {}"),
+            "missing class table: {out}"
+        );
+        assert!(
+            out.contains("HostLogger.__index = HostLogger"),
+            "missing __index: {out}"
+        );
+        assert!(
+            out.contains("function HostLogger:new()"),
+            "missing new method: {out}"
+        );
+        assert!(
+            out.contains("function HostLogger:log(level, message)"),
+            "missing log method: {out}"
+        );
+        assert!(
+            out.contains("error(\"abstract method: log must be implemented by host\", 2)"),
+            "missing error: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_lua_host_contract_metatable_with_return() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.fs.reader".to_owned(),
+            contract_id: 0xDEADBEEF,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "read".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "path".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_lua_host_contract_metatable(&mut out, &contract);
+        assert!(
+            out.contains("HostFsReader = {}"),
+            "missing class table: {out}"
+        );
+        assert!(
+            out.contains("function HostFsReader:read(path)"),
+            "missing read method: {out}"
+        );
+        assert!(
+            out.contains("--- @return string"),
+            "missing return annotation: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_host_contracts_file_empty() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let result: String = generate_host_contracts_file(&ir);
+        assert!(result.contains("local M = {}"));
+        assert!(result.contains("return M"));
+        assert!(!result.contains("HostLogger"));
+    }
+
+    #[test]
+    fn generate_host_contracts_file_with_contract() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: None,
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![contract],
+            bundle: None,
+        };
+        let result: String = generate_host_contracts_file(&ir);
+        assert!(result.contains("HostLogger = {}"));
+        assert!(result.contains("M.HOSTLOGGER_CONTRACT_ID = 0x123456789ABCDEF0ULL"));
+        assert!(result.contains("M.HostLogger = HostLogger"));
     }
 }

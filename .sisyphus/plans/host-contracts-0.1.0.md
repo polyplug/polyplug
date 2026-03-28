@@ -1180,7 +1180,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(python): generate guest-side host contract callers`
 
-- [ ] **Task 21**: Generate Lua host-side contract metatables
+- [x] **Task 21**: Generate Lua host-side contract metatables
   
   **Specification**:
   Generate Lua metatables that hosts implement for host contracts.
