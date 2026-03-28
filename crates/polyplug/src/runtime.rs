@@ -128,8 +128,6 @@ pub struct Runtime {
     host_contracts: std::sync::RwLock<HashMap<u64, &'static HostContractVTable>>,
     /// Host runtime type identifier.
     host_runtime: HostRuntime,
-    // TODO: HostRuntimeBridge trait (Task 11)
-    // host_bridge: Option<Arc<dyn HostRuntimeBridge>>,
 }
 
 /// Options for `Runtime::load_bundle_with`.
