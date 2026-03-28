@@ -1149,7 +1149,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(python): generate host-side contract ABCs`
 
-- [ ] **Task 20**: Generate Python guest-side host contract callers
+- [x] **Task 20**: Generate Python guest-side host contract callers
   
   **Specification**:
   Generate Python classes that plugins use to call host contracts.

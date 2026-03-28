@@ -129,6 +129,21 @@ impl CodeGenerator for PythonGenerator {
             });
         }
 
+        if !ir.host_contracts.is_empty() {
+            let host_contracts_py: String = generate_guest_host_contracts_file(ir);
+            let host_contracts_pyi: String = generate_guest_host_contracts_stub(ir);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/host_contracts.py"),
+                content: host_contracts_py,
+                force_regenerate: false,
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/host_contracts.pyi"),
+                content: host_contracts_pyi,
+                force_regenerate: false,
+            });
+        }
+
         Ok(())
     }
 }
@@ -1216,6 +1231,30 @@ fn host_contract_name_to_python_class(name: &str) -> String {
     }
 }
 
+/// Convert host contract name to Python guest caller class name.
+/// e.g. "host.logger" -> "HostLoggerContract", "host.fs.reader" -> "HostFsReaderContract"
+fn host_contract_name_to_python_caller(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal + "Contract"
+    } else {
+        format!("Host{}Contract", pascal)
+    }
+}
+
 /// Generate ergonomic Python type name for host interface method parameters.
 /// For host interfaces, we use ergonomic Python types:
 /// - StringView -> str (more ergonomic for host implementers)
@@ -1249,6 +1288,58 @@ fn python_host_param_type_name(ty: &ResolvedTypeRef) -> String {
 /// - UserDefined -> TypeName (owned)
 /// - Primitives -> Python primitive types
 fn python_host_return_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::F32 | PrimitiveType::F64 => "float".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "str".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "bytes".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "int".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate ergonomic Python type name for guest caller method parameters.
+/// For guest callers, we use ergonomic Python types:
+/// - StringView -> str (converted to StringView at ABI boundary)
+/// - Buffer -> bytes (converted to Buffer at ABI boundary)
+/// - UserDefined -> TypeName (passed as object)
+/// - Primitives -> Python primitive types (int, float, bool)
+fn python_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::F32 | PrimitiveType::F64 => "float".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "str".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "bytes".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "int".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate Python return type name for guest caller methods.
+/// Return types are owned where appropriate:
+/// - StringView -> str (owned)
+/// - Buffer -> bytes (owned)
+/// - UserDefined -> TypeName (owned)
+/// - Primitives -> Python primitive types
+fn python_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(p) => match p {
             PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 => {
@@ -1380,6 +1471,343 @@ fn generate_host_contracts_stub(ir: &ValidatedIr) -> String {
     for contract in &ir.host_contracts {
         let class_name: String = host_contract_name_to_python_class(&contract.name);
         let const_name: String = format!("{}_CONTRACT_ID", class_name.to_uppercase());
+        out.push_str(&format!("{}: int\n", const_name));
+    }
+
+    out
+}
+
+// ─── Guest Host Contract Caller Generation ─────────────────────────────────────
+
+/// Generate one guest-side host contract caller class.
+fn generate_python_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_python_caller(&contract.name);
+
+    out.push_str(&format!(
+        "# Guest caller for host contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("class {}:\n", class_name));
+    out.push_str("    def __init__(self, vtable: int) -> None:\n");
+    out.push_str("        self._vtable: int = vtable\n\n");
+
+    out.push_str("    @classmethod\n");
+    out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
+    out.push_str("        if host_ptr == 0:\n");
+    out.push_str("            return None\n");
+    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))\n");
+    out.push_str(&format!(
+        "        vtable: int = host.contents.get_host_contract(0, 0x{:016X}, min_version)\n",
+        contract.contract_id
+    ));
+    out.push_str("        if vtable == 0:\n");
+    out.push_str("            return None\n");
+    out.push_str("        return cls(vtable)\n\n");
+
+    out.push_str("    def is_valid(self) -> bool:\n");
+    out.push_str("        return self._vtable != 0\n\n");
+
+    for func in &contract.functions {
+        generate_python_guest_host_contract_method(out, func);
+    }
+
+    out.push('\n');
+}
+
+/// Generate one method for a guest-side host contract caller.
+fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedFunction) {
+    let fn_id: u32 = func.function_id;
+    let return_type: String = match &func.returns {
+        Some(ty) => python_guest_caller_return_type_name(ty),
+        None => "None".to_owned(),
+    };
+    let has_return: bool = func.returns.is_some();
+
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let py_ty: String = python_guest_caller_param_type_name(&p.ty);
+                format!(", {}: {}", p.name, py_ty)
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    out.push_str(&format!(
+        "    def {}(self{}) -> {}:\n",
+        func.name, params_str, return_type
+    ));
+
+    out.push_str("        if self._vtable == 0:\n");
+    if has_return {
+        out.push_str("            return None\n");
+    } else {
+        out.push_str("            return\n");
+    }
+    out.push_str("        header: Any = ctypes.cast(self._vtable, ctypes.POINTER(HostContractVTable)).contents.header\n");
+    out.push_str(&format!("        if {fn_id} >= header.function_count:\n"));
+    if has_return {
+        out.push_str("            return None\n");
+    } else {
+        out.push_str("            return\n");
+    }
+    out.push_str("        dispatch_type: int = header.dispatch_type\n");
+
+    emit_python_guest_host_contract_args_setup(out, func);
+    emit_python_guest_host_contract_out_setup(out, &func.returns);
+
+    out.push_str("        err: AbiError\n");
+    out.push_str("        if dispatch_type == DispatchType.Native:\n");
+    out.push_str(&format!(
+        "            fn_ptr: int = ctypes.cast(header.dispatch.native.functions + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
+    ));
+    out.push_str(
+        "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
+    );
+    out.push_str("            err = dispatch_fn(args_ptr, out_ptr)\n");
+    out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
+    out.push_str(&format!(
+        "            err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
+    ));
+    out.push_str("        else:\n");
+    if has_return {
+        out.push_str("            return None\n");
+    } else {
+        out.push_str("            return\n");
+    }
+    out.push_str("        if err.code != ABI_OK:\n");
+    if has_return {
+        out.push_str("            return None\n");
+    } else {
+        out.push_str("            return\n");
+    }
+    if has_return {
+        out.push_str("        return result\n");
+    }
+    out.push('\n');
+}
+
+/// Emit the args_ptr setup for a Python guest host contract method.
+fn emit_python_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunction) {
+    if func.params.is_empty() {
+        out.push_str("        args_ptr: ctypes.c_void_p = ctypes.c_void_p()\n");
+        return;
+    }
+
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "        {name}_bytes: bytes = {name}.encode('utf-8')\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "        {name}_view: StringView = StringView(ptr=ctypes.c_char_p({name}_bytes), len=len({name}_bytes))\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({name}_view), ctypes.c_void_p)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "        {name}_buf: Buffer = Buffer(ptr=ctypes.c_void_p(ctypes.addressof({name}) if len({name}) > 0 else 0), len=len({name}))\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({name}_buf), ctypes.c_void_p)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({}), ctypes.c_void_p)\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
+                let ty_name: String = python_type_name(&param.ty);
+                out.push_str(&format!(
+                    "        {name}_val: {ty} = {ty}({name})\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+                out.push_str(&format!(
+                    "        args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref({name}_val), ctypes.c_void_p)\n",
+                    name = param.name
+                ));
+            }
+        }
+        return;
+    }
+
+    // Multiple params: pack into inline struct
+    out.push_str("        args_val: dict[str, Any] = {}\n");
+    for param in &func.params {
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "        {name}_bytes: bytes = {name}.encode('utf-8')\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "        args_val['{name}'] = StringView(ptr=ctypes.c_char_p({name}_bytes), len=len({name}_bytes))\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "        args_val['{name}'] = Buffer(ptr=ctypes.c_void_p(ctypes.addressof({name}) if len({name}) > 0 else 0), len=len({name}))\n",
+                    name = param.name
+                ));
+            }
+            _ => {
+                out.push_str(&format!(
+                    "        args_val['{}'] = {}\n",
+                    param.name, param.name
+                ));
+            }
+        }
+    }
+    out.push_str(
+        "        args_ptr: ctypes.c_void_p = ctypes.c_void_p(ctypes.addressof(args_val))\n",
+    );
+}
+
+/// Emit the out_ptr setup for a Python guest host contract method.
+fn emit_python_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if let Some(ret_ty) = returns {
+        let py_ty: String = python_guest_caller_return_type_name(ret_ty);
+        if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::StringView)) {
+            out.push_str("        result: StringView = StringView()\n");
+            out.push_str("        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(result), ctypes.c_void_p)\n");
+        } else if matches!(ret_ty, ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)) {
+            out.push_str("        result: Buffer = Buffer()\n");
+            out.push_str("        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(result), ctypes.c_void_p)\n");
+        } else if matches!(ret_ty, ResolvedTypeRef::UserDefined(_)) {
+            out.push_str(&format!("        result: {py_ty} = {py_ty}()\n"));
+            out.push_str("        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(result), ctypes.c_void_p)\n");
+        } else {
+            let ctypes_ty: String = python_type_name(ret_ty);
+            out.push_str(&format!("        result: {ctypes_ty} = {ctypes_ty}()\n"));
+            out.push_str("        out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(result), ctypes.c_void_p)\n");
+        }
+    } else {
+        out.push_str("        out_ptr: ctypes.c_void_p = ctypes.c_void_p()\n");
+    }
+}
+
+/// Generate `guest/host_contracts.py` — caller classes for guest-side host contract callers.
+fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("import ctypes\n");
+    out.push_str("from typing import Any, Self\n");
+    out.push_str("from polyplug_guest.abi import ABI_OK, AbiError, Buffer, DispatchType, HostContractVTable, HostVTable, StringView\n\n");
+
+    let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
+    if !type_imports.is_empty() {
+        let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
+        out.push_str(&format!("from guest.types import {}\n\n", import_list));
+    }
+
+    out.push_str(
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)\n\n",
+    );
+
+    for contract in &ir.host_contracts {
+        generate_python_guest_host_contract_caller(&mut out, contract);
+    }
+
+    // Emit contract ID constants
+    out.push_str("# Contract ID constants\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_python_caller(&contract.name);
+        let const_name: String = format!("{}_ID", class_name.to_uppercase());
+        out.push_str(&format!(
+            "{}: int = 0x{:016X}\n",
+            const_name, contract.contract_id
+        ));
+    }
+
+    out
+}
+
+/// Collect type imports needed for guest host contract callers.
+fn collect_python_guest_host_contract_type_imports(ir: &ValidatedIr) -> BTreeSet<String> {
+    let mut imports: BTreeSet<String> = BTreeSet::new();
+    for contract in &ir.host_contracts {
+        for func in &contract.functions {
+            for param in &func.params {
+                if let ResolvedTypeRef::UserDefined(name) = &param.ty {
+                    imports.insert(name.clone());
+                }
+            }
+            if let Some(ResolvedTypeRef::UserDefined(name)) = &func.returns {
+                imports.insert(name.clone());
+            }
+        }
+    }
+    imports
+}
+
+/// Generate `guest/host_contracts.pyi` — type stubs for guest host contract callers.
+fn generate_guest_host_contracts_stub(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("from typing import Any, Self\n\n");
+
+    let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
+    if !type_imports.is_empty() {
+        let import_list: String = type_imports.into_iter().collect::<Vec<String>>().join(", ");
+        out.push_str(&format!("from guest.types import {}\n\n", import_list));
+    }
+
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_python_caller(&contract.name);
+        out.push_str(&format!("class {}:\n", class_name));
+        out.push_str("    def __init__(self, vtable: int) -> None: ...\n");
+        out.push_str("    @classmethod\n");
+        out.push_str(
+            "    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ...\n",
+        );
+        out.push_str("    def is_valid(self) -> bool: ...\n");
+        for func in &contract.functions {
+            let return_type: String = match &func.returns {
+                Some(ty) => python_guest_caller_return_type_name(ty),
+                None => "None".to_owned(),
+            };
+            let params_str: String = if func.params.is_empty() {
+                String::new()
+            } else {
+                func.params
+                    .iter()
+                    .map(|p: &ResolvedParam| {
+                        let py_ty: String = python_guest_caller_param_type_name(&p.ty);
+                        format!(", {}: {}", p.name, py_ty)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            };
+            out.push_str(&format!(
+                "    def {}(self{}) -> {}: ...\n",
+                func.name, params_str, return_type
+            ));
+        }
+        out.push('\n');
+    }
+
+    // Contract ID constants in stub
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_python_caller(&contract.name);
+        let const_name: String = format!("{}_ID", class_name.to_uppercase());
         out.push_str(&format!("{}: int\n", const_name));
     }
 
@@ -1828,5 +2256,238 @@ mod tests {
         assert!(result.contains("class HostLogger(ABC)"));
         assert!(result.contains("def log(self, level: int) -> None: ..."));
         assert!(result.contains("HOSTLOGGER_CONTRACT_ID: int"));
+    }
+
+    // ─── Guest Host Contract Caller Tests ─────────────────────────────────────────
+
+    #[test]
+    fn host_contract_name_to_python_caller_basic() {
+        assert_eq!(
+            host_contract_name_to_python_caller("host.logger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_python_caller_nested() {
+        assert_eq!(
+            host_contract_name_to_python_caller("host.fs.reader"),
+            "HostFsReaderContract"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_python_caller_already_has_host() {
+        assert_eq!(
+            host_contract_name_to_python_caller("host.HostLogger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn python_guest_caller_param_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(python_guest_caller_param_type_name(&ty), "str");
+    }
+
+    #[test]
+    fn python_guest_caller_param_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(python_guest_caller_param_type_name(&ty), "bytes");
+    }
+
+    #[test]
+    fn python_guest_caller_param_type_primitives() {
+        assert_eq!(
+            python_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "int"
+        );
+        assert_eq!(
+            python_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
+            "int"
+        );
+        assert_eq!(
+            python_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
+            "float"
+        );
+        assert_eq!(
+            python_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
+            "bool"
+        );
+    }
+
+    #[test]
+    fn python_guest_caller_return_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(python_guest_caller_return_type_name(&ty), "str");
+    }
+
+    #[test]
+    fn python_guest_caller_return_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(python_guest_caller_return_type_name(&ty), "bytes");
+    }
+
+    #[test]
+    fn generate_guest_host_contract_caller_basic() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![
+                    ResolvedParam {
+                        name: "level".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    },
+                    ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    },
+                ],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_python_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("class HostLoggerContract:"),
+            "missing class def: {out}"
+        );
+        assert!(
+            out.contains("def __init__(self, vtable: int) -> None:"),
+            "missing __init__: {out}"
+        );
+        assert!(
+            out.contains("def from_host(cls, host_ptr: int, min_version: int = 0)"),
+            "missing from_host: {out}"
+        );
+        assert!(
+            out.contains("def is_valid(self) -> bool:"),
+            "missing is_valid: {out}"
+        );
+        assert!(
+            out.contains("def log(self, level: int, message: str) -> None:"),
+            "missing method: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_host_contract_caller_with_return() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.fs.reader".to_owned(),
+            contract_id: 0xDEADBEEF,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "read".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "path".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_python_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("class HostFsReaderContract:"),
+            "missing class def: {out}"
+        );
+        assert!(
+            out.contains("def read(self, path: str) -> bytes:"),
+            "missing method with return: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_host_contracts_file_empty() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let result: String = generate_guest_host_contracts_file(&ir);
+        assert!(result.contains("from polyplug_guest.abi import"));
+        assert!(!result.contains("class"));
+    }
+
+    #[test]
+    fn generate_guest_host_contracts_file_with_contract() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: None,
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![contract],
+            bundle: None,
+        };
+        let result: String = generate_guest_host_contracts_file(&ir);
+        assert!(result.contains("class HostLoggerContract:"));
+        assert!(result.contains("HOSTLOGGERCONTRACT_ID: int = 0x123456789ABCDEF0"));
+    }
+
+    #[test]
+    fn generate_guest_host_contracts_stub_basic() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "level".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                }],
+                returns: None,
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![contract],
+            bundle: None,
+        };
+        let result: String = generate_guest_host_contracts_stub(&ir);
+        assert!(result.contains("class HostLoggerContract:"));
+        assert!(result.contains("def __init__(self, vtable: int) -> None: ..."));
+        assert!(result.contains(
+            "def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ..."
+        ));
+        assert!(result.contains("def is_valid(self) -> bool: ..."));
+        assert!(result.contains("def log(self, level: int) -> None: ..."));
+        assert!(result.contains("HOSTLOGGERCONTRACT_ID: int"));
     }
 }
