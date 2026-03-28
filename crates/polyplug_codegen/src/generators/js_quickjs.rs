@@ -98,6 +98,13 @@ impl CodeGenerator for JsQuickjsGenerator {
                 force_regenerate: true,
             });
         }
+        if !ir.host_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/host_contracts.ts"),
+                content: generate_guest_host_contracts_ts(ir),
+                force_regenerate: false,
+            });
+        }
         files.files.push(GeneratedFile {
             path: PathBuf::from("README.md"),
             content: generate_readme_quickjs(ir),
@@ -1043,6 +1050,478 @@ fn generate_host_contracts_ts(ir: &ValidatedIr) -> String {
     out
 }
 
+// ─── Guest Host Contract Caller Generation ────────────────────────────────────────
+
+/// Convert host contract name to TypeScript guest caller class name.
+/// e.g. "host.logger" -> "HostLoggerContract", "host.fs.reader" -> "HostFsReaderContract"
+fn host_contract_name_to_ts_caller(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal + "Contract"
+    } else {
+        "Host".to_owned() + &pascal + "Contract"
+    }
+}
+
+/// Generate ergonomic TypeScript type name for guest caller method parameters.
+/// For guest callers, we use ergonomic TypeScript types:
+/// - StringView -> string (converted to StringView at ABI boundary)
+/// - Buffer -> Uint8Array (converted to Buffer at ABI boundary)
+/// - UserDefined -> TypeName (passed by reference)
+/// - Primitives -> number (u32, i32, etc.) or { lo: number; hi: number } (u64, i64)
+fn ts_guest_caller_param_type(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => ts_primitive_guest(p).to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Uint8Array".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "{ lo: number; hi: number }".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate TypeScript return type name for guest caller methods.
+/// Return types are owned where appropriate:
+/// - StringView -> string (owned)
+/// - Buffer -> Uint8Array (owned)
+/// - UserDefined -> TypeName (owned)
+/// - Primitives -> number or { lo: number; hi: number }
+fn ts_guest_caller_return_type(ty: &ResolvedTypeRef) -> String {
+    ts_guest_caller_param_type(ty) // Same mapping for params and returns
+}
+
+/// TypeScript primitive type for guest callers (ergonomic, not ABI-level).
+fn ts_primitive_guest(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::U8
+        | PrimitiveType::U16
+        | PrimitiveType::U32
+        | PrimitiveType::I8
+        | PrimitiveType::I16
+        | PrimitiveType::I32
+        | PrimitiveType::F32
+        | PrimitiveType::F64 => "number",
+        PrimitiveType::Bool => "boolean",
+        PrimitiveType::U64 | PrimitiveType::I64 => "{ lo: number; hi: number }",
+    }
+}
+
+/// Generate one guest-side host contract caller class.
+fn generate_ts_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_ts_caller(&contract.name);
+    let contract_id_lo: u32 = (contract.contract_id & 0xFFFFFFFF) as u32;
+    let contract_id_hi: u32 = (contract.contract_id >> 32) as u32;
+
+    out.push_str(&format!(
+        "/**\n * Guest caller for host contract `{}` (id=0x{:016X})\n */\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("export class {} {{\n", class_name));
+    out.push_str("    private vtable: { lo: number; hi: number };\n\n");
+
+    out.push_str("    private constructor(vtable: { lo: number; hi: number }) {\n");
+    out.push_str("        this.vtable = vtable;\n");
+    out.push_str("    }\n\n");
+
+    out.push_str("    /** Factory method - creates caller instance or null if not found. */\n");
+    out.push_str(&format!(
+        "    static fromHost(hostPtr: {{ lo: number; hi: number }}, minVersion: number = 0): {} | null {{\n",
+        class_name
+    ));
+    out.push_str("        if (hostPtr.lo === 0 && hostPtr.hi === 0) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        if (!polyplug || !polyplug.getHostContract) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!(
+        "        const vtable = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x{:08X}, 0x{:08X}, minVersion);\n",
+        contract_id_lo, contract_id_hi
+    ));
+    out.push_str("        if (vtable === null || vtable === undefined || (vtable.lo === 0 && vtable.hi === 0)) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!("        return new {}(vtable);\n", class_name));
+    out.push_str("    }\n\n");
+
+    out.push_str("    /** Check if this caller instance is still valid. */\n");
+    out.push_str("    isValid(): boolean {\n");
+    out.push_str("        return this.vtable.lo !== 0 || this.vtable.hi !== 0;\n");
+    out.push_str("    }\n\n");
+
+    for func in &contract.functions {
+        generate_ts_guest_host_contract_method(out, func);
+    }
+
+    out.push_str("}\n\n");
+}
+
+/// Generate one method for a guest-side host contract caller.
+fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::ResolvedFunction) {
+    let fn_id: u32 = func.function_id;
+    let return_type: String = match &func.returns {
+        Some(ty) => ts_guest_caller_return_type(ty),
+        None => "void".to_owned(),
+    };
+    let has_return: bool = func.returns.is_some();
+
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let ts_ty: String = ts_guest_caller_param_type(&p.ty);
+                format!("{}: {}", p.name, ts_ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    out.push_str(&format!("    /** Call `{}` */\n", func.name));
+    out.push_str(&format!(
+        "    {}({}): {} {{\n",
+        func.name, params_str, return_type
+    ));
+
+    out.push_str("        if (this.vtable.lo === 0 && this.vtable.hi === 0) {\n");
+    if has_return {
+        out.push_str("            return null as any;\n");
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    out.push_str("        const polyplug = (globalThis as any).polyplug;\n");
+    out.push_str("        if (!polyplug) {\n");
+    if has_return {
+        out.push_str("            return null as any;\n");
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    out.push_str("        const vtablePtr = this.vtable.lo + this.vtable.hi * 4294967296;\n");
+    out.push_str("        const header = polyplug.readHostContractHeader(vtablePtr);\n");
+    out.push_str(&format!(
+        "        if ({fn_id} >= header.functionCount) {{\n"
+    ));
+    if has_return {
+        out.push_str("            return null as any;\n");
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    emit_ts_guest_host_contract_args_setup(out, func);
+    emit_ts_guest_host_contract_out_setup(out, &func.returns);
+
+    out.push_str("        const dispatchType = header.dispatchType;\n");
+    out.push_str("        let err: { lo: number; hi: number };\n");
+    out.push_str("        if (dispatchType === 0) {\n"); // DispatchType.Native
+    out.push_str(&format!(
+        "            const fnPtr = polyplug.readU64(header.functionsPtr + {fn_id} * 8);\n"
+    ));
+    out.push_str(
+        "            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, argsPtr, outPtr);\n",
+    );
+    out.push_str("        } else {\n"); // DispatchType.VirtualMachine
+    out.push_str(&format!(
+        "            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, {fn_id}, argsPtr, outPtr);\n"
+    ));
+    out.push_str("        }\n");
+    out.push_str("        if (err.lo !== 0 || err.hi !== 0) {\n");
+    if has_return {
+        out.push_str("            return null as any;\n");
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n");
+
+    if has_return {
+        out.push_str("        return result;\n");
+    }
+
+    out.push_str("    }\n\n");
+}
+
+/// Emit the argsPtr setup for a TypeScript guest host contract method.
+fn emit_ts_guest_host_contract_args_setup(out: &mut String, func: &crate::ir::ResolvedFunction) {
+    if func.params.is_empty() {
+        out.push_str("        const argsPtr = 0;\n");
+        return;
+    }
+
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "        const {}Bytes = new TextEncoder().encode({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "        const {}Ptr = polyplug.allocString({}Bytes);\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "        const {}Ptr = polyplug.allocBuffer({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "        const {}Ptr = polyplug.allocStruct({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+            }
+            ResolvedTypeRef::Primitive(p) => {
+                if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                    out.push_str(&format!(
+                        "        const {}Ptr = polyplug.allocU64({}.lo, {}.hi);\n",
+                        param.name, param.name, param.name
+                    ));
+                    out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+                } else {
+                    out.push_str(&format!(
+                        "        const {}Ptr = polyplug.allocU32({});\n",
+                        param.name, param.name
+                    ));
+                    out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+                }
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
+                out.push_str(&format!(
+                    "        const {}Ptr = polyplug.allocU64({}.lo, {}.hi);\n",
+                    param.name, param.name, param.name
+                ));
+                out.push_str(&format!("        const argsPtr = {}Ptr;\n", param.name));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {
+                out.push_str("        const argsPtr = 0;\n");
+            }
+        }
+        return;
+    }
+
+    // Multiple params: pack into inline struct
+    out.push_str("        const argsSize = ");
+    let mut total_size: usize = 0;
+    for param in &func.params {
+        match &param.ty {
+            ResolvedTypeRef::Primitive(p) => {
+                if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                    total_size += 8;
+                } else {
+                    total_size += 4;
+                }
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => total_size += 12,
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => total_size += 16,
+            ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => total_size += 8,
+            ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
+            ResolvedTypeRef::UserDefined(_) => {
+                total_size += 8;
+            }
+        }
+    }
+    out.push_str(&format!("{};\n", total_size));
+    out.push_str("        const argsPtr = polyplug.alloc(argsSize);\n");
+    let mut offset: usize = 0;
+    for param in &func.params {
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "        const {}Bytes = new TextEncoder().encode({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "        const {}StrPtr = polyplug.allocString({}Bytes);\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}StrPtr.lo);\n",
+                    offset, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}StrPtr.hi);\n",
+                    offset + 4,
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}Bytes.length);\n",
+                    offset + 8,
+                    param.name
+                ));
+                offset += 12;
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "        const {}BufPtr = polyplug.allocBuffer({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}BufPtr.lo);\n",
+                    offset, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}BufPtr.hi);\n",
+                    offset + 4,
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}.length);\n",
+                    offset + 8,
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}.length);\n",
+                    offset + 12,
+                    param.name
+                ));
+                offset += 16;
+            }
+            ResolvedTypeRef::Primitive(p) => {
+                if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                    out.push_str(&format!(
+                        "        polyplug.writeU32(argsPtr + {}, {}.lo);\n",
+                        offset, param.name
+                    ));
+                    out.push_str(&format!(
+                        "        polyplug.writeU32(argsPtr + {}, {}.hi);\n",
+                        offset + 4,
+                        param.name
+                    ));
+                    offset += 8;
+                } else {
+                    out.push_str(&format!(
+                        "        polyplug.writeU32(argsPtr + {}, {});\n",
+                        offset, param.name
+                    ));
+                    offset += 4;
+                }
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}.lo);\n",
+                    offset, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}.hi);\n",
+                    offset + 4,
+                    param.name
+                ));
+                offset += 8;
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "        const {}StructPtr = polyplug.allocStruct({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}StructPtr.lo);\n",
+                    offset, param.name
+                ));
+                out.push_str(&format!(
+                    "        polyplug.writeU32(argsPtr + {}, {}StructPtr.hi);\n",
+                    offset + 4,
+                    param.name
+                ));
+                offset += 8;
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {}
+        }
+    }
+}
+
+/// Emit the outPtr setup for a TypeScript guest host contract method.
+fn emit_ts_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if let Some(ret_ty) = returns {
+        match ret_ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str("        const outPtr = polyplug.alloc(12);\n");
+                out.push_str("        const result = { ptr_lo: 0, ptr_hi: 0, len: 0 };\n");
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str("        const outPtr = polyplug.alloc(16);\n");
+                out.push_str("        const result = { ptr_lo: 0, ptr_hi: 0, len: 0, cap: 0 };\n");
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str("        const outPtr = polyplug.allocStructSize();\n");
+                out.push_str("        const result = {} as any;\n");
+            }
+            ResolvedTypeRef::Primitive(p) => {
+                if matches!(p, PrimitiveType::U64 | PrimitiveType::I64) {
+                    out.push_str("        const outPtr = polyplug.alloc(8);\n");
+                    out.push_str("        const result = { lo: 0, hi: 0 };\n");
+                } else {
+                    out.push_str("        const outPtr = polyplug.alloc(4);\n");
+                    out.push_str("        const result = 0;\n");
+                }
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => {
+                out.push_str("        const outPtr = polyplug.alloc(8);\n");
+                out.push_str("        const result = { lo: 0, hi: 0 };\n");
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Void) => {
+                out.push_str("        const outPtr = 0;\n");
+            }
+        }
+    } else {
+        out.push_str("        const outPtr = 0;\n");
+    }
+}
+
+/// Generate `guest/host_contracts.ts` — caller classes for guest-side host contract callers.
+fn generate_guest_host_contracts_ts(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs (guest-side callers)\n\n",
+    );
+
+    for contract in &ir.host_contracts {
+        generate_ts_guest_host_contract_caller(&mut out, contract);
+    }
+
+    // Emit contract ID constants
+    out.push_str("// Contract ID constants\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_ts_caller(&contract.name);
+        let const_name: String = class_name.to_uppercase() + "_ID";
+        out.push_str(&format!(
+            "/** Contract ID for `{}` (FNV-1a of \"host_contract:{}@{}\") */\n",
+            contract.name, contract.name, contract.version.major
+        ));
+        out.push_str(&format!(
+            "export const {} = 0x{:016X}n;\n\n",
+            const_name, contract.contract_id
+        ));
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -1332,6 +1811,274 @@ mod tests {
         assert!(
             !names.contains(&"host/contracts.ts".to_owned()),
             "unexpected host/contracts.ts: {names:?}"
+        );
+    }
+
+    // ─── Guest Host Contract Caller Tests ─────────────────────────────────────
+
+    #[test]
+    fn host_contract_name_to_ts_caller_conversion() {
+        assert_eq!(
+            host_contract_name_to_ts_caller("host.logger"),
+            "HostLoggerContract"
+        );
+        assert_eq!(
+            host_contract_name_to_ts_caller("host.fs.reader"),
+            "HostFsReaderContract"
+        );
+        assert_eq!(
+            host_contract_name_to_ts_caller("host.HostLogger"),
+            "HostLoggerContract"
+        );
+        assert_eq!(
+            host_contract_name_to_ts_caller("logger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn ts_guest_caller_param_type_mappings() {
+        assert_eq!(
+            ts_guest_caller_param_type(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "number"
+        );
+        assert_eq!(
+            ts_guest_caller_param_type(&ResolvedTypeRef::Primitive(PrimitiveType::U64)),
+            "{ lo: number; hi: number }"
+        );
+        assert_eq!(
+            ts_guest_caller_param_type(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            ts_guest_caller_param_type(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "Uint8Array"
+        );
+        assert_eq!(
+            ts_guest_caller_param_type(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn ts_guest_caller_return_type_mappings() {
+        assert_eq!(
+            ts_guest_caller_return_type(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "number"
+        );
+        assert_eq!(
+            ts_guest_caller_return_type(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            ts_guest_caller_return_type(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "Uint8Array"
+        );
+        assert_eq!(
+            ts_guest_caller_return_type(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn generate_ts_guest_host_contract_caller_produces_class() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![
+                ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                },
+                ResolvedFunction {
+                    name: "logf".to_owned(),
+                    function_id: 1,
+                    params: vec![
+                        ResolvedParam {
+                            name: "level".to_owned(),
+                            ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        },
+                        ResolvedParam {
+                            name: "format".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        },
+                    ],
+                    returns: None,
+                },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_ts_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("export class HostLoggerContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("private constructor(vtable: { lo: number; hi: number })"),
+            "missing private constructor: {out}"
+        );
+        assert!(
+            out.contains(
+                "static fromHost(hostPtr: { lo: number; hi: number }, minVersion: number = 0)"
+            ),
+            "missing fromHost: {out}"
+        );
+        assert!(out.contains("isValid(): boolean"), "missing isValid: {out}");
+        assert!(
+            out.contains("log(message: string): void"),
+            "missing log method: {out}"
+        );
+        assert!(
+            out.contains("logf(level: number, format: string): void"),
+            "missing logf method: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_ts_guest_host_contract_caller_with_return() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.fs.reader".to_owned(),
+            contract_id: 0xDEAD_BEEF_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "read".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "path".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_ts_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("export class HostFsReaderContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("read(path: string): Uint8Array"),
+            "missing read method with return: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_host_contracts_ts_produces_file() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_guest_host_contracts_ts(&ir);
+        assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
+        assert!(
+            out.contains("export class HostLoggerContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("HOSTLOGGERCONTRACT_ID"),
+            "missing constant: {out}"
+        );
+        assert!(
+            out.contains("0x123456789ABCDEF0n"),
+            "missing contract ID value: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_with_host_contracts_produces_file() {
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"guest/host_contracts.ts".to_owned()),
+            "missing guest/host_contracts.ts: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_without_host_contracts_no_file() {
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"guest/host_contracts.ts".to_owned()),
+            "unexpected guest/host_contracts.ts: {names:?}"
         );
     }
 }

@@ -1283,7 +1283,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(js): generate host-side contract interfaces`
 
-- [ ] **Task 24**: Generate JavaScript guest-side host contract callers
+- [x] **Task 24**: Generate JavaScript guest-side host contract callers
   
   **Specification**:
   Generate JavaScript classes that plugins use to call host contracts.
