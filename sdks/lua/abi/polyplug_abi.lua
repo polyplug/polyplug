@@ -85,6 +85,12 @@ ffi.cdef[[
         uint64_t bundle_id;
     } HostContext;
 
+    //  Opaque handle to a host contract vtable.
+    // 
+    //  Plugins receive this via `host.get_host_contract()` and use it to call
+    //  host-provided functions. The actual structure is internal to the host.
+    typedef struct HostContractVTable HostContractVTable;
+
     //  ABI error — returned by value from all ABI calls.
     // 
     //  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
