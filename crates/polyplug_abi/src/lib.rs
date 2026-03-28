@@ -961,4 +961,68 @@ mod tests {
         assert_eq!(offset_of!(HostContractVTable, header), 0);
         assert_eq!(offset_of!(HostContractVTable, dispatch), 32);
     }
+
+    // ── Send/Sync Tests for Host Contract Types ──────────────────────────────
+
+    /// Compile-time assertion that a type implements Send.
+    const fn assert_send<T: Send>() {}
+
+    /// Compile-time assertion that a type implements Sync.
+    const fn assert_sync<T: Sync>() {}
+
+    #[test]
+    fn host_contract_types_are_send() {
+        // SAFETY: HostContractVTableHeader contains only plain data types (u32, u64, DispatchType).
+        // All fields are Copy types safe to share across threads.
+        assert_send::<HostContractVTableHeader>();
+
+        // SAFETY: NativeHostContractDispatch contains only a pointer to static data.
+        // The function pointers are 'static and safe to call from any thread.
+        assert_send::<NativeHostContractDispatch>();
+
+        // SAFETY: VmHostContractDispatch contains a function pointer and a raw pointer.
+        // The function pointer is safe to call from any thread (the dispatch function
+        // must handle its own synchronization). The bridge_data pointer is owned by
+        // the VM bridge and must be thread-safe.
+        assert_send::<VmHostContractDispatch>();
+
+        // SAFETY: HostContractDispatch is a union of Send+Sync types.
+        // The caller must access the correct variant based on dispatch_type.
+        assert_send::<HostContractDispatch>();
+
+        // SAFETY: HostContractVTable contains only data that is 'static or thread-safe.
+        // - header: plain data types (Send+Sync)
+        // - dispatch: union of Send+Sync types
+        // Sending/sharing across threads only reads these values.
+        assert_send::<HostContractVTable>();
+
+        // SAFETY: DispatchType is a simple C enum (Copy type). Safe to share across threads.
+        assert_send::<DispatchType>();
+    }
+
+    #[test]
+    fn host_contract_types_are_sync() {
+        // SAFETY: HostContractVTableHeader contains only plain data types.
+        // Concurrent reads are safe — no mutation occurs through shared references.
+        assert_sync::<HostContractVTableHeader>();
+
+        // SAFETY: NativeHostContractDispatch contains only a pointer to static data.
+        // Concurrent reads of the pointer are safe.
+        assert_sync::<NativeHostContractDispatch>();
+
+        // SAFETY: VmHostContractDispatch contains only a function pointer and a raw pointer.
+        // Concurrent calls to the dispatch function must be safe (VM bridge's responsibility).
+        assert_sync::<VmHostContractDispatch>();
+
+        // SAFETY: HostContractDispatch is a union of Send+Sync types.
+        // Concurrent access requires the caller to use the correct variant.
+        assert_sync::<HostContractDispatch>();
+
+        // SAFETY: HostContractVTable contains only data that is 'static or thread-safe.
+        // Concurrent reads are safe — no mutation occurs through shared references.
+        assert_sync::<HostContractVTable>();
+
+        // SAFETY: DispatchType is a simple C enum (Copy type). Concurrent reads are safe.
+        assert_sync::<DispatchType>();
+    }
 }

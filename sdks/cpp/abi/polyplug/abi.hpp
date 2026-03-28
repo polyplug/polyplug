@@ -29,14 +29,6 @@ enum class DispatchType : uint32_t {
     VirtualMachine = 1,
 };
 
-///  Host runtime type identifier — identifies the language/runtime hosting plugins.
-enum class HostRuntime : uint8_t {
-    Rust = 0,
-    Python = 1,
-    Lua = 2,
-    JavaScript = 3,
-};
-
 // ─── ABI Structs ──────────────────────────────────────────────────────────────
 
 extern "C" {
@@ -130,89 +122,7 @@ struct VmDispatch {
 
 } // extern "C"
 
-// ─── Host Contract Types ──────────────────────────────────────────────────────
-
-extern "C" {
-
-///  Host contract vtable header — metadata for a host-provided contract.
-struct HostContractVTableHeader {
-    ///  VTable format version (for future compatibility).
-    uint32_t vtable_version;
-    ///  FNV-1a hash of "contract_name@major_version".
-    uint64_t contract_id;
-    ///  Contract major version.
-    uint32_t contract_major;
-    ///  Contract minor version.
-    uint32_t contract_minor;
-    ///  Number of functions in this contract.
-    uint32_t function_count;
-    ///  Dispatch mechanism type (Native or VirtualMachine).
-    DispatchType dispatch_type;
-};
-
-///  Native dispatch for host contracts — direct function pointer array.
-///
-///  Used when `dispatch_type == DispatchType::Native`.
-///  The `functions` array contains `function_count` function pointers.
-struct NativeHostContractDispatch {
-    ///  Pointer to a static array of function pointers, indexed by function_id.
-    void* const* functions;
-};
-
-///  VM dispatch for host contracts — call through a dispatch function.
-///
-///  Used when `dispatch_type == DispatchType::VirtualMachine`.
-///  The `call` function receives `bridge_data` which contains VM-specific state.
-struct VmHostContractDispatch {
-    ///  Dispatch function called for every VM function invocation.
-    AbiError (*call )(void*, uint32_t, const void*, void*);
-    ///  VM-specific data (opaque to the host; interpreted by the dispatch function).
-    void* bridge_data;
-};
-
-} // extern "C"
-
-// ─── Host Contract Union ──────────────────────────────────────────────────────
-
-extern "C" {
-
-///  Union of host contract dispatch mechanisms — use based on `dispatch_type`.
-///
-///  # Safety
-///  Access the correct variant based on `HostContractVTableHeader::dispatch_type`:
-///  - `dispatch_type == Native` → access `.native`
-///  - `dispatch_type == VirtualMachine` → access `.vm`
-union HostContractDispatch {
-    ///  Native dispatch data (when dispatch_type == Native).
-    NativeHostContractDispatch native;
-    ///  VM dispatch data (when dispatch_type == VirtualMachine).
-    VmHostContractDispatch vm;
-};
-
-} // extern "C"
-
-// ─── Host Contract VTable ─────────────────────────────────────────────────────
-
-extern "C" {
-
-///  Host contract vtable — complete interface for a host-provided contract.
-///
-///  OWNERSHIP: Must be `'static` or intentionally leaked.
-///  Never stack-allocated. Never freed while runtime lives.
-///
-///  # Dispatch
-///  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id]`
-///  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(...)`
-struct HostContractVTable {
-    ///  Header containing contract metadata.
-    HostContractVTableHeader header;
-    ///  Union of dispatch mechanisms — access based on dispatch_type.
-    HostContractDispatch dispatch;
-};
-
-} // extern "C"
-
-// ─── Plugin Types ─────────────────────────────────────────────────────────────
+// ─── ABI Unions ───────────────────────────────────────────────────────────────
 
 extern "C" {
 
