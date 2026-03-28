@@ -1516,11 +1516,7 @@ fn contract_name_to_struct(name: &str) -> String {
 /// Convert host contract name to trait name.
 /// e.g. "host.logger" -> "HostLogger", "host.fs.reader" -> "HostFsReader"
 fn host_contract_name_to_trait(name: &str) -> String {
-    let name_without_prefix: &str = if name.starts_with("host.") {
-        &name[5..]
-    } else {
-        name
-    };
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
 
     let pascal: String = name_without_prefix
         .split('.')
@@ -1588,9 +1584,7 @@ fn generate_host_contract_trait(out: &mut String, contract: &ResolvedHostContrac
         "/// Host trait for contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
-    out.push_str(&format!(
-        "/// Hosts implement this trait to provide functionality to plugins.\n"
-    ));
+    out.push_str("/// Hosts implement this trait to provide functionality to plugins.\n");
     out.push_str(&format!("pub trait {trait_name}: Send + Sync {{\n"));
     for func in &contract.functions {
         generate_host_trait_method(out, func);
@@ -1741,9 +1735,7 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
     out.push_str("        }\n");
     out.push_str("        // SAFETY: host is non-null and valid per ABI contract.\n");
     out.push_str("        let host: &HostVTable = unsafe { &*host };\n");
-    out.push_str(&format!(
-        "        let vtable_ptr: *const HostContractVTable = unsafe {{\n"
-    ));
+    out.push_str("        let vtable_ptr: *const HostContractVTable = unsafe {\n");
     out.push_str(&format!(
         "            (host.get_host_contract)(core::ptr::null_mut(), 0x{:016X}_u64, min_version)\n",
         contract.contract_id

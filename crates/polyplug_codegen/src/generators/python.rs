@@ -14,6 +14,7 @@ use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedFunction;
+use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
@@ -61,6 +62,22 @@ impl CodeGenerator for PythonGenerator {
             content: callers_pyi,
             force_regenerate: false,
         });
+
+        // Emit host/contracts.py and host/contracts.pyi if there are host contracts
+        if !ir.host_contracts.is_empty() {
+            let contracts_py: String = generate_host_contracts_file(ir);
+            let contracts_pyi: String = generate_host_contracts_stub(ir);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/contracts.py"),
+                content: contracts_py,
+                force_regenerate: false,
+            });
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/contracts.pyi"),
+                content: contracts_pyi,
+                force_regenerate: false,
+            });
+        }
 
         Ok(())
     }
@@ -1173,6 +1190,202 @@ fn arg_pack_struct_name(contract_struct: &str, fn_name: &str) -> String {
     format!("{contract_struct}{fn_pascal}Args")
 }
 
+// ─── Host Contract ABC Generation ────────────────────────────────────────────────
+
+/// Convert host contract name to Python ABC class name.
+/// e.g. "host.logger" -> "HostLogger", "host.fs.reader" -> "HostFsReader"
+fn host_contract_name_to_python_class(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal
+    } else {
+        format!("Host{}", pascal)
+    }
+}
+
+/// Generate ergonomic Python type name for host interface method parameters.
+/// For host interfaces, we use ergonomic Python types:
+/// - StringView -> str (more ergonomic for host implementers)
+/// - Buffer -> bytes (more ergonomic for host implementers)
+/// - UserDefined -> TypeName (passed as object)
+/// - Primitives -> Python primitive types (int, float, bool)
+fn python_host_param_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::F32 | PrimitiveType::F64 => "float".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "str".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "bytes".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "int".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate Python return type name for host interface methods.
+/// Return types are owned where appropriate:
+/// - StringView -> str (owned)
+/// - Buffer -> bytes (owned)
+/// - UserDefined -> TypeName (owned)
+/// - Primitives -> Python primitive types
+fn python_host_return_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 => {
+                "int".to_owned()
+            }
+            PrimitiveType::F32 | PrimitiveType::F64 => "float".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "str".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "bytes".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "int".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate one abstract method for a host contract function.
+fn generate_python_host_contract_method(out: &mut String, func: &ResolvedFunction) {
+    let return_type: String = match &func.returns {
+        Some(ty) => python_host_return_type_name(ty),
+        None => "None".to_owned(),
+    };
+
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let py_ty: String = python_host_param_type_name(&p.ty);
+                format!("{}: {}", p.name, py_ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    out.push_str(&format!(
+        "    @abstractmethod\n    def {}(self{}{}) -> {}:\n        pass\n\n",
+        func.name,
+        if params_str.is_empty() { "" } else { ", " },
+        params_str,
+        return_type
+    ));
+}
+
+/// Generate the ABC class definition for one host contract.
+fn generate_python_host_contract_abc(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_python_class(&contract.name);
+    out.push_str(&format!(
+        "# Host contract `{}` (id=0x{:016X})\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("class {}(ABC):\n", class_name));
+
+    for func in &contract.functions {
+        generate_python_host_contract_method(out, func);
+    }
+
+    out.push('\n');
+}
+
+/// Generate `host/contracts.py` — ABC classes for each host contract.
+fn generate_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("from abc import ABC, abstractmethod\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_python_host_contract_abc(&mut out, contract);
+    }
+
+    // Emit contract ID constants
+    out.push_str("# Contract ID constants\n");
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_python_class(&contract.name);
+        let const_name: String = format!("{}_CONTRACT_ID", class_name.to_uppercase());
+        out.push_str(&format!(
+            "{}: int = 0x{:016X}\n",
+            const_name, contract.contract_id
+        ));
+    }
+
+    out
+}
+
+/// Generate `host/contracts.pyi` — type stubs for host contract ABCs.
+fn generate_host_contracts_stub(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("from abc import ABC, abstractmethod\n\n");
+
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_python_class(&contract.name);
+        out.push_str(&format!("class {}(ABC):\n", class_name));
+        for func in &contract.functions {
+            let return_type: String = match &func.returns {
+                Some(ty) => python_host_return_type_name(ty),
+                None => "None".to_owned(),
+            };
+            let params_str: String = if func.params.is_empty() {
+                String::new()
+            } else {
+                func.params
+                    .iter()
+                    .map(|p: &ResolvedParam| {
+                        let py_ty: String = python_host_param_type_name(&p.ty);
+                        format!("{}: {}", p.name, py_ty)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            out.push_str(&format!(
+                "    @abstractmethod\n    def {}(self{}{}) -> {}: ...\n",
+                func.name,
+                if params_str.is_empty() { "" } else { ", " },
+                params_str,
+                return_type
+            ));
+        }
+        out.push('\n');
+    }
+
+    // Contract ID constants in stub
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_python_class(&contract.name);
+        let const_name: String = format!("{}_CONTRACT_ID", class_name.to_uppercase());
+        out.push_str(&format!("{}: int\n", const_name));
+    }
+
+    out
+}
+
 fn generate_bundle_manifest_python(ir: &ValidatedIr) -> String {
     let bundle: &ResolvedBundle = match ir.bundle.as_ref() {
         Some(b) => b,
@@ -1394,5 +1607,226 @@ mod tests {
             "missing class def: {out}"
         );
         assert!(out.contains("NONE = 0"), "missing NONE: {out}");
+    }
+
+    // ─── Host Contract ABC Tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn host_contract_name_to_python_class_basic() {
+        assert_eq!(
+            host_contract_name_to_python_class("host.logger"),
+            "HostLogger"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_python_class_nested() {
+        assert_eq!(
+            host_contract_name_to_python_class("host.fs.reader"),
+            "HostFsReader"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_python_class_already_has_host() {
+        assert_eq!(
+            host_contract_name_to_python_class("host.HostLogger"),
+            "HostLogger"
+        );
+    }
+
+    #[test]
+    fn python_host_param_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(python_host_param_type_name(&ty), "str");
+    }
+
+    #[test]
+    fn python_host_param_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(python_host_param_type_name(&ty), "bytes");
+    }
+
+    #[test]
+    fn python_host_param_type_primitives() {
+        assert_eq!(
+            python_host_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "int"
+        );
+        assert_eq!(
+            python_host_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
+            "int"
+        );
+        assert_eq!(
+            python_host_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
+            "float"
+        );
+        assert_eq!(
+            python_host_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
+            "bool"
+        );
+    }
+
+    #[test]
+    fn python_host_return_type_stringview() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
+        assert_eq!(python_host_return_type_name(&ty), "str");
+    }
+
+    #[test]
+    fn python_host_return_type_buffer() {
+        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
+        assert_eq!(python_host_return_type_name(&ty), "bytes");
+    }
+
+    #[test]
+    fn generate_host_contract_abc_basic() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![
+                    ResolvedParam {
+                        name: "level".to_owned(),
+                        ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                    },
+                    ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    },
+                ],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_python_host_contract_abc(&mut out, &contract);
+        assert!(
+            out.contains("class HostLogger(ABC)"),
+            "missing class def: {out}"
+        );
+        assert!(
+            out.contains("@abstractmethod"),
+            "missing abstractmethod: {out}"
+        );
+        assert!(
+            out.contains("def log(self, level: int, message: str) -> None"),
+            "missing method: {out}"
+        );
+        assert!(out.contains("pass"), "missing pass: {out}");
+    }
+
+    #[test]
+    fn generate_host_contract_abc_with_return() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.fs.reader".to_owned(),
+            contract_id: 0xDEADBEEF,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "read".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "path".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: Some(ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            }],
+        };
+        let mut out: String = String::new();
+        generate_python_host_contract_abc(&mut out, &contract);
+        assert!(
+            out.contains("class HostFsReader(ABC)"),
+            "missing class def: {out}"
+        );
+        assert!(
+            out.contains("def read(self, path: str) -> bytes"),
+            "missing method with return: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_host_contracts_file_empty() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let result: String = generate_host_contracts_file(&ir);
+        assert!(result.contains("from abc import ABC, abstractmethod"));
+        assert!(!result.contains("class"));
+    }
+
+    #[test]
+    fn generate_host_contracts_file_with_contract() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![],
+                returns: None,
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![contract],
+            bundle: None,
+        };
+        let result: String = generate_host_contracts_file(&ir);
+        assert!(result.contains("class HostLogger(ABC)"));
+        assert!(result.contains("HOSTLOGGER_CONTRACT_ID: int = 0x123456789ABCDEF0"));
+    }
+
+    #[test]
+    fn generate_host_contracts_stub_basic() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x123456789ABCDEF0,
+            version: crate::ir::Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "level".to_owned(),
+                    ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                }],
+                returns: None,
+            }],
+        };
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![contract],
+            bundle: None,
+        };
+        let result: String = generate_host_contracts_stub(&ir);
+        assert!(result.contains("class HostLogger(ABC)"));
+        assert!(result.contains("def log(self, level: int) -> None: ..."));
+        assert!(result.contains("HOSTLOGGER_CONTRACT_ID: int"));
     }
 }
