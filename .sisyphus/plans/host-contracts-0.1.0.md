@@ -1088,7 +1088,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(csharp): generate host-side contract interfaces`
 
-- [ ] **Task 18**: Generate C# guest-side host contract callers
+- [x] **Task 18**: Generate C# guest-side host contract callers
   
   **Specification**:
   Generate C# classes that plugins use to call host contracts.

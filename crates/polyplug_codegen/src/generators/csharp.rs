@@ -935,6 +935,373 @@ fn generate_host_manifest(ir: &ValidatedIr) -> String {
     out
 }
 
+// ─── Guest Host Contract Caller Generation ─────────────────────────────────────
+
+/// Convert host contract name to C# guest caller class name.
+/// e.g. "host.logger" -> "HostLoggerContract", "host.fs.reader" -> "HostFsReaderContract"
+fn host_contract_name_to_cs_caller(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal + "Contract"
+    } else {
+        "Host".to_owned() + &pascal + "Contract"
+    }
+}
+
+/// Generate ergonomic C# type name for guest caller method parameters.
+/// For guest callers, we use ergonomic C# types:
+/// - StringView -> string (owned, converted to StringView at ABI boundary)
+/// - Buffer -> byte[] (owned, converted to Buffer at ABI boundary)
+/// - UserDefined -> ref TypeName (passed by reference)
+/// - Primitives -> T (passed by value)
+fn cs_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 => "byte".to_owned(),
+            PrimitiveType::U16 => "ushort".to_owned(),
+            PrimitiveType::U32 => "uint".to_owned(),
+            PrimitiveType::U64 => "ulong".to_owned(),
+            PrimitiveType::I8 => "sbyte".to_owned(),
+            PrimitiveType::I16 => "short".to_owned(),
+            PrimitiveType::I32 => "int".to_owned(),
+            PrimitiveType::I64 => "long".to_owned(),
+            PrimitiveType::F32 => "float".to_owned(),
+            PrimitiveType::F64 => "double".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "byte[]".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => format!("ref {}", name),
+    }
+}
+
+/// Generate C# return type name for guest caller methods.
+/// Return types are owned where appropriate:
+/// - StringView -> string (owned)
+/// - Buffer -> byte[] (owned)
+/// - UserDefined -> TypeName (owned)
+/// - Primitives -> T (by value)
+fn cs_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 => "byte".to_owned(),
+            PrimitiveType::U16 => "ushort".to_owned(),
+            PrimitiveType::U32 => "uint".to_owned(),
+            PrimitiveType::U64 => "ulong".to_owned(),
+            PrimitiveType::I8 => "sbyte".to_owned(),
+            PrimitiveType::I16 => "short".to_owned(),
+            PrimitiveType::I32 => "int".to_owned(),
+            PrimitiveType::I64 => "long".to_owned(),
+            PrimitiveType::F32 => "float".to_owned(),
+            PrimitiveType::F64 => "double".to_owned(),
+            PrimitiveType::Bool => "bool".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "byte[]".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate one guest-side host contract caller class.
+fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_cs_caller(&contract.name);
+
+    out.push_str(&format!(
+        "/// <summary>\n/// Guest caller for host contract `{}` (id=0x{:016X})\n/// Plugins use this class to call host-provided functionality.\n/// </summary>\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("public sealed class {} {{\n", class_name));
+    out.push_str("    private readonly IntPtr _vtable;\n\n");
+
+    // Private constructor
+    out.push_str(&format!(
+        "    private {}(IntPtr vtable) {{ _vtable = vtable; }}\n\n",
+        class_name
+    ));
+
+    // Factory method - FromHost
+    out.push_str("    /// <summary>Factory method - creates caller from HostVTable or null if not found.</summary>\n");
+    out.push_str(&format!(
+        "    public static {}? FromHost(IntPtr host, uint minVersion = 0) {{\n",
+        class_name
+    ));
+    out.push_str("        if (host == IntPtr.Zero) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str("        unsafe {\n");
+    out.push_str("            var hostVtable = (HostVTable*)host;\n");
+    out.push_str(&format!(
+        "            var vtable = hostVtable->GetHostContract(IntPtr.Zero, 0x{:016X}UL, minVersion);\n",
+        contract.contract_id
+    ));
+    out.push_str("            if (vtable == IntPtr.Zero) {\n");
+    out.push_str("                return null;\n");
+    out.push_str("            }\n");
+    out.push_str(&format!("            return new {}(vtable);\n", class_name));
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // IsValid property
+    out.push_str("    /// <summary>Check if caller is valid (vtable is non-null).</summary>\n");
+    out.push_str("    public bool IsValid => _vtable != IntPtr.Zero;\n\n");
+
+    // Methods for each function
+    for func in &contract.functions {
+        generate_cs_guest_host_contract_method(out, func, &class_name);
+    }
+
+    out.push_str("}\n\n");
+}
+
+/// Generate one method for a guest-side host contract caller.
+fn generate_cs_guest_host_contract_method(
+    out: &mut String,
+    func: &ResolvedFunction,
+    class_name: &str,
+) {
+    let fn_id: u32 = func.function_id;
+    let method_name: String = pascal_case(&func.name);
+    let return_type: String = match &func.returns {
+        Some(ty) => cs_guest_caller_return_type_name(ty),
+        None => "void".to_owned(),
+    };
+    let has_return: bool = func.returns.is_some();
+
+    // Build parameter list
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let cs_ty: String = cs_guest_caller_param_type_name(&p.ty);
+                format!("{} {}", cs_ty, p.name)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    out.push_str(&format!(
+        "    /// <summary>Call host contract function `{}` (function_id={})</summary>\n",
+        func.name, fn_id
+    ));
+    out.push_str(&format!(
+        "    public {} {}({}) {{\n",
+        return_type, method_name, params_str
+    ));
+
+    // Null vtable check
+    out.push_str("        if (_vtable == IntPtr.Zero) {\n");
+    if has_return {
+        out.push_str(&format!("            return default({});\n", return_type));
+    } else {
+        out.push_str("            return;\n");
+    }
+    out.push_str("        }\n\n");
+
+    // Get header and check function count
+    out.push_str("        unsafe {\n");
+    out.push_str("            var header = &((HostContractVTable*)_vtable)->Header;\n");
+    out.push_str(&format!(
+        "            if ({fn_id}u >= header->FunctionCount) {{\n"
+    ));
+    if has_return {
+        out.push_str(&format!(
+            "                return default({});\n",
+            return_type
+        ));
+    } else {
+        out.push_str("                return;\n");
+    }
+    out.push_str("            }\n\n");
+
+    // Build args_ptr setup
+    emit_cs_guest_host_contract_args_setup(out, func, class_name);
+
+    // Build out_ptr setup
+    emit_cs_guest_host_contract_out_setup(out, &func.returns);
+
+    // Dispatch call
+    out.push_str("            AbiError err;\n");
+    out.push_str("            switch (header->DispatchType) {\n");
+    out.push_str("                case DispatchType.Native: {\n");
+    out.push_str(&format!(
+        "                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[{fn_id}u];\n"
+    ));
+    out.push_str("                    err = fn_(argsPtr, outPtr);\n");
+    out.push_str("                    break;\n");
+    out.push_str("                }\n");
+    out.push_str("                case DispatchType.VirtualMachine: {\n");
+    out.push_str(&format!(
+        "                    err = header->Dispatch.VM.Call(header->Dispatch.VM.BridgeData, {fn_id}u, argsPtr, outPtr);\n"
+    ));
+    out.push_str("                    break;\n");
+    out.push_str("                }\n");
+    out.push_str("                default:\n");
+    if has_return {
+        out.push_str(&format!(
+            "                    return default({});\n",
+            return_type
+        ));
+    } else {
+        out.push_str("                    return;\n");
+    }
+    out.push_str("            }\n\n");
+
+    // Error handling
+    out.push_str("            if (err.Code != AbiConstants.ABI_OK) {\n");
+    if has_return {
+        out.push_str(&format!(
+            "                return default({});\n",
+            return_type
+        ));
+    } else {
+        out.push_str("                return;\n");
+    }
+    out.push_str("            }\n\n");
+
+    // Return result
+    if has_return {
+        out.push_str("            return result;\n");
+    }
+
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+}
+
+/// Emit the args_ptr setup for a C# guest host contract method.
+fn emit_cs_guest_host_contract_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    class_name: &str,
+) {
+    if func.params.is_empty() {
+        out.push_str("            var argsPtr = IntPtr.Zero;\n");
+        return;
+    }
+
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                // string -> StringView conversion
+                out.push_str(&format!(
+                    "            var {}_view = StringHelpers.AllocString({});\n",
+                    param.name, param.name
+                ));
+                out.push_str(&format!(
+                    "            var argsPtr = (IntPtr)(&{}_view);\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                // User-defined struct - pass pointer directly
+                out.push_str(&format!(
+                    "            var argsPtr = (IntPtr)(&{});\n",
+                    param.name
+                ));
+            }
+            ResolvedTypeRef::Primitive(_) | ResolvedTypeRef::AbiType(_) => {
+                out.push_str(&format!(
+                    "            var local_{name} = {name};\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "            var argsPtr = (IntPtr)(&local_{});\n",
+                    param.name
+                ));
+            }
+        }
+        return;
+    }
+
+    // Multiple params: pack into inline struct
+    let func_name_cap: String = pascal_case(&func.name);
+    let struct_name: String = format!("{}{}Args", class_name, func_name_cap);
+
+    out.push_str(&format!("            var args = new {} {{\n", struct_name));
+    for param in &func.params {
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "                {} = StringHelpers.AllocString({}),\n",
+                    pascal_case(&param.name),
+                    param.name
+                ));
+            }
+            _ => {
+                out.push_str(&format!(
+                    "                {} = {},\n",
+                    pascal_case(&param.name),
+                    param.name
+                ));
+            }
+        }
+    }
+    out.push_str("            };\n");
+    out.push_str("            var argsPtr = (IntPtr)(&args);\n");
+}
+
+/// Emit the out_ptr setup for a C# guest host contract method.
+fn emit_cs_guest_host_contract_out_setup(out: &mut String, returns: &Option<ResolvedTypeRef>) {
+    if let Some(ret_ty) = returns {
+        let cs_ty: String = cs_guest_caller_return_type_name(ret_ty);
+        out.push_str(&format!("            {} result = default;\n", cs_ty));
+        out.push_str("            var outPtr = (IntPtr)(&result);\n\n");
+    } else {
+        out.push_str("            var outPtr = IntPtr.Zero;\n\n");
+    }
+}
+
+/// Generate all guest-side host contract callers into a single file.
+fn generate_cs_guest_host_contracts_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(CS_HEADER);
+    out.push_str("using Polyplug.Guest;\n");
+    out.push_str("using Polyplug.Abi;\n");
+    out.push_str("using System.Runtime.CompilerServices;\n");
+    out.push_str("using System.Runtime.InteropServices;\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_cs_guest_host_contract_caller(&mut out, contract);
+    }
+
+    // Emit contract ID constants
+    for contract in &ir.host_contracts {
+        let class_name: String = host_contract_name_to_cs_caller(&contract.name);
+        let const_name: String = class_name.to_uppercase() + "_ID";
+        out.push_str(&format!(
+            "/// <summary>\n/// Contract ID constant for `{}` (FNV-1a of \"host_contract:{}@{}\")\n/// </summary>\n",
+            contract.name, contract.name, contract.version.major
+        ));
+        out.push_str(&format!("public static class {}Constants {{\n", class_name));
+        out.push_str(&format!(
+            "    public const ulong {} = 0x{:016X}UL;\n",
+            const_name, contract.contract_id
+        ));
+        out.push_str("}\n\n");
+    }
+
+    out
+}
+
 /// Generate `guest/BundleConstants.cs` — bundle-level C# constants (only emitted when `ir.bundle.is_some()`).
 fn generate_cs_bundle_constants(ir: &ValidatedIr) -> String {
     let bundle: &ResolvedBundle = match ir.bundle.as_ref() {
@@ -1301,6 +1668,13 @@ impl CodeGenerator for CSharpGenerator {
                 force_regenerate: true,
             });
         }
+        if !ir.host_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("guest/HostContracts.cs"),
+                content: generate_cs_guest_host_contracts_file(ir),
+                force_regenerate: false,
+            });
+        }
         Ok(())
     }
 }
@@ -1639,6 +2013,209 @@ mod tests {
         assert!(
             !names.contains(&"host/Contracts.cs".to_owned()),
             "unexpected host/Contracts.cs: {names:?}"
+        );
+    }
+
+    #[test]
+    fn host_contract_name_to_cs_caller_conversion() {
+        assert_eq!(
+            host_contract_name_to_cs_caller("host.logger"),
+            "HostLoggerContract"
+        );
+        assert_eq!(
+            host_contract_name_to_cs_caller("host.fs.reader"),
+            "HostFsReaderContract"
+        );
+        assert_eq!(
+            host_contract_name_to_cs_caller("host.HostLogger"),
+            "HostLoggerContract"
+        );
+        assert_eq!(
+            host_contract_name_to_cs_caller("logger"),
+            "HostLoggerContract"
+        );
+    }
+
+    #[test]
+    fn cs_guest_caller_param_type_name_mappings() {
+        assert_eq!(
+            cs_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "uint"
+        );
+        assert_eq!(
+            cs_guest_caller_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            cs_guest_caller_param_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "byte[]"
+        );
+        assert_eq!(
+            cs_guest_caller_param_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "ref MyStruct"
+        );
+    }
+
+    #[test]
+    fn cs_guest_caller_return_type_name_mappings() {
+        assert_eq!(
+            cs_guest_caller_return_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "uint"
+        );
+        assert_eq!(
+            cs_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            cs_guest_caller_return_type_name(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "byte[]"
+        );
+        assert_eq!(
+            cs_guest_caller_return_type_name(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn generate_cs_guest_host_contract_caller_produces_class() {
+        let contract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "message".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_cs_guest_host_contract_caller(&mut out, &contract);
+        assert!(
+            out.contains("public sealed class HostLoggerContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("private readonly IntPtr _vtable"),
+            "missing vtable field: {out}"
+        );
+        assert!(
+            out.contains("public static HostLoggerContract? FromHost"),
+            "missing FromHost method: {out}"
+        );
+        assert!(
+            out.contains("public void Log(string message)"),
+            "missing Log method: {out}"
+        );
+        assert!(
+            out.contains("public bool IsValid => _vtable != IntPtr.Zero"),
+            "missing IsValid property: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cs_guest_host_contracts_file_produces_file() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_cs_guest_host_contracts_file(&ir);
+        assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
+        assert!(
+            out.contains("public sealed class HostLoggerContract"),
+            "missing class: {out}"
+        );
+        assert!(
+            out.contains("HOSTLOGGERCONTRACT_ID"),
+            "missing constant: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_with_host_contracts_produces_guest_host_contracts_file() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"guest/HostContracts.cs".to_owned()),
+            "missing guest/HostContracts.cs: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_guest_without_host_contracts_no_guest_host_contracts_file() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_guest(&ir, &mut files)
+            .expect("generate_guest");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"guest/HostContracts.cs".to_owned()),
+            "unexpected guest/HostContracts.cs: {names:?}"
         );
     }
 }
