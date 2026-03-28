@@ -1253,7 +1253,7 @@ All 4 design documents must be complete and reviewed before proceeding to Wave 1
   **Commit**:
   - Message: `feat(lua): generate guest-side host contract callers`
 
-- [ ] **Task 23**: Generate JavaScript host-side contract interfaces
+- [x] **Task 23**: Generate JavaScript host-side contract interfaces
   
   **Specification**:
   Generate JavaScript/TypeScript interfaces that hosts implement.

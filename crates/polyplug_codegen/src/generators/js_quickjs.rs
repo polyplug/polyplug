@@ -17,6 +17,7 @@ use crate::ir::ResolvedBundle;
 use crate::ir::ResolvedContract;
 use crate::ir::ResolvedDependency;
 use crate::ir::ResolvedField;
+use crate::ir::ResolvedHostContract;
 use crate::ir::ResolvedParam;
 use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
@@ -49,6 +50,14 @@ impl CodeGenerator for JsQuickjsGenerator {
             content: generate_callers_ts(ir),
             force_regenerate: false,
         });
+        // Emit host/contracts.ts if there are host contracts
+        if !ir.host_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/contracts.ts"),
+                content: generate_host_contracts_ts(ir),
+                force_regenerate: false,
+            });
+        }
         Ok(())
     }
 
@@ -878,13 +887,175 @@ fn contract_to_class_name(contract_name: &str) -> String {
         .join("")
 }
 
+// ─── Host Contract Interface Generation ────────────────────────────────────────
+
+/// Convert host contract name to TypeScript interface name.
+/// e.g. "host.logger" -> "HostLogger", "host.fs.reader" -> "HostFsReader"
+fn host_contract_name_to_ts_interface(name: &str) -> String {
+    let name_without_prefix: &str = name.strip_prefix("host.").unwrap_or(name);
+
+    let pascal: String = name_without_prefix
+        .split('.')
+        .map(|p: &str| {
+            let mut chars: core::str::Chars<'_> = p.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    if pascal.starts_with("Host") {
+        pascal
+    } else {
+        "Host".to_owned() + &pascal
+    }
+}
+
+/// Generate ergonomic TypeScript type name for host interface method parameters.
+/// For host interfaces, we use ergonomic TypeScript types:
+/// - StringView -> string (more ergonomic for host implementers)
+/// - Buffer -> Uint8Array (more ergonomic for host implementers)
+/// - UserDefined -> TypeName (passed by reference in TypeScript)
+/// - Primitives -> number (u32, i32, etc.) or { lo: number; hi: number } (u64, i64)
+fn ts_host_param_type(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => ts_primitive_host(p).to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Uint8Array".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "{ lo: number; hi: number }".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
+/// Generate TypeScript return type name for host interface methods.
+/// Return types are owned where appropriate:
+/// - StringView -> string (owned)
+/// - Buffer -> Uint8Array (owned)
+/// - UserDefined -> TypeName (owned)
+/// - Primitives -> number or { lo: number; hi: number }
+fn ts_host_return_type(ty: &ResolvedTypeRef) -> String {
+    ts_host_param_type(ty) // Same mapping for params and returns
+}
+
+/// TypeScript primitive type for host interfaces (ergonomic, not ABI-level).
+fn ts_primitive_host(p: &PrimitiveType) -> &'static str {
+    match p {
+        PrimitiveType::U8
+        | PrimitiveType::U16
+        | PrimitiveType::U32
+        | PrimitiveType::I8
+        | PrimitiveType::I16
+        | PrimitiveType::I32
+        | PrimitiveType::F32
+        | PrimitiveType::F64 => "number",
+        PrimitiveType::Bool => "boolean",
+        PrimitiveType::U64 | PrimitiveType::I64 => "{ lo: number; hi: number }",
+    }
+}
+
+/// Generate one interface method for a host contract function.
+fn generate_ts_host_interface_method(out: &mut String, func: &crate::ir::ResolvedFunction) {
+    let return_type: String = match &func.returns {
+        Some(ty) => ts_host_return_type(ty),
+        None => "void".to_owned(),
+    };
+
+    let method_name: String = func
+        .name
+        .split(['_', '.'])
+        .filter(|seg: &&str| !seg.is_empty())
+        .map(|seg: &str| {
+            let mut c: core::str::Chars<'_> = seg.chars();
+            match c.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().to_string() + c.as_str(),
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("");
+
+    let params_str: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| {
+                let ts_ty: String = ts_host_param_type(&p.ty);
+                format!("{}: {}", p.name, ts_ty)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    out.push_str(&format!(
+        "    {}({}): {};\n",
+        method_name, params_str, return_type
+    ));
+}
+
+/// Generate the interface definition for one host contract.
+fn generate_ts_host_contract_interface(out: &mut String, contract: &ResolvedHostContract) {
+    let iface_name: String = host_contract_name_to_ts_interface(&contract.name);
+    out.push_str(&format!(
+        "/**\n * Host interface for contract `{}` (id=0x{:016X})\n * Hosts implement this interface to provide functionality to plugins.\n */\n",
+        contract.name, contract.contract_id
+    ));
+    out.push_str(&format!("export interface {} {{\n", iface_name));
+
+    for func in &contract.functions {
+        generate_ts_host_interface_method(out, func);
+    }
+
+    out.push_str("}\n\n");
+}
+
+/// Generate `host/contracts.ts` — host interfaces for each host contract.
+fn generate_host_contracts_ts(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(
+        "// THIS FILE IS AUTO-GENERATED BY polyplugc\n\
+         // DO NOT EDIT BY HAND\n\
+         // Runtime: js-quickjs (host-side interfaces)\n\n",
+    );
+
+    for contract in &ir.host_contracts {
+        generate_ts_host_contract_interface(&mut out, contract);
+    }
+
+    // Emit contract ID constants
+    out.push_str("// Contract ID constants\n");
+    for contract in &ir.host_contracts {
+        let iface_name: String = host_contract_name_to_ts_interface(&contract.name);
+        let const_name: String = iface_name.to_uppercase() + "_CONTRACT_ID";
+        out.push_str(&format!(
+            "/** Contract ID for `{}` (FNV-1a of \"host_contract:{}@{}\") */\n",
+            contract.name, contract.name, contract.version.major
+        ));
+        out.push_str(&format!(
+            "export const {} = 0x{:016X}n;\n\n",
+            const_name, contract.contract_id
+        ));
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use crate::ir::AbiBuiltin;
     use crate::ir::EnumDef;
     use crate::ir::EnumVariant;
+    use crate::ir::PrimitiveType;
     use crate::ir::ReprType;
+    use crate::ir::ResolvedFunction;
+    use crate::ir::ResolvedHostContract;
+    use crate::ir::ResolvedParam;
+    use crate::ir::Version;
 
     #[test]
     fn generate_js_quickjs_enum_non_bitflag() {
@@ -939,6 +1110,228 @@ mod tests {
         assert!(
             out.contains("Object.freeze({"),
             "missing Object.freeze: {out}"
+        );
+    }
+
+    // ─── Host Contract Interface Tests ────────────────────────────────────────
+
+    #[test]
+    fn host_contract_name_to_ts_interface_conversion() {
+        assert_eq!(
+            host_contract_name_to_ts_interface("host.logger"),
+            "HostLogger"
+        );
+        assert_eq!(
+            host_contract_name_to_ts_interface("host.fs.reader"),
+            "HostFsReader"
+        );
+        assert_eq!(
+            host_contract_name_to_ts_interface("host.HostLogger"),
+            "HostLogger"
+        );
+        assert_eq!(host_contract_name_to_ts_interface("logger"), "HostLogger");
+    }
+
+    #[test]
+    fn ts_host_param_type_mappings() {
+        assert_eq!(
+            ts_host_param_type(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "number"
+        );
+        assert_eq!(
+            ts_host_param_type(&ResolvedTypeRef::Primitive(PrimitiveType::U64)),
+            "{ lo: number; hi: number }"
+        );
+        assert_eq!(
+            ts_host_param_type(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            ts_host_param_type(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "Uint8Array"
+        );
+        assert_eq!(
+            ts_host_param_type(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn ts_host_return_type_mappings() {
+        assert_eq!(
+            ts_host_return_type(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
+            "number"
+        );
+        assert_eq!(
+            ts_host_return_type(&ResolvedTypeRef::AbiType(AbiBuiltin::StringView)),
+            "string"
+        );
+        assert_eq!(
+            ts_host_return_type(&ResolvedTypeRef::AbiType(AbiBuiltin::Buffer)),
+            "Uint8Array"
+        );
+        assert_eq!(
+            ts_host_return_type(&ResolvedTypeRef::UserDefined("MyStruct".to_owned())),
+            "MyStruct"
+        );
+    }
+
+    #[test]
+    fn generate_ts_host_contract_interface_produces_interface() {
+        let contract: ResolvedHostContract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![
+                ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                },
+                ResolvedFunction {
+                    name: "logf".to_owned(),
+                    function_id: 1,
+                    params: vec![
+                        ResolvedParam {
+                            name: "level".to_owned(),
+                            ty: ResolvedTypeRef::Primitive(PrimitiveType::U32),
+                        },
+                        ResolvedParam {
+                            name: "format".to_owned(),
+                            ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                        },
+                    ],
+                    returns: None,
+                },
+            ],
+        };
+        let mut out: String = String::new();
+        generate_ts_host_contract_interface(&mut out, &contract);
+        assert!(
+            out.contains("export interface HostLogger"),
+            "missing interface: {out}"
+        );
+        assert!(
+            out.contains("Log(message: string): void"),
+            "missing Log method: {out}"
+        );
+        assert!(
+            out.contains("Logf(level: number, format: string): void"),
+            "missing Logf method: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_host_contracts_ts_produces_file() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_host_contracts_ts(&ir);
+        assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
+        assert!(
+            out.contains("export interface HostLogger"),
+            "missing interface: {out}"
+        );
+        assert!(
+            out.contains("HOSTLOGGER_CONTRACT_ID"),
+            "missing constant: {out}"
+        );
+        assert!(
+            out.contains("0x123456789ABCDEF0n"),
+            "missing contract ID value: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_host_with_host_contracts_produces_contracts_file() {
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"host/contracts.ts".to_owned()),
+            "missing host/contracts.ts: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_host_without_host_contracts_no_contracts_file() {
+        let generator: JsQuickjsGenerator = JsQuickjsGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"host/contracts.ts".to_owned()),
+            "unexpected host/contracts.ts: {names:?}"
         );
     }
 }
