@@ -9,10 +9,6 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::PolyplugcError;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::compute_host_contract_id;
-use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -28,6 +24,10 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::compute_host_contract_id;
+use crate::ir::resolve_type_ref;
 
 // ─── Raw TOML AST structs ─────────────────────────────────────────────────────
 
@@ -944,8 +944,7 @@ mod tests {
 
     #[test]
     fn parse_host_contract_valid() {
-        let toml: &str =
-            "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n[[host_contract.functions]]\nname = \"log\"\n[[host_contract.functions.params]]\nname = \"message\"\ntype = \"StringView\"";
+        let toml: &str = "[[host_contract]]\nname = \"host.logger\"\nversion = \"1.0.0\"\n\n[[host_contract.functions]]\nname = \"log\"\n[[host_contract.functions.params]]\nname = \"message\"\ntype = \"StringView\"";
         let ir: ValidatedIr = parse_api_str(toml).expect("parse host contract");
         assert_eq!(ir.contracts.len(), 0);
     }
@@ -995,5 +994,25 @@ mod tests {
         let ir: ValidatedIr = parse_api_str(toml).expect("parse both contract types");
         assert_eq!(ir.contracts.len(), 1);
         assert_eq!(ir.contracts[0].name, "image.decode");
+    }
+
+    #[test]
+    fn parse_host_contract_invalid_version_rejected() {
+        let toml: &str = "[[host_contract]]\nname = \"host.logger\"\nversion = \"invalid\"\n";
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::ValidationFailed { .. })),
+            "expected ValidationFailed for invalid version format, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn parse_host_contract_version_overflow_rejected() {
+        let toml: &str = "[[host_contract]]\nname = \"host.logger\"\nversion = \"4294967296.0\"\n";
+        let result: Result<ValidatedIr, PolyplugcError> = parse_api_str(toml);
+        assert!(
+            matches!(result, Err(PolyplugcError::ValidationFailed { .. })),
+            "expected ValidationFailed for version overflow, got {result:?}",
+        );
     }
 }

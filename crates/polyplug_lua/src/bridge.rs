@@ -35,11 +35,11 @@ use mlua::Lua;
 
 use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::HostRuntimeBridge;
+use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
+use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostRuntime;
 use polyplug_abi::StringView;
-use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
-use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
 
 /// Bridge for Lua hosts implementing host contracts.
 ///

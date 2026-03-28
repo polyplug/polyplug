@@ -38,7 +38,9 @@ pub enum BridgeError {
     ContractNotFound { contract_id: u64 },
 
     /// The implementation type does not match the expected type for this contract.
-    #[error("implementation type mismatch for contract_id=0x{contract_id:016X}: expected {expected}, got {got}")]
+    #[error(
+        "implementation type mismatch for contract_id=0x{contract_id:016X}: expected {expected}, got {got}"
+    )]
     TypeMismatch {
         contract_id: u64,
         expected: String,

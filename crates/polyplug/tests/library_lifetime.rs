@@ -12,14 +12,14 @@ use polyplug::loader::parse_manifest;
 use polyplug::registry::Registry;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
-use polyplug_abi::bundle_id;
-use polyplug_abi::ffi::polyplug_host_alloc;
-use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
+use polyplug_abi::bundle_id;
+use polyplug_abi::ffi::polyplug_host_alloc;
+use polyplug_abi::ffi::polyplug_host_free;
 
 // ─── Stub host vtable callbacks ───────────────────────────────────────────────
 

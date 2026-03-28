@@ -1197,7 +1197,10 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    return obj\n");
     out.push_str("end\n\n");
 
-    out.push_str(&format!("function {}.from_host(host_ptr, min_version)\n", class_name));
+    out.push_str(&format!(
+        "function {}.from_host(host_ptr, min_version)\n",
+        class_name
+    ));
     out.push_str("    if min_version == nil then min_version = 0 end\n");
     out.push_str("    if host_ptr == nil then\n");
     out.push_str("        return nil\n");
@@ -1244,7 +1247,10 @@ fn generate_lua_guest_host_contract_method(
         format!("self, {}", params.join(", "))
     };
 
-    out.push_str(&format!("function {}:{}({})\n", class_name, func.name, params_str));
+    out.push_str(&format!(
+        "function {}:{}({})\n",
+        class_name, func.name, params_str
+    ));
 
     out.push_str("    if self._vtable == nil then\n");
     if has_return {
@@ -1555,10 +1561,7 @@ mod tests {
 
     #[test]
     fn host_contract_name_to_lua_class_basic() {
-        assert_eq!(
-            host_contract_name_to_lua_class("host.logger"),
-            "HostLogger"
-        );
+        assert_eq!(host_contract_name_to_lua_class("host.logger"), "HostLogger");
     }
 
     #[test]

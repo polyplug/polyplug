@@ -22,14 +22,14 @@ pub use config::PythonConfig;
 
 use std::path::Path;
 
+use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::Python;
 
 use polyplug::error::LoaderError;
 use polyplug::error::PolyplugError;
-use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::HostVTable;

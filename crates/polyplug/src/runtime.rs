@@ -1633,7 +1633,11 @@ mod tests {
 
     // --- Host Contract Tests ---
 
-    fn create_host_contract_vtable(contract_id: u64, major: u32, minor: u32) -> &'static HostContractVTable {
+    fn create_host_contract_vtable(
+        contract_id: u64,
+        major: u32,
+        minor: u32,
+    ) -> &'static HostContractVTable {
         Box::leak(Box::new(HostContractVTable {
             header: polyplug_abi::HostContractVTableHeader {
                 vtable_version: 1,
@@ -1660,12 +1664,14 @@ mod tests {
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
         let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
 
-        let result: Result<(), HostContractError> = runtime.register_host_contract(contract_id, vtable);
+        let result: Result<(), HostContractError> =
+            runtime.register_host_contract(contract_id, vtable);
         assert!(result.is_ok(), "registration should succeed");
 
         let found: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
         assert!(found.is_some(), "contract should be found");
-        let found_vtable: &HostContractVTable = found.expect("contract should be present after is_some check");
+        let found_vtable: &HostContractVTable =
+            found.expect("contract should be present after is_some check");
         assert_eq!(found_vtable.header.contract_id, contract_id);
     }
 
@@ -1679,10 +1685,12 @@ mod tests {
         let vtable1: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
         let vtable2: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 1);
 
-        let result1: Result<(), HostContractError> = runtime.register_host_contract(contract_id, vtable1);
+        let result1: Result<(), HostContractError> =
+            runtime.register_host_contract(contract_id, vtable1);
         assert!(result1.is_ok(), "first registration should succeed");
 
-        let result2: Result<(), HostContractError> = runtime.register_host_contract(contract_id, vtable2);
+        let result2: Result<(), HostContractError> =
+            runtime.register_host_contract(contract_id, vtable2);
         assert!(result2.is_err(), "duplicate registration should fail");
         match result2 {
             Err(HostContractError::DuplicateContract { contract_id: id }) => {
@@ -1702,16 +1710,27 @@ mod tests {
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
         let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
 
-        runtime.register_host_contract(contract_id, vtable).expect("registration should succeed");
+        runtime
+            .register_host_contract(contract_id, vtable)
+            .expect("registration should succeed");
 
         let removed: bool = runtime.unregister_host_contract(contract_id);
-        assert!(removed, "unregister should return true for existing contract");
+        assert!(
+            removed,
+            "unregister should return true for existing contract"
+        );
 
         let removed_again: bool = runtime.unregister_host_contract(contract_id);
-        assert!(!removed_again, "unregister should return false for non-existent contract");
+        assert!(
+            !removed_again,
+            "unregister should return false for non-existent contract"
+        );
 
         let found: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
-        assert!(found.is_none(), "contract should not be found after unregister");
+        assert!(
+            found.is_none(),
+            "contract should not be found after unregister"
+        );
     }
 
     #[test]
@@ -1723,19 +1742,31 @@ mod tests {
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 2);
         let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 2, 5);
 
-        runtime.register_host_contract(contract_id, vtable).expect("registration should succeed");
+        runtime
+            .register_host_contract(contract_id, vtable)
+            .expect("registration should succeed");
 
-        let found_low: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
+        let found_low: Option<&'static HostContractVTable> =
+            runtime.get_host_contract(contract_id, 0);
         assert!(found_low.is_some(), "should find with min_version=0");
 
-        let found_exact: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, (2 << 16) | 5);
+        let found_exact: Option<&'static HostContractVTable> =
+            runtime.get_host_contract(contract_id, (2 << 16) | 5);
         assert!(found_exact.is_some(), "should find with exact version");
 
-        let found_higher_minor: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, (2 << 16) | 3);
-        assert!(found_higher_minor.is_some(), "should find with lower minor version requirement");
+        let found_higher_minor: Option<&'static HostContractVTable> =
+            runtime.get_host_contract(contract_id, (2 << 16) | 3);
+        assert!(
+            found_higher_minor.is_some(),
+            "should find with lower minor version requirement"
+        );
 
-        let found_higher_major: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 3 << 16);
-        assert!(found_higher_major.is_none(), "should not find with higher major version requirement");
+        let found_higher_major: Option<&'static HostContractVTable> =
+            runtime.get_host_contract(contract_id, 3 << 16);
+        assert!(
+            found_higher_major.is_none(),
+            "should not find with higher major version requirement"
+        );
     }
 
     #[test]
@@ -1764,17 +1795,24 @@ mod tests {
         let contract_id: u64 = polyplug_abi::host_contract_id("host.test", 1);
         let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
 
-        runtime.register_host_contract(contract_id, vtable).expect("registration should succeed");
+        runtime
+            .register_host_contract(contract_id, vtable)
+            .expect("registration should succeed");
 
         let host_ctx: HostContext = HostContext {
             runtime: &runtime as *const Runtime as *mut Runtime,
             bundle_id: 0,
         };
-        let rt_ptr: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        let rt_ptr: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
-        let result: *const HostContractVTable = unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
-        assert!(!result.is_null(), "callback should return non-null for registered contract");
+        let result: *const HostContractVTable =
+            unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
+        assert!(
+            !result.is_null(),
+            "callback should return non-null for registered contract"
+        );
 
         // SAFETY: result is a valid HostContractVTable pointer
         let found_vtable: &HostContractVTable = unsafe { &*result };
@@ -1793,10 +1831,15 @@ mod tests {
             runtime: &runtime as *const Runtime as *mut Runtime,
             bundle_id: 0,
         };
-        let rt_ptr: *mut core::ffi::c_void = &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        let rt_ptr: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
-        let result: *const HostContractVTable = unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
-        assert!(result.is_null(), "callback should return null for unregistered contract");
+        let result: *const HostContractVTable =
+            unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
+        assert!(
+            result.is_null(),
+            "callback should return null for unregistered contract"
+        );
     }
 }

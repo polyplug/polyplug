@@ -5,10 +5,10 @@
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
 use crate::error::PolyplugcError;
-use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
+use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
