@@ -366,6 +366,9 @@ fn render_plugin_vtable_quickjs(
         out.push_str("\nfunction ");
         out.push_str(&wrapper_name);
         out.push_str("(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {\n");
+        // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
+        out.push_str("    // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.\n");
+        out.push_str("    // The host guarantees these pointers are properly aligned and sized before calling.\n");
         out.push_str("    var polyplug = globalThis.polyplug;\n");
         out.push_str("    if (!polyplug) return 1;\n");
         out.push_str("    var impl = ");
@@ -383,7 +386,10 @@ fn render_plugin_vtable_quickjs(
         // Read input StringView from args_ptr
         // StringView is { ptr_lo: u32, ptr_hi: u32, len: u32 } = 12 bytes
         // Use Number for pointer arithmetic (QuickJS Number can hold 53-bit integers)
+        out.push_str("    // SAFETY: Pointer arithmetic reconstructs the full 64-bit address from lo/hi halves.\n");
+        out.push_str("    // The loader guarantees the pointer is valid for the memory region being accessed.\n");
         out.push_str("    var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;\n");
+        out.push_str("    // SAFETY: readU32 reads 4 bytes from a valid memory location per the polyplug ABI.\n");
         out.push_str("    var input_ptr_lo = polyplug.readU32(args_ptr);\n");
         out.push_str("    var input_ptr_hi = polyplug.readU32(args_ptr + 4);\n");
         out.push_str("    var input_len = polyplug.readU32(args_ptr + 8);\n");
@@ -397,6 +403,10 @@ fn render_plugin_vtable_quickjs(
         out.push_str("(input);\n");
 
         // Write output StringView to out_ptr
+        out.push_str("    // SAFETY: out_ptr is a valid pointer to a StringView-sized buffer per ABI contract.\n");
+        out.push_str(
+            "    // writeU32 writes 4 bytes to valid memory locations per the polyplug ABI.\n",
+        );
         out.push_str("    var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;\n");
         out.push_str("    polyplug.writeU32(out_ptr, result.ptr_lo);\n");
         out.push_str("    polyplug.writeU32(out_ptr + 4, result.ptr_hi);\n");
@@ -1224,7 +1234,11 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     }
     out.push_str("        }\n");
 
+    // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
+    out.push_str("        // SAFETY: vtable.lo/hi are valid pointer halves per ABI contract.\n");
+    out.push_str("        // Pointer arithmetic reconstructs the full 64-bit address.\n");
     out.push_str("        const vtablePtr = this.vtable.lo + this.vtable.hi * 4294967296;\n");
+    out.push_str("        // SAFETY: readHostContractHeader reads from a valid vtable pointer per the polyplug ABI.\n");
     out.push_str("        const header = polyplug.readHostContractHeader(vtablePtr);\n");
     out.push_str(&format!(
         "        if ({fn_id} >= header.functionCount) {{\n"
@@ -1242,14 +1256,17 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     out.push_str("        const dispatchType = header.dispatchType;\n");
     out.push_str("        let err: { lo: number; hi: number };\n");
     out.push_str("        if (dispatchType === 0) {\n"); // DispatchType.Native
+    out.push_str("            // SAFETY: readU64 reads 8 bytes from a valid function table pointer per ABI contract.\n");
     out.push_str(&format!(
         "            const fnPtr = polyplug.readU64(header.functionsPtr + {fn_id} * 8);\n"
     ));
     out.push_str("            const implPtr = header.implPtr;\n");
+    out.push_str("            // SAFETY: callDispatchFn invokes a valid function pointer with properly aligned args/out per ABI contract.\n");
     out.push_str(
         "            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);\n",
     );
     out.push_str("        } else {\n"); // DispatchType.VirtualMachine
+    out.push_str("            // SAFETY: callVmDispatch invokes the VM dispatch with valid bridge data and args/out per ABI contract.\n");
     out.push_str(&format!(
         "            err = polyplug.callVmDispatch(header.bridgeData.lo, header.bridgeData.hi, {fn_id}, argsPtr, outPtr);\n"
     ));

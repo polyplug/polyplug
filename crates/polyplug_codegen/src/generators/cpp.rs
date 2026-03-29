@@ -456,6 +456,7 @@ fn generate_cpp_guest_abi_wrapper(
 
     if is_void_return {
         // For void, emit success return (call_expr already emits the call + newline)
+        out.push_str("        // SAFETY: out pointer is not dereferenced for void return per ABI contract.\n");
         out.push_str("        (void)out;\n");
         out.push_str("        return AbiError{ABI_OK, StringView{nullptr, 0}};\n");
     } else {
@@ -465,6 +466,10 @@ fn generate_cpp_guest_abi_wrapper(
             .map(cpp_type_name)
             .unwrap_or_else(|| "void".to_owned());
         out.push_str(&format!(
+            "        // SAFETY: out is a valid void* pointing to a {ret_type} per ABI contract.\n"
+        ));
+        out.push_str("        // The host guarantees proper alignment and size before calling this wrapper.\n");
+        out.push_str(&format!(
             "        *static_cast<{}*>(out) = result;\n",
             ret_type
         ));
@@ -472,8 +477,12 @@ fn generate_cpp_guest_abi_wrapper(
     }
 
     out.push_str("    } catch (const std::exception& e) {\n");
+    out.push_str("        // SAFETY: e.what() returns a valid null-terminated C string; reinterpret_cast preserves pointer validity.\n");
     out.push_str("        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};  // ABI_ERROR_GENERIC\n");
     out.push_str("    } catch (...) {\n");
+    out.push_str(
+        "        // SAFETY: panic_msg is a static constexpr string literal with known length 15.\n",
+    );
     out.push_str("        static constexpr const char* panic_msg = \"plugin panicked\";\n");
     out.push_str("        return AbiError{3U, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};  // ABI_ERROR_PANIC\n");
     out.push_str("    }\n");
@@ -495,7 +504,8 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
     if func.params.is_empty() {
         // No params — ignore args entirely
         return format!(
-            "        (void)args;\n        {}g_{}_impl->{}();\n",
+            "        // SAFETY: args is null for this function per ABI contract; no dereference needed.\n\
+             (void)args;\n        {}g_{}_impl->{}();\n",
             result_prefix, contract_lower, func.name
         );
     }
@@ -506,7 +516,9 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
             ResolvedTypeRef::UserDefined(type_name) => {
                 // Single user-defined struct param — dereference args directly
                 return format!(
-                    "        {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
+                    "        // SAFETY: args is a valid const void* pointing to a {type_name} per ABI contract.\n\
+             // The host guarantees proper alignment and size before calling this wrapper.\n\
+             {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
                     result_prefix, contract_lower, func.name, type_name
                 );
             }
@@ -514,7 +526,9 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
                 // Single primitive param — dereference args as the primitive type
                 let cpp_ty: String = cpp_type_name(&param.ty);
                 return format!(
-                    "        {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
+                    "        // SAFETY: args is a valid const void* pointing to a {cpp_ty} per ABI contract.\n\
+             // The host guarantees proper alignment and size before calling this wrapper.\n\
+             {}g_{}_impl->{}(*static_cast<const {}*>(args));\n",
                     result_prefix, contract_lower, func.name, cpp_ty
                 );
             }
@@ -526,6 +540,9 @@ fn build_guest_call_expr(contract_lower: &str, func: &ResolvedFunction) -> Strin
     let struct_name: String = format!("{}Args", func_name_cap);
 
     let mut code: String = String::new();
+    // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
+    code.push_str("        // SAFETY: args is a valid const void* pointing to a packed struct layout per ABI contract.\n");
+    code.push_str("        // The host guarantees proper alignment and size matching the struct definition below.\n");
     // Inline struct definition
     code.push_str(&format!("        struct {} {{", struct_name));
     for param in &func.params {
