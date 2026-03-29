@@ -53,6 +53,13 @@ impl CodeGenerator for LuaGenerator {
                 content: contracts_lua,
                 force_regenerate: false,
             });
+            // Emit host/vtable_factories.lua if there are host contracts
+            let vtable_factories_lua: String = generate_lua_host_vtable_factories_file(ir);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/vtable_factories.lua"),
+                content: vtable_factories_lua,
+                force_regenerate: false,
+            });
         }
 
         Ok(())
@@ -1481,6 +1488,296 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
 
     out.push_str("return M\n");
     out
+}
+
+// ─── Host VTable Factories Generation ─────────────────────────────────────────
+
+/// Generate all host-side vtable factories into a single file.
+fn generate_lua_host_vtable_factories_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(file_header());
+    out.push_str("local ffi = require(\"ffi\")\n\n");
+
+    out.push_str("-- ABI types for host contract vtables\n");
+    out.push_str("local ABI_OK = 0\n");
+    out.push_str("local ABI_ERROR_PANIC = 5\n\n");
+
+    out.push_str("local M = {}\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_lua_host_vtable_factory(&mut out, contract);
+    }
+
+    out.push_str("return M\n");
+    out
+}
+
+/// Generate vtable factories for one host contract.
+fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_lua_class(&contract.name);
+    let factory_name: String = format!(
+        "create_{}_vtable",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let factory_vm_name: String = format!(
+        "create_{}_vtable_vm",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let fn_count: usize = contract.functions.len();
+    let contract_id: u64 = contract.contract_id;
+    let major: u32 = contract.version.major;
+    let minor: u32 = contract.version.minor;
+
+    // NATIVE dispatch factory
+    out.push_str(&format!(
+        "-- Create a host contract vtable for `{}` with NATIVE dispatch.\n",
+        contract.name
+    ));
+    out.push_str("--\n");
+    out.push_str("-- Takes an implementation table and creates a vtable.\n");
+    out.push_str("-- The implementation must have methods matching the contract.\n");
+    out.push_str("--\n");
+    out.push_str("-- Memory:\n");
+    out.push_str("-- The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str(&format!(
+        "function M.{factory_name}(impl)\n"
+    ));
+    out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
+
+    // Generate thunks for each function
+    for func in &contract.functions {
+        generate_lua_host_thunk(out, func, &contract.name, &class_name);
+    }
+
+    // Static function pointer array
+    out.push_str(&format!("    local functions = ffi.new(\"void*[{fn_count}]\")\n"));
+    for (idx, func) in contract.functions.iter().enumerate() {
+        let thunk_name: String = format!(
+            "_{}_{}_thunk",
+            contract.name.replace('.', "_").to_lowercase(),
+            func.name
+        );
+        out.push_str(&format!(
+            "    functions[{idx}] = ffi.cast(\"void*\", ffi.cast(\"uint32_t (*)(const void*, const void*, void*)\", {thunk_name}))\n"
+        ));
+    }
+    out.push('\n');
+
+    // Create the vtable
+    out.push_str("    local vtable = ffi.new(\"HostContractVTable\")\n");
+    out.push_str("    vtable.header.vtable_version = 1\n");
+    out.push_str(&format!("    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"));
+    out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
+    out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
+    out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
+    out.push_str("    vtable.header.dispatch_type = 0  -- DispatchType.Native\n");
+    out.push_str("    vtable.dispatch.native.impl_ptr = nil  -- We use global _impl instead\n");
+    out.push_str("    vtable.dispatch.native.functions = functions\n\n");
+    out.push_str("    return vtable\n");
+    out.push_str("end\n\n");
+
+    // Global implementation storage
+    out.push_str(&format!(
+        "_{class_name}_impl = nil\n\n"
+    ));
+
+    // VM dispatch factory
+    out.push_str(&format!(
+        "-- Create a host contract vtable for `{}` with VM dispatch.\n",
+        contract.name
+    ));
+    out.push_str("--\n");
+    out.push_str("-- Used when the host implementation is in a VM language (Python, Lua, JS).\n");
+    out.push_str("--\n");
+    out.push_str("-- Arguments:\n");
+    out.push_str("--     bridge_data: Opaque pointer to VM-specific data\n");
+    out.push_str("--     dispatch_fn: Function to call for each contract function\n");
+    out.push_str("--\n");
+    out.push_str("-- Memory:\n");
+    out.push_str("-- The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str(&format!("function M.{factory_vm_name}(bridge_data, dispatch_fn)\n"));
+    out.push_str("    local vtable = ffi.new(\"HostContractVTable\")\n");
+    out.push_str("    vtable.header.vtable_version = 1\n");
+    out.push_str(&format!("    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"));
+    out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
+    out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
+    out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
+    out.push_str("    vtable.header.dispatch_type = 1  -- DispatchType.VirtualMachine\n");
+    out.push_str("    vtable.dispatch.vm.call = dispatch_fn\n");
+    out.push_str("    vtable.dispatch.vm.bridge_data = bridge_data\n\n");
+    out.push_str("    return vtable\n");
+    out.push_str("end\n\n");
+}
+
+/// Generate a thunk function for a host contract function.
+fn generate_lua_host_thunk(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_name: &str,
+    class_name: &str,
+) {
+    let thunk_name: String = format!(
+        "_{}_{}_thunk",
+        contract_name.replace('.', "_").to_lowercase(),
+        func.name
+    );
+    let has_return: bool = func.returns.is_some();
+
+    out.push_str(&format!(
+        "    local function {thunk_name}(impl_ptr, args, out)\n"
+    ));
+    out.push_str("        local ok, err = pcall(function()\n");
+    out.push_str(&format!("            local impl = _{class_name}_impl\n"));
+    out.push_str("            if impl == nil then\n");
+    out.push_str("                return ABI_ERROR_PANIC\n");
+    out.push_str("            end\n");
+
+    // Generate argument extraction
+    if !func.params.is_empty() {
+        generate_lua_host_thunk_args(out, func);
+    } else {
+        out.push_str("            local _ = args\n");
+    }
+
+    // Generate the method call
+    generate_lua_host_thunk_call(out, func, has_return);
+
+    // Handle return value
+    if has_return {
+        out.push_str(&format!(
+            "            -- SAFETY: out is a valid pointer per ABI contract.\n"
+        ));
+        out.push_str("            ffi.copy(out, result, ffi.sizeof(result))\n");
+    } else {
+        out.push_str("            local _ = out\n");
+    }
+
+    out.push_str("            return ABI_OK\n");
+    out.push_str("        end)\n");
+    out.push_str("        if not ok then\n");
+    out.push_str("            return ABI_ERROR_PANIC\n");
+    out.push_str("        end\n");
+    out.push_str("        return err\n");
+    out.push_str("    end\n\n");
+}
+
+/// Generate argument extraction for a host thunk.
+fn generate_lua_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        let ty_name: String = lua_host_abi_type_name(&param.ty);
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "            local {name}_sv = ffi.cast(\"StringView*\", args)[0]\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "            local {name} = ffi.string({name}_sv.ptr, {name}_sv.len)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "            local {name}_buf = ffi.cast(\"Buffer*\", args)[0]\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "            local {name} = ffi.string({name}_buf.ptr, {name}_buf.len)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "            local {name} = ffi.cast(\"{ty}*\", args)[0]\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+            }
+            _ => {
+                out.push_str(&format!(
+                    "            local {name} = ffi.cast(\"{ty}*\", args)[0]\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+            }
+        }
+    } else {
+        // Multiple params - use arg-pack struct
+        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        out.push_str(&format!(
+            "            local packed = ffi.cast(\"{pack_struct}*\", args)[0]\n"
+        ));
+        // Extract each param from the packed struct
+        for param in &func.params {
+            match &param.ty {
+                ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                    out.push_str(&format!(
+                        "            local {name} = ffi.string(packed.{name}.ptr, packed.{name}.len)\n",
+                        name = param.name
+                    ));
+                }
+                ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                    out.push_str(&format!(
+                        "            local {name} = ffi.string(packed.{name}.ptr, packed.{name}.len)\n",
+                        name = param.name
+                    ));
+                }
+                _ => {
+                    let ty_name: String = lua_host_param_type_annotation(&param.ty);
+                    out.push_str(&format!(
+                        "            local {name}: {ty} = packed.{name}\n",
+                        name = param.name,
+                        ty = ty_name
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Generate the method call inside a host thunk.
+fn generate_lua_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_return: bool) {
+    let call_args: String = if func.params.is_empty() {
+        String::new()
+    } else if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        param.name.clone()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| p.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if has_return {
+        let ret_ty: String = match func.returns.as_ref() {
+            Some(ret) => lua_host_abi_type_name(ret),
+            None => String::from("void"),
+        };
+        out.push_str(&format!(
+            "            local result = impl:{func_name}({call_args})\n",
+            func_name = func.name
+        ));
+    } else {
+        out.push_str(&format!(
+            "            impl:{func_name}({call_args})\n",
+            func_name = func.name
+        ));
+    }
+}
+
+/// Generate ABI type name for host thunk arguments.
+fn lua_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => p.cpp_name().to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "void*".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
 }
 
 // Compile-time assertion that lua_type_name compiles for primitive types.
