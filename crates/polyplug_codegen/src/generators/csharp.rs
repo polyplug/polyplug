@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -1598,6 +1598,332 @@ fn generate_cs_host_contracts_file(ir: &ValidatedIr) -> String {
     out
 }
 
+// ─── Host VTable Factories Generation ───────────────────────────────────────────
+
+/// Generate all host-side vtable factories into a single file.
+fn generate_cs_host_vtable_factories_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(CS_HEADER);
+    out.push_str("using Polyplug.Host;\n");
+    out.push_str("using Polyplug.Abi;\n");
+    out.push_str("using System;\n");
+    out.push_str("using System.Runtime.CompilerServices;\n");
+    out.push_str("using System.Runtime.InteropServices;\n\n");
+    out.push_str("namespace Polyplug.Generated;\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_cs_host_vtable_factory(&mut out, contract);
+    }
+
+    out
+}
+
+/// Generate vtable factories for one host contract.
+fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostContract) {
+    let iface_name: String = host_contract_name_to_cs_interface(&contract.name);
+    let factory_name: String = format!("Create{}VTable", iface_name.trim_start_matches('I'));
+    let factory_vm_name: String = format!("Create{}VTableVm", iface_name.trim_start_matches('I'));
+    let fn_count: usize = contract.functions.len();
+    let contract_id: u64 = contract.contract_id;
+    let major: u32 = contract.version.major;
+    let minor: u32 = contract.version.minor;
+
+    // NATIVE dispatch factory
+    out.push_str(&format!(
+        "/// <summary>\n/// Create a host contract vtable for `{}` with NATIVE dispatch.\n/// </summary>\n",
+        contract.name
+    ));
+    out.push_str("/// <remarks>\n");
+    out.push_str("/// Takes a reference to the implementation and creates a vtable.\n");
+    out.push_str("/// The implementation must implement the interface.\n");
+    out.push_str("/// </remarks>\n");
+    out.push_str(&format!(
+        "public static HostContractVTable {}<T>(T impl) where T: {} {{\n",
+        factory_name, iface_name
+    ));
+    out.push_str("    // Store implementation reference in a static field\n");
+    out.push_str(&format!(
+        "    s_{}_impl = impl;\n\n",
+        iface_name.trim_start_matches('I')
+    ));
+
+    // Generate thunks for each function
+    for func in &contract.functions {
+        generate_cs_host_thunk(out, func, &contract.name, &iface_name);
+    }
+
+    // Static function pointer array
+    out.push_str(&format!(
+        "    var functions = new IntPtr[{}] {{\n",
+        fn_count
+    ));
+    for func in &contract.functions {
+        let thunk_name: String = format!(
+            "{}_{}_thunk",
+            contract.name.replace('.', "_").to_lowercase(),
+            func.name
+        );
+        out.push_str(&format!(
+            "        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>){}\n",
+            thunk_name
+        ));
+    }
+    out.push_str("    };\n\n");
+
+    // Pin the function array
+    out.push_str("    var functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);\n\n");
+
+    // Create the vtable
+    out.push_str("    return new HostContractVTable {\n");
+    out.push_str("        Header = new HostContractVTableHeader {\n");
+    out.push_str("            VTableVersion = 1,\n");
+    out.push_str(&format!(
+        "            ContractId = 0x{contract_id:016X}UL,\n"
+    ));
+    out.push_str(&format!("            ContractMajor = {major}u,\n"));
+    out.push_str(&format!("            ContractMinor = {minor}u,\n"));
+    out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+    out.push_str("            DispatchType = DispatchType.Native,\n");
+    out.push_str("        },\n");
+    out.push_str("        Dispatch = new HostContractDispatch {\n");
+    out.push_str("            Native = new NativeHostContractDispatch {\n");
+    out.push_str("                ImplPtr = IntPtr.Zero,  // We use static field instead\n");
+    out.push_str("                Functions = functionsHandle.AddrOfPinnedObject(),\n");
+    out.push_str("            },\n");
+    out.push_str("        },\n");
+    out.push_str("    };\n");
+    out.push_str("}\n\n");
+
+    // Static implementation storage
+    out.push_str(&format!(
+        "private static {}? s_{}_impl;\n\n",
+        iface_name,
+        iface_name.trim_start_matches('I')
+    ));
+
+    // VM dispatch factory
+    out.push_str(&format!(
+        "/// <summary>\n/// Create a host contract vtable for `{}` with VM dispatch.\n/// </summary>\n",
+        contract.name
+    ));
+    out.push_str("/// <remarks>\n");
+    out.push_str("/// Used when the host implementation is in a VM language (Python, Lua, JS).\n");
+    out.push_str("/// </remarks>\n");
+    out.push_str(&format!(
+        "public static HostContractVTable {}(\n",
+        factory_vm_name
+    ));
+    out.push_str("    IntPtr bridgeData,\n");
+    out.push_str("    VmHostContractDispatchFn dispatchFn\n");
+    out.push_str(") {\n");
+    out.push_str("    return new HostContractVTable {\n");
+    out.push_str("        Header = new HostContractVTableHeader {\n");
+    out.push_str("            VTableVersion = 1,\n");
+    out.push_str(&format!(
+        "            ContractId = 0x{contract_id:016X}UL,\n"
+    ));
+    out.push_str(&format!("            ContractMajor = {major}u,\n"));
+    out.push_str(&format!("            ContractMinor = {minor}u,\n"));
+    out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+    out.push_str("            DispatchType = DispatchType.VirtualMachine,\n");
+    out.push_str("        },\n");
+    out.push_str("        Dispatch = new HostContractDispatch {\n");
+    out.push_str("            Vm = new VmHostContractDispatch {\n");
+    out.push_str("                Call = dispatchFn,\n");
+    out.push_str("                BridgeData = bridgeData,\n");
+    out.push_str("            },\n");
+    out.push_str("        },\n");
+    out.push_str("    };\n");
+    out.push_str("}\n\n");
+}
+
+/// Generate a thunk function for a host contract function.
+fn generate_cs_host_thunk(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_name: &str,
+    iface_name: &str,
+) {
+    let thunk_name: String = format!(
+        "{}_{}_thunk",
+        contract_name.replace('.', "_").to_lowercase(),
+        func.name
+    );
+    let has_return: bool = func.returns.is_some();
+
+    out.push_str("[UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
+    out.push_str(&format!(
+        "private static AbiError {}(IntPtr implPtr, IntPtr argsPtr, IntPtr outPtr) {{\n",
+        thunk_name
+    ));
+    out.push_str("    try {\n");
+    out.push_str(&format!(
+        "        var impl = s_{}_impl ?? throw new InvalidOperationException(\"implementation not set\");\n",
+        iface_name.trim_start_matches('I')
+    ));
+
+    // Generate argument extraction
+    if !func.params.is_empty() {
+        generate_cs_host_thunk_args(out, func);
+    } else {
+        out.push_str("        _ = argsPtr;\n");
+    }
+
+    // Generate the interface method call
+    generate_cs_host_thunk_call(out, func, has_return);
+
+    // Handle return value
+    if has_return {
+        let _ret_ty: String = match func.returns.as_ref() {
+            Some(ret) => cs_host_return_type_name(ret),
+            None => String::from("void"),
+        };
+        out.push_str("        // SAFETY: outPtr is a valid pointer per ABI contract.\n");
+        out.push_str("        unsafe { Marshal.StructureToPtr(result, outPtr, false); }\n");
+    } else {
+        out.push_str("        _ = outPtr;\n");
+    }
+
+    out.push_str("        return new AbiError { Code = AbiConstants.ABI_OK };\n");
+    out.push_str("    } catch (Exception ex) {\n");
+    out.push_str("        var msg = StringHelpers.AllocString(ex.Message);\n");
+    out.push_str(
+        "        return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = msg };\n",
+    );
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+}
+
+/// Generate argument extraction for a host thunk.
+fn generate_cs_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        let ty_name: String = cs_host_abi_type_name(&param.ty);
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "        var {}_sv = Marshal.PtrToStructure<StringView>(argsPtr);\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        var {} = StringHelpers.StringViewToString({}_sv);\n",
+                    param.name, param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "        var {}_buf = Marshal.PtrToStructure<Buffer>(argsPtr);\n",
+                    param.name
+                ));
+                out.push_str(&format!(
+                    "        var {} = StringHelpers.BufferToByteArray({}_buf);\n",
+                    param.name, param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "        var {} = Marshal.PtrToStructure<{}>(argsPtr);\n",
+                    param.name, ty_name
+                ));
+            }
+            _ => {
+                out.push_str(&format!(
+                    "        var {} = Marshal.PtrToStructure<{}>(argsPtr);\n",
+                    param.name, ty_name
+                ));
+            }
+        }
+    } else {
+        // Multiple params - use arg-pack struct
+        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        out.push_str(&format!(
+            "        var packed = Marshal.PtrToStructure<{}>(argsPtr);\n",
+            pack_struct
+        ));
+        // Extract each param from the packed struct
+        for param in &func.params {
+            match &param.ty {
+                ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                    out.push_str(&format!(
+                        "        var {} = StringHelpers.StringViewToString(packed.{});\n",
+                        param.name,
+                        pascal_case(&param.name)
+                    ));
+                }
+                ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                    out.push_str(&format!(
+                        "        var {} = StringHelpers.BufferToByteArray(packed.{});\n",
+                        param.name,
+                        pascal_case(&param.name)
+                    ));
+                }
+                _ => {
+                    out.push_str(&format!(
+                        "        var {} = packed.{};\n",
+                        param.name,
+                        pascal_case(&param.name)
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Generate the interface method call inside a host thunk.
+fn generate_cs_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_return: bool) {
+    let call_args: String = if func.params.is_empty() {
+        String::new()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| p.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if has_return {
+        let _ret_ty: String = match func.returns.as_ref() {
+            Some(ret) => cs_host_return_type_name(ret),
+            None => String::from("void"),
+        };
+        out.push_str(&format!(
+            "        var result = impl.{}({});\n",
+            pascal_case(&func.name),
+            call_args
+        ));
+    } else {
+        out.push_str(&format!(
+            "        impl.{}({});\n",
+            pascal_case(&func.name),
+            call_args
+        ));
+    }
+}
+
+/// Generate ABI type name for host thunk arguments.
+fn cs_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => match p {
+            PrimitiveType::U8 => "byte".to_owned(),
+            PrimitiveType::U16 => "ushort".to_owned(),
+            PrimitiveType::U32 => "uint".to_owned(),
+            PrimitiveType::U64 => "ulong".to_owned(),
+            PrimitiveType::I8 => "sbyte".to_owned(),
+            PrimitiveType::I16 => "short".to_owned(),
+            PrimitiveType::I32 => "int".to_owned(),
+            PrimitiveType::I64 => "long".to_owned(),
+            PrimitiveType::F32 => "float".to_owned(),
+            PrimitiveType::F64 => "double".to_owned(),
+            PrimitiveType::Bool => "byte".to_owned(),
+        },
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "IntPtr".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "void".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
+    }
+}
+
 impl CodeGenerator for CSharpGenerator {
     fn language_name(&self) -> &'static str {
         "csharp"
@@ -1628,6 +1954,14 @@ impl CodeGenerator for CSharpGenerator {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/Contracts.cs"),
                 content: generate_cs_host_contracts_file(ir),
+                force_regenerate: false,
+            });
+        }
+        // Emit vtable_factories.cs if there are host contracts
+        if !ir.host_contracts.is_empty() {
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/VTableFactories.cs"),
+                content: generate_cs_host_vtable_factories_file(ir),
                 force_regenerate: false,
             });
         }
@@ -2219,6 +2553,160 @@ mod tests {
         assert!(
             !names.contains(&"guest/HostContracts.cs".to_owned()),
             "unexpected guest/HostContracts.cs: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_host_with_host_contracts_produces_vtable_factories_file() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"host/VTableFactories.cs".to_owned()),
+            "missing host/VTableFactories.cs: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_host_without_host_contracts_no_vtable_factories_file() {
+        let generator: CSharpGenerator = CSharpGenerator;
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![],
+            bundle: None,
+        };
+        let mut files: GeneratedFiles = GeneratedFiles::default();
+        generator
+            .generate_host(&ir, &mut files)
+            .expect("generate_host");
+        let names: Vec<String> = files
+            .files
+            .iter()
+            .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.contains(&"host/VTableFactories.cs".to_owned()),
+            "unexpected host/VTableFactories.cs: {names:?}"
+        );
+    }
+
+    #[test]
+    fn generate_cs_host_vtable_factories_file_produces_file() {
+        let ir: ValidatedIr = ValidatedIr {
+            types: vec![],
+            enums: vec![],
+            contracts: vec![],
+            host_contracts: vec![ResolvedHostContract {
+                name: "host.logger".to_owned(),
+                contract_id: 0x1234_5678_9ABC_DEF0_u64,
+                version: Version {
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                },
+                functions: vec![ResolvedFunction {
+                    name: "log".to_owned(),
+                    function_id: 0,
+                    params: vec![ResolvedParam {
+                        name: "message".to_owned(),
+                        ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                    }],
+                    returns: None,
+                }],
+            }],
+            bundle: None,
+        };
+        let out: String = generate_cs_host_vtable_factories_file(&ir);
+        assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
+        assert!(
+            out.contains("CreateHostLoggerVTable<T>"),
+            "missing NATIVE factory: {out}"
+        );
+        assert!(
+            out.contains("CreateHostLoggerVTableVm"),
+            "missing VM factory: {out}"
+        );
+        assert!(
+            out.contains("where T: IHostLogger"),
+            "missing interface constraint: {out}"
+        );
+        assert!(
+            out.contains("VmHostContractDispatchFn"),
+            "missing VM dispatch type: {out}"
+        );
+    }
+
+    #[test]
+    fn generate_cs_host_vtable_factory_produces_native_and_vm_factories() {
+        let contract = ResolvedHostContract {
+            name: "host.logger".to_owned(),
+            contract_id: 0x1234_5678_9ABC_DEF0_u64,
+            version: Version {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
+            functions: vec![ResolvedFunction {
+                name: "log".to_owned(),
+                function_id: 0,
+                params: vec![ResolvedParam {
+                    name: "message".to_owned(),
+                    ty: ResolvedTypeRef::AbiType(AbiBuiltin::StringView),
+                }],
+                returns: None,
+            }],
+        };
+        let mut out: String = String::new();
+        generate_cs_host_vtable_factory(&mut out, &contract);
+        assert!(
+            out.contains("CreateHostLoggerVTable<T>"),
+            "missing NATIVE factory: {out}"
+        );
+        assert!(
+            out.contains("CreateHostLoggerVTableVm"),
+            "missing VM factory: {out}"
+        );
+        assert!(
+            out.contains("DispatchType.Native"),
+            "missing Native dispatch type: {out}"
+        );
+        assert!(
+            out.contains("DispatchType.VirtualMachine"),
+            "missing VM dispatch type: {out}"
+        );
+        assert!(
+            out.contains("host_logger_log_thunk"),
+            "missing thunk function: {out}"
         );
     }
 }
