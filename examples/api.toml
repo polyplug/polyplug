@@ -60,3 +60,42 @@ version = "1.0.0"
 name = "validate"
 params = [{ name = "input", type = "StringView" }]
 return = "StringView"
+
+# Custom enum type for logging levels
+[[enum]]
+name = "LogLevel"
+repr = "u32"
+
+[[enum.variants]]
+name = "Debug"
+value = "0"
+
+[[enum.variants]]
+name = "Info"
+value = "1"
+
+[[enum.variants]]
+name = "Warn"
+value = "2"
+
+[[enum.variants]]
+name = "Error"
+value = "3"
+
+# Host contract: Logging service provided by host to plugins
+[[host_contract]]
+name = "host.logger"
+version = "1.0.0"
+
+[[host_contract.functions]]
+name = "log"
+params = [{ name = "message", type = "StringView" }]
+returns = "void"
+
+[[host_contract.functions]]
+name = "log_with_level"
+params = [
+    { name = "level", type = "LogLevel" },
+    { name = "message", type = "StringView" }
+]
+returns = "void"
