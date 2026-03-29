@@ -26,6 +26,7 @@ function polyplug_init(rt_ctx, host_ptr, ctx_ptr)
     if ctx_ptr == nil then
         return ABI_ERROR_GENERIC
     end
+    polyplug_guest.store_host_vtable(host_ptr)
     local ctx = polyplug_guest.cast_context(ctx_ptr)
     local host = ffi.cast("HostVTable*", host_ptr)
 

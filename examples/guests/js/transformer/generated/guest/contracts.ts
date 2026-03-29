@@ -31,16 +31,25 @@ export const TRANSFORMER_DESCRIPTOR = {
 };
 
 function transformer_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.
+    // The host guarantees these pointers are properly aligned and sized before calling.
     var polyplug = globalThis.polyplug;
     if (!polyplug) return 1;
     var impl = TRANSFORMER_IMPL;
     if (!impl) return 1;
+    if (args_ptr_lo === 0 && args_ptr_hi === 0) return 8;
+    if (out_ptr_lo === 0 && out_ptr_hi === 0) return 8;
+    // SAFETY: Pointer arithmetic reconstructs the full 64-bit address from lo/hi halves.
+    // The loader guarantees the pointer is valid for the memory region being accessed.
     var args_ptr = args_ptr_lo + args_ptr_hi * 4294967296;
+    // SAFETY: readU32 reads 4 bytes from a valid memory location per the polyplug ABI.
     var input_ptr_lo = polyplug.readU32(args_ptr);
     var input_ptr_hi = polyplug.readU32(args_ptr + 4);
     var input_len = polyplug.readU32(args_ptr + 8);
     var input = { ptr_lo: input_ptr_lo, ptr_hi: input_ptr_hi, len: input_len };
     var result = impl.fn0(input);
+    // SAFETY: out_ptr is a valid pointer to a StringView-sized buffer per ABI contract.
+    // writeU32 writes 4 bytes to valid memory locations per the polyplug ABI.
     var out_ptr = out_ptr_lo + out_ptr_hi * 4294967296;
     polyplug.writeU32(out_ptr, result.ptr_lo);
     polyplug.writeU32(out_ptr + 4, result.ptr_hi);

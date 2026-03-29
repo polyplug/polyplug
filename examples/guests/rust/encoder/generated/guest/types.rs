@@ -5,3 +5,14 @@
 #![allow(non_snake_case)]
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
+
+/// Enum `LogLevel` (repr u32)
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+

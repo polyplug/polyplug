@@ -5,6 +5,7 @@
 import {
     DECODER_VTABLE
 } from './contracts';
+import { storeHostVtable } from 'polyplug-guest';
 
 // ABI constants
 const ABI_OK = 0;
@@ -31,6 +32,9 @@ export function polyplug_init(
     if (ctx_lo === 0 && ctx_hi === 0) {
         return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
+
+    // Store host vtable for later access via getHostVtable()
+    storeHostVtable(host_lo, host_hi);
 
     // Get polyplug host interface from globalThis
     const polyplug = (globalThis as any).polyplug;

@@ -30,12 +30,18 @@ inline AbiError reporter_report_abi(const void* args, void* out) noexcept {
         if (out == nullptr) {
             return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
         }
-        auto result = g_reporter_impl->report(*static_cast<const StringView*>(args));
+        // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
+// The host guarantees proper alignment and size before calling this wrapper.
+auto result = g_reporter_impl->report(*static_cast<const StringView*>(args));
+        // SAFETY: out is a valid void* pointing to a StringView per ABI contract.
+        // The host guarantees proper alignment and size before calling this wrapper.
         *static_cast<StringView*>(out) = result;
         return AbiError{ABI_OK, StringView{nullptr, 0}};
     } catch (const std::exception& e) {
+        // SAFETY: e.what() returns a valid null-terminated C string; reinterpret_cast preserves pointer validity.
         return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(e.what()), std::strlen(e.what())}};  // ABI_ERROR_GENERIC
     } catch (...) {
+        // SAFETY: panic_msg is a static constexpr string literal with known length 15.
         static constexpr const char* panic_msg = "plugin panicked";
         return AbiError{3U, StringView{reinterpret_cast<const uint8_t*>(panic_msg), 15}};  // ABI_ERROR_PANIC
     }

@@ -3,6 +3,7 @@
 #pragma once
 #include "vtables.hpp"
 #include "polyplug/abi.hpp"
+#include "polyplug/guest.hpp"
 
 namespace polyplug_plugin {
 
@@ -19,6 +20,9 @@ extern "C" AbiError polyplug_init(void* rt_ctx, const HostVTable* host, const Pl
         static constexpr const char* err_msg = "null parameter in polyplug_init";
         return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
     }
+
+    // Store host vtable for later access via polyplug::get_host_vtable()
+    polyplug::store_host_vtable(host);
 
     // Register plugin: decoder
     polyplug_plugin::set_decoder_impl(polyplug_plugin::create_decoder_impl());

@@ -5,14 +5,16 @@
 import {
     TRANSFORMER_VTABLE
 } from './contracts';
+import { storeHostVtable } from 'polyplug-guest';
 
 // ABI constants
 const ABI_OK = 0;
 const ABI_ERROR_GENERIC = 1;
+const ABI_ERROR_INVALID_POINTER = 8;
 
 interface AbiError {
     code: number;
-    message: { ptr: number; len: number } | null;
+    message: { ptr: number; len: number };
 }
 
 export function polyplug_init(
@@ -22,19 +24,22 @@ export function polyplug_init(
 ): AbiError {
     // Validate parameters
     if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {
-        return { code: ABI_ERROR_GENERIC, message: null };
+        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
     if (host_lo === 0 && host_hi === 0) {
-        return { code: ABI_ERROR_GENERIC, message: null };
+        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
     if (ctx_lo === 0 && ctx_hi === 0) {
-        return { code: ABI_ERROR_GENERIC, message: null };
+        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
+
+    // Store host vtable for later access via getHostVtable()
+    storeHostVtable(host_lo, host_hi);
 
     // Get polyplug host interface from globalThis
     const polyplug = (globalThis as any).polyplug;
     if (!polyplug || !polyplug.registerVtable) {
-        return { code: ABI_ERROR_GENERIC, message: null };
+        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
 
     // Register plugin: transformer
@@ -46,5 +51,5 @@ export function polyplug_init(
         TRANSFORMER_VTABLE.contractName
     );
 
-    return { code: ABI_OK, message: null };
+    return { code: ABI_OK, message: { ptr: 0, len: 0 } };
 }

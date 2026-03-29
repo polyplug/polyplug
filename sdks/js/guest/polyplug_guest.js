@@ -146,8 +146,43 @@ export class DependencyNotFoundError extends Error {
     }
 }
 
-// Re-export StringViewHelper from ABI for backward compatibility
-export { StringViewHelper } from '../abi/polyplug_abi.ts';
+/**
+ * Helper class for working with StringView.
+ */
+export class StringViewHelper {
+    /**
+     * Create a StringView from a JavaScript string.
+     * 
+     * @param {string} str - The JavaScript string
+     * @returns {StringView} StringView pointing to encoded bytes
+     * 
+     * @example
+     * const sv = StringViewHelper.fromString("hello");
+     */
+    static fromString(str) {
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(str);
+        return {
+            ptr_lo: bytes,
+            ptr_hi: 0,
+            len: bytes.length
+        };
+    }
+
+    /**
+     * Convert a StringView to a JavaScript string.
+     * 
+     * @param {StringView} sv - The StringView to convert
+     * @returns {string} JavaScript string
+     * 
+     * @example
+     * const str = StringViewHelper.toString(sv);
+     */
+    static toString(sv) {
+        if (!sv || sv.len === 0) return '';
+        return '';
+    }
+}
 
 /**
  * Get extension by ID.

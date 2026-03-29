@@ -6,6 +6,7 @@ from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
 from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
+from polyplug_guest import store_host_vtable
 
 if TYPE_CHECKING:
     from ctypes import _Pointer as _CtypesPointer
@@ -82,6 +83,7 @@ def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
         return
     if ctx_ptr == 0:
         return
+    store_host_vtable(host_ptr)
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))
     err_TRANSFORMER: AbiError = host.contents.register_plugin(

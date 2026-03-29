@@ -231,7 +231,7 @@ export interface PluginInterface {
 export interface HostVTable {
     register_plugin: (rt_ctx: bigint, descriptor: bigint, vtable: bigint) => AbiError;
     alloc: (rt_ctx: bigint, size: number, align: number) => bigint;
-    free: (rt_ctx: bigint, ptr: bigint, size: number, align: number, arg4: )) => void;
+    free: (rt_ctx: bigint, ptr: bigint, size: number, align: number) => void;
     find_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number) => PluginHandle;
     find_by_bundle: (rt_ctx: bigint, bundle_id: bigint, contract_id: bigint, min_version: number) => PluginHandle;
     find_all_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number, out: bigint, out_cap: number) => number;

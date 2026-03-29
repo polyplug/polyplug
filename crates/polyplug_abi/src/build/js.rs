@@ -92,7 +92,31 @@ impl JsGenerator {
 
         // Extract parameters
         let params_start: usize = type_name.find("fn(").map(|p| p + 3).unwrap_or(0);
-        let params_end: usize = type_name.find(")->").unwrap_or(type_name.len());
+
+        // Find the end of parameters:
+        // - If there's a return type ()->..., use that position
+        // - Otherwise, find the closing ) by counting parentheses
+        let params_end: usize = if let Some(pos) = type_name.find(")->") {
+            pos
+        } else {
+            // No explicit return type - find closing ) by counting depth
+            let mut depth: i32 = 0;
+            let mut end_pos: usize = type_name.len();
+            for (i, c) in type_name[params_start..].chars().enumerate() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth < 0 {
+                            end_pos = params_start + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            end_pos
+        };
 
         if params_start == 0 || params_end <= params_start {
             return format!("() => {}", ts_return);
@@ -892,11 +916,9 @@ mod tests {
         assert_eq!(files.files.len(), 1);
         assert_eq!(files.files[0].path, PathBuf::from("polyplug_abi.ts"));
         assert!(files.files[0].content.contains("export const ABI_OK"));
-        assert!(
-            files.files[0]
-                .content
-                .contains("export interface StringView")
-        );
+        assert!(files.files[0]
+            .content
+            .contains("export interface StringView"));
     }
 
     /// Generate the polyplug_abi.ts file for the SDK.
@@ -930,4 +952,17 @@ mod tests {
 
         println!("Generated: {}", output_path.display());
     }
+}
+
+#[test]
+fn rust_type_to_ts_function_pointer_free() {
+    // This is the type string for the free function in HostVTable
+    // After quote::quote! removes spaces, it becomes:
+    let type_str =
+        "unsafeextern\"C\"fn(rt_ctx:*mutcore::ffi::c_void,ptr:*mutu8,size:usize,align:usize,)->()";
+    let result = JsGenerator::rust_type_to_ts(type_str);
+    println!("Result: {}", result);
+    // Expected: (rt_ctx: bigint, ptr: bigint, size: number, align: number) => void
+    assert!(!result.contains("arg4"), "Should not have arg4 parameter");
+    assert!(!result.contains("))"), "Should not have )) in the result");
 }

@@ -7,3 +7,11 @@ import ctypes
 from typing import ClassVar
 from polyplug_guest.abi import Buffer, StringView
 
+import enum
+
+class LogLevel(enum.IntEnum):
+    DEBUG = 0
+    INFO = 1
+    WARN = 2
+    ERROR = 3
+

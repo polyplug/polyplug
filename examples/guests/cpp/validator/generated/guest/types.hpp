@@ -12,4 +12,12 @@ constexpr uint64_t PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432;
 constexpr uint64_t DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297;
 constexpr uint64_t PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0;
 
+/// Enum `LogLevel` (repr: uint32_t)
+enum class LogLevel : uint32_t {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+};
+
 }  // namespace polyplug_generated
