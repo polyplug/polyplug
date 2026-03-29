@@ -15,6 +15,7 @@ except ImportError:
 
 from generated.host.callers import ExampleWorkerContractCaller
 from generated.host.contracts import HostLogger, HOSTLOGGER_CONTRACT_ID
+from generated.host.vtable_factories import create_host_logger_vtable
 
 
 class ConsoleLogger(HostLogger):
@@ -37,8 +38,8 @@ def main():
             if "register failed: 2" not in str(e):
                 raise
 
-    logger_impl = ConsoleLogger()
-    rt.register_host_contract(HOSTLOGGER_CONTRACT_ID, logger_impl)
+    vtable = create_host_logger_vtable(ConsoleLogger())
+    rt.register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
 
     if not Path(plugin_path).exists():
         print(f"plugin path does not exist: {plugin_path}")

@@ -7,7 +7,7 @@ local ffi = require("ffi")
 local M = {}
 
 -- Cached FFI types for hot path performance
-local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")
+local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, const void*, void*)")
 
 -- Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 HostLoggerContract = {}
@@ -54,8 +54,9 @@ function HostLoggerContract:log(self, message)
     local err
     if dispatch_type == 0 then
         local fn_ptr = header.dispatch.native.functions[0]
+        local impl_ptr = header.dispatch.native.impl_ptr
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        err = fn(args_ptr, out_ptr)
+        err = fn(impl_ptr, args_ptr, out_ptr)
     elseif dispatch_type == 1 then
         err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
     else

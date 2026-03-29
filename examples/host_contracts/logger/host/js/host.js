@@ -2,7 +2,8 @@
 
 import { openPolyplug, runtimeNew, NULL_HANDLE } from "../../../sdks/js/host/polyplug.js";
 import { ContractIds } from "./generated/host/callers.ts";
-import { HostLoggerContractId } from "./generated/host/contracts.ts";
+import { HOSTLOGGER_CONTRACT_ID } from "./generated/host/contracts.ts";
+import { createHostLoggerVtable } from "./generated/host/vtable_factories.ts";
 
 const pluginPath = Deno.env.get("POLYPLUG_PLUGIN_PATH")
   ?? "../../../examples/host_contracts/logger/plugins";
@@ -15,11 +16,14 @@ console.error(`loading plugins from: ${pluginPath}\n`);
 const lib = openPolyplug(libPath);
 const rt = runtimeNew(lib);
 
-const logImpl = (message: string): void => {
-  console.log(`[PLUGIN LOG] ${message}`);
+const consoleLogger = {
+  Log(message) {
+    console.log(`[PLUGIN LOG] ${message}`);
+  },
 };
 
-rt.registerHostContract(HostLoggerContractId, logImpl);
+const vtable = createHostLoggerVtable(consoleLogger);
+rt.registerHostContract(HOSTLOGGER_CONTRACT_ID, vtable);
 
 const bundleNames = [];
 for await (const entry of Deno.readDir(pluginPath)) {

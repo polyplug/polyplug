@@ -4,17 +4,20 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
+#include <memory>
 
-#include "generated/host/callers.hpp"
-#include "generated/host/contracts.hpp"
-#include "generated/host/types.hpp"
+#include "host_callers.hpp"
+#include "types.hpp"
+#include "host_contracts.hpp"
+#include "vtable_factories.hpp"
 
 namespace fs = std::filesystem;
 
-class ConsoleLogger : public HostLogger {
+class ConsoleLogger : public polyplug_host::HostLogger {
 public:
-    void log(const std::string& message) override {
-        std::cout << "[PLUGIN LOG] " << message << "\n";
+    void log(StringView message) override {
+        std::string_view msg(reinterpret_cast<const char*>(message.ptr), message.len);
+        std::cout << "[PLUGIN LOG] " << msg << "\n";
     }
 };
 
@@ -30,8 +33,8 @@ int main() {
 
     polyplug::loaders::register_native(rt);
 
-    auto logger_impl = std::make_shared<ConsoleLogger>();
-    rt.register_host_contract(HOSTLOGGER_CONTRACT_ID, logger_impl);
+    auto vtable = polyplug_host::create_host_logger_vtable(std::make_unique<ConsoleLogger>());
+    rt.register_host_contract(polyplug_host::HOSTLOGGER_CONTRACT_ID, vtable);
 
     std::vector<std::string> bundles;
     for (const auto& entry : fs::directory_iterator(plugin_path)) {

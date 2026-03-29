@@ -2303,10 +2303,14 @@ fn generate_python_host_thunk_call(out: &mut String, func: &ResolvedFunction, ha
             None => String::from("None"),
         };
         out.push_str(&format!(
-            "            result: {ret_ty} = impl.{func_name}({call_args})\n"
+            "            result: {ret_ty} = impl.{func_name}({call_args})\n",
+            func_name = func.name
         ));
     } else {
-        out.push_str(&format!("            impl.{func_name}({call_args})\n"));
+        out.push_str(&format!(
+            "            impl.{func_name}({call_args})\n",
+            func_name = func.name
+        ));
     }
 }
 

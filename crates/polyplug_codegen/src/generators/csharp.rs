@@ -1610,11 +1610,13 @@ fn generate_cs_host_vtable_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
     out.push_str("namespace Polyplug.Generated;\n\n");
+    out.push_str("public static class VTableFactories {\n");
 
     for contract in &ir.host_contracts {
         generate_cs_host_vtable_factory(&mut out, contract);
     }
 
+    out.push_str("}\n");
     out
 }
 
@@ -1627,6 +1629,18 @@ fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
+
+    // Generate thunks for each function (must be outside the factory method)
+    for func in &contract.functions {
+        generate_cs_host_thunk(out, func, &contract.name, &iface_name);
+    }
+
+    // Static implementation storage
+    out.push_str(&format!(
+        "private static {}? s_{}_impl;\n\n",
+        iface_name,
+        iface_name.trim_start_matches('I')
+    ));
 
     // NATIVE dispatch factory
     out.push_str(&format!(
@@ -1646,11 +1660,6 @@ fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
         "    s_{}_impl = impl;\n\n",
         iface_name.trim_start_matches('I')
     ));
-
-    // Generate thunks for each function
-    for func in &contract.functions {
-        generate_cs_host_thunk(out, func, &contract.name, &iface_name);
-    }
 
     // Static function pointer array
     out.push_str(&format!(
@@ -1693,13 +1702,6 @@ fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        },\n");
     out.push_str("    };\n");
     out.push_str("}\n\n");
-
-    // Static implementation storage
-    out.push_str(&format!(
-        "private static {}? s_{}_impl;\n\n",
-        iface_name,
-        iface_name.trim_start_matches('I')
-    ));
 
     // VM dispatch factory
     out.push_str(&format!(

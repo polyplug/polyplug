@@ -10,6 +10,7 @@ public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
     public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {
         if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;
+        HostVTableStorage.StoreHostVTable(hostPtr);
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {

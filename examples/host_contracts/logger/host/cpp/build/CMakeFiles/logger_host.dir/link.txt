@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/logger_host.dir/link.d CMakeFiles/logger_host.dir/main.cpp.o -o logger_host   -L/mnt/data/Projects/Utils/polyplug/examples/host_contracts/logger/host/cpp/../../../../../target/release/deps  -Wl,-rpath,/mnt/data/Projects/Utils/polyplug/examples/host_contracts/logger/host/cpp/../../../../../target/release/deps -lpolyplug

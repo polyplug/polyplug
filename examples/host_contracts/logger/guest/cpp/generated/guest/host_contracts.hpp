@@ -50,8 +50,8 @@ public:
         AbiError err;
         switch (header->dispatch_type) {
             case DispatchType::Native: {
-                auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->dispatch.native.functions[0_u32]);
-                err = fn_(args_ptr, out_ptr);
+                auto fn_ = reinterpret_cast<AbiError(*)(const void*, const void*, void*)>(vtable_->dispatch.native.functions[0_u32]);
+                err = fn_(vtable_->dispatch.native.impl_ptr, args_ptr, out_ptr);
                 break;
             }
             case DispatchType::VirtualMachine: {

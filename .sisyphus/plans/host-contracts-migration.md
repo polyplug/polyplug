@@ -1024,7 +1024,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 1. Implement host vtable generation in polyplugc
+- [x] 1. Implement host vtable generation in polyplugc
 
   **What to do**:
   
@@ -1354,7 +1354,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 1.5. Update runtime to support new thunk signature (ABI BREAKING CHANGE)
+- [x] 1.5. Update runtime to support new thunk signature (ABI BREAKING CHANGE)
 
   **What to do**:
   The new thunk signature adds `impl_ptr` as the first parameter:
@@ -1597,7 +1597,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 3. Implement C++ host vtable generator
+- [x] 3. Implement C++ host vtable generator
 
   **What to do**:
   Add host vtable factory generation to C++ generator.
@@ -1646,7 +1646,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 4. Implement C# host vtable generator
+- [x] 4. Implement C# host vtable generator
 
   **What to do**:
   Add host vtable factory generation to C# generator.
@@ -1695,7 +1695,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 5. Implement Python host vtable generator
+- [x] 5. Implement Python host vtable generator
 
   **What to do**:
   Add host vtable factory generation to Python generator.
@@ -1744,7 +1744,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 6. Implement Lua host vtable generator
+- [x] 6. Implement Lua host vtable generator
 
   **What to do**:
   Add host vtable factory generation to Lua generator.
@@ -1793,7 +1793,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 7. Implement JavaScript host vtable generator
+- [x] 7. Implement JavaScript host vtable generator
 
   **What to do**:
   Add host vtable factory generation to JavaScript generator.
@@ -1847,7 +1847,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 8. Add host.logger to api.toml (ULTIMATE - uses custom enum type!)
+- [x] 8. Add host.logger to api.toml (ULTIMATE - uses custom enum type!)
 
   **What to do**:
   - Add to `examples/api.toml`:
@@ -1941,7 +1941,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 9. Regenerate and update Rust example
+- [x] 9. Regenerate and update Rust example
 
   **What to do**:
   Regenerate code and update Rust host/reporter to use generated vtable factories.

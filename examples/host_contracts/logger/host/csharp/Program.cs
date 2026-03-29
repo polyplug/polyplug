@@ -53,8 +53,8 @@ class Program
             .PluginDir(pluginPath)
             .Build();
 
-        var loggerImpl = new ConsoleLogger();
-        rt.RegisterHostContract(HostLoggerConstants.HOSTLOGGER_CONTRACT_ID, loggerImpl);
+        var vtable = VTableFactories.CreateHostLoggerVTable(new ConsoleLogger());
+        rt.RegisterHostContract(HostLoggerConstants.IHOSTLOGGER_CONTRACT_ID, vtable);
 
         var bundles = Directory.GetDirectories(pluginPath)
             .Where(dir => File.Exists(Path.Combine(dir, "manifest.toml")))
@@ -92,7 +92,7 @@ class Program
     }
 }
 
-class ConsoleLogger : HostLogger
+class ConsoleLogger : IHostLogger
 {
     public void Log(string message)
     {

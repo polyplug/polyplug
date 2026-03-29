@@ -10,6 +10,7 @@ end
 
 local callers = require('generated.host.callers')
 local contracts = require('generated.host.contracts')
+local vtable_factories = require('generated.host.vtable_factories')
 
 local function get_plugin_path()
     local path = os.getenv('POLYPLUG_PLUGIN_PATH')
@@ -45,11 +46,19 @@ if not ok and not string.find(err, 'failed: 2') then
     error(err)
 end
 
-local function log_impl(message)
+-- Create logger implementation
+local ConsoleLogger = {}
+ConsoleLogger.__index = ConsoleLogger
+
+function ConsoleLogger:log(message)
     print('[PLUGIN LOG] ' .. message)
 end
 
-rt:register_host_contract(contracts.HOSTLOGGER_CONTRACT_ID, log_impl)
+local console_logger = setmetatable({}, ConsoleLogger)
+
+-- Create vtable using generated factory
+local vtable = vtable_factories.create_host_logger_vtable(console_logger)
+rt:register_host_contract(contracts.HOSTLOGGER_CONTRACT_ID, vtable)
 
 local bundles = {}
 for name in io.popen('ls -1 "' .. plugin_path .. '" 2>/dev/null'):lines() do

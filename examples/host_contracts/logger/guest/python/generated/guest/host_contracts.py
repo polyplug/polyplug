@@ -7,7 +7,7 @@ import ctypes
 from typing import Any, Self
 from polyplug_guest.abi import ABI_OK, AbiError, Buffer, DispatchType, HostContractVTable, HostVTable, StringView
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
 
 # Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 class HostLoggerContract:
@@ -41,8 +41,9 @@ class HostLoggerContract:
         err: AbiError
         if dispatch_type == DispatchType.Native:
             fn_ptr: int = ctypes.cast(header.dispatch.native.functions + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
+            impl_ptr: int = ctypes.cast(header.dispatch.native.impl_ptr, ctypes.c_void_p).value
             dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-            err = dispatch_fn(args_ptr, out_ptr)
+            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)
         elif dispatch_type == DispatchType.VirtualMachine:
             err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
         else:

@@ -52,8 +52,8 @@ public sealed class HostLoggerContract {
             AbiError err;
             switch (header->DispatchType) {
                 case DispatchType.Native: {
-                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[0u];
-                    err = fn_(argsPtr, outPtr);
+                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[0u];
+                    err = fn_(header->Dispatch.Native.ImplPtr, argsPtr, outPtr);
                     break;
                 }
                 case DispatchType.VirtualMachine: {
