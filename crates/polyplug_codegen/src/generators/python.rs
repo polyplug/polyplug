@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -75,6 +75,13 @@ impl CodeGenerator for PythonGenerator {
             files.files.push(GeneratedFile {
                 path: PathBuf::from("host/contracts.pyi"),
                 content: contracts_pyi,
+                force_regenerate: false,
+            });
+            // Emit host/vtable_factories.py if there are host contracts
+            let vtable_factories_py: String = generate_python_host_vtable_factories_file(ir);
+            files.files.push(GeneratedFile {
+                path: PathBuf::from("host/vtable_factories.py"),
+                content: vtable_factories_py,
                 force_regenerate: false,
             });
         }
@@ -1980,6 +1987,338 @@ fn generate_python_enum(out: &mut String, e: &EnumDef) {
         let upper_name: String = to_upper_snake_case(&variant.name);
         let subst_value: String = substitute_variant_refs_python(&e.variants, &variant.value);
         out.push_str(&format!("    {} = {}\n", upper_name, subst_value));
+    }
+}
+
+// ─── Host VTable Factories Generation ─────────────────────────────────────────
+
+/// Generate all host-side vtable factories into a single file.
+fn generate_python_host_vtable_factories_file(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str(PY_HEADER);
+    out.push_str("from __future__ import annotations\n");
+    out.push_str("import ctypes\n");
+    out.push_str("from typing import Callable, Any\n");
+    out.push_str("from polyplug.abi import (\n");
+    out.push_str("    HostContractVTable,\n");
+    out.push_str("    HostContractVTableHeader,\n");
+    out.push_str("    HostContractDispatch,\n");
+    out.push_str("    NativeHostContractDispatch,\n");
+    out.push_str("    VmHostContractDispatch,\n");
+    out.push_str("    DispatchType,\n");
+    out.push_str("    StringView,\n");
+    out.push_str("    Buffer,\n");
+    out.push_str("    AbiError,\n");
+    out.push_str("    ABI_OK,\n");
+    out.push_str("    ABI_ERROR_PANIC,\n");
+    out.push_str(")\n");
+    out.push_str("from host.contracts import *\n\n");
+
+    for contract in &ir.host_contracts {
+        generate_python_host_vtable_factory(&mut out, contract);
+    }
+
+    out
+}
+
+/// Generate vtable factories for one host contract.
+fn generate_python_host_vtable_factory(out: &mut String, contract: &ResolvedHostContract) {
+    let class_name: String = host_contract_name_to_python_class(&contract.name);
+    let factory_name: String = format!(
+        "create_{}_vtable",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let factory_vm_name: String = format!(
+        "create_{}_vtable_vm",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let fn_count: usize = contract.functions.len();
+    let contract_id: u64 = contract.contract_id;
+    let major: u32 = contract.version.major;
+    let minor: u32 = contract.version.minor;
+
+    // NATIVE dispatch factory
+    out.push_str(&format!(
+        "# Create a host contract vtable for `{}` with NATIVE dispatch.\n",
+        contract.name
+    ));
+    out.push_str("#\n");
+    out.push_str("# Takes an implementation instance and creates a vtable.\n");
+    out.push_str("# The implementation must inherit from the ABC class.\n");
+    out.push_str("#\n");
+    out.push_str("# Memory:\n");
+    out.push_str("# The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str(&format!(
+        "def {factory_name}(impl: {class_name}) -> HostContractVTable:\n"
+    ));
+    out.push_str(&format!("    global _{class_name}_impl\n"));
+    out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
+
+    // Generate thunks for each function
+    for func in &contract.functions {
+        generate_python_host_thunk(out, func, &contract.name, &class_name);
+    }
+
+    // Static function pointer array
+    out.push_str(&format!("    functions = [\n"));
+    for func in &contract.functions {
+        let thunk_name: String = format!(
+            "_{}_{}_thunk",
+            contract.name.replace('.', "_").to_lowercase(),
+            func.name
+        );
+        out.push_str(&format!(
+            "        ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)({thunk_name}), ctypes.c_void_p),\n"
+        ));
+    }
+    out.push_str("    ]\n\n");
+
+    // Create the vtable
+    out.push_str("    vtable = HostContractVTable(\n");
+    out.push_str("        header=HostContractVTableHeader(\n");
+    out.push_str("            vtable_version=1,\n");
+    out.push_str(&format!("            contract_id=0x{contract_id:016X},\n"));
+    out.push_str(&format!("            contract_major={major},\n"));
+    out.push_str(&format!("            contract_minor={minor},\n"));
+    out.push_str(&format!("            function_count={fn_count},\n"));
+    out.push_str("            dispatch_type=DispatchType.Native,\n");
+    out.push_str("        ),\n");
+    out.push_str("        dispatch=HostContractDispatch(\n");
+    out.push_str("            native=NativeHostContractDispatch(\n");
+    out.push_str("                impl_ptr=0,  # We use global _impl instead\n");
+    out.push_str("                functions=functions,\n");
+    out.push_str("            ),\n");
+    out.push_str("        ),\n");
+    out.push_str("    )\n\n");
+    out.push_str("    return vtable\n\n");
+
+    // Global implementation storage
+    out.push_str(&format!(
+        "_{class_name}_impl: {class_name} | None = None\n\n"
+    ));
+
+    // VM dispatch factory
+    out.push_str(&format!(
+        "# Create a host contract vtable for `{}` with VM dispatch.\n",
+        contract.name
+    ));
+    out.push_str("#\n");
+    out.push_str("# Used when the host implementation is in a VM language (Python, Lua, JS).\n");
+    out.push_str("#\n");
+    out.push_str("# Arguments:\n");
+    out.push_str("#     bridge_data: Opaque pointer to VM-specific data\n");
+    out.push_str("#     dispatch_fn: Function to call for each contract function\n");
+    out.push_str("#\n");
+    out.push_str("# Memory:\n");
+    out.push_str("# The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str(&format!("def {factory_vm_name}(\n"));
+    out.push_str("    bridge_data: int,\n");
+    out.push_str("    dispatch_fn: Callable[[int, int, int, int], AbiError],\n");
+    out.push_str(") -> HostContractVTable:\n");
+    out.push_str("    vtable = HostContractVTable(\n");
+    out.push_str("        header=HostContractVTableHeader(\n");
+    out.push_str("            vtable_version=1,\n");
+    out.push_str(&format!("            contract_id=0x{contract_id:016X},\n"));
+    out.push_str(&format!("            contract_major={major},\n"));
+    out.push_str(&format!("            contract_minor={minor},\n"));
+    out.push_str(&format!("            function_count={fn_count},\n"));
+    out.push_str("            dispatch_type=DispatchType.VirtualMachine,\n");
+    out.push_str("        ),\n");
+    out.push_str("        dispatch=HostContractDispatch(\n");
+    out.push_str("            vm=VmHostContractDispatch(\n");
+    out.push_str("                call=dispatch_fn,\n");
+    out.push_str("                bridge_data=bridge_data,\n");
+    out.push_str("            ),\n");
+    out.push_str("        ),\n");
+    out.push_str("    )\n\n");
+    out.push_str("    return vtable\n\n");
+}
+
+/// Generate a thunk function for a host contract function.
+fn generate_python_host_thunk(
+    out: &mut String,
+    func: &ResolvedFunction,
+    contract_name: &str,
+    class_name: &str,
+) {
+    let thunk_name: String = format!(
+        "_{}_{}_thunk",
+        contract_name.replace('.', "_").to_lowercase(),
+        func.name
+    );
+    let has_return: bool = func.returns.is_some();
+
+    out.push_str(&format!(
+        "    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n"
+    ));
+    out.push_str(&format!(
+        "    def {thunk_name}(impl_ptr: int, args: int, out: int) -> AbiError:\n"
+    ));
+    out.push_str("        try:\n");
+    out.push_str(&format!("            impl = _{class_name}_impl\n"));
+    out.push_str("            if impl is None:\n");
+    out.push_str(
+        "                return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))\n",
+    );
+
+    // Generate argument extraction
+    if !func.params.is_empty() {
+        generate_python_host_thunk_args(out, func);
+    } else {
+        out.push_str("            _ = args\n");
+    }
+
+    // Generate the method call
+    generate_python_host_thunk_call(out, func, has_return);
+
+    // Handle return value
+    if has_return {
+        let ret_ty: String = match func.returns.as_ref() {
+            Some(ret) => python_host_return_type_name(ret),
+            None => String::from("None"),
+        };
+        out.push_str(&format!(
+            "            # SAFETY: out is a valid pointer per ABI contract.\n"
+        ));
+        out.push_str(&format!(
+            "            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n"
+        ));
+    } else {
+        out.push_str("            _ = out\n");
+    }
+
+    out.push_str("            return AbiError(code=ABI_OK, message=StringView(ptr=0, len=0))\n");
+    out.push_str("        except Exception:\n");
+    out.push_str(
+        "            return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))\n",
+    );
+    out.push_str("\n");
+}
+
+/// Generate argument extraction for a host thunk.
+fn generate_python_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
+    if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        let ty_name: String = python_host_abi_type_name(&param.ty);
+        match &param.ty {
+            ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&format!(
+                    "            {name}_sv: StringView = ctypes.cast(args, ctypes.POINTER(StringView)).contents\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "            {name}: str = ctypes.string_at({name}_sv.ptr, {name}_sv.len).decode('utf-8')\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&format!(
+                    "            {name}_buf: Buffer = ctypes.cast(args, ctypes.POINTER(Buffer)).contents\n",
+                    name = param.name
+                ));
+                out.push_str(&format!(
+                    "            {name}: bytes = ctypes.string_at({name}_buf.ptr, {name}_buf.len)\n",
+                    name = param.name
+                ));
+            }
+            ResolvedTypeRef::UserDefined(_) => {
+                out.push_str(&format!(
+                    "            {name}: {ty} = ctypes.cast(args, ctypes.POINTER({ty})).contents\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+            }
+            _ => {
+                out.push_str(&format!(
+                    "            {name}: {ty} = ctypes.cast(args, ctypes.POINTER({ty})).contents\n",
+                    name = param.name,
+                    ty = ty_name
+                ));
+            }
+        }
+    } else {
+        // Multiple params - use arg-pack struct
+        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        out.push_str(&format!(
+            "            class {pack_struct}(ctypes.Structure):\n"
+        ));
+        out.push_str("                _fields_ = [\n");
+        for param in &func.params {
+            let cpp_ty: String = python_host_abi_type_name(&param.ty);
+            out.push_str(&format!(
+                "                    (\"{}\", {}),\n",
+                param.name, cpp_ty
+            ));
+        }
+        out.push_str("                ]\n");
+        out.push_str(&format!(
+            "            packed: {pack_struct} = ctypes.cast(args, ctypes.POINTER({pack_struct})).contents\n"
+        ));
+        // Extract each param from the packed struct
+        for param in &func.params {
+            match &param.ty {
+                ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                    out.push_str(&format!(
+                        "            {name}: str = ctypes.string_at(packed.{name}.ptr, packed.{name}.len).decode('utf-8')\n",
+                        name = param.name
+                    ));
+                }
+                ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                    out.push_str(&format!(
+                        "            {name}: bytes = ctypes.string_at(packed.{name}.ptr, packed.{name}.len)\n",
+                        name = param.name
+                    ));
+                }
+                _ => {
+                    let ty_name: String = python_host_param_type_name(&param.ty);
+                    out.push_str(&format!(
+                        "            {name}: {ty} = packed.{name}\n",
+                        name = param.name,
+                        ty = ty_name
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Generate the method call inside a host thunk.
+fn generate_python_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_return: bool) {
+    let call_args: String = if func.params.is_empty() {
+        String::new()
+    } else if func.params.len() == 1 {
+        let param: &ResolvedParam = &func.params[0];
+        param.name.clone()
+    } else {
+        func.params
+            .iter()
+            .map(|p: &ResolvedParam| p.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    if has_return {
+        let ret_ty: String = match func.returns.as_ref() {
+            Some(ret) => python_host_return_type_name(ret),
+            None => String::from("None"),
+        };
+        out.push_str(&format!(
+            "            result: {ret_ty} = impl.{func_name}({call_args})\n"
+        ));
+    } else {
+        out.push_str(&format!("            impl.{func_name}({call_args})\n"));
+    }
+}
+
+/// Generate ABI type name for host thunk arguments.
+fn python_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
+    match ty {
+        ResolvedTypeRef::Primitive(p) => python_primitive_type(p).to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "StringView".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "Buffer".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "ctypes.c_void_p".to_owned(),
+        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "None".to_owned(),
+        ResolvedTypeRef::UserDefined(name) => name.clone(),
     }
 }
 
