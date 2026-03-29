@@ -554,7 +554,8 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("// Re-generate with: polyplugc generate --api api.toml --lang cpp --out <dir>\n");
     out.push_str("#pragma once\n");
     out.push_str("#include \"vtables.hpp\"\n");
-    out.push_str("#include \"polyplug/abi.hpp\"\n\n");
+    out.push_str("#include \"polyplug/abi.hpp\"\n");
+    out.push_str("#include \"polyplug/guest.hpp\"\n\n");
 
     out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
     if let Some(bundle) = &ir.bundle {
@@ -600,6 +601,8 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         "        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
     );
     out.push_str("    }\n\n");
+    out.push_str("    // Store host vtable for later access via polyplug::get_host_vtable()\n");
+    out.push_str("    polyplug::store_host_vtable(host);\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {

@@ -44,11 +44,23 @@ __all__ = [
     "DispatchType",
     "to_str",
     "alloc_string",
+    "store_host_vtable",
+    "get_host_vtable",
 ]
 
 
 _host_alloc = None
 _host_free = None
+_host_vtable_ptr: int = 0
+
+
+def store_host_vtable(host_vtable_ptr: int) -> None:
+    global _host_vtable_ptr
+    _host_vtable_ptr = host_vtable_ptr
+
+
+def get_host_vtable() -> int:
+    return _host_vtable_ptr
 
 
 def _init_allocator(host_vtable_ptr: int, rt_ctx: int) -> None:

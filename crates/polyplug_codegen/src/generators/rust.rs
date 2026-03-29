@@ -899,6 +899,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::PluginInterface;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::PluginContext;\n");
+    out.push_str("use polyplug_guest::store_host_vtable;\n");
     out.push_str("use core::ffi::c_void;\n");
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -955,7 +956,11 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
         "    let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated\n",
     );
     out.push_str("    // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("    let host: &HostVTable = unsafe { &*host };\n\n");
+    out.push_str("    let host: &HostVTable = unsafe { &*host };\n");
+    out.push_str(
+        "    // SAFETY: Called once during plugin init, before any host contract access.\n",
+    );
+    out.push_str("    unsafe { store_host_vtable(host as *const HostVTable); }\n\n");
     // Call user initialization hook if it exists
     out.push_str("    // Call user initialization to register plugin implementations\n");
     out.push_str("    unsafe extern \"C\" {\n");

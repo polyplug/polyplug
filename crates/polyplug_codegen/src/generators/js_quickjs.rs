@@ -548,7 +548,8 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         }
         out.push_str(&format!("    {plugin_var}_VTABLE"));
     }
-    out.push_str("\n} from './contracts';\n\n");
+    out.push_str("\n} from './contracts';\n");
+    out.push_str("import { storeHostVtable } from 'polyplug-guest';\n\n");
 
     out.push_str("// ABI constants\n");
     out.push_str("const ABI_OK = 0;\n");
@@ -575,7 +576,8 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("    if (ctx_lo === 0 && ctx_hi === 0) {\n");
     out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n\n");
-
+    out.push_str("    // Store host vtable for later access via getHostVtable()\n");
+    out.push_str("    storeHostVtable(host_lo, host_hi);\n\n");
     out.push_str("    // Get polyplug host interface from globalThis\n");
     out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
     out.push_str("    if (!polyplug || !polyplug.registerVtable) {\n");

@@ -594,6 +594,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         "    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n",
     );
     out.push_str("        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n");
+    out.push_str("        HostVTableStorage.StoreHostVTable(hostPtr);\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");

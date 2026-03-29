@@ -359,6 +359,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
     out.push_str("    if ctx_ptr == nil then\n");
     out.push_str("        return ABI_ERROR_GENERIC\n");
     out.push_str("    end\n");
+    out.push_str("    polyplug_guest.store_host_vtable(host_ptr)\n");
     out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
     out.push_str("    local host = ffi.cast(\"HostVTable*\", host_ptr)\n\n");
 

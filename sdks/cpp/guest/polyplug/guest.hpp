@@ -126,6 +126,28 @@ inline void operator delete[](void* ptr, std::size_t sz, std::align_val_t al) no
     }
 }
 
+// ─── Host VTable Storage ───────────────────────────────────────────────────────
+
+namespace polyplug {
+namespace detail {
+
+inline const HostVTable*& host_vtable_storage() noexcept {
+    static const HostVTable* stored = nullptr;
+    return stored;
+}
+
+}
+
+inline void store_host_vtable(const HostVTable* vtable) noexcept {
+    detail::host_vtable_storage() = vtable;
+}
+
+inline const HostVTable* get_host_vtable() noexcept {
+    return detail::host_vtable_storage();
+}
+
+}
+
 // ─── Entry point macro ───────────────────────────────────────────────────────
 
 /// Expand to the required extern "C" polyplug_init function signature.

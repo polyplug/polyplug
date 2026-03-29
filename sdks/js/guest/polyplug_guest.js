@@ -39,6 +39,18 @@ export const ABI_ERROR_PANIC = 3;
  */
 export const EXT_TRACE_ID = 0xC4EB9AEE;
 
+let _hostVtableLo = 0;
+let _hostVtableHi = 0;
+
+export function storeHostVtable(lo, hi) {
+    _hostVtableLo = lo;
+    _hostVtableHi = hi;
+}
+
+export function getHostVtable() {
+    return { lo: _hostVtableLo, hi: _hostVtableHi };
+}
+
 /**
  * A read-only view into a UTF-8 string in the host's address space.
  * 

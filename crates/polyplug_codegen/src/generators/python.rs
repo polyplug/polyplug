@@ -392,7 +392,8 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n");
+    out.push_str("from polyplug_guest import store_host_vtable\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
     out.push_str("    ctypes.POINTER = _CtypesPointer  # type: ignore[assignment]\n\n");
@@ -452,6 +453,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("        return\n");
     out.push_str("    if ctx_ptr == 0:\n");
     out.push_str("        return\n");
+    out.push_str("    store_host_vtable(host_ptr)\n");
     out.push_str("    ctx: PluginContext = PluginContext.from_address(ctx_ptr)\n");
     out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))\n");
 
