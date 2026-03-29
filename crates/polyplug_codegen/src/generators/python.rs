@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -1564,10 +1564,13 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     out.push_str(&format!(
         "            fn_ptr: int = ctypes.cast(header.dispatch.native.functions + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
+    out.push_str(&format!(
+        "            impl_ptr: int = ctypes.cast(header.dispatch.native.impl_ptr, ctypes.c_void_p).value\n"
+    ));
     out.push_str(
         "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );
-    out.push_str("            err = dispatch_fn(args_ptr, out_ptr)\n");
+    out.push_str("            err = dispatch_fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("        elif dispatch_type == DispatchType.VirtualMachine:\n");
     out.push_str(&format!(
         "            err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
@@ -1718,7 +1721,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     }
 
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)\n\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n\n",
     );
 
     for contract in &ir.host_contracts {

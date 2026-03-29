@@ -5,10 +5,10 @@
 //! - Guest-side: extern "C" ABI wrappers + abstract base classes + vtable statics
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -1466,9 +1466,11 @@ fn generate_cpp_guest_host_contract_method(
     out.push_str("        switch (header->dispatch_type) {\n");
     out.push_str("            case DispatchType::Native: {\n");
     out.push_str(&format!(
-        "                auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable_->dispatch.native.functions[{fn_id}_u32]);\n"
+        "                auto fn_ = reinterpret_cast<AbiError(*)(const void*, const void*, void*)>(vtable_->dispatch.native.functions[{fn_id}_u32]);\n"
     ));
-    out.push_str("                err = fn_(args_ptr, out_ptr);\n");
+    out.push_str(
+        "                err = fn_(vtable_->dispatch.native.impl_ptr, args_ptr, out_ptr);\n",
+    );
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
@@ -1754,12 +1756,10 @@ mod tests {
         // Now produces 3 files: types.hpp, host_callers.hpp, manifest.toml
         assert!(!files.files.is_empty());
         // At least one file contains the AUTO-GENERATED header
-        assert!(
-            files
-                .files
-                .iter()
-                .any(|f| f.content.contains("AUTO-GENERATED"))
-        );
+        assert!(files
+            .files
+            .iter()
+            .any(|f| f.content.contains("AUTO-GENERATED")));
     }
 
     #[test]

@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -1143,9 +1143,11 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("            switch (header->DispatchType) {\n");
     out.push_str("                case DispatchType.Native: {\n");
     out.push_str(&format!(
-        "                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[{fn_id}u];\n"
+        "                    var fn_ = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, IntPtr, AbiError>)header->Dispatch.Native.Functions[{fn_id}u];\n"
     ));
-    out.push_str("                    err = fn_(argsPtr, outPtr);\n");
+    out.push_str(
+        "                    err = fn_(header->Dispatch.Native.ImplPtr, argsPtr, outPtr);\n",
+    );
     out.push_str("                    break;\n");
     out.push_str("                }\n");
     out.push_str("                case DispatchType.VirtualMachine: {\n");

@@ -1279,8 +1279,9 @@ fn generate_lua_guest_host_contract_method(
     out.push_str(&format!(
         "        local fn_ptr = header.dispatch.native.functions[{fn_id}]\n"
     ));
+    out.push_str("        local impl_ptr = header.dispatch.native.impl_ptr\n");
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
-    out.push_str("        err = fn(args_ptr, out_ptr)\n");
+    out.push_str("        err = fn(impl_ptr, args_ptr, out_ptr)\n");
     out.push_str("    elseif dispatch_type == 1 then\n");
     out.push_str(&format!(
         "        err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, {fn_id}, args_ptr, out_ptr)\n"
@@ -1451,7 +1452,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("local M = {}\n\n");
 
     out.push_str("-- Cached FFI types for hot path performance\n");
-    out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, void*)\")\n\n");
+    out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, const void*, void*)\")\n\n");
 
     for contract in &ir.host_contracts {
         generate_lua_guest_host_contract_caller(&mut out, contract);

@@ -5,10 +5,10 @@
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -1822,9 +1822,11 @@ fn generate_guest_host_contract_method(
     out.push_str("                    // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
     out.push_str("                    // - Function pointers have the same size and alignment as data pointers\n");
     out.push_str("                    // - The vtable guarantees that the function at this index is a native dispatch\n");
-    out.push_str("                    //   with the exact signature: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError\n");
-    out.push_str("                    let dispatch_fn: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
-    out.push_str("                    dispatch_fn(args_ptr, out_ptr)\n");
+    out.push_str("                    //   with the exact signature: unsafe extern \"C\" fn(*const (), *const (), *mut ()) -> AbiError\n");
+    out.push_str("                    let dispatch_fn: unsafe extern \"C\" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
+    out.push_str(
+        "                    dispatch_fn(vtable.dispatch.native.impl_ptr, args_ptr, out_ptr)\n",
+    );
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
     out.push_str(&format!(

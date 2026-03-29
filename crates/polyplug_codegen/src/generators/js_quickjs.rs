@@ -1236,8 +1236,9 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     out.push_str(&format!(
         "            const fnPtr = polyplug.readU64(header.functionsPtr + {fn_id} * 8);\n"
     ));
+    out.push_str("            const implPtr = header.implPtr;\n");
     out.push_str(
-        "            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, argsPtr, outPtr);\n",
+        "            err = polyplug.callDispatchFn(fnPtr.lo, fnPtr.hi, implPtr.lo, implPtr.hi, argsPtr, outPtr);\n",
     );
     out.push_str("        } else {\n"); // DispatchType.VirtualMachine
     out.push_str(&format!(
