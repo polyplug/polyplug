@@ -9,7 +9,7 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_abi::host_contract_id;
-use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
+use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
 use std::path::PathBuf;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

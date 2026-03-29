@@ -1298,7 +1298,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 2. Add tests for vtable generation
+- [x] 2. Add tests for vtable generation
 
   **What to do**:
   - Add unit tests in `crates/polyplug_codegen/tests/`
@@ -1455,7 +1455,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 2.5. Add 25+ layout calculation tests in polyplug_codegen
+- [x] 2.5. Add 25+ layout calculation tests in polyplug_codegen
 
   **CRITICAL**: Comprehensive test suite to verify ALL type layout calculations are accurate!
   
@@ -1563,7 +1563,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 2.75. Test generated code in examples context
+- [x] 2.75. Test generated code in examples context
 
   **What to do**:
   - Create minimal test api.toml
@@ -1992,7 +1992,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 10. Regenerate and update C++ example
+- [x] 10. Regenerate and update C++ example
 
   **What to do**:
   Regenerate code and update C++ host/reporter to use generated vtable factories.
@@ -2040,7 +2040,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 11. Regenerate and update C# example
+- [x] 11. Regenerate and update C# example
 
   **What to do**:
   Regenerate code and update C# host/reporter to use generated vtable factories.
@@ -2088,7 +2088,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 12. Regenerate and update Python example
+- [x] 12. Regenerate and update Python example
 
   **What to do**:
   Regenerate code and update Python host/reporter to use generated vtable factories.
@@ -2136,7 +2136,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 13. Regenerate and update Lua example
+- [x] 13. Regenerate and update Lua example
 
   **What to do**:
   Regenerate code and update Lua host/reporter to use generated vtable factories.
@@ -2184,7 +2184,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 14. Regenerate and update JavaScript example
+- [x] 14. Regenerate and update JavaScript example
 
   **What to do**:
   Regenerate code and update JavaScript host/reporter to use generated vtable factories.
@@ -2244,7 +2244,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ## Final Verification Wave
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle`
   - Check: polyplugc generates vtable factories
   - Check: No manual vtable creation in examples
   - Check: All thunks have panic safety

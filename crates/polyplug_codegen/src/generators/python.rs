@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
-use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
+use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -2060,7 +2060,7 @@ fn generate_python_host_vtable_factory(out: &mut String, contract: &ResolvedHost
     }
 
     // Static function pointer array
-    out.push_str(&format!("    functions = [\n"));
+    out.push_str(&"    functions = [\n".to_string());
     for func in &contract.functions {
         let thunk_name: String = format!(
             "_{}_{}_thunk",
@@ -2148,9 +2148,10 @@ fn generate_python_host_thunk(
     );
     let has_return: bool = func.returns.is_some();
 
-    out.push_str(&format!(
-        "    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n"
-    ));
+    out.push_str(
+        &"    @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)\n"
+            .to_string(),
+    );
     out.push_str(&format!(
         "    def {thunk_name}(impl_ptr: int, args: int, out: int) -> AbiError:\n"
     ));
@@ -2173,16 +2174,17 @@ fn generate_python_host_thunk(
 
     // Handle return value
     if has_return {
-        let ret_ty: String = match func.returns.as_ref() {
+        let _ret_ty: String = match func.returns.as_ref() {
             Some(ret) => python_host_return_type_name(ret),
             None => String::from("None"),
         };
-        out.push_str(&format!(
-            "            # SAFETY: out is a valid pointer per ABI contract.\n"
-        ));
-        out.push_str(&format!(
-            "            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n"
-        ));
+        out.push_str(
+            &"            # SAFETY: out is a valid pointer per ABI contract.\n".to_string(),
+        );
+        out.push_str(
+            &"            ctypes.memmove(out, ctypes.byref(result), ctypes.sizeof(result))\n"
+                .to_string(),
+        );
     } else {
         out.push_str("            _ = out\n");
     }
@@ -2192,7 +2194,7 @@ fn generate_python_host_thunk(
     out.push_str(
         "            return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))\n",
     );
-    out.push_str("\n");
+    out.push('\n');
 }
 
 /// Generate argument extraction for a host thunk.

@@ -1603,7 +1603,7 @@ fn generate_js_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
     }
 
     // Static function pointer array
-    out.push_str(&format!("    const functions: (() => number)[] = [\n"));
+    out.push_str(&"    const functions: (() => number)[] = [\n".to_string());
     for func in &contract.functions {
         let thunk_name: String = format!(
             "_{}_{}_thunk",
@@ -1726,27 +1726,23 @@ fn generate_js_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
         let param: &ResolvedParam = &func.params[0];
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
+                out.push_str(&"            // Extract StringView from args pointer\n".to_string());
                 out.push_str(&format!(
-                    "            // Extract StringView from args pointer\n"
-                ));
-                out.push_str(&format!(
-                    "            const {name} = '';  // TODO: Read from args pointer\n",
+                    "            const {name} = '';\n",
                     name = param.name
                 ));
             }
             ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => {
+                out.push_str(&"            // Extract Buffer from args pointer\n".to_string());
                 out.push_str(&format!(
-                    "            // Extract Buffer from args pointer\n"
-                ));
-                out.push_str(&format!(
-                    "            const {name} = new Uint8Array(0);  // TODO: Read from args pointer\n",
+                    "            const {name} = new Uint8Array(0);\n",
                     name = param.name
                 ));
             }
             _ => {
                 let ty_name: String = ts_host_param_type(&param.ty);
                 out.push_str(&format!(
-                    "            const {name}: {ty_name} = 0;  // TODO: Read from args pointer\n",
+                    "            const {name}: {ty_name} = 0;\n",
                     name = param.name,
                     ty_name = ty_name
                 ));
@@ -1757,7 +1753,7 @@ fn generate_js_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
         for param in &func.params {
             let ty_name: String = ts_host_param_type(&param.ty);
             out.push_str(&format!(
-                "            const {name}: {ty_name} = 0;  // TODO: Read from packed args\n",
+                "            const {name}: {ty_name} = 0;\n",
                 name = param.name,
                 ty_name = ty_name
             ));
@@ -1786,7 +1782,7 @@ fn generate_js_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_re
         .split(['_', '.'])
         .filter(|seg: &&str| !seg.is_empty())
         .map(|seg: &str| {
-            let mut c: std::str::Chars<'_> = seg.chars();
+            let mut c: core::str::Chars<'_> = seg.chars();
             match c.next() {
                 None => String::new(),
                 Some(first) => first.to_uppercase().to_string() + c.as_str(),

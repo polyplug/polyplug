@@ -1539,9 +1539,7 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
     out.push_str("-- The returned vtable is cached and lives for the lifetime of the program.\n");
-    out.push_str(&format!(
-        "function M.{factory_name}(impl)\n"
-    ));
+    out.push_str(&format!("function M.{factory_name}(impl)\n"));
     out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
 
     // Generate thunks for each function
@@ -1550,7 +1548,9 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     }
 
     // Static function pointer array
-    out.push_str(&format!("    local functions = ffi.new(\"void*[{fn_count}]\")\n"));
+    out.push_str(&format!(
+        "    local functions = ffi.new(\"void*[{fn_count}]\")\n"
+    ));
     for (idx, func) in contract.functions.iter().enumerate() {
         let thunk_name: String = format!(
             "_{}_{}_thunk",
@@ -1566,7 +1566,9 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     // Create the vtable
     out.push_str("    local vtable = ffi.new(\"HostContractVTable\")\n");
     out.push_str("    vtable.header.vtable_version = 1\n");
-    out.push_str(&format!("    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"));
+    out.push_str(&format!(
+        "    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"
+    ));
     out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
     out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
     out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
@@ -1577,9 +1579,7 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str("end\n\n");
 
     // Global implementation storage
-    out.push_str(&format!(
-        "_{class_name}_impl = nil\n\n"
-    ));
+    out.push_str(&format!("_{class_name}_impl = nil\n\n"));
 
     // VM dispatch factory
     out.push_str(&format!(
@@ -1595,10 +1595,14 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
     out.push_str("-- The returned vtable is cached and lives for the lifetime of the program.\n");
-    out.push_str(&format!("function M.{factory_vm_name}(bridge_data, dispatch_fn)\n"));
+    out.push_str(&format!(
+        "function M.{factory_vm_name}(bridge_data, dispatch_fn)\n"
+    ));
     out.push_str("    local vtable = ffi.new(\"HostContractVTable\")\n");
     out.push_str("    vtable.header.vtable_version = 1\n");
-    out.push_str(&format!("    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"));
+    out.push_str(&format!(
+        "    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"
+    ));
     out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
     out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
     out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
@@ -1644,9 +1648,9 @@ fn generate_lua_host_thunk(
 
     // Handle return value
     if has_return {
-        out.push_str(&format!(
-            "            -- SAFETY: out is a valid pointer per ABI contract.\n"
-        ));
+        out.push_str(
+            &"            -- SAFETY: out is a valid pointer per ABI contract.\n".to_string(),
+        );
         out.push_str("            ffi.copy(out, result, ffi.sizeof(result))\n");
     } else {
         out.push_str("            local _ = out\n");
@@ -1752,7 +1756,7 @@ fn generate_lua_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_r
     };
 
     if has_return {
-        let ret_ty: String = match func.returns.as_ref() {
+        let _ret_ty: String = match func.returns.as_ref() {
             Some(ret) => lua_host_abi_type_name(ret),
             None => String::from("void"),
         };
