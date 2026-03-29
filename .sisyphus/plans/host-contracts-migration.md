@@ -1430,8 +1430,23 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
     Steps:
       1. grep -n "impl_ptr" crates/polyplug/src/runtime.rs
       2. cargo test -p polyplug
-    Expected: Tests pass, impl_ptr passed to dispatch
+    Expected: Tests pass, impl_ptr found in runtime
     Evidence: .sisyphus/evidence/task-1-5-abi.txt
+  
+  Scenario: Dispatch call passes impl_ptr as first argument
+    Tool: bash
+    Steps:
+      1. grep -A 5 "dispatch_fn\|dispatch.*impl_ptr" crates/polyplug/src/runtime.rs
+    Expected: Shows impl_ptr being passed as first argument to dispatch
+    Evidence: .sisyphus/evidence/task-1-5-dispatch.txt
+  
+  Scenario: Function pointer type includes impl_ptr
+    Tool: bash
+    Steps:
+      1. grep "extern \"C\" fn.*impl_ptr" crates/polyplug/src/runtime.rs
+      2. grep "fn\(\*const (), \*const (), \*mut ()\)" crates/polyplug/src/runtime.rs
+    Expected: Shows fn(*const (), *const (), *mut ()) signature (impl_ptr first)
+    Evidence: .sisyphus/evidence/task-1-5-signature.txt
   ```
 
   **Commit**: YES
