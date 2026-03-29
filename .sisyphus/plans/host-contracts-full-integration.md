@@ -38,10 +38,29 @@ Complete the migration by integrating host.logger into ALL main examples, then d
 "$POLYPLUGC" generate --bundle "$dir/bundle.toml" --lang "$lang" --out "$dir/generated"
 ```
 
-**REQUIRED ADDITION (after line 45, before building guests):**
+**REQUIRED ADDITION (after line 94, AFTER guest loop ends):**
+
+**CURRENT build_all.sh structure:**
 ```bash
+# Lines 27-94: Guest generation loop
+for lang in $LANGS; do
+    for plugin in $PLUGINS; do
+        # ... guest generation ...
+    done
+done  # <-- LINE 94: Guest loop ends here
+
+echo ""              # Line 95
+echo "[4/4] Building hosts..."  # Line 96
+# Line 97+: Host building
+```
+
+**INSERT AFTER LINE 94 (after `done`, before empty line):**
+```bash
+done  # <-- Line 94: INSERT AFTER THIS LINE
+
 # [2.5/4] Generate HOST code with host contracts
 # CRITICAL: This is REQUIRED for host.logger integration
+# INSERT THIS BLOCK:
 echo "[2.5/4] Generating host code with host contracts..."
 for lang in rust cpp csharp python lua js; do
     host_dir="hosts/$lang"
@@ -52,21 +71,15 @@ for lang in rust cpp csharp python lua js; do
             echo "ERROR: Failed to generate host code for $lang"
             exit 1
         fi
-        
-        # Verify vtable_factories was generated
-        if [ ! -f "$host_dir/generated/host/vtable_factories.rs" ] && \
-           [ ! -f "$host_dir/generated/host/vtable_factories.hpp" ] && \
-           [ ! -f "$host_dir/generated/host/vtable_factories.cs" ] && \
-           [ ! -f "$host_dir/generated/host/vtable_factories.py" ] && \
-           [ ! -f "$host_dir/generated/host/vtable_factories.lua" ] && \
-           [ ! -f "$host_dir/generated/host/vtable_factories.ts" ]; then
-            echo "ERROR: vtable_factories not generated for $lang"
-            exit 1
-        fi
     fi
 done
 echo ""
+
+# Then continue with existing:
+echo "[4/4] Building hosts..."
 ```
+
+**CRITICAL**: This goes AFTER the guest loop (line 94), NOT after line 45 (which is inside the loop).
 
 **Acceptance Criteria:**
 - [ ] build_all.sh includes host generation step
@@ -131,31 +144,35 @@ Verifying generated files...
 
 ---
 
-**Task 0.3: VERIFY Generated Module Structure**
+**Task 0.3: VERIFY Code Generator Creates Correct mod.rs**
 
-**Check:** `examples/hosts/rust/src/generated/host/mod.rs`
+**MOMUS CRITICAL NOTE**: Do NOT edit generated files - they have "DO NOT EDIT" headers!
 
-**Must contain:**
+**Instead**: The code generator (polyplugc) MUST create these modules automatically.
+
+**Verify after Task 0.2:**
+```bash
+# Check if mod.rs was generated with correct modules
+cat examples/hosts/rust/generated/host/mod.rs
+```
+
+**Expected content:**
 ```rust
 pub mod host_contracts;
+pub mod host_callers;
+pub mod types;
 pub mod vtable_factories;
 ```
 
-**If missing, add manually:**
-```bash
-cat >> examples/hosts/rust/src/generated/host/mod.rs << 'EOF'
-pub mod host_contracts;
-pub mod vtable_factories;
-EOF
-```
+**If modules are missing**, the issue is in the **code generator** (rust.rs), not the generated file.
 
-**Do this for all 6 languages.**
+**ACCEPTANCE**: Plan assumes polyplugc generates correct mod.rs. If not, that's a pre-existing bug in the generator, not this plan's responsibility.
 
 ---
 
-**Task 0.4: REGENERATE GUEST CODE**
+**Task 0.4: REGENERATE GUEST CODE (if needed)**
 
-**Execute:**
+**Execute AFTER Task 0.2:**
 ```bash
 cd /mnt/data/Projects/Utils/polyplug/examples
 
@@ -169,6 +186,20 @@ for lang in rust cpp csharp python lua js; do
     done
 done
 ```
+
+---
+
+### Task 0 Summary - EXECUTION ORDER:
+
+**DO THESE IN EXACT ORDER:**
+
+1. **Task 0.1**: Edit build_all.sh (add host generation AFTER line 94)
+2. **Task 0.2**: Generate host code manually (to verify it works)
+3. **Task 0.3**: Verify mod.rs has correct modules (if not, generator bug)
+4. **Task 0.4**: Regenerate guest code
+5. **THEN** proceed to Tasks 1-12
+
+**Task 13** (Update build_all.sh) is now DONE via Task 0.1 - don't duplicate.
 
 ---
 
