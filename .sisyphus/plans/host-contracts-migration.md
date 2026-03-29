@@ -740,7 +740,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 0.75. Add get_host_vtable() to polyplug_guest for host contract access
+- [x] 0.75. Add get_host_vtable() to polyplug_guest for host contract access
 
   **CRITICAL MISSING PIECE**: Guest code needs to access host vtables!
   
@@ -848,7 +848,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 0.8. Update guest-side host contract caller generation
+- [x] 0.8. Update guest-side host contract caller generation
 
   **CRITICAL**: Guest-side callers use OLD thunk signature (missing impl_ptr)!
   
@@ -936,7 +936,7 @@ Task 0 → Task 0.5 → Task 0.75 → Task 0.8 → Task 0.85 → Task 1 → Task
 
 ---
 
-- [ ] 0.85. Update generated init.rs to store HostVTable
+- [x] 0.85. Update generated init.rs to store HostVTable
 
   **CRITICAL**: Generated init.rs must call store_host_vtable() during initialization!
   

@@ -6,26 +6,23 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::types::*;
-use polyplug_guest::alloc_string;
+use std::sync::OnceLock;
 use polyplug_guest::AbiError;
+use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
-use polyplug_guest::PluginError;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::StringView;
+use polyplug_guest::PluginError;
+use polyplug_guest::alloc_string;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_ERROR_PANIC, ABI_OK};
-use std::sync::OnceLock;
+use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};
+use super::types::*;
 /// Convert a PluginError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.
 fn plugin_error_to_abi_error(e: PluginError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| StringView::null());
-    AbiError {
-        code: e.code,
-        message,
-    }
+    AbiError { code: e.code, message }
 }
 
 use super::contracts::ExampleWorkerPlugin;
@@ -46,9 +43,7 @@ pub const WORKER_CONTRACT_ID: u64 = 0xE1C66C3C27F331A4;
 pub static WORKER_IMPL: OnceLock<Box<dyn ExampleWorkerPlugin>> = OnceLock::new();
 
 pub fn set_worker_impl(impl_: Box<dyn ExampleWorkerPlugin>) -> Result<(), &'static str> {
-    WORKER_IMPL
-        .set(impl_)
-        .map_err(|_| "worker already registered")
+    WORKER_IMPL.set(impl_).map_err(|_| "worker already registered")
 }
 
 /// ABI wrapper for do_work (function_id = 0).
@@ -57,33 +52,20 @@ extern "C" fn worker_do_work_abi(args: *const (), out: *mut ()) -> AbiError {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn ExampleWorkerPlugin = match WORKER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => {
-                return AbiError {
-                    code: ABI_ERROR_GENERIC,
-                    message: StringView::from_static(b"implementation not registered"),
-                }
-            }
+            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"implementation not registered") },
         };
         if args.is_null() {
-            return AbiError {
-                code: ABI_ERROR_INVALID_POINTER,
-                message: StringView::from_static(b"args pointer is null"),
-            };
+            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"args pointer is null") };
         }
         if out.is_null() {
-            return AbiError {
-                code: ABI_ERROR_INVALID_POINTER,
-                message: StringView::from_static(b"out pointer is null"),
-            };
+            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"out pointer is null") };
         }
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.do_work(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe {
-                    std::ptr::write(out as *mut StringView, val);
-                }
+                unsafe { std::ptr::write(out as *mut StringView, val); }
                 AbiError::ok()
             }
             Err(e) => plugin_error_to_abi_error(e),
@@ -94,7 +76,9 @@ extern "C" fn worker_do_work_abi(args: *const (), out: *mut ()) -> AbiError {
     }
 }
 
-static WORKER_FNS: [FnPtr; 1_usize] = [FnPtr(worker_do_work_abi as *const ())];
+static WORKER_FNS: [FnPtr; 1_usize] = [
+    FnPtr(worker_do_work_abi as *const ()),
+];
 
 pub static WORKER_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -108,3 +92,4 @@ pub static WORKER_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
+

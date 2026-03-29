@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::error::PolyplugcError;
-use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
+use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -1566,9 +1566,9 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     out.push_str(&format!(
         "            fn_ptr: int = ctypes.cast(header.dispatch.native.functions + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
-    out.push_str(&format!(
+    out.push_str(
         "            impl_ptr: int = ctypes.cast(header.dispatch.native.impl_ptr, ctypes.c_void_p).value\n"
-    ));
+    );
     out.push_str(
         "            dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );

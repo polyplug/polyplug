@@ -6,3 +6,7 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
+pub const EXAMPLE_WORKER_CONTRACT_ID: u64 = 0xe1c66c3c27f331a4;
+pub const EXAMPLE_WORKER_REQUIRED_VERSION: polyplug::version::Version =
+    polyplug::version::Version { major: 1, minor: 0 };
+pub const EXAMPLE_WORKER_REQUIRED_FUNCTION_COUNT: u32 = 1;

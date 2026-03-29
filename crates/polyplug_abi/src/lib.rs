@@ -16,6 +16,8 @@ pub mod build;
 pub mod ffi;
 pub mod tracking;
 
+use core::ffi::c_void;
+
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
 
@@ -416,9 +418,9 @@ unsafe impl Sync for HostContractVTableHeader {}
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeHostContractDispatch {
-    /// Pointer to the implementation (e.g., Box<ConsoleLogger> as *const ()).
+    /// Pointer to the implementation (e.g., Box<dyn Trait> as *const c_void).
     /// This is passed as the first argument to all native dispatch functions.
-    pub impl_ptr: *const (),
+    pub impl_ptr: *const c_void,
     /// Pointer to a static array of function pointers, indexed by function_id.
     pub functions: *const *const (),
 }

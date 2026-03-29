@@ -1453,7 +1453,9 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("local M = {}\n\n");
 
     out.push_str("-- Cached FFI types for hot path performance\n");
-    out.push_str("local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, const void*, void*)\")\n\n");
+    out.push_str(
+        "local DispatchFnType = ffi.typeof(\"uint32_t (*)(const void*, const void*, void*)\")\n\n",
+    );
 
     for contract in &ir.host_contracts {
         generate_lua_guest_host_contract_caller(&mut out, contract);

@@ -6,11 +6,12 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use super::types::*;
 use polyplug_guest::PluginError;
 use polyplug_guest::StringView;
+use super::types::*;
 
 /// Guest trait for contract `example.worker` (id=0xE1C66C3C27F331A4)
 pub trait ExampleWorkerPlugin: Send + Sync {
     fn do_work(&self, input: StringView) -> Result<StringView, PluginError>;
 }
+
