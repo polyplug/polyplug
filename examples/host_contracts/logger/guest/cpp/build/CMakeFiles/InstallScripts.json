@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/mnt/data/Projects/Utils/polyplug/examples/host_contracts/logger/guest/cpp/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

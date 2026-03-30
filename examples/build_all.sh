@@ -93,7 +93,26 @@ for lang in $LANGS; do
     done
 done
 
+# [3.5/4] Generate HOST code with host contracts
+echo "[3.5/4] Generating host code with host contracts..."
+for lang in rust cpp csharp python lua js-quickjs; do
+    # Map lang to directory name (js-quickjs -> js)
+    lang_dir="$lang"
+    if [ "$lang" = "js-quickjs" ]; then
+        lang_dir="js"
+    fi
+    host_dir="hosts/$lang_dir"
+    if [ -d "$host_dir" ]; then
+        echo "  generating: $lang_dir host"
+        "$POLYPLUGC" generate --api api.toml --lang "$lang" --out "$host_dir/generated"
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Failed to generate host code for $lang_dir"
+            exit 1
+        fi
+    fi
+done
 echo ""
+
 echo "[4/4] Building hosts..."
 
 cargo build --release --manifest-path "hosts/rust/Cargo.toml" 2>/dev/null || true

@@ -6,6 +6,8 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
+use polyplug_guest::StringView;
+
 /// Enum `LogLevel` (repr u32)
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,5 +16,13 @@ pub enum LogLevel {
     Info = 1,
     Warn = 2,
     Error = 3,
+}
+
+/// Auto-generated arg-pack for `HostLogger::log_with_level`
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct HostLoggerLogWithLevelArgs {
+    pub level: LogLevel,
+    pub message: StringView,
 }
 

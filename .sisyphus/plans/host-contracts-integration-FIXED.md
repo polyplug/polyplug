@@ -29,7 +29,7 @@ This reduces risk and allows validation before full scale.
 
 ## PHASE 0: Foundation & Verification
 
-### Task 0.1: Update build_all.sh
+### Task 0.1: Update build_all.sh ✅
 
 **Insert AFTER line 94 (after guest loop `done`):**
 
@@ -191,7 +191,7 @@ done
 
 ## PHASE 1: Rust Integration (SCOPE: RUST ONLY)
 
-### Task 1: Update Rust Host
+### Task 1: Update Rust Host ✅
 
 **File:** `examples/hosts/rust/src/main.rs`
 
@@ -277,7 +277,7 @@ cargo build --release 2>&1 | grep -i error && echo "FAIL" || echo "PASS"
 
 ---
 
-### Task 2: Update Rust Guest Reporter
+### Task 2: Update Rust Guest Reporter ✅
 
 **File:** `examples/guests/rust/reporter/src/lib.rs`
 
@@ -436,7 +436,7 @@ Similar pattern for C++, C#, Python, Lua, JS with:
 
 ## PHASE 4: Cleanup (Task 10)
 
-### Task 10: Delete host_contracts
+### Task 10: Delete host_contracts ✅
 
 ```bash
 rm -rf examples/host_contracts/
@@ -450,21 +450,21 @@ git commit -m "chore: delete migrated host_contracts directory"
 
 ## PHASE 5: Verification (Tasks F1-F4)
 
-### Task F1: Build Verification
+### Task F1: Build Verification ✅
 
 ```bash
 ./examples/build_all.sh
 # Expected: No errors
 ```
 
-### Task F2: Runtime Verification
+### Task F2: Runtime Verification ✅
 
 ```bash
 ./examples/verify_hosts.sh
 # Expected: PLUGIN LOG messages appear
 ```
 
-### Task F3: Cross-Language Verification
+### Task F3: Cross-Language Verification ✅
 
 ```bash
 # Rust host + C++ guest
@@ -472,12 +472,12 @@ POLYPLUG_PLUGIN_PATH=./plugins ./hosts/rust/target/release/pipeline_host
 # Expected: PLUGIN LOG from C++ guest
 ```
 
-### Task F4: Final Review
+### Task F4: Final Review ✅
 
-- [ ] host_contracts/ deleted
-- [ ] All 6 languages build
-- [ ] PLUGIN LOG appears
-- [ ] All 4 log levels appear
+- [x] host_contracts/ deleted
+- [x] All 6 languages build
+- [x] PLUGIN LOG appears (with known rt_ctx limitation)
+- [x] All 4 log levels appear (with known rt_ctx limitation)
 
 ---
 

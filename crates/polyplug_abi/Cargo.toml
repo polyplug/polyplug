@@ -1,15 +1,19 @@
 [package]
 name = "polyplug_abi"
+description = "ABI type definitions for the polyplug plugin runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "ABI type definitions for the polyplug plugin runtime"
+build = "build/main.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
+thiserror = { workspace = true }
+
+[build-dependencies]
+thiserror = { workspace = true }
 syn = { workspace = true }
 quote = { workspace = true }
-thiserror = { workspace = true }

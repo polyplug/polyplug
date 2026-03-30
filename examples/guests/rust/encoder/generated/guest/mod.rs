@@ -3,3 +3,4 @@ pub mod contracts;
 pub mod init;
 pub mod types;
 pub mod vtables;
+pub mod host_contract_callers;

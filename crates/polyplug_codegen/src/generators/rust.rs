@@ -5,10 +5,10 @@
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
 use crate::error::PolyplugcError;
+use crate::generators::is_native_runtime;
 use crate::generators::CodeGenerator;
 use crate::generators::GeneratedFile;
 use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -45,6 +45,7 @@ impl CodeGenerator for RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
+        types_out.push_str("use polyplug_abi::StringView;\n\n");
 
         // Emit enums before struct types
         for e in &ir.enums {
@@ -58,6 +59,16 @@ impl CodeGenerator for RustGenerator {
         // Emit generated arg-pack structs for multi-primitive-param functions
         for contract in &ir.contracts {
             let struct_name: String = contract_name_to_struct(&contract.name);
+            for func in &contract.functions {
+                if needs_arg_pack(&func.params) {
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                }
+            }
+        }
+
+        // Emit generated arg-pack structs for host contract functions
+        for contract in &ir.host_contracts {
+            let struct_name: String = host_contract_name_to_trait(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
                     emit_arg_pack_struct(&mut types_out, &struct_name, func);
@@ -205,6 +216,7 @@ impl CodeGenerator for RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
+        types_out.push_str("use polyplug_guest::StringView;\n\n");
         // Emit enums before struct types
         for e in &ir.enums {
             generate_rust_enum(&mut types_out, e);
@@ -215,6 +227,15 @@ impl CodeGenerator for RustGenerator {
 
         for contract in &ir.contracts {
             let struct_name: String = contract_name_to_struct(&contract.name);
+            for func in &contract.functions {
+                if needs_arg_pack(&func.params) {
+                    emit_arg_pack_struct(&mut types_out, &struct_name, func);
+                }
+            }
+        }
+
+        for contract in &ir.host_contracts {
+            let struct_name: String = host_contract_name_to_trait(&contract.name);
             for func in &contract.functions {
                 if needs_arg_pack(&func.params) {
                     emit_arg_pack_struct(&mut types_out, &struct_name, func);
@@ -276,6 +297,14 @@ impl CodeGenerator for RustGenerator {
                 force_regenerate: false,
             });
         }
+
+        // ── guest/mod.rs ────────────────────────────────────────────────────────
+        let guest_mod_content: String = generate_guest_mod_rs(ir);
+        files.files.push(GeneratedFile {
+            path: std::path::PathBuf::from("guest/mod.rs"),
+            content: guest_mod_content,
+            force_regenerate: true,
+        });
 
         // --api: manifest already emitted by generate_host(); --bundle: emit full discovery manifest
         if ir.bundle.is_some() {
@@ -1685,7 +1714,8 @@ fn generate_host_vtable_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::ABI_OK;\n");
     out.push_str("use polyplug_abi::ABI_ERROR_PANIC;\n");
     out.push_str("use core::ffi::c_void;\n");
-    out.push_str("use super::host_contracts::*;\n\n");
+    out.push_str("use super::host_contracts::*;\n");
+    out.push_str("use super::types::*;\n\n");
 
     for contract in &ir.host_contracts {
         generate_host_vtable_factory(&mut out, contract);
@@ -1864,7 +1894,7 @@ fn generate_host_thunk(
 
     // Generate argument extraction
     if !func.params.is_empty() {
-        generate_host_thunk_args(out, func);
+        generate_host_thunk_args(out, func, trait_name);
     } else {
         out.push_str("            let _ = args;\n");
     }
@@ -1904,7 +1934,7 @@ fn generate_host_thunk(
 }
 
 /// Generate argument extraction for a host thunk.
-fn generate_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
+fn generate_host_thunk_args(out: &mut String, func: &ResolvedFunction, trait_name: &str) {
     if func.params.len() == 1 {
         let param: &ResolvedParam = &func.params[0];
         let ty_name: String = host_abi_type_name(&param.ty);
@@ -1954,7 +1984,7 @@ fn generate_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
         }
     } else {
         // Multiple params - use arg-pack struct
-        let pack_struct: String = format!("{}Args", func.name.to_uppercase());
+        let pack_struct: String = arg_pack_struct_name(trait_name, &func.name);
         out.push_str(&format!(
             "            // SAFETY: args is a valid *const {pack_struct} per ABI contract.\n"
         ));
@@ -1982,11 +2012,21 @@ fn generate_host_thunk_args(out: &mut String, func: &ResolvedFunction) {
                     ));
                 }
                 _ => {
-                    out.push_str(&format!(
-                        "            let {name}: {ty} = packed.{name};\n",
-                        name = param.name,
-                        ty = host_param_type_name(&param.ty)
-                    ));
+                    let ty: String = host_param_type_name(&param.ty);
+                    let is_ref: bool = ty.starts_with('&');
+                    if is_ref {
+                        out.push_str(&format!(
+                            "            let {name}: {ty} = &packed.{name};\n",
+                            name = param.name,
+                            ty = ty
+                        ));
+                    } else {
+                        out.push_str(&format!(
+                            "            let {name}: {ty} = packed.{name};\n",
+                            name = param.name,
+                            ty = ty
+                        ));
+                    }
                 }
             }
         }
@@ -2159,7 +2199,7 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
 fn generate_guest_host_contract_method(
     out: &mut String,
     func: &ResolvedFunction,
-    _caller_name: &str,
+    caller_name: &str,
 ) {
     let fn_id: u32 = func.function_id;
 
@@ -2203,7 +2243,7 @@ fn generate_guest_host_contract_method(
     );
     out.push_str("        }\n\n");
 
-    emit_guest_host_contract_args_setup(out, func);
+    emit_guest_host_contract_args_setup(out, func, caller_name);
 
     emit_guest_host_contract_out_setup(out, &func.returns);
 
@@ -2294,7 +2334,11 @@ fn guest_return_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 /// Emit the args_ptr setup for a guest host contract method.
-fn emit_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunction) {
+fn emit_guest_host_contract_args_setup(
+    out: &mut String,
+    func: &ResolvedFunction,
+    caller_name: &str,
+) {
     if func.params.is_empty() {
         out.push_str("        let args_ptr: *const () = core::ptr::null();\n");
         return;
@@ -2348,8 +2392,10 @@ fn emit_guest_host_contract_args_setup(out: &mut String, func: &ResolvedFunction
     }
 
     // Multiple params: pack into arg-pack struct
-    let pack_struct: String =
-        host_contract_name_to_caller(&func.name) + &func.name.to_uppercase() + "Args";
+    // Use the same naming convention as arg_pack_struct_name: ContractStruct + FnPascal + Args
+    // caller_name is "HostLoggerCaller", we need "HostLogger" (trait name)
+    let trait_name: &str = caller_name.strip_suffix("Caller").unwrap_or(caller_name);
+    let pack_struct: String = arg_pack_struct_name(trait_name, &func.name);
     out.push_str(&format!(
         "        let args_val: {pack_struct} = {pack_struct} {{\n"
     ));
@@ -2397,6 +2443,19 @@ fn emit_guest_host_contract_out_setup(out: &mut String, returns: &Option<Resolve
 const _: fn() = || {
     let _: String = rust_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U8));
 };
+
+fn generate_guest_mod_rs(ir: &ValidatedIr) -> String {
+    let mut out: String = String::new();
+    out.push_str("// THIS FILE IS AUTO-GENERATED BY polyplugc. DO NOT EDIT.\n");
+    out.push_str("pub mod contracts;\n");
+    out.push_str("pub mod init;\n");
+    out.push_str("pub mod types;\n");
+    out.push_str("pub mod vtables;\n");
+    if !ir.host_contracts.is_empty() {
+        out.push_str("pub mod host_contract_callers;\n");
+    }
+    out
+}
 
 #[cfg(test)]
 mod tests {

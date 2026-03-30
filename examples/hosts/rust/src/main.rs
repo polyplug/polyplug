@@ -1,7 +1,7 @@
-use polyplug::ReloadPhase;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
+use polyplug::ReloadPhase;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
 use polyplug_js::{JsConfig, JsLoader};
@@ -15,7 +15,27 @@ use std::time::Duration;
 mod generated;
 
 use generated::host::host_callers::*;
+use generated::host::host_contracts::{HostLogger, HOSTLOGGER_CONTRACT_ID};
 use generated::host::types::*;
+use generated::host::vtable_factories::create_host_logger_vtable;
+
+struct ConsoleLogger;
+
+impl HostLogger for ConsoleLogger {
+    fn log(&self, message: &str) {
+        println!("[plugin] {}", message);
+    }
+
+    fn log_with_level(&self, level: &LogLevel, message: &str) {
+        let level_str: &str = match level {
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Info => "INFO",
+            LogLevel::Warn => "WARN",
+            LogLevel::Error => "ERROR",
+        };
+        println!("[plugin][{}] {}", level_str, message);
+    }
+}
 
 fn main() {
     if let Err(e) = run() {
@@ -79,6 +99,12 @@ fn run() -> Result<(), String> {
             .build()
             .map_err(|e| e.to_string())?,
     ));
+
+    let vtable: &'static polyplug_abi::HostContractVTable =
+        create_host_logger_vtable(Box::new(ConsoleLogger));
+    runtime
+        .register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
+        .map_err(|e| format!("failed to register host.logger contract: {e}"))?;
 
     let bundles: Vec<(PathBuf, _)> = scanner::scan_dir(&plugin_path);
     if bundles.is_empty() {

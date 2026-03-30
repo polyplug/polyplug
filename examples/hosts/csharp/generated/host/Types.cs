@@ -15,3 +15,10 @@ public static class ContractIds {
     public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0;
 }
 
+public enum LogLevel : uint {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+

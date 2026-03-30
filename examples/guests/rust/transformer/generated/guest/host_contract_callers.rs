@@ -136,11 +136,11 @@ impl HostLoggerCaller {
             return Err(HostContractError::new(ABI_HOST_CONTRACT_CALL_FAILED));
         }
 
-        let args_val: HostLog_with_levelCallerLOG_WITH_LEVELArgs = HostLog_with_levelCallerLOG_WITH_LEVELArgs {
+        let args_val: HostLoggerLogWithLevelArgs = HostLoggerLogWithLevelArgs {
             level: level,
             message: alloc_string(&message).unwrap_or_else(|_| StringView::null()),
         };
-        let args_ptr: *const () = &args_val as *const HostLog_with_levelCallerLOG_WITH_LEVELArgs as *const ();
+        let args_ptr: *const () = &args_val as *const HostLoggerLogWithLevelArgs as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
         let err: AbiError = unsafe {
             match header.dispatch_type {

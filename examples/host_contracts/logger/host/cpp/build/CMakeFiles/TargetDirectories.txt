@@ -1,3 +1,0 @@
-/mnt/data/Projects/Utils/polyplug/examples/host_contracts/logger/host/cpp/build/CMakeFiles/logger_host.dir
-/mnt/data/Projects/Utils/polyplug/examples/host_contracts/logger/host/cpp/build/CMakeFiles/edit_cache.dir
-/mnt/data/Projects/Utils/polyplug/examples/host_contracts/logger/host/cpp/build/CMakeFiles/rebuild_cache.dir

@@ -8,3 +8,11 @@ from typing import ClassVar
 
 from polyplug.abi import StringView
 
+import enum
+
+class LogLevel(enum.IntEnum):
+    DEBUG = 0
+    INFO = 1
+    WARN = 2
+    ERROR = 3
+
