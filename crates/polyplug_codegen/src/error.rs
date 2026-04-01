@@ -77,9 +77,7 @@ pub enum PolyplugcError {
     #[error("guest generation not supported for `{language}`: {reason}")]
     GuestGenerationNotSupported { language: String, reason: String },
 
-    #[error(
-        "host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")"
-    )]
+    #[error("host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")")]
     HostContractNameMissingPrefix { name: String },
 
     #[error(

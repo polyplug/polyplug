@@ -36,7 +36,7 @@ class AbiError(ctypes.Structure):
     
      OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
      via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-     after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+     after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
     """
     _fields_ = [
         ("code", ctypes.c_uint32),
@@ -228,6 +228,26 @@ class RuntimeConfig(ctypes.Structure):
     ]
 
 
+class AbiErrorCode(enum.IntEnum):
+    """ ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
+    
+     These codes are returned by all ABI functions to indicate success or failure.
+     The `code` field of `AbiError` uses these values.
+    """
+    Ok = 0
+    Generic = 1
+    BufferTooSmall = 2
+    Panic = 3
+    NotFound = 4
+    StaleHandle = 5
+    FunctionNotAvailable = 6
+    DuplicateProvider = 7
+    InvalidPointer = 8
+    HostContractNotFound = 100
+    HostContractVersionMismatch = 101
+    HostContractCallFailed = 102
+
+
 class DispatchType(enum.IntEnum):
     """ Dispatch mechanism type — determines how function calls are routed."""
     Native = 0
@@ -302,18 +322,6 @@ def plugin_handle_is_null(handle: &PluginHandle) -> ctypes.c_bool:
     pass
 
 POLYPLUG_ABI_VERSION: int = 1
-ABI_OK: int = 0
-ABI_ERROR_GENERIC: int = 1
-ABI_BUFFER_TOO_SMALL: int = 2
-ABI_ERROR_PANIC: int = 3
-ABI_ERROR_NOT_FOUND: int = 4
-ABI_ERROR_STALE_HANDLE: int = 5
-ABI_FUNCTION_NOT_AVAIL: int = 6
-ABI_ERROR_DUPLICATE_PROVIDER: int = 7
-ABI_ERROR_INVALID_POINTER: int = 8
-ABI_HOST_CONTRACT_NOT_FOUND: int = 100
-ABI_HOST_CONTRACT_VERSION_MISMATCH: int = 101
-ABI_HOST_CONTRACT_CALL_FAILED: int = 102
 def fnv1a_64(data: &[u8]) -> ctypes.c_uint64:
     pass
 

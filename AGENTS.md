@@ -521,7 +521,49 @@ pub use crate::ir::Version;
 
 ---
 
-### 14. Test Failures Must Be Fixed, Never Skipped
+### 14. No Backward Compatibility Code
+
+**NEVER add backward compatibility code, deprecated aliases, or migration shims.**
+
+This codebase does NOT maintain backward compatibility. Breaking changes are intentional and expected.
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — deprecated constants for "backward compatibility"
+#[deprecated(since = "0.2.0", note = "Use AbiErrorCode::Ok instead")]
+pub const ABI_OK: u32 = AbiErrorCode::Ok as u32;
+
+// FORBIDDEN — type aliases for "migration"
+pub type OldTypeName = NewTypeName;
+
+// FORBIDDEN — compatibility wrappers
+pub fn old_function_name() { new_function_name() }
+```
+
+**CORRECT:**
+```rust
+// CORRECT — just use the new type directly
+pub enum AbiErrorCode { Ok = 0, ... }
+
+// CORRECT — consumers update their code
+use polyplug_abi::AbiErrorCode;
+let code = AbiErrorCode::Ok;
+```
+
+**Why this matters:**
+- Backward compatibility code creates technical debt
+- It obscures the actual API
+- It encourages not updating code
+- This codebase explicitly does NOT guarantee backward compatibility
+
+**When making breaking changes:**
+1. Remove the old code completely
+2. Update all usages in the same PR
+3. Do NOT leave deprecated shims
+
+---
+
+### 15. Test Failures Must Be Fixed, Never Skipped
 
 **NEVER skip, ignore, or mark tests as `#[ignore]` to avoid fixing failures.**
 

@@ -22,21 +22,39 @@ use core::ffi::c_void;
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
 
-// ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined)
-pub const ABI_OK: u32 = 0;
-pub const ABI_ERROR_GENERIC: u32 = 1;
-pub const ABI_BUFFER_TOO_SMALL: u32 = 2; // caller must reallocate (see Buffer protocol)
-pub const ABI_ERROR_PANIC: u32 = 3; // plugin panicked (caught by catch_unwind)
-pub const ABI_ERROR_NOT_FOUND: u32 = 4; // plugin/contract not found
-pub const ABI_ERROR_STALE_HANDLE: u32 = 5; // PluginHandle generation mismatch
-pub const ABI_FUNCTION_NOT_AVAIL: u32 = 6; // function_id >= function_count
-pub const ABI_ERROR_DUPLICATE_PROVIDER: u32 = 7; // same bundle already provides this contract
-pub const ABI_ERROR_INVALID_POINTER: u32 = 8; // null or invalid pointer passed to ABI function
-
-// Host contract error codes (reserved: 100-199 host contracts)
-pub const ABI_HOST_CONTRACT_NOT_FOUND: u32 = 100; // host contract not found by contract_id
-pub const ABI_HOST_CONTRACT_VERSION_MISMATCH: u32 = 101; // host contract version mismatch
-pub const ABI_HOST_CONTRACT_CALL_FAILED: u32 = 102; // host contract function call failed
+/// ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
+///
+/// These codes are returned by all ABI functions to indicate success or failure.
+/// The `code` field of `AbiError` uses these values.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbiErrorCode {
+    /// Success — no error.
+    Ok = 0,
+    /// Generic error — unspecified failure.
+    Generic = 1,
+    /// Buffer too small — caller must reallocate (see Buffer protocol).
+    BufferTooSmall = 2,
+    /// Panic — plugin panicked (caught by catch_unwind).
+    Panic = 3,
+    /// Not found — plugin/contract not found.
+    NotFound = 4,
+    /// Stale handle — PluginHandle generation mismatch.
+    StaleHandle = 5,
+    /// Function not available — function_id >= function_count.
+    FunctionNotAvailable = 6,
+    /// Duplicate provider — same bundle already provides this contract.
+    DuplicateProvider = 7,
+    /// Invalid pointer — null or invalid pointer passed to ABI function.
+    InvalidPointer = 8,
+    // Host contract error codes (reserved: 100-199 host contracts)
+    /// Host contract not found — no host contract matches contract_id.
+    HostContractNotFound = 100,
+    /// Host contract version mismatch — host contract version does not match.
+    HostContractVersionMismatch = 101,
+    /// Host contract call failed — host contract function call failed.
+    HostContractCallFailed = 102,
+}
 
 /// Non-owning UTF-8 string view.
 ///
@@ -68,7 +86,7 @@ pub const fn string_view_from_static(bytes: &'static [u8]) -> StringView {
     }
 }
 
-/// The null/empty StringView (ptr=null, len=0). Used for ABI_OK error messages.
+/// The null/empty StringView (ptr=null, len=0). Used for AbiErrorCode::Ok error messages.
 pub const fn string_view_null() -> StringView {
     StringView {
         ptr: core::ptr::null(),
@@ -140,7 +158,7 @@ pub unsafe fn buffer_as_mut_slice(buf: &mut Buffer) -> &mut [u8] {
 ///
 /// OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
 /// via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-/// after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+/// after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AbiError {
@@ -153,7 +171,7 @@ pub struct AbiError {
 /// Construct a success AbiError.
 pub const fn abi_error_ok() -> AbiError {
     AbiError {
-        code: ABI_OK,
+        code: AbiErrorCode::Ok as u32,
         message: string_view_null(),
     }
 }
@@ -161,14 +179,14 @@ pub const fn abi_error_ok() -> AbiError {
 /// Construct a panic error with a static message.
 pub const fn abi_error_panic_caught() -> AbiError {
     AbiError {
-        code: ABI_ERROR_PANIC,
+        code: AbiErrorCode::Panic as u32,
         message: string_view_from_static(b"plugin panicked"),
     }
 }
 
 /// Returns true if this represents success.
 pub fn abi_error_is_ok(err: &AbiError) -> bool {
-    err.code == ABI_OK
+    err.code == AbiErrorCode::Ok as u32
 }
 
 // SAFETY: AbiError contains a StringView which is Send+Sync, and a u32 code.
@@ -631,6 +649,7 @@ pub struct RuntimeConfig {
 mod tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
+    use polyplug_utils::{bundle_id, contract_id, fnv1a_64, host_contract_id, plugin_contract_id};
 
     #[test]
     fn fnv1a_known_values() {
@@ -728,7 +747,7 @@ mod tests {
     fn test_abi_error_ok() {
         let e: AbiError = abi_error_ok();
         assert!(abi_error_is_ok(&e));
-        assert_eq!(e.code, ABI_OK);
+        assert_eq!(e.code, AbiErrorCode::Ok as u32);
     }
 
     // ── ABI Layout Tests ─────────────────────────────────────────────────────

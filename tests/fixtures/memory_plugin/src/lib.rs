@@ -6,6 +6,7 @@
 //! zero-length roundtrip.
 
 use core::mem::align_of;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 
 // ─── FNV-1a hash (compile-time constant for "memory.test@1") ─────────────────
@@ -76,20 +77,20 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
     let required_align: usize = align_of::<u64>();
     if cap < len {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     if cap > 0 && ptr.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     if cap > 0 && (ptr as usize) % required_align != 0 {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     // SAFETY: ptr is a valid buffer of at least cap bytes owned and allocated by the host.
@@ -103,7 +104,7 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
         let out_u32: *mut u32 = out as *mut u32;
         out_u32.write(cap as u32);
     }
-    AbiError::ok()
+    abi_error_ok()
 }
 
 /// fn 1 — allocate a buffer via the host vtable, fill it, and return it.
@@ -125,8 +126,8 @@ extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> Abi
     let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.rt_ctx, size, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     // SAFETY: ptr is a valid allocation of at least `size` bytes returned by the host allocator.
@@ -143,7 +144,7 @@ extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> Abi
             cap: size,
         });
     }
-    AbiError::ok()
+    abi_error_ok()
 }
 
 /// fn 2 — echo a StringView back without copying.
@@ -163,13 +164,13 @@ extern "C" fn memory_echo_string_view(args: *const (), out: *mut ()) -> AbiError
     let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
     if core::str::from_utf8(bytes).is_err() {
         return AbiError {
-            code: ABI_ERROR_GENERIC, // invalid UTF-8
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32, // invalid UTF-8
+            message: string_view_null(),
         };
     }
     // SAFETY: out points to a valid StringView per the ABI contract.
     unsafe { (out as *mut StringView).write(sv) };
-    AbiError::ok()
+    abi_error_ok()
 }
 
 /// fn 3 — zero-length roundtrip: report buf.len and sv.len (both expected to be 0).
@@ -189,7 +190,7 @@ extern "C" fn memory_zero_length_roundtrip(args: *const (), out: *mut ()) -> Abi
     };
     // SAFETY: out points to a valid ZeroResult per the ABI contract.
     unsafe { (out as *mut ZeroResult).write(result) };
-    AbiError::ok()
+    abi_error_ok()
 }
 
 // ─── Static VTable ────────────────────────────────────────────────────────────
@@ -267,14 +268,14 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
 

@@ -6,29 +6,35 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use std::sync::OnceLock;
+use super::types::*;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::PluginDispatch;
-use polyplug_guest::StringView;
 use polyplug_guest::PluginError;
+use polyplug_guest::PluginInterface;
+use polyplug_guest::StringView;
+use polyplug_guest::abi_error_ok;
 use polyplug_guest::alloc_string;
+use polyplug_guest::string_view_from_static;
+use polyplug_guest::string_view_null;
 #[allow(unused_imports)]
-use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};
-use super::types::*;
+use polyplug_guest::{ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_ERROR_PANIC, ABI_OK};
+use std::sync::OnceLock;
 /// Convert a PluginError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.
 fn plugin_error_to_abi_error(e: PluginError) -> AbiError {
-    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| StringView::null());
-    AbiError { code: e.code, message }
+    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
+    AbiError {
+        code: e.code,
+        message,
+    }
 }
 
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineEncoderPlugin;
 use super::contracts::DataReporterPlugin;
+use super::contracts::DataTransformerPlugin;
+use super::contracts::PipelineDecoderPlugin;
+use super::contracts::PipelineEncoderPlugin;
 use super::contracts::PipelineValidatorPlugin;
 /// Wrapper for a function pointer stored in a static vtable array.
 #[repr(transparent)]
@@ -47,7 +53,9 @@ pub const VALIDATOR_CONTRACT_ID: u64 = 0xA553FAB5D11C7AF0;
 pub static VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorPlugin>> = OnceLock::new();
 
 pub fn set_validator_impl(impl_: Box<dyn PipelineValidatorPlugin>) -> Result<(), &'static str> {
-    VALIDATOR_IMPL.set(impl_).map_err(|_| "validator already registered")
+    VALIDATOR_IMPL
+        .set(impl_)
+        .map_err(|_| "validator already registered")
 }
 
 /// ABI wrapper for validate (function_id = 0).
@@ -56,21 +64,34 @@ extern "C" fn validator_validate_abi(args: *const (), out: *mut ()) -> AbiError 
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn PipelineValidatorPlugin = match VALIDATOR_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"implementation not registered") },
+            None => {
+                return AbiError {
+                    code: ABI_ERROR_GENERIC,
+                    message: string_view_from_static(b"implementation not registered"),
+                };
+            }
         };
         if args.is_null() {
-            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"args pointer is null") };
+            return AbiError {
+                code: ABI_ERROR_INVALID_POINTER,
+                message: string_view_from_static(b"args pointer is null"),
+            };
         }
         if out.is_null() {
-            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b"out pointer is null") };
+            return AbiError {
+                code: ABI_ERROR_INVALID_POINTER,
+                message: string_view_from_static(b"out pointer is null"),
+            };
         }
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.validate(unsafe { *(args as *const StringView) });
         match result {
             Ok(val) => {
                 // SAFETY: out is a valid *mut StringView per ABI contract.
-                unsafe { std::ptr::write(out as *mut StringView, val); }
-                AbiError::ok()
+                unsafe {
+                    std::ptr::write(out as *mut StringView, val);
+                }
+                abi_error_ok()
             }
             Err(e) => plugin_error_to_abi_error(e),
         }
@@ -80,9 +101,7 @@ extern "C" fn validator_validate_abi(args: *const (), out: *mut ()) -> AbiError 
     }
 }
 
-static VALIDATOR_FNS: [FnPtr; 1_usize] = [
-    FnPtr(validator_validate_abi as *const ()),
-];
+static VALIDATOR_FNS: [FnPtr; 1_usize] = [FnPtr(validator_validate_abi as *const ())];
 
 pub static VALIDATOR_VTABLE: PluginInterface = PluginInterface {
     rt_ctx: core::ptr::null(),
@@ -96,4 +115,3 @@ pub static VALIDATOR_VTABLE: PluginInterface = PluginInterface {
         },
     },
 };
-

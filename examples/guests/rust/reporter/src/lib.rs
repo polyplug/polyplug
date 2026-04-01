@@ -1,4 +1,4 @@
-use polyplug_guest::{alloc_string, get_host_vtable, to_str, PluginError, StringView};
+use polyplug_guest::{PluginError, StringView, alloc_string, get_host_vtable, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;

@@ -6,19 +6,19 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::HostContractVTable;
-use polyplug_abi::HostContractVTableHeader;
-use polyplug_abi::HostContractDispatch;
-use polyplug_abi::NativeHostContractDispatch;
-use polyplug_abi::VmHostContractDispatch;
-use polyplug_abi::DispatchType;
-use polyplug_abi::StringView;
-use polyplug_abi::AbiError;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::ABI_ERROR_PANIC;
-use core::ffi::c_void;
 use super::host_contracts::*;
 use super::types::*;
+use core::ffi::c_void;
+use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiError;
+use polyplug_abi::DispatchType;
+use polyplug_abi::HostContractDispatch;
+use polyplug_abi::HostContractVTable;
+use polyplug_abi::HostContractVTableHeader;
+use polyplug_abi::NativeHostContractDispatch;
+use polyplug_abi::StringView;
+use polyplug_abi::VmHostContractDispatch;
 
 /// Create a host contract vtable for `host.logger` with NATIVE dispatch.
 ///
@@ -28,7 +28,9 @@ use super::types::*;
 /// # Memory
 /// The returned vtable is leaked and lives for the lifetime of the program.
 /// The implementation Box is also leaked (its pointer is stored in the vtable).
-pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'static HostContractVTable {
+pub fn create_host_logger_vtable(
+    implementation: Box<dyn HostLogger>,
+) -> &'static HostContractVTable {
     let fat_ptr: *const dyn HostLogger = Box::into_raw(implementation);
     let wrapper: Box<*const dyn HostLogger> = Box::new(fat_ptr);
     let impl_ptr: *const *const dyn HostLogger = Box::into_raw(wrapper);
@@ -45,7 +47,10 @@ pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'stati
             // SAFETY: args is a valid *const StringView per ABI contract.
             let message_sv: StringView = unsafe { *(args as *const StringView) };
             let message: &str = unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(message_sv.ptr, message_sv.len))
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                    message_sv.ptr,
+                    message_sv.len,
+                ))
             };
             impl_ref.log(message);
             let _ = out;
@@ -69,10 +74,14 @@ pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'stati
             let fat_ptr: *const *const dyn HostLogger = impl_ptr as *const *const dyn HostLogger;
             let impl_ref: &dyn HostLogger = unsafe { &**fat_ptr };
             // SAFETY: args is a valid *const HostLoggerLogWithLevelArgs per ABI contract.
-            let packed: &HostLoggerLogWithLevelArgs = unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
+            let packed: &HostLoggerLogWithLevelArgs =
+                unsafe { &*(args as *const HostLoggerLogWithLevelArgs) };
             let level: &LogLevel = &packed.level;
             let message: &str = unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(packed.message.ptr, packed.message.len))
+                core::str::from_utf8_unchecked(core::slice::from_raw_parts(
+                    packed.message.ptr,
+                    packed.message.len,
+                ))
             };
             impl_ref.log_with_level(level, message);
             let _ = out;
@@ -86,10 +95,8 @@ pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'stati
         }
     }
 
-    static FUNCTIONS: [unsafe extern "C" fn(*const c_void, *const (), *mut ()) -> AbiError; 2] = [
-        host_logger_log_thunk,
-        host_logger_log_with_level_thunk,
-    ];
+    static FUNCTIONS: [unsafe extern "C" fn(*const c_void, *const (), *mut ()) -> AbiError; 2] =
+        [host_logger_log_thunk, host_logger_log_with_level_thunk];
 
     let vtable: HostContractVTable = HostContractVTable {
         header: HostContractVTableHeader {
@@ -149,4 +156,3 @@ pub fn create_host_logger_vtable_vm(
 
     Box::leak(Box::new(vtable))
 }
-

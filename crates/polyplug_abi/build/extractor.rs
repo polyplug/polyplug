@@ -5,8 +5,8 @@
 //! and functions into `AbiTypes` for code generation.
 
 use syn::{
-    parse_file, Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn,
-    ItemStruct, ItemUnion, Lit, Meta, Visibility,
+    Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn, ItemStruct,
+    ItemUnion, Lit, Meta, Visibility, parse_file,
 };
 
 use crate::types::{
@@ -37,24 +37,11 @@ const ABI_TYPES: &[&str] = &[
     "VmHostContractDispatch",
     "HostContractDispatch",
     "HostContractVTable",
+    "AbiErrorCode",
 ];
 
 /// ABI constants that should be extracted by the extractor.
-const ABI_CONSTANTS: &[&str] = &[
-    "POLYPLUG_ABI_VERSION",
-    "ABI_OK",
-    "ABI_ERROR_GENERIC",
-    "ABI_BUFFER_TOO_SMALL",
-    "ABI_ERROR_PANIC",
-    "ABI_ERROR_NOT_FOUND",
-    "ABI_ERROR_STALE_HANDLE",
-    "ABI_FUNCTION_NOT_AVAIL",
-    "ABI_ERROR_DUPLICATE_PROVIDER",
-    "ABI_ERROR_INVALID_POINTER",
-    "ABI_HOST_CONTRACT_NOT_FOUND",
-    "ABI_HOST_CONTRACT_VERSION_MISMATCH",
-    "ABI_HOST_CONTRACT_CALL_FAILED",
-];
+const ABI_CONSTANTS: &[&str] = &["POLYPLUG_ABI_VERSION"];
 
 /// ABI functions that should be extracted by the extractor.
 const ABI_FUNCTIONS: &[&str] = &[

@@ -28,7 +28,7 @@ local M = {}
     // 
     //  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
     //  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-    //  after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+    //  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
     typedef struct AbiError {
         //  0 = success, non-zero = error.
         uint32_t code;
@@ -232,6 +232,37 @@ local M = {}
         uint32_t compatibility;
     } RuntimeConfig;
 
+    //  ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
+    // 
+    //  These codes are returned by all ABI functions to indicate success or failure.
+    //  The `code` field of `AbiError` uses these values.
+    typedef enum AbiErrorCode {
+        //  Success — no error.
+        AbiErrorCode_Ok = 0,
+        //  Generic error — unspecified failure.
+        AbiErrorCode_Generic = 1,
+        //  Buffer too small — caller must reallocate (see Buffer protocol).
+        AbiErrorCode_BufferTooSmall = 2,
+        //  Panic — plugin panicked (caught by catch_unwind).
+        AbiErrorCode_Panic = 3,
+        //  Not found — plugin/contract not found.
+        AbiErrorCode_NotFound = 4,
+        //  Stale handle — PluginHandle generation mismatch.
+        AbiErrorCode_StaleHandle = 5,
+        //  Function not available — function_id >= function_count.
+        AbiErrorCode_FunctionNotAvailable = 6,
+        //  Duplicate provider — same bundle already provides this contract.
+        AbiErrorCode_DuplicateProvider = 7,
+        //  Invalid pointer — null or invalid pointer passed to ABI function.
+        AbiErrorCode_InvalidPointer = 8,
+        //  Host contract not found — no host contract matches contract_id.
+        AbiErrorCode_HostContractNotFound = 100,
+        //  Host contract version mismatch — host contract version does not match.
+        AbiErrorCode_HostContractVersionMismatch = 101,
+        //  Host contract call failed — host contract function call failed.
+        AbiErrorCode_HostContractCallFailed = 102,
+    } AbiErrorCode;
+
     //  Dispatch mechanism type — determines how function calls are routed.
     typedef enum DispatchType {
         //  Native dispatch: direct function pointer calls (zero overhead).
@@ -293,18 +324,6 @@ local function plugin_handle_null() end
 local function plugin_handle_is_null(&PluginHandle handle) end
 
 M.POLYPLUG_ABI_VERSION = ffi.cast("uint32_t", 1)
-M.ABI_OK = ffi.cast("uint32_t", 0)
-M.ABI_ERROR_GENERIC = ffi.cast("uint32_t", 1)
-M.ABI_BUFFER_TOO_SMALL = ffi.cast("uint32_t", 2)
-M.ABI_ERROR_PANIC = ffi.cast("uint32_t", 3)
-M.ABI_ERROR_NOT_FOUND = ffi.cast("uint32_t", 4)
-M.ABI_ERROR_STALE_HANDLE = ffi.cast("uint32_t", 5)
-M.ABI_FUNCTION_NOT_AVAIL = ffi.cast("uint32_t", 6)
-M.ABI_ERROR_DUPLICATE_PROVIDER = ffi.cast("uint32_t", 7)
-M.ABI_ERROR_INVALID_POINTER = ffi.cast("uint32_t", 8)
-M.ABI_HOST_CONTRACT_NOT_FOUND = ffi.cast("uint32_t", 100)
-M.ABI_HOST_CONTRACT_VERSION_MISMATCH = ffi.cast("uint32_t", 101)
-M.ABI_HOST_CONTRACT_CALL_FAILED = ffi.cast("uint32_t", 102)
 local function fnv1a_64(&[u8] data) end
 
 local function contract_id(&str name, uint32_t major) end

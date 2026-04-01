@@ -4,6 +4,8 @@
 //! They are used by the extractor module and will be converted to
 //! `polyplug_codegen::data::AbiItems` for code generation.
 
+#![allow(dead_code)]
+
 /// A single ABI type extracted from the source.
 #[derive(Debug, Clone)]
 pub enum AbiType {

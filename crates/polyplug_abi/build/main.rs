@@ -6,8 +6,11 @@
 //! 3. Calls polyplug_codegen for each target language
 //! 4. Writes generated SDK files to `sdks/{lang}/abi/`
 
-mod generate;
+#![allow(clippy::expect_used)]
+#![allow(clippy::unwrap_used)]
+
 mod extractor;
+mod generate;
 mod mapper;
 mod types;
 
@@ -32,9 +35,7 @@ fn main() {
     let lib_rs: PathBuf = manifest_dir.join("src/lib.rs");
     let content: String = fs::read_to_string(&lib_rs).expect("Failed to read src/lib.rs");
 
-    let abi_types: types::AbiTypes =
-        extract_types(&content).expect("Failed to extract ABI types");
+    let abi_types: types::AbiTypes = extract_types(&content).expect("Failed to extract ABI types");
 
-    generate_all_sdks(&abi_types, &workspace_root)
-        .expect("Failed to generate SDKs");
+    generate_all_sdks(&abi_types, &workspace_root).expect("Failed to generate SDKs");
 }

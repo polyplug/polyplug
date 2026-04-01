@@ -25,4 +25,3 @@ pub struct HostLoggerLogWithLevelArgs {
     pub level: LogLevel,
     pub message: StringView,
 }
-

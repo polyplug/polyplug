@@ -4,10 +4,10 @@
 //! - Host-side: type-safe Rust wrappers to call plugins (for app developers)
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
-use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
+use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -126,15 +126,11 @@ impl CodeGenerator for RustGenerator {
         let mut callers_out: String = String::new();
         callers_out.push_str(header);
 
-        callers_out.push_str("use polyplug_abi::ABI_OK;\n");
+        callers_out.push_str("use polyplug_abi::AbiErrorCode;\n");
         callers_out.push_str("use polyplug_abi::AbiError;\n");
         callers_out.push_str("use polyplug_abi::PluginInterface;\n");
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
-        callers_out.push_str("use polyplug_abi::ABI_ERROR_GENERIC;\n");
-        callers_out.push_str("use polyplug_abi::ABI_ERROR_NOT_FOUND;\n");
-        callers_out.push_str("use polyplug_abi::ABI_ERROR_STALE_HANDLE;\n");
-        callers_out.push_str("use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;\n");
         callers_out.push_str("use polyplug_abi::PluginHandle;\n");
         callers_out.push_str("use polyplug::registry::PluginGuard;\n");
         callers_out.push_str("use polyplug::runtime::Runtime;\n");
@@ -554,6 +550,9 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::PluginError;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
+    out.push_str("use polyplug_guest::string_view_null;\n");
+    out.push_str("use polyplug_guest::string_view_from_static;\n");
+    out.push_str("use polyplug_guest::abi_error_ok;\n");
     out.push_str("#[allow(unused_imports)]\n");
     out.push_str("use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};\n");
     out.push_str("use super::types::*;\n");
@@ -564,7 +563,7 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     );
     out.push_str("/// Falls back to a null message if allocation fails.\n");
     out.push_str("fn plugin_error_to_abi_error(e: PluginError) -> AbiError {\n");
-    out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| StringView::null());\n");
+    out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());\n");
     out.push_str("    AbiError { code: e.code, message }\n");
     out.push_str("}\n\n");
     for contract in &ir.contracts {
@@ -824,17 +823,17 @@ fn generate_guest_abi_wrapper(
         "        let impl_ref: &dyn {trait_name} = match {contract_upper}_IMPL.get() {{\n"
     ));
     out.push_str("            Some(i) => i.as_ref(),\n");
-    out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"implementation not registered\") },\n");
+    out.push_str("            None => return AbiError { code: ABI_ERROR_GENERIC, message: string_view_from_static(b\"implementation not registered\") },\n");
     out.push_str("        };\n");
 
     if !func.params.is_empty() {
         out.push_str("        if args.is_null() {\n");
-        out.push_str("            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b\"args pointer is null\") };\n");
+        out.push_str("            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: string_view_from_static(b\"args pointer is null\") };\n");
         out.push_str("        }\n");
     }
     if has_return {
         out.push_str("        if out.is_null() {\n");
-        out.push_str("            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: StringView::from_static(b\"out pointer is null\") };\n");
+        out.push_str("            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: string_view_from_static(b\"out pointer is null\") };\n");
         out.push_str("        }\n");
     }
 
@@ -854,13 +853,13 @@ fn generate_guest_abi_wrapper(
         out.push_str(&format!(
             "                unsafe {{ std::ptr::write(out as *mut {ret_ty}, val); }}\n"
         ));
-        out.push_str("                AbiError::ok()\n");
+        out.push_str("                abi_error_ok()\n");
         out.push_str("            }\n");
         out.push_str("            Err(e) => plugin_error_to_abi_error(e),\n");
         out.push_str("        }\n");
     } else {
         out.push_str("        match result {\n");
-        out.push_str("            Ok(()) => AbiError::ok(),\n");
+        out.push_str("            Ok(()) => abi_error_ok(),\n");
         out.push_str("            Err(e) => plugin_error_to_abi_error(e),\n");
         out.push_str("        }\n");
     }
@@ -933,6 +932,8 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::AbiError;\n");
     out.push_str("use polyplug_guest::ABI_OK;\n");
     out.push_str("use polyplug_guest::ABI_ERROR_GENERIC;\n");
+    out.push_str("use polyplug_guest::string_view_from_static;\n");
+    out.push_str("use polyplug_guest::abi_error_ok;\n");
     out.push_str("use polyplug_guest::PluginDescriptor;\n");
     out.push_str("use polyplug_guest::HostVTable;\n");
     out.push_str("use polyplug_guest::PluginInterface;\n");
@@ -976,17 +977,17 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str(") -> AbiError {\n");
     out.push_str("    if rt_ctx.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"rt_ctx is null\") };\n",
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: string_view_from_static(b\"rt_ctx is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    if host.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"host is null\") };\n",
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: string_view_from_static(b\"host is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    if ctx.is_null() {\n");
     out.push_str(
-        "        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b\"ctx is null\") };\n",
+        "        return AbiError { code: ABI_ERROR_GENERIC, message: string_view_from_static(b\"ctx is null\") };\n",
     );
     out.push_str("    }\n");
     out.push_str("    // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.\n");
@@ -1087,7 +1088,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
         }
     }
 
-    out.push_str("    AbiError::ok()\n");
+    out.push_str("    abi_error_ok()\n");
     out.push_str("}\n");
 }
 
@@ -1260,7 +1261,7 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "            if {fn_id}_u32 >= vtable.function_count {{\n"
     ));
-    out.push_str("                AbiError { code: ABI_FUNCTION_NOT_AVAIL, message: polyplug_abi::StringView::from_static(b\"function not available in vtable\") }\n");
+    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable as u32, message: polyplug_abi::string_view_from_static(b\"function not available in vtable\") }\n");
     out.push_str("            } else {\n");
     out.push_str("                match vtable.dispatch_type {\n");
     out.push_str("                    DispatchType::Native => {\n");
@@ -1282,7 +1283,7 @@ fn generate_host_fn_caller(
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
-    out.push_str("        if err.code != ABI_OK {\n");
+    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
     out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
     out.push_str("                String::new()\n");
     out.push_str("            } else {\n");
@@ -1711,8 +1712,7 @@ fn generate_host_vtable_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::DispatchType;\n");
     out.push_str("use polyplug_abi::StringView;\n");
     out.push_str("use polyplug_abi::AbiError;\n");
-    out.push_str("use polyplug_abi::ABI_OK;\n");
-    out.push_str("use polyplug_abi::ABI_ERROR_PANIC;\n");
+    out.push_str("use polyplug_abi::AbiErrorCode;\n");
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::host_contracts::*;\n");
     out.push_str("use super::types::*;\n\n");
@@ -1918,13 +1918,13 @@ fn generate_host_thunk(
         out.push_str("            let _ = out;\n");
     }
 
-    out.push_str("            AbiError::ok()\n");
+    out.push_str("            abi_error_ok()\n");
     out.push_str("        })) {\n");
     out.push_str("            Ok(err) => err,\n");
     out.push_str("            Err(_) => AbiError {\n");
-    out.push_str("                code: ABI_ERROR_PANIC,\n");
+    out.push_str("                code: AbiErrorCode::Panic as u32,\n");
     out.push_str(&format!(
-        "                message: StringView::from_static(b\"panic in host.{}::{}\"),\n",
+        "                message: string_view_from_static(b\"panic in host.{}::{}\"),\n",
         trait_name.to_lowercase().replace("host", ""),
         func.name
     ));
@@ -2107,6 +2107,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_guest::ABI_HOST_CONTRACT_VERSION_MISMATCH;\n");
     out.push_str("use polyplug_guest::ABI_HOST_CONTRACT_CALL_FAILED;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
+    out.push_str("use polyplug_guest::string_view_null;\n");
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::types::*;\n\n");
 
@@ -2350,7 +2351,7 @@ fn emit_guest_host_contract_args_setup(
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "        let {name}_view: StringView = alloc_string(&{name}).unwrap_or_else(|_| StringView::null());\n",
+                    "        let {name}_view: StringView = alloc_string(&{name}).unwrap_or_else(|_| string_view_null());\n",
                     name = param.name
                 ));
                 out.push_str(&format!(
@@ -2403,7 +2404,7 @@ fn emit_guest_host_contract_args_setup(
         match &param.ty {
             ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => {
                 out.push_str(&format!(
-                    "            {}: alloc_string(&{}).unwrap_or_else(|_| StringView::null()),\n",
+                    "            {}: alloc_string(&{}).unwrap_or_else(|_| string_view_null()),\n",
                     param.name, param.name
                 ));
             }

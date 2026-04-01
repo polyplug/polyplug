@@ -29,7 +29,7 @@ struct Buffer {
 ///
 ///  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
 ///  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-///  after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+///  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
 struct AbiError {
     ///  0 = success, non-zero = error.
     uint32_t code;
@@ -233,6 +233,37 @@ struct RuntimeConfig {
     uint32_t compatibility;
 };
 
+///  ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
+///
+///  These codes are returned by all ABI functions to indicate success or failure.
+///  The `code` field of `AbiError` uses these values.
+enum class AbiErrorCode : uint32_t {
+    ///  Success — no error.
+    Ok = 0,
+    ///  Generic error — unspecified failure.
+    Generic = 1,
+    ///  Buffer too small — caller must reallocate (see Buffer protocol).
+    BufferTooSmall = 2,
+    ///  Panic — plugin panicked (caught by catch_unwind).
+    Panic = 3,
+    ///  Not found — plugin/contract not found.
+    NotFound = 4,
+    ///  Stale handle — PluginHandle generation mismatch.
+    StaleHandle = 5,
+    ///  Function not available — function_id >= function_count.
+    FunctionNotAvailable = 6,
+    ///  Duplicate provider — same bundle already provides this contract.
+    DuplicateProvider = 7,
+    ///  Invalid pointer — null or invalid pointer passed to ABI function.
+    InvalidPointer = 8,
+    ///  Host contract not found — no host contract matches contract_id.
+    HostContractNotFound = 100,
+    ///  Host contract version mismatch — host contract version does not match.
+    HostContractVersionMismatch = 101,
+    ///  Host contract call failed — host contract function call failed.
+    HostContractCallFailed = 102,
+};
+
 ///  Dispatch mechanism type — determines how function calls are routed.
 enum class DispatchType : uint32_t {
     ///  Native dispatch: direct function pointer calls (zero overhead).
@@ -294,18 +325,6 @@ PluginHandle plugin_handle_null();
 bool plugin_handle_is_null(&PluginHandle handle);
 
 #define POLYPLUG_ABI_VERSION 1U
-#define ABI_OK 0U
-#define ABI_ERROR_GENERIC 1U
-#define ABI_BUFFER_TOO_SMALL 2U
-#define ABI_ERROR_PANIC 3U
-#define ABI_ERROR_NOT_FOUND 4U
-#define ABI_ERROR_STALE_HANDLE 5U
-#define ABI_FUNCTION_NOT_AVAIL 6U
-#define ABI_ERROR_DUPLICATE_PROVIDER 7U
-#define ABI_ERROR_INVALID_POINTER 8U
-#define ABI_HOST_CONTRACT_NOT_FOUND 100U
-#define ABI_HOST_CONTRACT_VERSION_MISMATCH 101U
-#define ABI_HOST_CONTRACT_CALL_FAILED 102U
 constexpr uint64_t fnv1a_64(&[u8] data) { /* implementation */ }
 
 constexpr uint64_t contract_id(&str name, uint32_t major) { /* implementation */ }

@@ -9,12 +9,8 @@ use std::path::PathBuf;
 use clap::Parser;
 use clap::Subcommand;
 
-use generators::{
-    CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles,
-};
-use polyplug_codegen::{
-    GenerateConfig, GenerateOutput, Lang, PolyplugcError, Side,
-};
+use generators::{CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles};
+use polyplug_codegen::{GenerateConfig, GenerateOutput, Lang, PolyplugcError, Side};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]
@@ -119,11 +115,11 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
         }
 
         Command::Validate { api, bundle } => {
-            let manifest = api.or(bundle).ok_or_else(|| {
-                PolyplugcError::ValidationFailed {
+            let manifest = api
+                .or(bundle)
+                .ok_or_else(|| PolyplugcError::ValidationFailed {
                     message: "Must specify --api or --bundle".to_owned(),
-                }
-            })?;
+                })?;
 
             // Just parse to validate
             if manifest.ends_with("bundle.toml") {
@@ -140,11 +136,11 @@ fn run(cli: Cli) -> Result<(), PolyplugcError> {
             lang,
             out,
         } => {
-            let manifest = api.or(bundle).ok_or_else(|| {
-                PolyplugcError::ValidationFailed {
+            let manifest = api
+                .or(bundle)
+                .ok_or_else(|| PolyplugcError::ValidationFailed {
                     message: "Must specify --api or --bundle".to_owned(),
-                }
-            })?;
+                })?;
 
             let lang_enum = parse_lang(&lang)?;
 
@@ -219,25 +215,18 @@ fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
     })
 }
 
-fn write_files(
-    output: &GenerateOutput,
-    out_dir: &std::path::Path,
-) -> Result<(), PolyplugcError> {
+fn write_files(output: &GenerateOutput, out_dir: &std::path::Path) -> Result<(), PolyplugcError> {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                PolyplugcError::WriteFailed {
-                    path: parent.to_string_lossy().into_owned(),
-                    source: e,
-                }
+            fs::create_dir_all(parent).map_err(|e| PolyplugcError::WriteFailed {
+                path: parent.to_string_lossy().into_owned(),
+                source: e,
             })?;
         }
-        fs::write(&file_path, &file.content).map_err(|e| {
-            PolyplugcError::WriteFailed {
-                path: file_path.to_string_lossy().into_owned(),
-                source: e,
-            }
+        fs::write(&file_path, &file.content).map_err(|e| PolyplugcError::WriteFailed {
+            path: file_path.to_string_lossy().into_owned(),
+            source: e,
         })?;
     }
 

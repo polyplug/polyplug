@@ -85,23 +85,6 @@ static HOST_VTABLE: OnceLock<HostVtablePtr> = OnceLock::new();
 /// returning this value. The loader rejects plugins with a different version.
 pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-/// Output buffer too small — caller must reallocate and retry.
-pub use polyplug_abi::ABI_BUFFER_TOO_SMALL;
-pub use polyplug_abi::ABI_ERROR_DUPLICATE_PROVIDER;
-/// Generic error code — use for unclassified plugin errors.
-pub use polyplug_abi::ABI_ERROR_GENERIC;
-pub use polyplug_abi::ABI_ERROR_INVALID_POINTER;
-/// Requested plugin or contract not found.
-pub use polyplug_abi::ABI_ERROR_NOT_FOUND;
-/// Plugin panicked — returned by the host runtime when `catch_unwind` fires.
-pub use polyplug_abi::ABI_ERROR_PANIC;
-/// Plugin handle is stale (plugin was unloaded and reloaded).
-pub use polyplug_abi::ABI_ERROR_STALE_HANDLE;
-/// Function ID is out of range for this vtable.
-pub use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
-/// Success code — no error.
-pub use polyplug_abi::ABI_OK;
-
 // ─── ABI Types ────────────────────────────────────────────────────────────────
 
 /// Non-owning UTF-8 string view. Never null-terminated.
@@ -189,46 +172,27 @@ pub use polyplug_abi::HostContractDispatch;
 /// OWNERSHIP: `'static` vtable registered by the host runtime.
 pub use polyplug_abi::HostContractVTable;
 
-// ─── Host Contract Error Codes ────────────────────────────────────────────────
-
-/// Host contract not found — guest requested a host contract that isn't registered.
-pub use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
-
-/// Host contract version mismatch — guest's required version doesn't match host's.
-pub use polyplug_abi::ABI_HOST_CONTRACT_VERSION_MISMATCH;
-
-/// Host contract call failed — generic error from host contract invocation.
-pub use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
-
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 
-/// Compute the FNV-1a 64-bit contract ID for `"name@major_version"`.
-///
-/// Use this to verify at runtime that your compile-time constant matches.
-/// `polyplugc` generates these constants for you at code-generation time.
-///
-/// # Example
-/// ```rust
-/// use polyplug_abi::contract_id;
-/// assert_eq!(contract_id("test.add", 1), 0xCC4232FAB0410D2B);
-/// ```
-pub use polyplug_abi::contract_id;
-
-/// Compute the FNV-1a 64-bit bundle ID for a bundle name.
-pub use polyplug_abi::bundle_id;
+pub use polyplug_utils::contract_id;
+pub use polyplug_utils::bundle_id;
 
 // ─── Allocator ────────────────────────────────────────────────────────────────
 
-/// Allocate memory via the host system allocator.
-///
-/// All memory that crosses the plugin/host boundary must use this allocator.
-/// Returns null for size=0 or invalid alignment.
 pub use polyplug_abi::ffi::polyplug_host_alloc;
 
-/// Free memory previously allocated by `polyplug_host_alloc`.
-///
-/// Passing null or size=0 is a safe no-op.
 pub use polyplug_abi::ffi::polyplug_host_free;
+
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/// Create a StringView from a static byte slice.
+pub use polyplug_abi::string_view_from_static;
+
+/// Create a null StringView (empty/absent).
+pub use polyplug_abi::string_view_null;
+
+/// Create an AbiError with code=0 (success) and null message.
+pub use polyplug_abi::abi_error_ok;
 
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 

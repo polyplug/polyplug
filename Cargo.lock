@@ -1611,6 +1611,7 @@ name = "polyplug_guest"
 version = "0.1.0"
 dependencies = [
  "polyplug_abi",
+ "polyplug_utils",
 ]
 
 [[package]]

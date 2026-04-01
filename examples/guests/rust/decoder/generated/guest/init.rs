@@ -6,18 +6,20 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::AbiError;
-use polyplug_guest::ABI_OK;
-use polyplug_guest::ABI_ERROR_GENERIC;
-use polyplug_guest::PluginDescriptor;
-use polyplug_guest::HostVTable;
-use polyplug_guest::PluginInterface;
-use polyplug_guest::StringView;
-use polyplug_guest::PluginContext;
-use polyplug_guest::store_host_vtable;
-use core::ffi::c_void;
 use super::vtables::DECODER_CONTRACT_ID;
 use super::vtables::DECODER_VTABLE;
+use core::ffi::c_void;
+use polyplug_guest::ABI_ERROR_GENERIC;
+use polyplug_guest::ABI_OK;
+use polyplug_guest::AbiError;
+use polyplug_guest::HostVTable;
+use polyplug_guest::PluginContext;
+use polyplug_guest::PluginDescriptor;
+use polyplug_guest::PluginInterface;
+use polyplug_guest::StringView;
+use polyplug_guest::abi_error_ok;
+use polyplug_guest::store_host_vtable;
+use polyplug_guest::string_view_from_static;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
@@ -35,13 +37,22 @@ pub unsafe extern "C" fn polyplug_init(
     ctx: *const PluginContext,
 ) -> AbiError {
     if rt_ctx.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"rt_ctx is null") };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: string_view_from_static(b"rt_ctx is null"),
+        };
     }
     if host.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"host is null") };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: string_view_from_static(b"host is null"),
+        };
     }
     if ctx.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::from_static(b"ctx is null") };
+        return AbiError {
+            code: ABI_ERROR_GENERIC,
+            message: string_view_from_static(b"ctx is null"),
+        };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
     let ctx: &PluginContext = unsafe { &*ctx };
@@ -49,29 +60,43 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host is non-null and valid per ABI contract.
     let host: &HostVTable = unsafe { &*host };
     // SAFETY: Called once during plugin init, before any host contract access.
-    unsafe { store_host_vtable(host as *const HostVTable); }
+    unsafe {
+        store_host_vtable(host as *const HostVTable);
+    }
 
     // Call user initialization to register plugin implementations
     unsafe extern "C" {
         fn polyplug_user_init();
     }
     // SAFETY: polyplug_user_init is a safe initialization function provided by user
-    unsafe { polyplug_user_init(); }
+    unsafe {
+        polyplug_user_init();
+    }
 
     let desc_DECODER: PluginDescriptor = PluginDescriptor {
-        name: StringView { ptr: b"decoder".as_ptr(), len: 7_usize },
-        contract_name: StringView { ptr: b"pipeline.Decoder@1".as_ptr(), len: 18_usize },
+        name: StringView {
+            ptr: b"decoder".as_ptr(),
+            len: 7_usize,
+        },
+        contract_name: StringView {
+            ptr: b"pipeline.Decoder@1".as_ptr(),
+            len: 18_usize,
+        },
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
     };
     // SAFETY: desc and vtable are 'static.
     let err_DECODER: AbiError = unsafe {
-        (host.register_plugin)(rt_ctx, &desc_DECODER as *const PluginDescriptor, &DECODER_VTABLE as *const PluginInterface)
+        (host.register_plugin)(
+            rt_ctx,
+            &desc_DECODER as *const PluginDescriptor,
+            &DECODER_VTABLE as *const PluginInterface,
+        )
     };
     if err_DECODER.code != ABI_OK {
         return err_DECODER;
     }
 
-    AbiError::ok()
+    abi_error_ok()
 }

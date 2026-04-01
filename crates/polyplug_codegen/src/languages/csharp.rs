@@ -20,6 +20,19 @@ impl CSharpGenerator {
             return String::from("IntPtr");
         }
 
+        if rust_type == "&str" {
+            return String::from("string");
+        }
+
+        if rust_type.starts_with("&[u8]") || rust_type.starts_with("&[") {
+            return String::from("byte[]");
+        }
+
+        if rust_type.starts_with('&') {
+            let inner: &str = &rust_type[1..];
+            return Self::rust_type_to_csharp(inner);
+        }
+
         match rust_type {
             "u64" => String::from("ulong"),
             "u32" => String::from("uint"),
@@ -53,6 +66,19 @@ impl CSharpGenerator {
                     String::from("///")
                 } else {
                     format!("/// {}", line)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    }
+
+    fn format_indented_xml_doc(doc: &str, indent: &str) -> String {
+        doc.lines()
+            .map(|line: &str| {
+                if line.is_empty() {
+                    format!("{}///", indent)
+                } else {
+                    format!("{}/// {}", indent, line)
                 }
             })
             .collect::<Vec<String>>()
@@ -95,7 +121,7 @@ impl CodeGenerator for CSharpGenerator {
 
         for field in &item.fields {
             if let Some(doc) = &field.doc {
-                output.push_str(&Self::format_xml_doc(doc));
+                output.push_str(&Self::format_indented_xml_doc(doc, "    "));
                 output.push('\n');
             }
 
@@ -121,7 +147,7 @@ impl CodeGenerator for CSharpGenerator {
 
         for (i, variant) in item.variants.iter().enumerate() {
             if let Some(doc) = &variant.doc {
-                output.push_str(&Self::format_xml_doc(doc));
+                output.push_str(&Self::format_indented_xml_doc(doc, "    "));
                 output.push('\n');
             }
 

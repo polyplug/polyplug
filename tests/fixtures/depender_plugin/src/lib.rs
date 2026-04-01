@@ -6,6 +6,7 @@
 
 use core::sync::atomic::AtomicU32;
 use core::sync::atomic::Ordering;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 
 // ─── Function pointer wrapper for Sync ─────────────────────────────────────────
@@ -85,14 +86,14 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     INIT_COUNT.fetch_add(1_u32, Ordering::SeqCst);

@@ -1,7 +1,7 @@
+use polyplug::ReloadPhase;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
-use polyplug::ReloadPhase;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
 use polyplug_js::{JsConfig, JsLoader};
@@ -15,7 +15,7 @@ use std::time::Duration;
 mod generated;
 
 use generated::host::host_callers::*;
-use generated::host::host_contracts::{HostLogger, HOSTLOGGER_CONTRACT_ID};
+use generated::host::host_contracts::{HOSTLOGGER_CONTRACT_ID, HostLogger};
 use generated::host::types::*;
 use generated::host::vtable_factories::create_host_logger_vtable;
 

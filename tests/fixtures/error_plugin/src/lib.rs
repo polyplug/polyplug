@@ -7,6 +7,7 @@
 //!   fn 1 — error_panic: catches an intentional panic and returns ABI_ERROR_PANIC
 //!   fn 2 — error_chain_propagate: calls another plugin via host vtable and propagates its error
 
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
 
 // ─── Extern host allocator ───────────────────────────────────────────────────
@@ -59,8 +60,8 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
     let ptr: *mut u8 = unsafe { polyplug_host_alloc(len, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     // SAFETY: ptr is valid for len bytes as guaranteed by polyplug_host_alloc.
@@ -76,7 +77,7 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
         // SAFETY: out points to a valid AbiError per the ABI contract.
         (out as *mut AbiError).write(abi_error);
     }
-    AbiError::ok()
+    abi_error_ok()
 }
 
 /// fn 1 — error_panic
@@ -91,10 +92,10 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
         panic!("intentional error_plugin panic");
     });
     match result {
-        Ok(()) => AbiError::ok(), // unreachable — the closure always panics
+        Ok(()) => abi_error_ok(), // unreachable — the closure always panics
         Err(_) => AbiError {
-            code: ABI_ERROR_PANIC,
-            message: StringView::from_static(b"plugin panicked"),
+            code: AbiErrorCode::Panic as u32,
+            message: string_view_from_static(b"plugin panicked"),
         },
     }
 }
@@ -120,16 +121,16 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // Dispatch through the interface if non-null and fn_id is in range.
     let inner_result: AbiError = if iface_ptr.is_null() {
         AbiError {
-            code: ABI_ERROR_NOT_FOUND,
-            message: StringView::null(),
+            code: AbiErrorCode::NotFound as u32,
+            message: string_view_null(),
         }
     } else {
         // SAFETY: iface_ptr is 'static and non-null.
         let iface: &PluginInterface = unsafe { &*iface_ptr };
         if chain_args.target_fn_id >= iface.function_count {
             AbiError {
-                code: ABI_FUNCTION_NOT_AVAIL,
-                message: StringView::null(),
+                code: AbiErrorCode::FunctionNotAvailable as u32,
+                message: string_view_null(),
             }
         } else {
             // SAFETY: fn_id < function_count validated above.
@@ -149,7 +150,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     };
     // SAFETY: out points to a valid AbiError per the ABI contract.
     unsafe { (out as *mut AbiError).write(inner_result) };
-    AbiError::ok()
+    abi_error_ok()
 }
 
 // ─── Static VTable ────────────────────────────────────────────────────────────
@@ -225,14 +226,14 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
-            message: StringView::null(),
+            code: AbiErrorCode::Generic as u32,
+            message: string_view_null(),
         };
     }
 

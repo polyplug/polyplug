@@ -7,9 +7,9 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)]
 public struct StringView
 {
-///  UTF-8 bytes, NOT null-terminated.
+    ///  UTF-8 bytes, NOT null-terminated.
     public IntPtr Ptr;
-///  Byte count.
+    ///  Byte count.
     public nuint Len;
 }
 
@@ -21,9 +21,9 @@ public struct StringView
 public struct Buffer
 {
     public IntPtr Ptr;
-///  Bytes currently used.
+    ///  Bytes currently used.
     public nuint Len;
-///  Bytes allocated.
+    ///  Bytes allocated.
     public nuint Cap;
 }
 
@@ -31,13 +31,13 @@ public struct Buffer
 ///
 ///  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
 ///  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-///  after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+///  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
 [StructLayout(LayoutKind.Sequential)]
 public struct AbiError
 {
-///  0 = success, non-zero = error.
+    ///  0 = success, non-zero = error.
     public uint Code;
-///  Empty/NULL if success. UTF-8 message if non-zero code.
+    ///  Empty/NULL if success. UTF-8 message if non-zero code.
     public StringView Message;
 }
 
@@ -48,9 +48,9 @@ public struct AbiError
 [StructLayout(LayoutKind.Sequential)]
 public struct PluginHandle
 {
-///  Slot in the registry array.
+    ///  Slot in the registry array.
     public uint Index;
-///  Incremented on unload — detects stale handles.
+    ///  Incremented on unload — detects stale handles.
     public uint Generation;
 }
 
@@ -64,9 +64,9 @@ public struct PluginHandle
 [StructLayout(LayoutKind.Sequential)]
 public struct HostContext
 {
-///  Opaque pointer to the Runtime. Never dereferenced by plugins.
+    ///  Opaque pointer to the Runtime. Never dereferenced by plugins.
     public IntPtr Runtime;
-///  Bundle ID of the calling bundle for dependency enforcement.
+    ///  Bundle ID of the calling bundle for dependency enforcement.
     public ulong BundleId;
 }
 
@@ -77,7 +77,7 @@ public struct HostContext
 [StructLayout(LayoutKind.Sequential)]
 public struct NativeDispatch
 {
-///  Pointer to a static array of function pointers, indexed by function_id.
+    ///  Pointer to a static array of function pointers, indexed by function_id.
     public IntPtr Functions;
 }
 
@@ -88,16 +88,16 @@ public struct NativeDispatch
 [StructLayout(LayoutKind.Sequential)]
 public struct VmDispatch
 {
-///  Dispatch function called for every VM function invocation.
-///
-///  # Arguments
-///  - `loader_data`: VM-specific data (cast from `*mut c_void`)
-///  - `fn_id`: Function index within the contract
-///  - `args`: Pointer to packed arguments (ABI-specific layout)
-///  - `out`: Pointer to output buffer for return value
+    ///  Dispatch function called for every VM function invocation.
+    ///
+    ///  # Arguments
+    ///  - `loader_data`: VM-specific data (cast from `*mut c_void`)
+    ///  - `fn_id`: Function index within the contract
+    ///  - `args`: Pointer to packed arguments (ABI-specific layout)
+    ///  - `out`: Pointer to output buffer for return value
     public IntPtr Call;
-///  Loader-specific data (e.g., LuaLoaderData, JsLoaderData).
-///  Opaque to the host; interpreted by the dispatch function.
+    ///  Loader-specific data (e.g., LuaLoaderData, JsLoaderData).
+    ///  Opaque to the host; interpreted by the dispatch function.
     public IntPtr LoaderData;
 }
 
@@ -112,18 +112,18 @@ public struct VmDispatch
 [StructLayout(LayoutKind.Sequential)]
 public struct PluginInterface
 {
-///  Pointer to the host context for this plugin.
-///  Used for host function calls and dependency enforcement.
+    ///  Pointer to the host context for this plugin.
+    ///  Used for host function calls and dependency enforcement.
     public IntPtr RtCtx;
-///  FNV-1a hash of "contract_name@major_version".
+    ///  FNV-1a hash of "contract_name@major_version".
     public ulong ContractId;
-///  minor.patch encoded as `(minor << 16 | patch)`.
+    ///  minor.patch encoded as `(minor << 16 | patch)`.
     public uint ContractVersion;
-///  Number of valid entries in the dispatch array.
+    ///  Number of valid entries in the dispatch array.
     public uint FunctionCount;
-///  Dispatch mechanism type (Native or VirtualMachine).
+    ///  Dispatch mechanism type (Native or VirtualMachine).
     public DispatchType DispatchType;
-///  Union of dispatch mechanisms — access based on dispatch_type.
+    ///  Union of dispatch mechanisms — access based on dispatch_type.
     public PluginDispatch Dispatch;
 }
 
@@ -131,17 +131,17 @@ public struct PluginInterface
 [StructLayout(LayoutKind.Sequential)]
 public struct HostContractVTableHeader
 {
-///  VTable format version (for future compatibility).
+    ///  VTable format version (for future compatibility).
     public uint VtableVersion;
-///  FNV-1a hash of "contract_name@major_version".
+    ///  FNV-1a hash of "contract_name@major_version".
     public ulong ContractId;
-///  Contract major version.
+    ///  Contract major version.
     public uint ContractMajor;
-///  Contract minor version.
+    ///  Contract minor version.
     public uint ContractMinor;
-///  Number of functions in this contract.
+    ///  Number of functions in this contract.
     public uint FunctionCount;
-///  Dispatch mechanism type (Native or VirtualMachine).
+    ///  Dispatch mechanism type (Native or VirtualMachine).
     public DispatchType DispatchType;
 }
 
@@ -152,10 +152,10 @@ public struct HostContractVTableHeader
 [StructLayout(LayoutKind.Sequential)]
 public struct NativeHostContractDispatch
 {
-///  Pointer to the implementation (e.g., Box<dyn Trait> as *const c_void).
-///  This is passed as the first argument to all native dispatch functions.
+    ///  Pointer to the implementation (e.g., Box<dyn Trait> as *const c_void).
+    ///  This is passed as the first argument to all native dispatch functions.
     public IntPtr ImplPtr;
-///  Pointer to a static array of function pointers, indexed by function_id.
+    ///  Pointer to a static array of function pointers, indexed by function_id.
     public IntPtr Functions;
 }
 
@@ -166,15 +166,15 @@ public struct NativeHostContractDispatch
 [StructLayout(LayoutKind.Sequential)]
 public struct VmHostContractDispatch
 {
-///  Dispatch function called for every VM function invocation.
-///
-///  # Arguments
-///  - `bridge_data`: VM-specific data (cast from `*mut c_void`)
-///  - `fn_id`: Function index within the contract
-///  - `args`: Pointer to packed arguments (ABI-specific layout)
-///  - `out`: Pointer to output buffer for return value
+    ///  Dispatch function called for every VM function invocation.
+    ///
+    ///  # Arguments
+    ///  - `bridge_data`: VM-specific data (cast from `*mut c_void`)
+    ///  - `fn_id`: Function index within the contract
+    ///  - `args`: Pointer to packed arguments (ABI-specific layout)
+    ///  - `out`: Pointer to output buffer for return value
     public IntPtr Call;
-///  VM-specific data (opaque to the host; interpreted by the dispatch function).
+    ///  VM-specific data (opaque to the host; interpreted by the dispatch function).
     public IntPtr BridgeData;
 }
 
@@ -189,9 +189,9 @@ public struct VmHostContractDispatch
 [StructLayout(LayoutKind.Sequential)]
 public struct HostContractVTable
 {
-///  Header containing contract metadata.
+    ///  Header containing contract metadata.
     public HostContractVTableHeader Header;
-///  Union of dispatch mechanisms — access based on dispatch_type.
+    ///  Union of dispatch mechanisms — access based on dispatch_type.
     public HostContractDispatch Dispatch;
 }
 
@@ -211,8 +211,8 @@ public struct HostVTable
     public IntPtr FindByBundle;
     public IntPtr FindAllByContract;
     public IntPtr ResolvePlugin;
-///  Get host contract vtable by contract_id and minimum version.
-///  Returns null if no host contract matches the criteria.
+    ///  Get host contract vtable by contract_id and minimum version.
+    ///  Returns null if no host contract matches the criteria.
     public IntPtr GetHostContract;
 }
 
@@ -224,9 +224,9 @@ public struct HostVTable
 [StructLayout(LayoutKind.Sequential)]
 public struct PluginDescriptor
 {
-///  Human-readable plugin name.
+    ///  Human-readable plugin name.
     public StringView Name;
-///  Full contract name for collision detection.
+    ///  Full contract name for collision detection.
     public StringView ContractName;
     public uint VersionMajor;
     public uint VersionMinor;
@@ -239,12 +239,12 @@ public struct PluginDescriptor
 [StructLayout(LayoutKind.Sequential)]
 public struct PluginContext
 {
-///  Absolute canonical path to the directory containing the loaded bundle.
+    ///  Absolute canonical path to the directory containing the loaded bundle.
     public StringView BundlePath;
-///  Host's supported ABI version for negotiation (Option C).
-///  Plugin can use this to determine available features.
+    ///  Host's supported ABI version for negotiation (Option C).
+    ///  Plugin can use this to determine available features.
     public uint HostAbiVersion;
-///  Bundle ID for dependency enforcement during init.
+    ///  Bundle ID for dependency enforcement during init.
     public ulong BundleId;
 }
 
@@ -256,19 +256,51 @@ public struct PluginContext
 [StructLayout(LayoutKind.Sequential)]
 public struct RuntimeConfig
 {
-///  Plugin directories to scan (array of `plugin_dir_count` StringViews).
+    ///  Plugin directories to scan (array of `plugin_dir_count` StringViews).
     public IntPtr PluginDirs;
     public nuint PluginDirCount;
-///  Compatibility mode: 0 = Strict (only mode implemented in MVP).
+    ///  Compatibility mode: 0 = Strict (only mode implemented in MVP).
     public uint Compatibility;
+}
+
+///  ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
+///
+///  These codes are returned by all ABI functions to indicate success or failure.
+///  The `code` field of `AbiError` uses these values.
+public enum AbiErrorCode : uint
+{
+    ///  Success — no error.
+    Ok = 0,
+    ///  Generic error — unspecified failure.
+    Generic = 1,
+    ///  Buffer too small — caller must reallocate (see Buffer protocol).
+    BufferTooSmall = 2,
+    ///  Panic — plugin panicked (caught by catch_unwind).
+    Panic = 3,
+    ///  Not found — plugin/contract not found.
+    NotFound = 4,
+    ///  Stale handle — PluginHandle generation mismatch.
+    StaleHandle = 5,
+    ///  Function not available — function_id >= function_count.
+    FunctionNotAvailable = 6,
+    ///  Duplicate provider — same bundle already provides this contract.
+    DuplicateProvider = 7,
+    ///  Invalid pointer — null or invalid pointer passed to ABI function.
+    InvalidPointer = 8,
+    ///  Host contract not found — no host contract matches contract_id.
+    HostContractNotFound = 100,
+    ///  Host contract version mismatch — host contract version does not match.
+    HostContractVersionMismatch = 101,
+    ///  Host contract call failed — host contract function call failed.
+    HostContractCallFailed = 102,
 }
 
 ///  Dispatch mechanism type — determines how function calls are routed.
 public enum DispatchType : uint
 {
-///  Native dispatch: direct function pointer calls (zero overhead).
+    ///  Native dispatch: direct function pointer calls (zero overhead).
     Native = 0,
-///  VM dispatch: call through a dispatch function with loader_data.
+    ///  VM dispatch: call through a dispatch function with loader_data.
     VirtualMachine = 1,
 }
 
@@ -311,48 +343,36 @@ public struct HostContractDispatch
     public VmHostContractDispatch Vm;
 }
 
-public static StringView string_view_from_static(&'static[u8] bytes);
+public static StringView string_view_from_static('static[u8] bytes);
 
 public static StringView string_view_null();
 
-public static &str string_view_as_str(&StringView sv);
+public static string string_view_as_str(StringView sv);
 
-public static String string_view_to_string_owned(&StringView sv);
+public static String string_view_to_string_owned(StringView sv);
 
-public static &[u8] buffer_as_slice(&Buffer buf);
+public static byte[] buffer_as_slice(Buffer buf);
 
-public static &mut[u8] buffer_as_mut_slice(&mutBuffer buf);
+public static mut[u8] buffer_as_mut_slice(mutBuffer buf);
 
 public static AbiError abi_error_ok();
 
 public static AbiError abi_error_panic_caught();
 
-public static bool abi_error_is_ok(&AbiError err);
+public static bool abi_error_is_ok(AbiError err);
 
 public static PluginHandle plugin_handle_null();
 
-public static bool plugin_handle_is_null(&PluginHandle handle);
+public static bool plugin_handle_is_null(PluginHandle handle);
 
 public const uint POLYPLUG_ABI_VERSION = 1u;
-public const uint ABI_OK = 0u;
-public const uint ABI_ERROR_GENERIC = 1u;
-public const uint ABI_BUFFER_TOO_SMALL = 2u;
-public const uint ABI_ERROR_PANIC = 3u;
-public const uint ABI_ERROR_NOT_FOUND = 4u;
-public const uint ABI_ERROR_STALE_HANDLE = 5u;
-public const uint ABI_FUNCTION_NOT_AVAIL = 6u;
-public const uint ABI_ERROR_DUPLICATE_PROVIDER = 7u;
-public const uint ABI_ERROR_INVALID_POINTER = 8u;
-public const uint ABI_HOST_CONTRACT_NOT_FOUND = 100u;
-public const uint ABI_HOST_CONTRACT_VERSION_MISMATCH = 101u;
-public const uint ABI_HOST_CONTRACT_CALL_FAILED = 102u;
-public static ulong fnv1a_64(&[u8] data);
+public static ulong fnv1a_64(byte[] data);
 
-public static ulong contract_id(&str name, uint major);
+public static ulong contract_id(string name, uint major);
 
-public static ulong bundle_id(&str name);
+public static ulong bundle_id(string name);
 
-public static ulong host_contract_id(&str name, uint major);
+public static ulong host_contract_id(string name, uint major);
 
-public static ulong plugin_contract_id(&str name, uint major);
+public static ulong plugin_contract_id(string name, uint major);
 

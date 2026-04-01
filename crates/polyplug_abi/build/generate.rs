@@ -3,6 +3,8 @@
 //! This module provides functions to generate SDK bindings for all supported
 //! languages (C++, C#, Python, Lua, JavaScript) from extracted ABI types.
 
+#![allow(clippy::std_instead_of_core)]
+
 use crate::mapper::{create_hash_functions, map_all_abi_types};
 use crate::types::AbiTypes;
 use polyplug_codegen::data::Item;
@@ -73,7 +75,7 @@ impl TargetLang {
 pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
     let abi_items: Vec<Item> = map_all_abi_types(&abi_types.types());
     let hash_items: Vec<Item> = create_hash_functions();
-    let all_items: Vec<Item> = abi_items.into_iter().chain(hash_items.into_iter()).collect();
+    let all_items: Vec<Item> = abi_items.into_iter().chain(hash_items).collect();
 
     let generator: Box<dyn CodeGenerator> = match lang {
         TargetLang::Cpp => Box::new(CppGenerator::new()),
