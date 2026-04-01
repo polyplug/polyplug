@@ -7,15 +7,15 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+polyplug_utils = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
-polyplug = { workspace = true }
-polyplug_abi = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 libloading = { workspace = true }
+polyplug_abi = { workspace = true }
 
 [lints]
 workspace = true

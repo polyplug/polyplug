@@ -36,6 +36,8 @@ from polyplug_abi.abi import (
     contract_id,
     extension_id,
     bundle_id,
+    host_contract_id,
+    plugin_contract_id,
     FNV_OFFSET,
     FNV_PRIME,
 )
@@ -130,6 +132,8 @@ __all__ = [
     "contract_id",
     "extension_id",
     "bundle_id",
+    "host_contract_id",
+    "plugin_contract_id",
     "FNV_OFFSET",
     "FNV_PRIME",
     "ReloadPhaseType",

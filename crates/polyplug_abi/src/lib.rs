@@ -11,11 +11,16 @@
 // =============================================================================
 
 //! ABI — `#[repr(C)]` types, constants, and FNV-1a hashing for the polyplug ABI boundary.
+//!
+//! Type definitions are sourced from `abi.toml` in this crate's root.
 
 pub mod ffi;
 pub mod tracking;
 
 use core::ffi::c_void;
+
+// Re-export hash functions from polyplug_utils
+pub use polyplug_utils::{bundle_id, contract_id, fnv1a_64, host_contract_id, plugin_contract_id};
 
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
@@ -58,47 +63,43 @@ unsafe impl Send for StringView {}
 // SAFETY: Same reasoning as Send — concurrent reads are safe.
 unsafe impl Sync for StringView {}
 
-impl StringView {
-    /// Construct a StringView from a static byte slice.
-    pub const fn from_static(bytes: &'static [u8]) -> StringView {
-        StringView {
-            ptr: bytes.as_ptr(),
-            len: bytes.len(),
-        }
-    }
-
-    /// The null/empty StringView (ptr=null, len=0). Used for ABI_OK error messages.
-    pub const fn null() -> StringView {
-        StringView {
-            ptr: core::ptr::null(),
-            len: 0,
-        }
+/// Construct a StringView from a static byte slice.
+pub const fn string_view_from_static(bytes: &'static [u8]) -> StringView {
+    StringView {
+        ptr: bytes.as_ptr(),
+        len: bytes.len(),
     }
 }
 
-impl StringView {
-    /// Returns the contents as a `&str`.
-    ///
-    /// # Safety
-    /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
-    pub unsafe fn as_str(&self) -> &str {
-        // SAFETY: StringView::as_str is only called with host-owned StringViews created
-        // via StringView::from_static or StringView::from_str_ref — both guarantee valid
-        // UTF-8. Plugin-provided StringViews must never be passed to this method.
-        unsafe {
-            let slice: &[u8] = core::slice::from_raw_parts(self.ptr, self.len);
-            core::str::from_utf8_unchecked(slice) // SAFETY: see comment above
-        }
+/// The null/empty StringView (ptr=null, len=0). Used for ABI_OK error messages.
+pub const fn string_view_null() -> StringView {
+    StringView {
+        ptr: core::ptr::null(),
+        len: 0,
     }
+}
 
-    /// Copies the StringView contents into a new owned `String`.
-    ///
-    /// # Safety
-    /// Caller must ensure `ptr` is valid UTF-8 for `len` bytes and the memory is live.
-    pub unsafe fn to_string_owned(&self) -> String {
-        // SAFETY: Caller guarantees ptr is valid, non-null, UTF-8, and live.
-        unsafe { self.as_str().to_owned() }
+/// Returns the StringView contents as a `&str`.
+///
+/// # Safety
+/// Caller must ensure `sv.ptr` is valid UTF-8 for `sv.len` bytes and the memory is live.
+pub unsafe fn string_view_as_str(sv: &StringView) -> &str {
+    // SAFETY: string_view_as_str is only called with host-owned StringViews created
+    // via string_view_from_static — guarantees valid UTF-8.
+    // Plugin-provided StringViews must never be passed to this function.
+    unsafe {
+        let slice: &[u8] = core::slice::from_raw_parts(sv.ptr, sv.len);
+        core::str::from_utf8_unchecked(slice) // SAFETY: see comment above
     }
+}
+
+/// Copies the StringView contents into a new owned `String`.
+///
+/// # Safety
+/// Caller must ensure `sv.ptr` is valid UTF-8 for `sv.len` bytes and the memory is live.
+pub unsafe fn string_view_to_string_owned(sv: &StringView) -> String {
+    // SAFETY: Caller guarantees ptr is valid, non-null, UTF-8, and live.
+    unsafe { string_view_as_str(sv).to_owned() }
 }
 
 /// Owning byte buffer.
@@ -119,25 +120,23 @@ pub struct Buffer {
 // Sending between threads is safe because the host allocator is thread-safe.
 unsafe impl Send for Buffer {}
 
-impl Buffer {
-    /// Returns the buffer contents as a byte slice.
-    ///
-    /// # Safety
-    /// Caller must ensure `ptr` is valid for `len` bytes and the memory is live.
-    pub unsafe fn as_slice(&self) -> &[u8] {
-        // SAFETY: Caller guarantees ptr is non-null and valid for len bytes.
-        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
-    }
+/// Returns the buffer contents as a byte slice.
+///
+/// # Safety
+/// Caller must ensure `buf.ptr` is valid for `buf.len` bytes and the memory is live.
+pub unsafe fn buffer_as_slice(buf: &Buffer) -> &[u8] {
+    // SAFETY: Caller guarantees ptr is non-null and valid for len bytes.
+    unsafe { core::slice::from_raw_parts(buf.ptr, buf.len) }
+}
 
-    /// Returns the buffer contents as a mutable byte slice.
-    ///
-    /// # Safety
-    /// Caller must ensure `ptr` is valid for `cap` bytes, the memory is live, and no
-    /// other reference to the buffer exists.
-    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
-        // SAFETY: Caller guarantees ptr is non-null, valid for cap bytes, and exclusively owned.
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.cap) }
-    }
+/// Returns the buffer contents as a mutable byte slice.
+///
+/// # Safety
+/// Caller must ensure `buf.ptr` is valid for `buf.cap` bytes, the memory is live, and no
+/// other reference to the buffer exists.
+pub unsafe fn buffer_as_mut_slice(buf: &mut Buffer) -> &mut [u8] {
+    // SAFETY: Caller guarantees ptr is non-null, valid for cap bytes, and exclusively owned.
+    unsafe { core::slice::from_raw_parts_mut(buf.ptr, buf.cap) }
 }
 
 /// ABI error — returned by value from all ABI calls.
@@ -154,27 +153,25 @@ pub struct AbiError {
     pub message: StringView,
 }
 
-impl AbiError {
-    /// Construct a success AbiError.
-    pub const fn ok() -> AbiError {
-        AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        }
+/// Construct a success AbiError.
+pub const fn abi_error_ok() -> AbiError {
+    AbiError {
+        code: ABI_OK,
+        message: string_view_null(),
     }
+}
 
-    /// Construct a panic error with a static message.
-    pub const fn panic_caught() -> AbiError {
-        AbiError {
-            code: ABI_ERROR_PANIC,
-            message: StringView::from_static(b"plugin panicked"),
-        }
+/// Construct a panic error with a static message.
+pub const fn abi_error_panic_caught() -> AbiError {
+    AbiError {
+        code: ABI_ERROR_PANIC,
+        message: string_view_from_static(b"plugin panicked"),
     }
+}
 
-    /// Returns true if this represents success.
-    pub fn is_ok(self) -> bool {
-        self.code == ABI_OK
-    }
+/// Returns true if this represents success.
+pub fn abi_error_is_ok(err: &AbiError) -> bool {
+    err.code == ABI_OK
 }
 
 // SAFETY: AbiError contains a StringView which is Send+Sync, and a u32 code.
@@ -196,19 +193,17 @@ pub struct PluginHandle {
     pub generation: u32,
 }
 
-impl PluginHandle {
-    /// The null/invalid handle. Never returned by a successful lookup.
-    pub const fn null() -> PluginHandle {
-        PluginHandle {
-            index: u32::MAX,
-            generation: 0,
-        }
+/// The null/invalid handle. Never returned by a successful lookup.
+pub const fn plugin_handle_null() -> PluginHandle {
+    PluginHandle {
+        index: u32::MAX,
+        generation: 0,
     }
+}
 
-    /// Returns true if this is the null handle.
-    pub fn is_null(self) -> bool {
-        self.index == u32::MAX
-    }
+/// Returns true if this is the null handle.
+pub fn plugin_handle_is_null(handle: &PluginHandle) -> bool {
+    handle.index == u32::MAX
 }
 
 /// Opaque host context passed to plugin functions via rt_ctx parameter.
@@ -633,47 +628,6 @@ pub struct RuntimeConfig {
     pub compatibility: u32,
 }
 
-// ─── FNV-1a Hash ─────────────────────────────────────────────────────────────
-
-/// FNV-1a 64-bit hash — used for contract IDs.
-pub(crate) fn fnv1a_64(data: &[u8]) -> u64 {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x00000100000001B3;
-    let mut hash: u64 = FNV_OFFSET;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
-/// Compute the contract ID for `"name@major_version"` using FNV-1a 64-bit.
-pub fn contract_id(name: &str, major_version: u32) -> u64 {
-    let canonical: String = format!("{}@{}", name, major_version);
-    fnv1a_64(canonical.as_bytes())
-}
-
-/// Calculate host contract ID from name and major version.
-///
-/// Uses a distinct prefix `"host_contract:"` to avoid collisions with plugin contract IDs.
-pub fn host_contract_id(name: &str, major: u32) -> u64 {
-    let input: String = format!("host_contract:{}@{}", name, major);
-    fnv1a_64(input.as_bytes())
-}
-
-/// Calculate plugin contract ID from name and major version.
-///
-/// Uses a distinct prefix `"plugin_contract:"` to avoid collisions with host contract IDs.
-pub fn plugin_contract_id(name: &str, major: u32) -> u64 {
-    let input: String = format!("plugin_contract:{}@{}", name, major);
-    fnv1a_64(input.as_bytes())
-}
-
-/// Compute a bundle ID from its name using FNV-1a 64-bit hash.
-pub fn bundle_id(name: &str) -> u64 {
-    fnv1a_64(name.as_bytes())
-}
-
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -763,20 +717,20 @@ mod tests {
     }
 
     #[test]
-    fn plugin_handle_null() {
-        let h: PluginHandle = PluginHandle::null();
-        assert!(h.is_null());
+    fn test_plugin_handle_null() {
+        let h: PluginHandle = plugin_handle_null();
+        assert!(plugin_handle_is_null(&h));
         let valid: PluginHandle = PluginHandle {
             index: 0,
             generation: 1,
         };
-        assert!(!valid.is_null());
+        assert!(!plugin_handle_is_null(&valid));
     }
 
     #[test]
-    fn abi_error_ok() {
-        let e: AbiError = AbiError::ok();
-        assert!(e.is_ok());
+    fn test_abi_error_ok() {
+        let e: AbiError = abi_error_ok();
+        assert!(abi_error_is_ok(&e));
         assert_eq!(e.code, ABI_OK);
     }
 

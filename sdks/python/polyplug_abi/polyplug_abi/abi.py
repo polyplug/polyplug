@@ -277,3 +277,15 @@ def extension_id(name: str) -> int:
 def bundle_id(name: str) -> int:
     """Compute a bundle ID from its name using FNV-1a 64-bit hash."""
     return fnv1a_64(name.encode("utf-8"))
+
+
+def host_contract_id(name: str, major: int) -> int:
+    """Calculate host contract ID from name and major version."""
+    input_str: str = f"host_contract:{name}@{major}"
+    return fnv1a_64(input_str.encode("utf-8"))
+
+
+def plugin_contract_id(name: str, major: int) -> int:
+    """Calculate plugin contract ID from name and major version."""
+    input_str: str = f"plugin_contract:{name}@{major}"
+    return fnv1a_64(input_str.encode("utf-8"))

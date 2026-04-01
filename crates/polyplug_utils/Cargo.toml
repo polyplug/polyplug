@@ -1,0 +1,12 @@
+[package]
+name = "polyplug_utils"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Utility functions for polyplug (hashing, etc.)"
+
+[dependencies]
+
+[lints]
+workspace = true

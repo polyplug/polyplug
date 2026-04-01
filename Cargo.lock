@@ -1575,6 +1575,8 @@ dependencies = [
 name = "polyplug_abi"
 version = "0.1.0"
 dependencies = [
+ "polyplug_codegen",
+ "polyplug_utils",
  "quote",
  "syn",
  "thiserror",
@@ -1585,8 +1587,8 @@ name = "polyplug_codegen"
 version = "0.1.0"
 dependencies = [
  "libloading",
- "polyplug",
  "polyplug_abi",
+ "polyplug_utils",
  "serde",
  "tempfile",
  "thiserror",
@@ -1654,6 +1656,10 @@ dependencies = [
  "pyo3",
  "tempfile",
 ]
+
+[[package]]
+name = "polyplug_utils"
+version = "0.1.0"
 
 [[package]]
 name = "polyplugc"

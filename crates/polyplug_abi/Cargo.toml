@@ -12,8 +12,9 @@ workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+polyplug_utils = { workspace = true }
 
 [build-dependencies]
-thiserror = { workspace = true }
 syn = { workspace = true }
 quote = { workspace = true }
+polyplug_codegen = { workspace = true }

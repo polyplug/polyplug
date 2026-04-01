@@ -26,6 +26,7 @@ license = "MIT"
 
 [workspace.dependencies]
 polyplug_abi = { version = "0.1.0", path = "crates/polyplug_abi" }
+polyplug_abi_build = { version = "0.1.0", path = "crates/polyplug_abi_build" }
 polyplug = { version = "0.1.0", path = "crates/polyplug" }
 polyplugc = { version = "0.1.0", path = "crates/polyplugc" }
 polyplug_codegen = { version = "0.1.0", path = "crates/polyplug_codegen" }
@@ -35,6 +36,7 @@ polyplug_lua = { version = "0.1.0", path = "crates/polyplug_lua" }
 polyplug_python = { version = "0.1.0", path = "crates/polyplug_python" }
 polyplug_native = { version = "0.1.0", path = "crates/polyplug_native" }
 polyplug_guest = { version = "0.1.0", path = "crates/polyplug_guest" }
+polyplug_utils = { version = "0.1.0", path = "crates/polyplug_utils" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

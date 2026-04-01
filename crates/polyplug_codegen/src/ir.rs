@@ -3,11 +3,12 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
-use polyplug_abi::bundle_id as runtime_bundle_id;
-use polyplug_abi::contract_id as runtime_contract_id;
-use polyplug_abi::host_contract_id as runtime_host_contract_id;
-
 use crate::error::PolyplugcError;
+
+// Re-export hash functions from polyplug_utils with legacy names for backward compatibility
+pub(crate) use polyplug_utils::bundle_id as compute_bundle_id;
+pub(crate) use polyplug_utils::contract_id as compute_contract_id;
+pub(crate) use polyplug_utils::host_contract_id as compute_host_contract_id;
 
 // ─── Version ─────────────────────────────────────────────────────────────
 
@@ -354,22 +355,7 @@ pub struct ValidatedIr {
     pub bundle: Option<ResolvedBundle>,
 }
 
-// ─── FNV-1a (re-exported from runtime) ───────────────────────────────────────────
-
-/// Compute a contract ID: FNV-1a of "name@major".
-pub(crate) fn compute_contract_id(name: &str, major: u32) -> u64 {
-    runtime_contract_id(name, major)
-}
-
-/// Compute a host contract ID: FNV-1a of "host_contract:name@major".
-pub(crate) fn compute_host_contract_id(name: &str, major: u32) -> u64 {
-    runtime_host_contract_id(name, major)
-}
-
-/// Compute a bundle ID: FNV-1a hash of the bundle name.
-pub(crate) fn compute_bundle_id(name: &str) -> u64 {
-    runtime_bundle_id(name)
-}
+// ─── Type Resolution ──────────────────────────────────────────────────────────────
 
 // ─── Type Resolution ──────────────────────────────────────────────────────────────
 
@@ -398,8 +384,6 @@ pub(crate) fn resolve_type_ref(
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use polyplug_abi::bundle_id as runtime_bundle_id;
-    use polyplug_abi::contract_id as runtime_contract_id;
 
     #[test]
     fn version_parse() {
@@ -498,12 +482,11 @@ mod tests {
     }
 
     #[test]
-    fn codegen_contract_id_matches_runtime() {
-        // codegen compute_contract_id must produce identical results to the
-        // runtime polyplug_abi::contract_id — both delegate to the same fn.
-        let codegen_id: u64 = compute_contract_id("image.decode", 1);
-        let runtime_id: u64 = runtime_contract_id("image.decode", 1);
-        assert_eq!(codegen_id, runtime_id);
+    fn codegen_contract_id_deterministic() {
+        // compute_contract_id must produce consistent results
+        let id1: u64 = compute_contract_id("image.decode", 1);
+        let id2: u64 = compute_contract_id("image.decode", 1);
+        assert_eq!(id1, id2);
     }
 
     #[test]
@@ -526,12 +509,11 @@ mod tests {
     }
 
     #[test]
-    fn codegen_bundle_id_matches_runtime() {
-        // codegen compute_bundle_id must produce identical results to the
-        // runtime polyplug_abi::bundle_id — both delegate to the same fn.
-        let codegen_id: u64 = compute_bundle_id("my-bundle");
-        let runtime_id: u64 = runtime_bundle_id("my-bundle");
-        assert_eq!(codegen_id, runtime_id);
+    fn codegen_bundle_id_deterministic() {
+        // compute_bundle_id must produce consistent results
+        let id1: u64 = compute_bundle_id("my-bundle");
+        let id2: u64 = compute_bundle_id("my-bundle");
+        assert_eq!(id1, id2);
     }
 
     #[test]

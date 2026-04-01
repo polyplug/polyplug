@@ -8,15 +8,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use polyplug_abi::ABI_OK;
+use polyplug_abi::string_view_null;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
-use polyplug_abi::StringView;
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_abi::ABI_OK;
+use polyplug_codegen::{generate, GenerateConfig, Lang, Side};
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -147,7 +147,7 @@ pub unsafe extern "C" fn polyplug_init(
     _ctx: *const PluginContext,
 ) -> AbiError {
     if host.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError { code: ABI_ERROR_GENERIC, message: string_view_null() };
     }
 
     // Set the implementation before registering
@@ -198,7 +198,7 @@ unsafe extern "C" fn capture_vtable_callback(
     CAPTURED_VTABLE.with(|cell| cell.set(vtable));
     AbiError {
         code: ABI_OK,
-        message: StringView::null(),
+        message: string_view_null(),
     }
 }
 
@@ -367,7 +367,7 @@ fn test_rust_codegen_compile_and_run() {
 
     // SAFETY: init_fn is valid; host_vtable lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
-        bundle_path: StringView::null(),
+        bundle_path: string_view_null(),
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };

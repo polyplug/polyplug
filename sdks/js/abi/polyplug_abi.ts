@@ -329,6 +329,26 @@ export function bundleId(name: string): bigint {
     return fnv1a_64(name);
 }
 
+/**
+ * Calculate host contract ID from name and major version.
+ * @param name - The host contract name.
+ * @param major - The major version.
+ * @returns The host contract ID as bigint.
+ */
+export function hostContractId(name: string, major: number): bigint {
+    return fnv1a_64(`host_contract:${name}@${major}`);
+}
+
+/**
+ * Calculate plugin contract ID from name and major version.
+ * @param name - The plugin contract name.
+ * @param major - The major version.
+ * @returns The plugin contract ID as bigint.
+ */
+export function pluginContractId(name: string, major: number): bigint {
+    return fnv1a_64(`plugin_contract:${name}@${major}`);
+}
+
 // ─── String Helpers ────────────────────────────────────────────────────────────
 
 /**

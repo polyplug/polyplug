@@ -292,7 +292,7 @@ fn render_plugin_vtable_quickjs(
 ) -> Result<(), PolyplugcError> {
     let plugin_var: String = plugin_name.to_uppercase().replace(['.', '-'], "_");
     let contract_name_full: String = format!("{}@{}", contract.name, contract.version.major);
-    let contract_id: u64 = polyplug_abi::contract_id(&contract.name, contract.version.major);
+    let contract_id: u64 = crate::ir::compute_contract_id(&contract.name, contract.version.major);
     let contract_lo: u32 = (contract_id & 0xFFFFFFFF) as u32;
     let contract_hi: u32 = (contract_id >> 32) as u32;
     let function_count: usize = contract.functions.len();

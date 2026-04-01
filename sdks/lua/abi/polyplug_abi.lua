@@ -279,4 +279,22 @@ function M.bundle_id(name)
     return fnv1a_64(name)
 end
 
+--- Calculate host contract ID from name and major version.
+-- @param name string         The host contract name.
+-- @param major_version number The major version.
+-- @return number             The host contract ID.
+function M.host_contract_id(name, major_version)
+    local s = 'host_contract:' .. name .. '@' .. tostring(major_version)
+    return fnv1a_64(s)
+end
+
+--- Calculate plugin contract ID from name and major version.
+-- @param name string         The plugin contract name.
+-- @param major_version number The major version.
+-- @return number             The plugin contract ID.
+function M.plugin_contract_id(name, major_version)
+    local s = 'plugin_contract:' .. name .. '@' .. tostring(major_version)
+    return fnv1a_64(s)
+end
+
 return M
