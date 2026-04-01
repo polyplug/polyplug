@@ -37,6 +37,11 @@ use polyplug_abi::HostVTable;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
+use polyplug_abi::plugin_handle_null;
+use polyplug_abi::string_view_null;
+use polyplug_abi::string_view_from_static;
+use polyplug_abi::string_view_to_string_owned;
+use polyplug_abi::abi_error_ok;
 
 use core::sync::atomic::Ordering;
 use notify::Watcher;
@@ -958,7 +963,7 @@ pub(crate) unsafe extern "C" fn host_register_plugin(
     if rt_ctx.is_null() {
         return polyplug_abi::AbiError {
             code: polyplug_abi::ABI_ERROR_GENERIC,
-            message: polyplug_abi::StringView::null(),
+            message: polyplug_abi::string_view_null(),
         };
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host during polyplug_init
@@ -977,23 +982,23 @@ pub(crate) unsafe extern "C" fn host_register_plugin(
     if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
         return polyplug_abi::AbiError {
             code: polyplug_abi::ABI_ERROR_GENERIC,
-            message: polyplug_abi::StringView::from_static(
+            message: polyplug_abi::string_view_from_static(
                 b"PluginDescriptor.contract_name is null or empty",
             ),
         };
     }
 
     // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes
-    let contract_name: String = unsafe { desc.contract_name.to_string_owned() };
+    let contract_name: String = unsafe { string_view_to_string_owned(&desc.contract_name) };
 
     // SAFETY: vtable is a valid 'static PluginInterface from the plugin binary
     match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
-        Ok(_handle) => polyplug_abi::AbiError::ok(),
+        Ok(_handle) => polyplug_abi::abi_error_ok(),
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
             polyplug_abi::AbiError {
                 code: polyplug_abi::ABI_ERROR_GENERIC,
-                message: polyplug_abi::StringView::null(),
+                message: polyplug_abi::string_view_null(),
             }
         }
     }
@@ -1035,7 +1040,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     min_version: u32,
 ) -> PluginHandle {
     if rt_ctx.is_null() {
-        return PluginHandle::null();
+        return plugin_handle_null();
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
@@ -1048,11 +1053,11 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     let caller_bundle_id: u64 = ctx.bundle_id;
 
     if caller_bundle_id != 0 && !registry.is_dependency_declared(caller_bundle_id, contract_id) {
-        return PluginHandle::null();
+        return plugin_handle_null();
     }
     match registry.find_by_contract(contract_id, min_version) {
         Ok(h) => h,
-        Err(_) => PluginHandle::null(),
+        Err(_) => plugin_handle_null(),
     }
 }
 
@@ -1067,7 +1072,7 @@ pub(crate) unsafe extern "C" fn host_find_by_bundle(
     min_version: u32,
 ) -> PluginHandle {
     if rt_ctx.is_null() {
-        return PluginHandle::null();
+        return plugin_handle_null();
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
@@ -1078,11 +1083,11 @@ pub(crate) unsafe extern "C" fn host_find_by_bundle(
     let caller_bundle_id: u64 = ctx.bundle_id;
 
     if caller_bundle_id != 0 && !registry.is_dependency_declared(caller_bundle_id, contract_id) {
-        return PluginHandle::null();
+        return plugin_handle_null();
     }
     match registry.find_by_bundle(bundle_id, contract_id, min_version) {
         Ok(h) => h,
-        Err(_) => PluginHandle::null(),
+        Err(_) => plugin_handle_null(),
     }
 }
 
@@ -1258,8 +1263,8 @@ mod tests {
             },
         }));
         let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::StringView::from_static(b"stub"),
-            contract_name: polyplug_abi::StringView::from_static(b"stub.contract"),
+            name: polyplug_abi::string_view_from_static(b"stub"),
+            contract_name: polyplug_abi::string_view_from_static(b"stub.contract"),
             version_major: 1_u32,
             version_minor: 0_u32,
             version_patch: 0_u32,

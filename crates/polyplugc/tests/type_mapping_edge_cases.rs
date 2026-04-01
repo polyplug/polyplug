@@ -11,7 +11,8 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplugc::generate;
 use std::io::Write as _;
 
 // ─── TOML helpers ─────────────────────────────────────────────────────────────

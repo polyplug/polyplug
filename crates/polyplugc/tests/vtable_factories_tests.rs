@@ -9,7 +9,8 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_abi::host_contract_id;
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplugc::generate;
 use std::path::PathBuf;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ fn generate_host_vtable_factories(tmp_dir: &PathBuf) -> String {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     // Write all generated files to disk
     for file in &output.files {

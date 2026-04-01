@@ -10,6 +10,8 @@ use crate::registry::VTableSlot;
 use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
 use crate::runtime::RuntimeConfig;
+use polyplug_abi::plugin_handle_is_null;
+use polyplug_abi::plugin_handle_null;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use std::sync::Arc;
@@ -166,7 +168,7 @@ impl RuntimeConfigC {
 // ─── Helper functions ──────────────────────────────────────────────────────────
 
 fn pack_handle(h: PluginHandle) -> u64 {
-    if h.is_null() {
+    if plugin_handle_is_null(&h) {
         u64::MAX
     } else {
         (h.generation as u64) << 32 | h.index as u64
@@ -175,7 +177,7 @@ fn pack_handle(h: PluginHandle) -> u64 {
 
 fn unpack_handle(packed: u64) -> PluginHandle {
     if packed == u64::MAX {
-        PluginHandle::null()
+        plugin_handle_null()
     } else {
         PluginHandle {
             index: (packed & 0xFFFF_FFFF) as u32,
@@ -828,8 +830,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -991,8 +993,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));

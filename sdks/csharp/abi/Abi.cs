@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 
+namespace Polyplug.Abi {
+
 ///  Non-owning UTF-8 string view.
 ///
 ///  OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
@@ -343,36 +345,22 @@ public struct HostContractDispatch
     public VmHostContractDispatch Vm;
 }
 
-public static StringView string_view_from_static('static[u8] bytes);
 
-public static StringView string_view_null();
-
-public static string string_view_as_str(StringView sv);
-
-public static String string_view_to_string_owned(StringView sv);
-
-public static byte[] buffer_as_slice(Buffer buf);
-
-public static mut[u8] buffer_as_mut_slice(mutBuffer buf);
-
-public static AbiError abi_error_ok();
-
-public static AbiError abi_error_panic_caught();
-
-public static bool abi_error_is_ok(AbiError err);
-
-public static PluginHandle plugin_handle_null();
-
-public static bool plugin_handle_is_null(PluginHandle handle);
-
-public const uint POLYPLUG_ABI_VERSION = 1u;
-public static ulong fnv1a_64(byte[] data);
-
-public static ulong contract_id(string name, uint major);
-
-public static ulong bundle_id(string name);
-
-public static ulong host_contract_id(string name, uint major);
-
-public static ulong plugin_contract_id(string name, uint major);
-
+/// ABI constants for polyplug.
+public static class AbiConstants
+{
+    public const uint ABI_OK = 0u;
+    public const uint ABI_ERROR_GENERIC = 1u;
+    public const uint ABI_ERROR_BUFFER_TOO_SMALL = 2u;
+    public const uint ABI_ERROR_PANIC = 3u;
+    public const uint ABI_ERROR_NOT_FOUND = 4u;
+    public const uint ABI_ERROR_STALE_HANDLE = 5u;
+    public const uint ABI_ERROR_FUNCTION_NOT_AVAILABLE = 6u;
+    public const uint ABI_ERROR_DUPLICATE_PROVIDER = 7u;
+    public const uint ABI_ERROR_INVALID_POINTER = 8u;
+    public const uint ABI_HOST_CONTRACT_NOT_FOUND = 100u;
+    public const uint ABI_HOST_CONTRACT_VERSION_MISMATCH = 101u;
+    public const uint ABI_HOST_CONTRACT_CALL_FAILED = 102u;
+    public const uint POLYPLUG_ABI_VERSION = 1u;
+}
+}

@@ -28,8 +28,7 @@ impl CSharpGenerator {
             return String::from("byte[]");
         }
 
-        if rust_type.starts_with('&') {
-            let inner: &str = &rust_type[1..];
+        if let Some(inner) = rust_type.strip_prefix('&') {
             return Self::rust_type_to_csharp(inner);
         }
 
@@ -47,15 +46,6 @@ impl CSharpGenerator {
             "bool" => String::from("bool"),
             "()" => String::from("void"),
             other => String::from(other),
-        }
-    }
-
-    fn format_constant_value(value: &str, type_name: &str) -> String {
-        match type_name {
-            "u64" => format!("{}ul", value),
-            "u32" | "usize" => format!("{}u", value),
-            "i64" => format!("{}L", value),
-            _ => String::from(value),
         }
     }
 
@@ -101,10 +91,10 @@ impl CSharpGenerator {
 }
 
 impl CodeGenerator for CSharpGenerator {
-    fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        let value: String = Self::format_constant_value(&item.value, &item.rust_type);
-        let csharp_type: String = Self::rust_type_to_csharp(&item.rust_type);
-        format!("public const {} {} = {};\n", csharp_type, item.name, value)
+    fn generate_const(&self, _item: &ConstInfo, _ctx: &GenerationContext) -> String {
+        // C# ABI bindings don't include constants at namespace level.
+        // Constants are provided by the AbiConstants static class in the host/guest SDKs.
+        String::new()
     }
 
     fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
@@ -187,21 +177,11 @@ impl CodeGenerator for CSharpGenerator {
         output
     }
 
-    fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let ret_type: String = item
-            .return_type
-            .as_ref()
-            .map(|t| Self::rust_type_to_csharp(t))
-            .unwrap_or_else(|| "void".to_string());
-
-        let params: String = item
-            .params
-            .iter()
-            .map(|p| format!("{} {}", Self::rust_type_to_csharp(&p.rust_type), p.name))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        format!("public static {} {}({});\n\n", ret_type, item.name, params)
+    fn generate_function(&self, _item: &FunctionInfo, _ctx: &GenerationContext) -> String {
+        // C# ABI bindings don't include functions - only structs, enums, and constants.
+        // Functions are either P/Invoke declarations (host side) or exports (guest side),
+        // both of which are generated separately by the host/guest code generators.
+        String::new()
     }
 
     fn file_extension(&self) -> &'static str {
@@ -213,7 +193,31 @@ impl CodeGenerator for CSharpGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "using System.Runtime.InteropServices;\n\n".to_string()
+        "using System.Runtime.InteropServices;\n\nnamespace Polyplug.Abi {\n\n".to_string()
+    }
+
+    fn generate_footer(&self, _ctx: &GenerationContext) -> String {
+        r#"
+/// ABI constants for polyplug.
+public static class AbiConstants
+{
+    public const uint ABI_OK = 0u;
+    public const uint ABI_ERROR_GENERIC = 1u;
+    public const uint ABI_ERROR_BUFFER_TOO_SMALL = 2u;
+    public const uint ABI_ERROR_PANIC = 3u;
+    public const uint ABI_ERROR_NOT_FOUND = 4u;
+    public const uint ABI_ERROR_STALE_HANDLE = 5u;
+    public const uint ABI_ERROR_FUNCTION_NOT_AVAILABLE = 6u;
+    public const uint ABI_ERROR_DUPLICATE_PROVIDER = 7u;
+    public const uint ABI_ERROR_INVALID_POINTER = 8u;
+    public const uint ABI_HOST_CONTRACT_NOT_FOUND = 100u;
+    public const uint ABI_HOST_CONTRACT_VERSION_MISMATCH = 101u;
+    public const uint ABI_HOST_CONTRACT_CALL_FAILED = 102u;
+    public const uint POLYPLUG_ABI_VERSION = 1u;
+}
+}
+"#
+        .to_string()
     }
 }
 

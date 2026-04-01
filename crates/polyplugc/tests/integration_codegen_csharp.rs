@@ -3,7 +3,8 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplugc::generate;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -19,7 +20,7 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Use polyplug_codegen::generate() to generate C# bindings.
+/// Use polyplugc::generate() to generate C# bindings.
 fn generate_csharp_bindings(bundle_toml: &Path, out_dir: &Path) {
     let config = GenerateConfig {
         api_toml: bundle_toml.to_path_buf(),
@@ -28,7 +29,7 @@ fn generate_csharp_bindings(bundle_toml: &Path, out_dir: &Path) {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     // Write generated files to disk
     for file in &output.files {
@@ -96,7 +97,7 @@ fn test_csharp_codegen_generates_enum_types() {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = out_dir.join(&file.path);

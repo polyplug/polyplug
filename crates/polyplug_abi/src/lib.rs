@@ -22,6 +22,47 @@ use core::ffi::c_void;
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
 
+/// ABI success constant — returned by all ABI functions on success.
+pub const ABI_OK: u32 = AbiErrorCode::Ok as u32;
+
+/// Generic error constant.
+pub const ABI_ERROR_GENERIC: u32 = AbiErrorCode::Generic as u32;
+
+/// Buffer too small error constant.
+pub const ABI_ERROR_BUFFER_TOO_SMALL: u32 = AbiErrorCode::BufferTooSmall as u32;
+
+/// Panic error constant.
+pub const ABI_ERROR_PANIC: u32 = AbiErrorCode::Panic as u32;
+
+/// Not found error constant.
+pub const ABI_ERROR_NOT_FOUND: u32 = AbiErrorCode::NotFound as u32;
+
+/// Stale handle error constant.
+pub const ABI_ERROR_STALE_HANDLE: u32 = AbiErrorCode::StaleHandle as u32;
+
+/// Function not available error constant.
+pub const ABI_ERROR_FUNCTION_NOT_AVAILABLE: u32 = AbiErrorCode::FunctionNotAvailable as u32;
+
+/// Duplicate provider error constant.
+pub const ABI_ERROR_DUPLICATE_PROVIDER: u32 = AbiErrorCode::DuplicateProvider as u32;
+
+/// Invalid pointer error constant.
+pub const ABI_ERROR_INVALID_POINTER: u32 = AbiErrorCode::InvalidPointer as u32;
+
+/// Host contract not found error constant.
+pub const ABI_HOST_CONTRACT_NOT_FOUND: u32 = AbiErrorCode::HostContractNotFound as u32;
+
+/// Host contract version mismatch error constant.
+pub const ABI_HOST_CONTRACT_VERSION_MISMATCH: u32 =
+    AbiErrorCode::HostContractVersionMismatch as u32;
+
+/// Host contract call failed error constant.
+pub const ABI_HOST_CONTRACT_CALL_FAILED: u32 = AbiErrorCode::HostContractCallFailed as u32;
+
+pub use polyplug_utils::bundle_id;
+pub use polyplug_utils::contract_id;
+pub use polyplug_utils::host_contract_id;
+
 /// ABI error codes (reserved: 0-255 runtime, 256+ plugin-defined).
 ///
 /// These codes are returned by all ABI functions to indicate success or failure.
@@ -77,6 +118,24 @@ unsafe impl Send for StringView {}
 
 // SAFETY: Same reasoning as Send — concurrent reads are safe.
 unsafe impl Sync for StringView {}
+
+impl StringView {
+    /// Construct a StringView from a static byte slice.
+    pub const fn from_static(bytes: &'static [u8]) -> StringView {
+        StringView {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        }
+    }
+
+    /// The null/empty StringView (ptr=null, len=0).
+    pub const fn null() -> StringView {
+        StringView {
+            ptr: core::ptr::null(),
+            len: 0,
+        }
+    }
+}
 
 /// Construct a StringView from a static byte slice.
 pub const fn string_view_from_static(bytes: &'static [u8]) -> StringView {
@@ -195,6 +254,24 @@ unsafe impl Send for AbiError {}
 // SAFETY: AbiError contains a StringView which is Send+Sync (concurrent reads are safe), and a u32 code.
 unsafe impl Sync for AbiError {}
 
+impl AbiError {
+    /// Construct a success AbiError.
+    pub const fn ok() -> AbiError {
+        AbiError {
+            code: AbiErrorCode::Ok as u32,
+            message: string_view_null(),
+        }
+    }
+
+    /// Construct a panic error with a static message.
+    pub const fn panic_caught() -> AbiError {
+        AbiError {
+            code: AbiErrorCode::Panic as u32,
+            message: string_view_from_static(b"plugin panicked"),
+        }
+    }
+}
+
 /// Opaque handle to a loaded plugin — validated on use.
 ///
 /// INTERNAL STRUCTURE: index into registry array + generation counter.
@@ -219,6 +296,13 @@ pub const fn plugin_handle_null() -> PluginHandle {
 /// Returns true if this is the null handle.
 pub fn plugin_handle_is_null(handle: &PluginHandle) -> bool {
     handle.index == u32::MAX
+}
+
+impl PluginHandle {
+    /// Returns true if this is the null handle.
+    pub fn is_null(&self) -> bool {
+        self.index == u32::MAX
+    }
 }
 
 /// Opaque host context passed to plugin functions via rt_ctx parameter.

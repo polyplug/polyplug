@@ -1793,7 +1793,7 @@ const _: fn() = || {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use polyplug_codegen::ReprType;
+    use crate::ir::ReprType;
 
     #[test]
     fn generate_lua_enum_non_bitflag() {
@@ -1934,7 +1934,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -1984,7 +1984,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2035,7 +2035,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2135,7 +2135,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2189,7 +2189,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2241,7 +2241,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,

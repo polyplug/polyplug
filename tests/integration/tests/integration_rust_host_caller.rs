@@ -5,6 +5,7 @@ use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_native::NativeLoader;
@@ -65,7 +66,7 @@ impl TestAddContract {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: polyplug_abi::ABI_FUNCTION_NOT_AVAIL,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::null(),
                 }
             } else if vtable.dispatch_type != polyplug_abi::DispatchType::Native {

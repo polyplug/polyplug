@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplugc::generate;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -43,7 +44,7 @@ fn test_rust_host_contract_generates_host_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -88,7 +89,7 @@ fn test_rust_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -130,7 +131,7 @@ fn test_cpp_host_contract_generates_host_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -175,7 +176,7 @@ fn test_cpp_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -214,7 +215,7 @@ fn test_csharp_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -255,7 +256,7 @@ fn test_csharp_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -291,7 +292,7 @@ fn test_python_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -333,7 +334,7 @@ fn test_python_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -372,7 +373,7 @@ fn test_lua_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -413,7 +414,7 @@ fn test_lua_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -452,7 +453,7 @@ fn test_js_quickjs_host_contract_generates_contracts_file() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);
@@ -493,7 +494,7 @@ fn test_js_quickjs_host_contract_guest_generates_caller() {
         out_dir: tmp_dir.clone(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = tmp_dir.join(&file.path);

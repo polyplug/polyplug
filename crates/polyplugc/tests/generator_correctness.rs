@@ -1,4 +1,4 @@
-//! Generator correctness tests.
+//! Generator correctness tests for polyplugc.
 //!
 //! Verifies that the Rust code generator produces output that:
 //!   1. Assigns vtable slot indices that are sequential and correct (0, 1, 2, …).
@@ -13,14 +13,11 @@
 #![allow(clippy::expect_used)]
 
 use polyplug_abi::contract_id as fnv_contract_id;
-use polyplug_codegen::ir::PrimitiveType;
-use polyplug_codegen::ir::ResolvedContract;
-use polyplug_codegen::ir::ResolvedFunction;
-use polyplug_codegen::ir::ResolvedParam;
-use polyplug_codegen::ir::ResolvedTypeRef;
-use polyplug_codegen::ir::ValidatedIr;
-use polyplug_codegen::ir::Version;
 use polyplug_codegen::{GenerateConfig, GenerateOutput, GeneratedFile, Lang, Side};
+use polyplugc::ir::{
+    PrimitiveType, ResolvedContract, ResolvedFunction, ResolvedParam, ResolvedTypeRef, ValidatedIr,
+    Version,
+};
 use std::path::PathBuf;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -103,7 +100,7 @@ fn run_guest_generator(ir: ValidatedIr, test_tag: &str, file_suffix: &str) -> St
         side: Side::Guest,
         out_dir: tmp_dir.join("out"),
     };
-    let output: GenerateOutput = polyplug_codegen::generate(config).expect("generate");
+    let output: GenerateOutput = polyplugc::generate(config).expect("generate");
 
     output
         .files
@@ -129,7 +126,7 @@ fn ir_to_api_toml(ir: &ValidatedIr) -> String {
         let fields_inline: String = ty
             .fields
             .iter()
-            .map(|f: &polyplug_codegen::ResolvedField| {
+            .map(|f: &polyplugc::ir::ResolvedField| {
                 format!(
                     "{{ name = \"{}\", type = \"{}\" }}",
                     f.name,
@@ -191,10 +188,10 @@ fn resolved_type_to_str(ty: &ResolvedTypeRef) -> &'static str {
         ResolvedTypeRef::Primitive(PrimitiveType::F32) => "f32",
         ResolvedTypeRef::Primitive(PrimitiveType::F64) => "f64",
         ResolvedTypeRef::Primitive(PrimitiveType::Bool) => "bool",
-        ResolvedTypeRef::AbiType(polyplug_codegen::ir::AbiBuiltin::StringView) => "StringView",
-        ResolvedTypeRef::AbiType(polyplug_codegen::ir::AbiBuiltin::Buffer) => "Buffer",
-        ResolvedTypeRef::AbiType(polyplug_codegen::ir::AbiBuiltin::Ptr) => "ptr",
-        ResolvedTypeRef::AbiType(polyplug_codegen::ir::AbiBuiltin::Void) => "void",
+        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::StringView) => "StringView",
+        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::Buffer) => "Buffer",
+        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::Ptr) => "ptr",
+        ResolvedTypeRef::AbiType(polyplugc::ir::AbiBuiltin::Void) => "void",
         ResolvedTypeRef::UserDefined(_) => {
             // UserDefined names are dynamic; no test uses them here.
             panic!("resolved_type_to_str: UserDefined not supported in ir_to_api_toml")
@@ -373,7 +370,7 @@ fn signature_stringview_return_matches_contract() {
         0,
         vec![],
         Some(ResolvedTypeRef::AbiType(
-            polyplug_codegen::ir::AbiBuiltin::StringView,
+            polyplugc::ir::AbiBuiltin::StringView,
         )),
     )];
     let ir: ValidatedIr = make_ir("sv.check", 1, fns);

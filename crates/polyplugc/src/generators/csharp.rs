@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
+use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
-use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -2022,7 +2022,7 @@ impl CodeGenerator for CSharpGenerator {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use polyplug_codegen::*;
+    use crate::ir::*;
 
     #[test]
     fn generate_cs_enum_non_bitflag() {

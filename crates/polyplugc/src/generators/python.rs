@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
-use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -296,7 +296,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, ABI_FUNCTION_NOT_AVAIL, NULL_HANDLE, PluginInterface, StringView\n\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, AbiErrorCode::FunctionNotAvailable, NULL_HANDLE, PluginInterface, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -2332,7 +2332,7 @@ fn python_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use polyplug_codegen::ReprType;
+    use crate::ir::ReprType;
 
     #[test]
     fn generate_python_enum_non_bitflag() {
@@ -2462,7 +2462,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2505,7 +2505,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2551,7 +2551,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2580,7 +2580,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2683,7 +2683,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2733,7 +2733,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2779,7 +2779,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2808,7 +2808,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: polyplug_codegen::Version {
+            version: crate::ir::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,

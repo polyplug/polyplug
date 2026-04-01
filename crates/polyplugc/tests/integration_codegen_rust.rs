@@ -8,15 +8,16 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-use polyplug_abi::ABI_OK;
+use polyplug_abi::string_view_null;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
-use polyplug_abi::string_view_null;
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_abi::ABI_OK;
+use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplugc::generate;
 
 // ─── Helper: compile target dir ──────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ fn so_filename() -> &'static str {
 
 // ─── Helper: generate code using library API ─────────────────────────────────
 
-/// Use polyplug_codegen::generate() to generate Rust bindings.
+/// Use polyplugc::generate() to generate Rust bindings.
 fn generate_rust_bindings(api_toml: &Path, out_dir: &Path, side: Side) {
     let config = GenerateConfig {
         api_toml: api_toml.to_path_buf(),
@@ -52,7 +53,7 @@ fn generate_rust_bindings(api_toml: &Path, out_dir: &Path, side: Side) {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     // Write generated files to disk
     for file in &output.files {
@@ -112,6 +113,7 @@ use polyplug_guest::PluginError;
 use polyplug_guest::HostVTable;
 use polyplug_guest::PluginContext;
 use polyplug_guest::StringView;
+use polyplug_guest::string_view_null;
 use core::ffi::c_void;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;

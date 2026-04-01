@@ -85,6 +85,42 @@ static HOST_VTABLE: OnceLock<HostVtablePtr> = OnceLock::new();
 /// returning this value. The loader rejects plugins with a different version.
 pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 
+/// ABI success constant.
+pub use polyplug_abi::ABI_OK;
+
+/// Generic error constant.
+pub use polyplug_abi::ABI_ERROR_GENERIC;
+
+/// Buffer too small error constant.
+pub use polyplug_abi::ABI_ERROR_BUFFER_TOO_SMALL;
+
+/// Panic error constant.
+pub use polyplug_abi::ABI_ERROR_PANIC;
+
+/// Not found error constant.
+pub use polyplug_abi::ABI_ERROR_NOT_FOUND;
+
+/// Stale handle error constant.
+pub use polyplug_abi::ABI_ERROR_STALE_HANDLE;
+
+/// Function not available error constant.
+pub use polyplug_abi::ABI_ERROR_FUNCTION_NOT_AVAILABLE;
+
+/// Duplicate provider error constant.
+pub use polyplug_abi::ABI_ERROR_DUPLICATE_PROVIDER;
+
+/// Invalid pointer error constant.
+pub use polyplug_abi::ABI_ERROR_INVALID_POINTER;
+
+/// Host contract not found error constant.
+pub use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
+
+/// Host contract version mismatch error constant.
+pub use polyplug_abi::ABI_HOST_CONTRACT_VERSION_MISMATCH;
+
+/// Host contract call failed error constant.
+pub use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
+
 // ─── ABI Types ────────────────────────────────────────────────────────────────
 
 /// Non-owning UTF-8 string view. Never null-terminated.
@@ -174,8 +210,8 @@ pub use polyplug_abi::HostContractVTable;
 
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 
-pub use polyplug_utils::contract_id;
 pub use polyplug_utils::bundle_id;
+pub use polyplug_utils::contract_id;
 
 // ─── Allocator ────────────────────────────────────────────────────────────────
 
@@ -193,6 +229,8 @@ pub use polyplug_abi::string_view_null;
 
 /// Create an AbiError with code=0 (success) and null message.
 pub use polyplug_abi::abi_error_ok;
+
+pub use polyplug_abi::abi_error_panic_caught;
 
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 

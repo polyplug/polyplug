@@ -26,6 +26,7 @@ use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
@@ -108,7 +109,7 @@ unsafe extern "C" fn js_dispatch(
         Some(f) => f,
         None => {
             return AbiError {
-                code: polyplug_abi::ABI_FUNCTION_NOT_AVAIL,
+                code: AbiErrorCode::FunctionNotAvailable as u32,
                 message: StringView::null(),
             };
         }

@@ -9,16 +9,16 @@
 use super::types::*;
 use polyplug::registry::PluginGuard;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_ERROR_GENERIC;
-use polyplug_abi::ABI_ERROR_NOT_FOUND;
-use polyplug_abi::ABI_ERROR_STALE_HANDLE;
-use polyplug_abi::ABI_FUNCTION_NOT_AVAIL;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::ABI_ERROR_GENERIC;
+use polyplug_abi::ABI_ERROR_NOT_FOUND;
+use polyplug_abi::ABI_ERROR_STALE_HANDLE;
+use polyplug_abi::ABI_OK;
 
 /// Host-side error type for contract calls.
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl PipelineDecoderContract {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: ABI_FUNCTION_NOT_AVAIL,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::from_static(
                         b"function not available in vtable",
                     ),
@@ -166,7 +166,7 @@ impl DataTransformerContract {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: ABI_FUNCTION_NOT_AVAIL,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::from_static(
                         b"function not available in vtable",
                     ),
@@ -258,7 +258,7 @@ impl PipelineEncoderContract {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: ABI_FUNCTION_NOT_AVAIL,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::from_static(
                         b"function not available in vtable",
                     ),
@@ -350,7 +350,7 @@ impl DataReporterContract {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: ABI_FUNCTION_NOT_AVAIL,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::from_static(
                         b"function not available in vtable",
                     ),
@@ -442,7 +442,7 @@ impl PipelineValidatorContract {
             let vtable: &PluginInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: ABI_FUNCTION_NOT_AVAIL,
+                    code: AbiErrorCode::FunctionNotAvailable as u32,
                     message: polyplug_abi::StringView::from_static(
                         b"function not available in vtable",
                     ),

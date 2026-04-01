@@ -4,11 +4,12 @@
 //! correctness, and the full set of supported languages.
 //!
 //! Run with:
-//!   cargo test --test pack_command --package polyplug_codegen
+//!   cargo test --test pack_command --package polyplugc
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{Lang, PackConfig, pack};
+use polyplug_codegen::Lang;
+use polyplugc::{pack, PackConfig};
 use std::fs;
 use std::path::PathBuf;
 
@@ -33,9 +34,10 @@ fn make_config(
     fs::create_dir_all(tmp_manifest).expect("create tmp manifest dir");
     fs::write(&manifest_path, bundle_toml).expect("write bundle.toml");
     PackConfig {
-        manifest: manifest_path,
-        lang,
-        out_dir: out_dir.to_path_buf(),
+        api: None,
+        bundle: Some(manifest_path),
+        lang: lang.as_str().to_string(),
+        out: out_dir.to_path_buf(),
     }
 }
 
@@ -436,9 +438,10 @@ fn rust_pack_defaults_when_no_bundle_section() {
     fs::write(&manifest_path, api_toml).expect("write api.toml");
 
     let config: PackConfig = PackConfig {
-        manifest: manifest_path,
-        lang: Lang::Rust,
-        out_dir: out_dir.clone(),
+        api: Some(manifest_path),
+        bundle: None,
+        lang: "rust".to_string(),
+        out: out_dir.clone(),
     };
     pack(config).expect("pack rust with api.toml succeeded");
 

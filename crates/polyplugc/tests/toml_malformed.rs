@@ -1,4 +1,4 @@
-//! TOML parsing edge-case tests for polyplug_codegen.
+//! TOML parsing edge-case tests for polyplugc.
 //!
 //! Focuses on TOML syntax anomalies that are distinct from semantic validation:
 //! missing closing brackets, invalid escape sequences, mixed table/array syntax,
@@ -6,12 +6,12 @@
 //! and deeply nested tables.
 //!
 //! Run with:
-//!   cargo test --test toml_malformed --package polyplug_codegen
+//!   cargo test --test toml_malformed --package polyplugc
 
 #![allow(clippy::expect_used)]
 
 use polyplug_codegen::error::PolyplugcError;
-use polyplug_codegen::parser::{parse_api_str, parse_bundle_str};
+use polyplugc::parser::{parse_api_str, parse_bundle_str};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ fn invalid_escape_sequence_lone_backslash() {
 #[test]
 fn valid_escape_sequences_accepted() {
     // Standard TOML escapes: `\\`, `\"`, `\n`, `\t`, `\r` must all be accepted.
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str(
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(
         "[[contract]]\nname = \"esc\\\\slash\\\"quote\\nnewline\\ttab\"\nversion = \"1.0\"",
     );
     assert!(
@@ -182,12 +182,12 @@ fn array_element_defined_before_array_header() {
 #[test]
 fn empty_string_is_valid_api_toml() {
     // An empty API schema is semantically valid — no contracts, no types.
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str("");
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str("");
     assert!(
         result.is_ok(),
         "expected empty string to parse as empty API, got {result:?}"
     );
-    let ir: polyplug_codegen::ValidatedIr = result.expect("parse");
+    let ir: polyplugc::ir::ValidatedIr = result.expect("parse");
     assert_eq!(ir.contracts.len(), 0, "expected zero contracts");
     assert_eq!(ir.types.len(), 0, "expected zero types");
     assert_eq!(ir.enums.len(), 0, "expected zero enums");
@@ -205,7 +205,7 @@ fn empty_string_is_invalid_bundle_toml() {
 
 #[test]
 fn newlines_only_is_valid_api_toml() {
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str("\n\n\n");
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str("\n\n\n");
     assert!(
         result.is_ok(),
         "expected newlines-only to parse as empty API, got {result:?}"
@@ -219,7 +219,7 @@ fn newlines_only_is_valid_api_toml() {
 #[test]
 fn comments_only_is_valid_api_toml() {
     let toml: &str = "# polyplug api schema\n# no contracts defined yet\n";
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected comments-only API TOML to succeed, got {result:?}"
@@ -244,7 +244,7 @@ fn comment_after_value_is_valid() {
         "name = \"svc.foo\" # the name\n",
         "version = \"1.0\" # the version\n",
     );
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected inline comments after values to be accepted, got {result:?}"
@@ -299,7 +299,7 @@ fn unicode_escape_surrogate_pair_rejected() {
 #[test]
 fn unicode_escape_valid_codepoint_accepted() {
     // `\u0041` is 'A' — a perfectly valid Unicode scalar value.
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> =
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
         parse_api_str("[[contract]]\nname = \"\\u0041BC\"\nversion = \"1.0\"");
     assert!(
         result.is_ok(),
@@ -310,7 +310,7 @@ fn unicode_escape_valid_codepoint_accepted() {
 #[test]
 fn long_unicode_escape_u_uppercase_valid() {
     // `\U0001F600` (8 hex digits) — valid TOML long Unicode escape.
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> =
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> =
         parse_api_str("[[contract]]\nname = \"emoji\\U0001F600end\"\nversion = \"1.0\"");
     assert!(
         result.is_ok(),
@@ -327,12 +327,12 @@ fn very_long_name_value_accepted() {
     // A 10 000-character name string — TOML has no line-length limit.
     let long_name: String = "a".repeat(10_000);
     let toml: String = format!("[[contract]]\nname = \"{long_name}\"\nversion = \"1.0\"\n");
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str(&toml);
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(&toml);
     assert!(
         result.is_ok(),
         "expected very long name string to be accepted, got {result:?}"
     );
-    let ir: polyplug_codegen::ValidatedIr = result.expect("parse");
+    let ir: polyplugc::ir::ValidatedIr = result.expect("parse");
     assert_eq!(ir.contracts[0].name.len(), 10_000);
 }
 
@@ -341,7 +341,7 @@ fn very_long_comment_line_accepted() {
     // A comment that is 50 000 characters long should not cause an error.
     let long_comment: String = format!("# {}", "x".repeat(50_000));
     let toml: String = format!("{long_comment}\n[[contract]]\nname = \"svc\"\nversion = \"1.0\"\n");
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str(&toml);
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(&toml);
     assert!(
         result.is_ok(),
         "expected very long comment line to be accepted, got {result:?}"
@@ -379,7 +379,7 @@ fn deeply_nested_dotted_keys_accepted() {
     // The `RawBundleMeta` struct has `#[serde(default)]`-annotated optional fields;
     // unknown fields bubble to a `ValidationFailed` because serde's `deny_unknown_fields`
     // is not set — so this might succeed or fail based on the schema. We test it doesn't panic.
-    let _result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
+    let _result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_bundle_str(toml);
     // No assertion on Ok/Err — just confirm no panic / no crash.
 }
 
@@ -428,11 +428,11 @@ fn contract_functions_params_nested_array_round_trip() {
         "name = \"b\"\n",
         "type = \"u32\"\n",
     );
-    let result: Result<polyplug_codegen::ValidatedIr, PolyplugcError> = parse_api_str(toml);
+    let result: Result<polyplugc::ir::ValidatedIr, PolyplugcError> = parse_api_str(toml);
     assert!(
         result.is_ok(),
         "expected deeply-nested array-of-tables round-trip to succeed, got {result:?}"
     );
-    let ir: polyplug_codegen::ValidatedIr = result.expect("parse");
+    let ir: polyplugc::ir::ValidatedIr = result.expect("parse");
     assert_eq!(ir.contracts[0].functions[0].params.len(), 2);
 }

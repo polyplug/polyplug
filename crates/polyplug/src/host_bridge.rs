@@ -173,7 +173,7 @@ pub trait HostRuntimeBridge: Send + Sync {
     ///
     /// # Returns
     ///
-    /// - `AbiError::ok()` on success
+    /// - `abi_error_ok()` on success
     /// - `AbiError { code: ABI_HOST_CONTRACT_NOT_FOUND, ... }` if contract not found
     /// - `AbiError { code: ABI_HOST_CONTRACT_CALL_FAILED, ... }` if dispatch failed
     ///

@@ -24,6 +24,7 @@ use crate::error::RegistryError;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
+use polyplug_abi::string_view_from_static;
 
 /// A `Send + Sync` wrapper around a raw interface pointer.
 /// The pointer is guaranteed to point to `'static` data that is never mutated after registration.
@@ -678,8 +679,8 @@ mod tests {
 
     fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
         PluginDescriptor {
-            name: StringView::from_static(name.as_bytes()),
-            contract_name: StringView::from_static(contract_name.as_bytes()),
+            name: string_view_from_static(name.as_bytes()),
+            contract_name: string_view_from_static(contract_name.as_bytes()),
             version_major: 1,
             version_minor: 0,
             version_patch: 0,

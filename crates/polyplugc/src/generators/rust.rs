@@ -4,10 +4,10 @@
 //! - Host-side: type-safe Rust wrappers to call plugins (for app developers)
 //! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
 
+use super::is_native_runtime;
 use super::CodeGenerator;
 use super::GeneratedFile;
 use super::GeneratedFiles;
-use super::is_native_runtime;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -2463,7 +2463,7 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::*;
-    use polyplug_codegen::ReprType;
+    use crate::ir::ReprType;
 
     #[test]
     fn contract_name_to_struct_conversion() {
@@ -2677,7 +2677,7 @@ mod tests {
 
     #[test]
     fn generate_host_contract_trait_produces_trait() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
@@ -2732,7 +2732,7 @@ mod tests {
 
     #[test]
     fn generate_host_contracts_file_produces_file() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -2772,7 +2772,7 @@ mod tests {
 
     #[test]
     fn generate_host_with_host_contracts_produces_host_contracts_file() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -2890,7 +2890,7 @@ mod tests {
 
     #[test]
     fn generate_guest_host_contract_caller_produces_struct() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
@@ -2932,7 +2932,7 @@ mod tests {
 
     #[test]
     fn generate_guest_host_contracts_file_produces_file() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -2969,7 +2969,7 @@ mod tests {
 
     #[test]
     fn generate_guest_with_host_contracts_produces_host_contract_callers_file() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -3035,7 +3035,7 @@ mod tests {
 
     #[test]
     fn generate_host_vtable_factories_file_produces_file() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -3080,14 +3080,14 @@ mod tests {
             "missing panic safety: {out}"
         );
         assert!(
-            out.contains("ABI_ERROR_PANIC"),
+            out.contains("AbiErrorCode::Panic"),
             "missing panic error code: {out}"
         );
     }
 
     #[test]
     fn generate_host_with_host_contracts_produces_vtable_factories_file() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let generator: RustGenerator = RustGenerator;
         let ir: ValidatedIr = ValidatedIr {
@@ -3153,7 +3153,7 @@ mod tests {
 
     #[test]
     fn vtable_factory_has_safety_comments() {
-        use polyplug_codegen::Version;
+        use crate::ir::Version;
 
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],

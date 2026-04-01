@@ -16,6 +16,7 @@ use crate::loader::manifest::ManifestData;
 use crate::registry::VTableSlot;
 use crate::runtime::HostContext;
 use crate::runtime::Runtime;
+use polyplug_abi::abi_error_ok;
 
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
 const MAX_CASCADE_DEPTH: usize = 16_usize;
@@ -71,7 +72,7 @@ pub(crate) unsafe extern "C" fn reload_register_callback(
     vtable: *const polyplug_abi::PluginInterface,
 ) -> polyplug_abi::AbiError {
     if rt_ctx.is_null() || vtable.is_null() {
-        return polyplug_abi::AbiError::ok();
+        return polyplug_abi::abi_error_ok();
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the reload code.
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
@@ -84,7 +85,7 @@ pub(crate) unsafe extern "C" fn reload_register_callback(
             e.into_inner()
         });
     guard.push(VTablePtr(vtable));
-    polyplug_abi::AbiError::ok()
+    polyplug_abi::abi_error_ok()
 }
 
 /// Reload a bundle by path, with cascade depth tracking to prevent infinite loops.

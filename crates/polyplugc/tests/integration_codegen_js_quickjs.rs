@@ -2,7 +2,8 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_codegen::{GenerateConfig, Lang, Side, generate};
+use polyplug_codegen::{GenerateConfig, Lang, Side};
+use polyplugc::generate;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -23,7 +24,7 @@ fn generate_js_quickjs_bindings(api_toml: &Path, out_dir: &Path) {
         out_dir: out_dir.to_path_buf(),
     };
 
-    let output = generate(config).expect("polyplug_codegen::generate failed");
+    let output = generate(config).expect("polyplugc::generate failed");
 
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
