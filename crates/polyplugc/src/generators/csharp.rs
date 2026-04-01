@@ -2,11 +2,10 @@
 
 use std::path::PathBuf;
 
-use crate::error::PolyplugcError;
-use crate::generators::CodeGenerator;
-use crate::generators::GeneratedFile;
-use crate::generators::GeneratedFiles;
-use crate::generators::is_native_runtime;
+use super::is_native_runtime;
+use super::CodeGenerator;
+use super::GeneratedFile;
+use super::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::PrimitiveType;
@@ -19,6 +18,7 @@ use crate::ir::ResolvedParam;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use polyplug_codegen::PolyplugcError;
 
 /// The C# code generator.
 pub(crate) struct CSharpGenerator;
@@ -2022,7 +2022,7 @@ impl CodeGenerator for CSharpGenerator {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::ir::*;
+    use polyplug_codegen::*;
 
     #[test]
     fn generate_cs_enum_non_bitflag() {

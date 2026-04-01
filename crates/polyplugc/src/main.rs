@@ -1,9 +1,20 @@
+mod generators;
+mod ir;
+mod pack;
+mod parser;
+
+use std::fs;
 use std::path::PathBuf;
 
 use clap::Parser;
 use clap::Subcommand;
 
-use polyplug_codegen::{GenerateConfig, Lang, PackConfig, Side, generate, pack};
+use generators::{
+    CodeGenerator, GeneratedFile as InternalGeneratedFile, GeneratedFiles,
+};
+use polyplug_codegen::{
+    GenerateConfig, GenerateOutput, Lang, PolyplugcError, Side,
+};
 
 /// polyplugc — code generator for the polyplug plugin runtime.
 #[derive(Debug, Parser)]
@@ -74,7 +85,7 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> Result<(), polyplug_codegen::PolyplugcError> {
+fn run(cli: Cli) -> Result<(), PolyplugcError> {
     match cli.command {
         Command::Generate {
             api,
@@ -87,7 +98,7 @@ fn run(cli: Cli) -> Result<(), polyplug_codegen::PolyplugcError> {
             } else if let Some(bundle_path) = bundle {
                 (bundle_path, Side::Guest)
             } else {
-                return Err(polyplug_codegen::PolyplugcError::ValidationFailed {
+                return Err(PolyplugcError::ValidationFailed {
                     message: "Must specify --api or --bundle".to_owned(),
                 });
             };
@@ -109,16 +120,16 @@ fn run(cli: Cli) -> Result<(), polyplug_codegen::PolyplugcError> {
 
         Command::Validate { api, bundle } => {
             let manifest = api.or(bundle).ok_or_else(|| {
-                polyplug_codegen::PolyplugcError::ValidationFailed {
+                PolyplugcError::ValidationFailed {
                     message: "Must specify --api or --bundle".to_owned(),
                 }
             })?;
 
             // Just parse to validate
             if manifest.ends_with("bundle.toml") {
-                polyplug_codegen::parser::parse_bundle_with_api(&manifest)?;
+                parser::parse_bundle_with_api(&manifest)?;
             } else {
-                polyplug_codegen::parser::parse_api(&manifest)?;
+                parser::parse_api(&manifest)?;
             }
             println!("OK: {}", manifest.display());
         }
@@ -130,26 +141,26 @@ fn run(cli: Cli) -> Result<(), polyplug_codegen::PolyplugcError> {
             out,
         } => {
             let manifest = api.or(bundle).ok_or_else(|| {
-                polyplug_codegen::PolyplugcError::ValidationFailed {
+                PolyplugcError::ValidationFailed {
                     message: "Must specify --api or --bundle".to_owned(),
                 }
             })?;
 
             let lang_enum = parse_lang(&lang)?;
 
-            let config = PackConfig {
-                manifest,
-                lang: lang_enum,
-                out_dir: out,
+            let ir: crate::ir::ValidatedIr = if manifest.ends_with("bundle.toml") {
+                parser::parse_bundle_with_api(&manifest)?
+            } else {
+                parser::parse_api(&manifest)?
             };
 
-            pack(config)?;
+            pack::run(&ir, &out, lang_enum.as_str())?;
         }
     }
     Ok(())
 }
 
-fn parse_lang(lang: &str) -> Result<Lang, polyplug_codegen::PolyplugcError> {
+fn parse_lang(lang: &str) -> Result<Lang, PolyplugcError> {
     match lang {
         "rust" => Ok(Lang::Rust),
         "cpp" | "c++" => Ok(Lang::Cpp),
@@ -157,7 +168,7 @@ fn parse_lang(lang: &str) -> Result<Lang, polyplug_codegen::PolyplugcError> {
         "python" | "py" => Ok(Lang::Python),
         "lua" => Ok(Lang::Lua),
         "js-quickjs" => Ok(Lang::JsQuickJs),
-        other => Err(polyplug_codegen::PolyplugcError::ValidationFailed {
+        other => Err(PolyplugcError::ValidationFailed {
             message: format!(
                 "Unknown language: `{other}`. Supported: rust, cpp, csharp, python, lua, js-quickjs"
             ),
@@ -165,24 +176,65 @@ fn parse_lang(lang: &str) -> Result<Lang, polyplug_codegen::PolyplugcError> {
     }
 }
 
-fn write_files(
-    output: &polyplug_codegen::GenerateOutput,
-    out_dir: &std::path::Path,
-) -> Result<(), polyplug_codegen::PolyplugcError> {
-    use std::fs;
+fn generate(config: GenerateConfig) -> Result<GenerateOutput, PolyplugcError> {
+    let file_content: String =
+        fs::read_to_string(&config.api_toml).map_err(|e: std::io::Error| {
+            PolyplugcError::ReadFailed {
+                path: config.api_toml.to_string_lossy().to_string(),
+                source: e,
+            }
+        })?;
+    let ir: crate::ir::ValidatedIr = if file_content.contains("[bundle]") {
+        parser::parse_bundle_with_api(&config.api_toml)?
+    } else {
+        parser::parse_api(&config.api_toml)?
+    };
 
+    let generator: Box<dyn CodeGenerator> = match config.lang {
+        Lang::Rust => Box::new(generators::rust::RustGenerator),
+        Lang::Cpp => Box::new(generators::cpp::CppGenerator),
+        Lang::CSharp => Box::new(generators::csharp::CSharpGenerator),
+        Lang::Python => Box::new(generators::python::PythonGenerator),
+        Lang::Lua => Box::new(generators::lua::LuaGenerator),
+        Lang::JsQuickJs => Box::new(generators::js_quickjs::JsQuickjsGenerator),
+    };
+
+    let mut files: GeneratedFiles = GeneratedFiles::default();
+    match config.side {
+        Side::Host => generator.generate_host(&ir, &mut files)?,
+        Side::Guest => generator.generate_guest(&ir, &mut files)?,
+    }
+
+    let public_files: Vec<polyplug_codegen::GeneratedFile> = files
+        .files
+        .into_iter()
+        .map(|f: InternalGeneratedFile| polyplug_codegen::GeneratedFile {
+            path: f.path,
+            content: f.content,
+        })
+        .collect();
+
+    Ok(GenerateOutput {
+        files: public_files,
+    })
+}
+
+fn write_files(
+    output: &GenerateOutput,
+    out_dir: &std::path::Path,
+) -> Result<(), PolyplugcError> {
     for file in &output.files {
         let file_path = out_dir.join(&file.path);
         if let Some(parent) = file_path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                polyplug_codegen::PolyplugcError::WriteFailed {
+                PolyplugcError::WriteFailed {
                     path: parent.to_string_lossy().into_owned(),
                     source: e,
                 }
             })?;
         }
         fs::write(&file_path, &file.content).map_err(|e| {
-            polyplug_codegen::PolyplugcError::WriteFailed {
+            PolyplugcError::WriteFailed {
                 path: file_path.to_string_lossy().into_owned(),
                 source: e,
             }

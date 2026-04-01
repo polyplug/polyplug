@@ -483,7 +483,45 @@ A reviewer finding any violation of this document must reject the PR immediately
 
 ---
 
-### 13. Test Failures Must Be Fixed, Never Skipped
+### 13. No Re-exports That Obscure Module Boundaries
+
+**NEVER use `pub use` to re-export items from another crate. Re-exports should only be used for:**
+- Re-exporting from the same crate (e.g., `pub use crate::module::Type`)
+- Creating a convenient facade for a module's own types
+
+**FORBIDDEN — re-exporting from another crate (even public APIs):**
+```rust
+// FORBIDDEN — polyplug_codegen re-exporting polyplug_abi's types
+pub use polyplug_abi::ir::SomeType;
+
+// FORBIDDEN — re-exporting from a dependency's public API to supply to another crate
+pub use polyplug_utils::{bundle_id, contract_id, fnv1a_64};
+
+// FORBIDDEN — re-exporting from a dependency's private module
+pub use some_dep::internal_module::Type;
+```
+
+**CORRECT — consumers import directly from the source crate:**
+```rust
+// CORRECT — polyplugc imports directly from polyplug_utils
+use polyplug_utils::{bundle_id, contract_id, fnv1a_64};
+
+// CORRECT — re-exporting from same crate
+pub use crate::ir::Version;
+```
+
+**Why this matters:**
+- Re-exports create confusion about where types/functions are actually defined
+- They create tight coupling between crates through the re-exporting crate
+- They make refactoring harder — changing the source requires updating all re-exports
+- They obscure the actual module boundaries and dependencies
+- **Most importantly:** If crate A re-exports from crate B, and crate C uses crate A, crate C gets crate B's types through crate A. This creates a dependency chain that makes it unclear where things come from.
+
+**Rule:** If crate C needs something from crate B, it must depend on crate B directly and import from crate B. Never use crate A as a "pass-through" for crate B's exports.
+
+---
+
+### 14. Test Failures Must Be Fixed, Never Skipped
 
 **NEVER skip, ignore, or mark tests as `#[ignore]` to avoid fixing failures.**
 

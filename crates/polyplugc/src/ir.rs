@@ -3,12 +3,12 @@
 //! The IR is produced by the parser, validated (type resolution, contract IDs),
 //! and then consumed by code generators.
 
-use crate::error::PolyplugcError;
+use polyplug_codegen::PolyplugcError;
 
 // Re-export hash functions from polyplug_utils with legacy names for backward compatibility
-pub(crate) use polyplug_utils::bundle_id as compute_bundle_id;
-pub(crate) use polyplug_utils::contract_id as compute_contract_id;
-pub(crate) use polyplug_utils::host_contract_id as compute_host_contract_id;
+pub use polyplug_utils::bundle_id as compute_bundle_id;
+pub use polyplug_utils::contract_id as compute_contract_id;
+pub use polyplug_utils::host_contract_id as compute_host_contract_id;
 
 // ─── Version ─────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ pub struct Version {
 
 impl Version {
     /// Parse "major.minor.patch" or "major.minor" or "major" string.
-    pub(crate) fn parse(s: &str) -> Result<Version, PolyplugcError> {
+    pub fn parse(s: &str) -> Result<Version, PolyplugcError> {
         let parts: Vec<&str> = s.split('.').collect();
         let parse_u32 = |p: &str| -> Result<u32, PolyplugcError> {
             p.parse::<u32>()
@@ -64,7 +64,7 @@ impl Version {
 
     /// Encode minor.patch as (minor << 16 | patch) for ABI storage.
     #[allow(dead_code)]
-    pub(crate) fn minor_patch_encoded(&self) -> u32 {
+    pub fn minor_patch_encoded(&self) -> u32 {
         (self.minor << 16) | self.patch
     }
 }
@@ -105,7 +105,7 @@ impl PrimitiveType {
     }
 
     /// Rust type name.
-    pub(crate) fn rust_name(&self) -> &'static str {
+    pub fn rust_name(&self) -> &'static str {
         match self {
             PrimitiveType::U8 => "u8",
             PrimitiveType::U16 => "u16",
@@ -122,7 +122,7 @@ impl PrimitiveType {
     }
 
     /// C/C++ type name.
-    pub(crate) fn cpp_name(&self) -> &'static str {
+    pub fn cpp_name(&self) -> &'static str {
         match self {
             PrimitiveType::U8 => "uint8_t",
             PrimitiveType::U16 => "uint16_t",
@@ -183,7 +183,7 @@ pub enum ReprType {
 
 impl ReprType {
     /// Parse "u8" | "u16" | "u32" | "u64" string.
-    pub(crate) fn parse(s: &str) -> Option<ReprType> {
+    pub fn parse(s: &str) -> Option<ReprType> {
         match s {
             "u8" => Some(ReprType::U8),
             "u16" => Some(ReprType::U16),
@@ -194,7 +194,7 @@ impl ReprType {
     }
 
     /// The Rust type name for this repr.
-    pub(crate) fn rust_name(&self) -> &'static str {
+    pub fn rust_name(&self) -> &'static str {
         match self {
             ReprType::U8 => "u8",
             ReprType::U16 => "u16",
@@ -204,7 +204,7 @@ impl ReprType {
     }
 
     /// The C/C++ type name for this repr.
-    pub(crate) fn cpp_name(&self) -> &'static str {
+    pub fn cpp_name(&self) -> &'static str {
         match self {
             ReprType::U8 => "uint8_t",
             ReprType::U16 => "uint16_t",
@@ -214,7 +214,7 @@ impl ReprType {
     }
 
     /// The C# type name for this repr.
-    pub(crate) fn cs_name(&self) -> &'static str {
+    pub fn cs_name(&self) -> &'static str {
         match self {
             ReprType::U8 => "byte",
             ReprType::U16 => "ushort",
@@ -315,7 +315,7 @@ pub struct ResolvedBundle {
     #[allow(dead_code)]
     pub runtime: String,
     #[allow(dead_code)]
-    pub file: crate::generators::ResolvedBundleFile,
+    pub file: polyplug_codegen::ResolvedBundleFile,
     #[allow(dead_code)]
     pub plugins: Vec<ResolvedPlugin>,
     #[allow(dead_code)]
@@ -360,7 +360,7 @@ pub struct ValidatedIr {
 // ─── Type Resolution ──────────────────────────────────────────────────────────────
 
 /// Resolve a type string to a ResolvedTypeRef.
-pub(crate) fn resolve_type_ref(
+pub fn resolve_type_ref(
     type_str: &str,
     contract: &str,
     known_types: &[String],

@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
-use crate::error::PolyplugcError;
-use crate::generators::CodeGenerator;
-use crate::generators::GeneratedFile;
-use crate::generators::GeneratedFiles;
+use super::CodeGenerator;
+use super::GeneratedFile;
+use super::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -18,6 +17,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use polyplug_codegen::PolyplugcError;
 
 pub(crate) struct LuaGenerator;
 
@@ -1793,7 +1793,7 @@ const _: fn() = || {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::ir::ReprType;
+    use polyplug_codegen::ReprType;
 
     #[test]
     fn generate_lua_enum_non_bitflag() {
@@ -1934,7 +1934,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: polyplug_codegen::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -1984,7 +1984,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: crate::ir::Version {
+            version: polyplug_codegen::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2035,7 +2035,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: polyplug_codegen::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2135,7 +2135,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: polyplug_codegen::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2189,7 +2189,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.fs.reader".to_owned(),
             contract_id: 0xDEADBEEF,
-            version: crate::ir::Version {
+            version: polyplug_codegen::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,
@@ -2241,7 +2241,7 @@ mod tests {
         let contract: ResolvedHostContract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x123456789ABCDEF0,
-            version: crate::ir::Version {
+            version: polyplug_codegen::Version {
                 major: 1,
                 minor: 0,
                 patch: 0,

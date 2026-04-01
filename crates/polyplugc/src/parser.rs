@@ -8,7 +8,10 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::error::PolyplugcError;
+use crate::ir::compute_bundle_id;
+use crate::ir::compute_contract_id;
+use crate::ir::compute_host_contract_id;
+use crate::ir::resolve_type_ref;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
 use crate::ir::ReprType;
@@ -24,12 +27,9 @@ use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
 use crate::ir::Version;
-use crate::ir::compute_bundle_id;
-use crate::ir::compute_contract_id;
-use crate::ir::compute_host_contract_id;
-use crate::ir::resolve_type_ref;
-
-// ─── Raw TOML AST structs ─────────────────────────────────────────────────────
+use polyplug_codegen::PlatformKey;
+use polyplug_codegen::PolyplugcError;
+use polyplug_codegen::ResolvedBundleFile;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawApiSchema {
@@ -37,11 +37,8 @@ pub(crate) struct RawApiSchema {
     pub types: Vec<RawType>,
     #[serde(rename = "enum", default)]
     pub r#enum: Vec<RawEnum>,
-    /// Plugin contracts. Accepts both `[[plugin_contract]]` (preferred) and
-    /// `[[contract]]` (deprecated) via serde alias.
     #[serde(default, alias = "contract")]
     pub plugin_contract: Vec<RawContract>,
-    /// Host contracts from `[[host_contract]]` sections.
     #[serde(default)]
     pub host_contract: Vec<RawHostContract>,
 }
@@ -68,8 +65,6 @@ pub(crate) struct RawContract {
     pub functions: Vec<RawFunction>,
 }
 
-/// Host contract definition from `[[host_contract]]` sections.
-/// Host contracts define APIs that the host provides to plugins.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct RawHostContract {
@@ -124,7 +119,6 @@ pub(crate) struct RawBundleSchema {
 pub(crate) struct RawBundleMeta {
     pub name: String,
     pub version: String,
-    /// Path or package name to the api.toml for this bundle.
     #[serde(default)]
     pub api: Option<String>,
     #[serde(default)]
@@ -134,15 +128,10 @@ pub(crate) struct RawBundleMeta {
     pub needs_reinit_on_dep_reload: bool,
 }
 
-/// Bundle file field — either flat string or [bundle.file] table.
-/// Uses untagged enum to accept both forms.
-/// The [bundle.file] table deserializes as nested HashMap: {"linux": {"x86_64": "file.so"}}
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum RawBundleFile {
-    /// Flat string: file = "path"
     Single(String),
-    /// Table: [bundle.file] with platform entries as nested map
     PlatformMap(HashMap<String, HashMap<String, String>>),
 }
 
@@ -156,7 +145,6 @@ impl Default for RawBundleFile {
 pub(crate) struct RawPlugin {
     pub name: String,
     pub version: String,
-
     #[serde(default)]
     pub implements: Vec<String>,
     #[serde(default)]
@@ -165,24 +153,17 @@ pub(crate) struct RawPlugin {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawDependency {
-    /// Either "contract" or "bundle" depending on resolution strategy.
     #[allow(dead_code)]
     pub kind: String,
-    /// Contract name (will be hashed to contract_id by the IR lowering).
     #[allow(dead_code)]
     pub contract: String,
-    /// Minimum version required, e.g. "1.0".
     #[allow(dead_code)]
     pub min_version: String,
-    /// Bundle name — only present when kind == "bundle".
     #[serde(default)]
     #[allow(dead_code)]
     pub bundle: Option<String>,
 }
 
-// ─── Public parse functions ───────────────────────────────────────────────────────
-
-/// Parse and validate an `api.toml` file, producing a `ValidatedIr`.
 pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     let content: String =
         std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
@@ -192,7 +173,6 @@ pub fn parse_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     parse_api_str(&content)
 }
 
-/// Parse an `api.toml` TOML string.
 pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     if content.contains("[[contract]]") && !content.contains("[[plugin_contract]]") {
         eprintln!("warning: [[contract]] is deprecated, use [[plugin_contract]] instead");
@@ -204,7 +184,6 @@ pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     lower_api(raw)
 }
 
-/// Parse and validate a `bundle.toml` file.
 #[allow(dead_code)]
 pub fn parse_bundle(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     let content: String =
@@ -215,7 +194,6 @@ pub fn parse_bundle(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     parse_bundle_str(&content)
 }
 
-/// Parse a `bundle.toml` TOML string.
 #[allow(dead_code)]
 pub fn parse_bundle_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     let raw: RawBundleSchema =
@@ -225,11 +203,6 @@ pub fn parse_bundle_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
     lower_bundle(raw)
 }
 
-/// Parse a `bundle.toml` file and chain-load the referenced `api.toml`.
-///
-/// Reads `bundle.bundle.api` field. If present, resolves the path relative to the
-/// bundle file's parent directory and calls `parse_api()` to load types + contracts.
-/// Returns a `ValidatedIr` with the bundle metadata merged with the API types/contracts.
 pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
     let content: String =
         std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
@@ -267,12 +240,6 @@ pub fn parse_bundle_with_api(path: &Path) -> Result<ValidatedIr, PolyplugcError>
     })
 }
 
-// ─── IR Lowering ──────────────────────────────────────────────────────────────────
-
-/// Checks whether `bundle_name` matches any contract name in `contracts`.
-///
-/// Returns `Err(PolyplugcError::BundleNameConflict)` on the first match.
-/// Comparison is exact and case-sensitive — contract names are identity-bearing.
 fn check_bundle_name_conflict(
     bundle_name: &str,
     contracts: &[ResolvedContract],
@@ -287,13 +254,6 @@ fn check_bundle_name_conflict(
     Ok(())
 }
 
-/// Validate a variant value expression string.
-///
-/// Allowed tokens: integer literals (decimal, hex 0x..., binary 0b...),
-/// operators: `<<`, `|`, `~`, grouping: `(`, `)`, whitespace (skipped),
-/// and previously-declared variant names (backward references only).
-///
-/// Returns Ok(()) if valid, Err with appropriate PolyplugcError if not.
 fn validate_enum_value_expr(
     expr: &str,
     enum_name: &str,
@@ -305,14 +265,11 @@ fn validate_enum_value_expr(
     let mut i: usize = 0;
     while i < len {
         let c: char = chars[i];
-        // Skip whitespace
         if c.is_whitespace() {
             i += 1;
             continue;
         }
-        // Integer literal
         if c.is_ascii_digit() {
-            // Consume hex (0x...) or binary (0b...) or decimal
             if c == '0' && i + 1 < len && (chars[i + 1] == 'x' || chars[i + 1] == 'X') {
                 i += 2;
                 while i < len && chars[i].is_ascii_hexdigit() {
@@ -330,7 +287,6 @@ fn validate_enum_value_expr(
             }
             continue;
         }
-        // Identifier (variant name)
         if c.is_alphabetic() || c == '_' {
             let start: usize = i;
             while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
@@ -340,7 +296,6 @@ fn validate_enum_value_expr(
             if declared_variants.contains(&ident) {
                 continue;
             }
-            // Not a known backward ref
             if chars[start].is_uppercase() {
                 return Err(PolyplugcError::EnumForwardRef {
                     enum_name: enum_name.to_owned(),
@@ -354,7 +309,6 @@ fn validate_enum_value_expr(
                 expr: expr.to_owned(),
             });
         }
-        // << operator
         if c == '<' {
             if i + 1 < len && chars[i + 1] == '<' {
                 i += 2;
@@ -366,22 +320,18 @@ fn validate_enum_value_expr(
                 expr: expr.to_owned(),
             });
         }
-        // | operator
         if c == '|' {
             i += 1;
             continue;
         }
-        // ~ operator
         if c == '~' {
             i += 1;
             continue;
         }
-        // Grouping
         if c == '(' || c == ')' {
             i += 1;
             continue;
         }
-        // Anything else is invalid
         return Err(PolyplugcError::EnumInvalidValueExpr {
             enum_name: enum_name.to_owned(),
             variant_name: variant_name.to_owned(),
@@ -391,13 +341,10 @@ fn validate_enum_value_expr(
     Ok(())
 }
 
-/// Check that no variant references another variant that itself contains a reference.
-/// Enforces the "one level deep" rule.
 fn check_enum_chained_refs(
     enum_name: &str,
     variants: &[EnumVariant],
 ) -> Result<(), PolyplugcError> {
-    // Helper: check if an expression string contains any variant name token
     let expr_contains_variant_ref = |expr: &str, variant_names: &[&str]| -> bool {
         let chars: Vec<char> = expr.chars().collect();
         let len: usize = chars.len();
@@ -422,7 +369,6 @@ fn check_enum_chained_refs(
     let all_names: Vec<&str> = variants.iter().map(|v| v.name.as_str()).collect();
 
     for variant in variants {
-        // Find all variant name tokens in this variant's value expression
         let chars: Vec<char> = variant.value.chars().collect();
         let len: usize = chars.len();
         let mut j: usize = 0;
@@ -433,11 +379,8 @@ fn check_enum_chained_refs(
                     j += 1;
                 }
                 let ref_name: String = chars[start..j].iter().collect();
-                // Is this a reference to a declared variant?
                 if all_names.contains(&ref_name.as_str()) {
-                    // Find the referenced variant's value
                     if let Some(ref_variant) = variants.iter().find(|v| v.name == ref_name) {
-                        // Does the referenced variant also reference a variant?
                         if expr_contains_variant_ref(&ref_variant.value, &all_names) {
                             return Err(PolyplugcError::EnumChainedRef {
                                 enum_name: enum_name.to_owned(),
@@ -456,10 +399,8 @@ fn check_enum_chained_refs(
 }
 
 fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
-    // Step 1: Collect known type names for type resolution
     let known_type_names: Vec<String> = raw.types.iter().map(|t| t.name.clone()).collect();
 
-    // Step 2: Collect known enum names and check for name collisions with types
     let known_enum_names: Vec<String> = raw.r#enum.iter().map(|e| e.name.clone()).collect();
     for name in &known_enum_names {
         if known_type_names.contains(name) {
@@ -467,14 +408,12 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         }
     }
 
-    // Step 3: Build combined name set for type reference resolution
     let all_known_names: Vec<String> = known_type_names
         .iter()
         .chain(known_enum_names.iter())
         .cloned()
         .collect();
 
-    // Step 4: Resolve types
     let mut resolved_types: Vec<ResolvedType> = Vec::new();
     for raw_type in &raw.types {
         let mut fields: Vec<ResolvedField> = Vec::new();
@@ -492,7 +431,6 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         });
     }
 
-    // Step 5: Resolve enums
     let mut resolved_enums: Vec<EnumDef> = Vec::new();
     for raw_enum in &raw.r#enum {
         let repr: ReprType = match ReprType::parse(&raw_enum.repr) {
@@ -528,7 +466,6 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         });
     }
 
-    // Step 6: Resolve contracts
     let mut resolved_contracts: Vec<ResolvedContract> = Vec::new();
     for raw_contract in &raw.plugin_contract {
         let version: Version = Version::parse(&raw_contract.version)?;
@@ -566,7 +503,6 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         });
     }
 
-    // Step 7: Resolve host contracts
     let mut resolved_host_contracts: Vec<ResolvedHostContract> = Vec::new();
     for raw_host_contract in &raw.host_contract {
         let version: Version = Version::parse(&raw_host_contract.version)?;
@@ -604,29 +540,23 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
         });
     }
 
-    // Step 8: Validate host contracts
-    // - Host contract names must start with "host."
-    // - No duplicate names across plugin_contracts and host_contracts
     let plugin_contract_names: Vec<&str> = raw
         .plugin_contract
         .iter()
         .map(|c| c.name.as_str())
         .collect();
     for raw_host_contract in &raw.host_contract {
-        // Validate "host." prefix
         if !raw_host_contract.name.starts_with("host.") {
             return Err(PolyplugcError::HostContractNameMissingPrefix {
                 name: raw_host_contract.name.clone(),
             });
         }
-        // Check for duplicates across both contract types
         if plugin_contract_names.contains(&raw_host_contract.name.as_str()) {
             return Err(PolyplugcError::DuplicateContractName {
                 name: raw_host_contract.name.clone(),
             });
         }
     }
-    // Check for duplicates within host_contracts
     let mut seen_host_names: Vec<&str> = Vec::new();
     for raw_host_contract in &raw.host_contract {
         if seen_host_names.contains(&raw_host_contract.name.as_str()) {
@@ -685,18 +615,16 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
         };
         resolved_deps.push(resolved);
     }
-    // Parse file field — native runtimes require [bundle.file] table, others use flat string
     let runtime = raw.bundle.runtime.to_lowercase();
     let is_native = runtime == "rust" || runtime == "cpp" || runtime == "native";
-    let resolved_file: crate::generators::ResolvedBundleFile = match &raw.bundle.file {
+    let resolved_file: ResolvedBundleFile = match &raw.bundle.file {
         RawBundleFile::PlatformMap(os_map) if is_native => {
-            // Native runtimes MUST use [bundle.file] table
-            let mut map: std::collections::HashMap<crate::generators::PlatformKey, String> =
+            let mut map: std::collections::HashMap<PlatformKey, String> =
                 std::collections::HashMap::new();
             for (os, arch_map) in os_map {
                 for (arch, path) in arch_map {
                     map.insert(
-                        crate::generators::PlatformKey {
+                        PlatformKey {
                             os: os.clone(),
                             arch: arch.clone(),
                         },
@@ -704,11 +632,10 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
                     );
                 }
             }
-            crate::generators::ResolvedBundleFile::PlatformMap(map)
+            ResolvedBundleFile::PlatformMap(map)
         }
         RawBundleFile::Single(path) if !path.is_empty() && !is_native => {
-            // Non-native runtimes MUST use flat string
-            crate::generators::ResolvedBundleFile::Single(path.clone())
+            ResolvedBundleFile::Single(path.clone())
         }
         RawBundleFile::PlatformMap(_) if !is_native => {
             return Err(PolyplugcError::ValidationFailed {
@@ -750,7 +677,6 @@ fn lower_bundle(raw: RawBundleSchema) -> Result<ValidatedIr, PolyplugcError> {
     })
 }
 
-// Suppress unused import warning for HashMap (used in future expansion)
 const _: () = {
     let _ = core::mem::size_of::<HashMap<String, String>>();
 };
@@ -841,7 +767,6 @@ mod tests {
 
     #[test]
     fn test_enum_forward_ref_rejected() {
-        // Variant B references variant C which hasn't been declared yet
         let declared: Vec<String> = vec!["A".to_owned()];
         let result: Result<(), PolyplugcError> =
             validate_enum_value_expr("C | 1", "MyEnum", "B", &declared);
@@ -853,8 +778,6 @@ mod tests {
 
     #[test]
     fn test_enum_chained_ref_rejected() {
-        // A = "1", B = "A | 1" (B refs A which has no ref — OK so far)
-        // C = "B | 2" (C refs B which refs A — chained ref!)
         let variants: Vec<EnumVariant> = vec![
             EnumVariant {
                 name: "A".to_owned(),
@@ -878,9 +801,6 @@ mod tests {
 
     #[test]
     fn test_enum_name_collision_with_type() {
-        // [[types]] named "Status" AND [[enum]] also named "Status" — should error
-        // This test is for T5's lower_api(). For now we call validate directly with
-        // a minimal check that names collide. We'll use the collision logic directly.
         let type_names: Vec<String> = vec!["Status".to_owned()];
         let enum_names: Vec<String> = vec!["Status".to_owned()];
         let collision: bool = enum_names.iter().any(|n| type_names.contains(n));
@@ -889,15 +809,12 @@ mod tests {
 
     #[test]
     fn test_enum_invalid_repr_rejected() {
-        // Repr "i32" should be invalid — test via ReprType::parse
         let result: Option<ReprType> = ReprType::parse("i32");
         assert!(result.is_none(), "i32 should not be a valid ReprType");
     }
 
     #[test]
     fn test_enum_valid_bitflag_expr() {
-        // Test that a valid bitflag expression parses without error
-        // A=0, B=1, C=1<<1, D=B|C
         let declared_a: Vec<String> = vec![];
         let r_a: Result<(), PolyplugcError> =
             validate_enum_value_expr("0", "Flags", "A", &declared_a);

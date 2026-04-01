@@ -1589,10 +1589,8 @@ dependencies = [
  "libloading",
  "polyplug_abi",
  "polyplug_utils",
- "serde",
  "tempfile",
  "thiserror",
- "toml",
 ]
 
 [[package]]
@@ -1671,7 +1669,10 @@ dependencies = [
  "polyplug_abi",
  "polyplug_codegen",
  "polyplug_guest",
+ "polyplug_utils",
+ "serde",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

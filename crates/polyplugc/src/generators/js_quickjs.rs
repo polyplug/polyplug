@@ -5,10 +5,9 @@
 
 use std::path::PathBuf;
 
-use crate::error::PolyplugcError;
-use crate::generators::CodeGenerator;
-use crate::generators::GeneratedFile;
-use crate::generators::GeneratedFiles;
+use super::CodeGenerator;
+use super::GeneratedFile;
+use super::GeneratedFiles;
 use crate::ir::AbiBuiltin;
 use crate::ir::EnumDef;
 use crate::ir::EnumVariant;
@@ -24,6 +23,7 @@ use crate::ir::ResolvedPlugin;
 use crate::ir::ResolvedType;
 use crate::ir::ResolvedTypeRef;
 use crate::ir::ValidatedIr;
+use polyplug_codegen::PolyplugcError;
 
 /// Generator for js-quickjs plugin bundles.
 ///
@@ -1808,15 +1808,15 @@ fn generate_js_host_thunk_call(out: &mut String, func: &ResolvedFunction, has_re
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::ir::AbiBuiltin;
-    use crate::ir::EnumDef;
-    use crate::ir::EnumVariant;
-    use crate::ir::PrimitiveType;
-    use crate::ir::ReprType;
-    use crate::ir::ResolvedFunction;
-    use crate::ir::ResolvedHostContract;
-    use crate::ir::ResolvedParam;
-    use crate::ir::Version;
+    use polyplug_codegen::AbiBuiltin;
+    use polyplug_codegen::EnumDef;
+    use polyplug_codegen::EnumVariant;
+    use polyplug_codegen::PrimitiveType;
+    use polyplug_codegen::ReprType;
+    use polyplug_codegen::ResolvedFunction;
+    use polyplug_codegen::ResolvedHostContract;
+    use polyplug_codegen::ResolvedParam;
+    use polyplug_codegen::Version;
 
     #[test]
     fn generate_js_quickjs_enum_non_bitflag() {

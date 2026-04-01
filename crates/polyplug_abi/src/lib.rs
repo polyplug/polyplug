@@ -19,9 +19,6 @@ pub mod tracking;
 
 use core::ffi::c_void;
 
-// Re-export hash functions from polyplug_utils
-pub use polyplug_utils::{bundle_id, contract_id, fnv1a_64, host_contract_id, plugin_contract_id};
-
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
 

@@ -39,33 +39,6 @@ pub enum PolyplugcError {
     )]
     BundleNameConflict { bundle_name: String },
 
-    #[error("failed to read cache file `{path}`: {source}")]
-    CacheReadFailed {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("failed to write cache file `{path}`: {source}")]
-    CacheWriteFailed {
-        path: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("failed to deserialize cache file `{path}`: {source}")]
-    CacheDeserializeFailed {
-        path: String,
-        #[source]
-        source: toml::de::Error,
-    },
-
-    #[error("failed to serialize cache: {source}")]
-    CacheSerializeFailed {
-        #[source]
-        source: toml::ser::Error,
-    },
-
     #[error("invalid repr `{repr}` for enum `{enum_name}`: must be u8 | u16 | u32 | u64")]
     EnumInvalidRepr { enum_name: String, repr: String },
 
@@ -104,7 +77,9 @@ pub enum PolyplugcError {
     #[error("guest generation not supported for `{language}`: {reason}")]
     GuestGenerationNotSupported { language: String, reason: String },
 
-    #[error("host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")")]
+    #[error(
+        "host contract name `{name}` must start with \"host.\" prefix (e.g., \"host.logger\")"
+    )]
     HostContractNameMissingPrefix { name: String },
 
     #[error(

@@ -7,14 +7,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::error::PolyplugcError;
 use crate::ir::ValidatedIr;
+use polyplug_codegen::PolyplugcError;
 
-/// Generate scaffold packaging files for a plugin in the given language.
-/// Writes scaffold files under `out/`.
-///
-/// Note: This command generates scaffold metadata only.
-/// No build tools are invoked (no cargo, npm, dotnet, pip, luarocks, deno).
 pub(crate) fn run(ir: &ValidatedIr, out: &Path, lang: &str) -> Result<(), PolyplugcError> {
     let bundle_name: &str = ir
         .bundle
@@ -258,11 +253,9 @@ fn pack_js_quickjs(
   \"version\": \"{version}\",\n\
   \"main\": \"bundle.js\",\n\
   \"scripts\": {{\n\
-    \"build\": \"rolldown index.ts --format esm --file bundle.js\"\n\
-  }},\n\
+    \"build\": \"rolldown index.ts --format esm --file bundle.js\"\n  }},\n\
   \"dependencies\": {{\n\
-    \"polyplug_guest\": \"*\"\n\
-  }}\n\
+    \"polyplug_guest\": \"*\"\n  }}\n\
 }}\n"
     );
 
