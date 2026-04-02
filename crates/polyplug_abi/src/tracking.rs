@@ -35,12 +35,14 @@ unsafe extern "C" fn tracking_alloc(size: usize, align: usize) -> *mut u8 {
     // SAFETY: Caller guarantees size > 0 and align is a power of two.
     // Forwarding directly to the ABI allocator with unchanged parameters.
     let ptr: *mut u8 = polyplug_host_alloc(size, align);
+
     #[cfg(debug_assertions)]
     if !ptr.is_null() {
         TLS_LIVE_ADDRS.with(|s| {
             s.borrow_mut().insert(ptr as usize);
         });
     }
+
     ptr
 }
 
