@@ -1,4 +1,4 @@
-use crate::types::abi_error::AbiError;
+use crate::types::AbiError;
 
 /// VM dispatch data — call through a dispatch function.
 ///

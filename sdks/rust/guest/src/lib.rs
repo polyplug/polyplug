@@ -219,19 +219,6 @@ pub use polyplug_abi::ffi::polyplug_host_alloc;
 
 pub use polyplug_abi::ffi::polyplug_host_free;
 
-// ─── Helper Functions ─────────────────────────────────────────────────────────
-
-/// Create a StringView from a static byte slice.
-pub use polyplug_abi::string_view_from_static;
-
-/// Create a null StringView (empty/absent).
-pub use polyplug_abi::string_view_null;
-
-/// Create an AbiError with code=0 (success) and null message.
-pub use polyplug_abi::abi_error_ok;
-
-pub use polyplug_abi::abi_error_panic_caught;
-
 // ─── Helper Types ─────────────────────────────────────────────────────────────
 
 /// Wrapper for a function pointer stored in a static vtable array.

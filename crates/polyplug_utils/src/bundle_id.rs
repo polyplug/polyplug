@@ -1,5 +1,6 @@
 use crate::fnv1a_64;
 
+#[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BundleId(u64);
 

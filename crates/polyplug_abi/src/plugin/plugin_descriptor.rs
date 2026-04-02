@@ -1,4 +1,4 @@
-use crate::types::{string_view::StringView, version::Version};
+use crate::types::{StringView, Version};
 
 /// Metadata about a plugin within a bundle.
 ///

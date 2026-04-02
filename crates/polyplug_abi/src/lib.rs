@@ -8,7 +8,6 @@ pub mod dispatch;
 pub mod ffi;
 pub mod host;
 pub mod plugin;
-pub mod runtime_config;
 pub mod runtime_language;
 pub mod tracking;
 pub mod types;
@@ -20,7 +19,7 @@ pub const POLYPLUG_ABI_VERSION: u32 = 1;
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{abi_error::AbiError, error_code::AbiErrorCode};
+    use crate::types::{AbiError, AbiErrorCode};
 
     #[test]
     fn test_abi_error_ok() {

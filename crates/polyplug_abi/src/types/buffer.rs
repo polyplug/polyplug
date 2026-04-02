@@ -1,4 +1,3 @@
-
 /// Owning byte buffer.
 ///
 /// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
@@ -17,23 +16,25 @@ pub struct Buffer {
 // Sending between threads is safe because the host allocator is thread-safe.
 unsafe impl Send for Buffer {}
 
-/// Returns the buffer contents as a byte slice.
-///
-/// # Safety
-/// Caller must ensure `buf.ptr` is valid for `buf.len` bytes and the memory is live.
-pub unsafe fn buffer_as_slice(buf: &Buffer) -> &[u8] {
-    // SAFETY: Caller guarantees ptr is non-null and valid for len bytes.
-    unsafe { core::slice::from_raw_parts(buf.ptr, buf.len) }
-}
+impl Buffer {
+    /// Returns the buffer contents as a byte slice.
+    ///
+    /// # Safety
+    /// Caller must ensure `buf.ptr` is valid for `buf.len` bytes and the memory is live.
+    pub unsafe fn as_slice(&self) -> &[u8] {
+        // SAFETY: Caller guarantees ptr is non-null and valid for len bytes.
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
 
-/// Returns the buffer contents as a mutable byte slice.
-///
-/// # Safety
-/// Caller must ensure `buf.ptr` is valid for `buf.cap` bytes, the memory is live, and no
-/// other reference to the buffer exists.
-pub unsafe fn buffer_as_mut_slice(buf: &mut Buffer) -> &mut [u8] {
-    // SAFETY: Caller guarantees ptr is non-null, valid for cap bytes, and exclusively owned.
-    unsafe { core::slice::from_raw_parts_mut(buf.ptr, buf.cap) }
+    /// Returns the buffer contents as a mutable byte slice.
+    ///
+    /// # Safety
+    /// Caller must ensure `buf.ptr` is valid for `buf.cap` bytes, the memory is live, and no
+    /// other reference to the buffer exists.
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: Caller guarantees ptr is non-null, valid for cap bytes, and exclusively owned.
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.cap) }
+    }
 }
 
 #[cfg(test)]

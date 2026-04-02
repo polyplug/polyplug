@@ -280,3 +280,17 @@ Neither is acceptable for v1. See PRD section 27 (Non-Goals).
 
 App developers who need crash isolation should run plugins in a separate worker process
 and communicate via IPC. polyplug does not provide this facility.
+
+
+
+// =============================================================================
+// ABI FROZEN — pre-v1.0 (HostVTable rt_ctx refactoring)
+// =============================================================================
+//
+// The following types and function signatures constitute the frozen polyplug ABI.
+// NO CHANGES to #[repr(C)] structs, function pointer signatures, or the field
+// order of HostVTable are permitted after this point.
+//
+// All new functionality must go through the host contract mechanism (get_host_contract).
+// For rationale and trust model, see TRUST_MODEL.md.
+// =============================================================================

@@ -1,4 +1,4 @@
-use crate::types::string_view::StringView;
+use crate::types::StringView;
 
 /// Context passed to every guest `polyplug_init()` function.
 ///

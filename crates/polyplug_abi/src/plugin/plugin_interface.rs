@@ -1,6 +1,6 @@
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
-    types::version::Version,
+    types::Version,
 };
 
 /// Plugin Interface — one per contract implemented by a plugin.

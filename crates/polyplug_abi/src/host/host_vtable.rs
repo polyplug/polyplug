@@ -5,7 +5,7 @@ use crate::{
         plugin_descriptor::PluginDescriptor, plugin_handle::PluginHandle,
         plugin_interface::PluginInterface,
     },
-    types::abi_error::AbiError,
+    types::AbiError,
 };
 
 /// Host capabilities passed to every plugin at init time.

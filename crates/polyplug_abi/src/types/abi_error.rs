@@ -9,7 +9,7 @@ use crate::types::{error_code::AbiErrorCode, string_view::StringView};
 #[derive(Debug, Clone, Copy)]
 pub struct AbiError {
     /// 0 = success, non-zero = error.
-    pub code: u32,
+    pub code: AbiErrorCode,
     /// Empty/NULL if success. UTF-8 message if non-zero code.
     pub message: StringView,
 }
@@ -24,7 +24,7 @@ impl AbiError {
     /// Construct a success AbiError.
     pub const fn ok() -> AbiError {
         AbiError {
-            code: AbiErrorCode::Ok as u32,
+            code: AbiErrorCode::Ok,
             message: StringView::null(),
         }
     }
@@ -32,14 +32,14 @@ impl AbiError {
     /// Construct a panic error with a static message.
     pub const fn panic_caught() -> AbiError {
         AbiError {
-            code: AbiErrorCode::Panic as u32,
+            code: AbiErrorCode::Panic,
             message: StringView::from_static(b"plugin panicked"),
         }
     }
 
     /// Returns true if this represents success.
-    pub const fn is_ok(&self) -> bool {
-        self.code == AbiErrorCode::Ok as u32
+    pub fn is_ok(&self) -> bool {
+        self.code == AbiErrorCode::Ok
     }
 }
 
