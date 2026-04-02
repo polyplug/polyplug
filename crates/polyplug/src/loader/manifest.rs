@@ -4,9 +4,12 @@
 //! The `runtime` field determines which `BundleLoader` handles the bundle.
 //! If absent, defaults to `"native"`.
 
+// TODO: Move toml parse to host rust SDK
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use polyplug_utils::{BundleId, PluginContractId};
 use serde::Deserializer;
 
 fn default_runtime() -> String {
@@ -117,9 +120,9 @@ pub struct RawManifestDependency {
     #[serde(default)]
     pub bundle: Option<String>,
     #[serde(default)]
-    pub contract_id: u64,
+    pub contract_id: PluginContractId,
     #[serde(default)]
-    pub bundle_id: Option<u64>,
+    pub bundle_id: Option<BundleId>,
 }
 
 impl RawManifestDependency {
@@ -158,14 +161,14 @@ impl RawManifestDependency {
 pub enum ManifestDependency {
     ByContract {
         contract: String,
-        contract_id: u64,
+        contract_id: PluginContractId,
         min_version: String,
     },
     ByBundle {
         bundle: String,
-        bundle_id: u64,
+        bundle_id: BundleId,
         contract: String,
-        contract_id: u64,
+        contract_id: PluginContractId,
         min_version: String,
     },
 }
@@ -220,123 +223,13 @@ impl ManifestData {
             .filter_map(|dep: &RawManifestDependency| dep.resolve())
             .collect::<Vec<ManifestDependency>>()
     }
-
-    /// Validate that the `file` field is non-empty after parsing.
-    ///
-    /// # Errors
-    /// Returns `Err(ManifestMissingFile)` if the `file` field is absent or whitespace-only.
-    pub fn validate_file(&self) -> Result<(), crate::error::LoaderError> {
-        if self.file.trim().is_empty() {
-            return Err(crate::error::LoaderError::ManifestMissingFile {
-                bundle: self.name.clone(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Serialize this manifest to a TOML string.
-    ///
-    /// This is the canonical way to create manifest.toml content.
-    /// Use this instead of manually formatting strings.
-    pub fn to_toml(&self) -> String {
-        let mut out: String = String::new();
-
-        out.push_str(&format!("id = {}\n", self.id));
-
-        if !self.name.is_empty() {
-            out.push_str(&format!("name = \"{}\"\n", self.name));
-        }
-
-        if !self.version.is_empty() {
-            out.push_str(&format!("version = \"{}\"\n", self.version));
-        }
-
-        out.push_str(&format!("runtime = \"{}\"\n", self.runtime));
-
-        if !self.file.is_empty() {
-            out.push_str(&format!("file = \"{}\"\n", self.file));
-        }
-
-        if !self.provides.is_empty() {
-            let provides: String = self
-                .provides
-                .iter()
-                .map(|s: &String| format!("\"{}\"", s))
-                .collect::<Vec<String>>()
-                .join(", ");
-            out.push_str(&format!("provides = [{}]\n", provides));
-        }
-
-        if self.needs_reinit_on_dep_reload {
-            out.push_str("needs_reinit_on_dep_reload = true\n");
-        }
-
-        if !self.function_count.is_empty() {
-            out.push_str("\n[function_count]\n");
-            for (contract, count) in &self.function_count {
-                out.push_str(&format!("\"{}\" = {}\n", contract, count));
-            }
-        }
-
-        if !self.dependencies.is_empty() {
-            for dep in &self.dependencies {
-                out.push_str("\n[[dependency]]\n");
-                out.push_str(&format!("kind = \"{}\"\n", dep.kind));
-                out.push_str(&format!("contract = \"{}\"\n", dep.contract));
-                out.push_str(&format!("min_version = \"{}\"\n", dep.min_version));
-                if let Some(bundle) = &dep.bundle {
-                    out.push_str(&format!("bundle = \"{}\"\n", bundle));
-                }
-                if dep.contract_id != 0 {
-                    out.push_str(&format!("contract_id = {}\n", dep.contract_id));
-                }
-                if let Some(bundle_id) = dep.bundle_id {
-                    out.push_str(&format!("bundle_id = {}\n", bundle_id));
-                }
-            }
-        }
-
-        out
-    }
-
-    /// Parse a manifest from a TOML string.
-    ///
-    /// This is the canonical way to parse manifest content.
-    /// Use this instead of calling `toml::from_str()` directly.
-    ///
-    /// # Errors
-    /// Returns a `LoaderError::ManifestParse` if the TOML is malformed.
-    pub fn parse_from_str(toml_src: &str) -> Result<Self, crate::error::LoaderError> {
-        let data: ManifestData = toml::from_str(toml_src).map_err(|e: toml::de::Error| {
-            crate::error::LoaderError::ManifestParse {
-                path: String::new(),
-                reason: e.to_string(),
-            }
-        })?;
-        Ok(data)
-    }
-
-    /// Create a minimal valid manifest for testing.
-    #[cfg(test)]
-    pub fn for_test(name: &str, runtime: &str, file: &str) -> Self {
-        Self {
-            id: 1,
-            name: name.to_owned(),
-            runtime: runtime.to_owned(),
-            file: file.to_owned(),
-            version: String::new(),
-            provides: Vec::new(),
-            function_count: HashMap::new(),
-            dependencies: Vec::new(),
-            needs_reinit_on_dep_reload: false,
-            path: PathBuf::new(),
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use polyplug_utils::{BundleId, PluginContractId};
+
     use super::{ManifestData, ManifestDependency, RawManifestDependency};
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -412,12 +305,13 @@ mod tests {
 
     #[test]
     fn raw_dep_resolve_by_contract() {
-        let dep: RawManifestDependency = RawManifestDependency {
+        let b_contract_id: PluginContractId = PluginContractId::new("test", 1);
+        let dep = RawManifestDependency {
             kind: "contract".to_owned(),
             contract: "math".to_owned(),
             min_version: "1.0".to_owned(),
             bundle: None,
-            contract_id: 42,
+            contract_id: b_contract_id,
             bundle_id: None,
         };
         let resolved: Option<ManifestDependency> = dep.resolve();
@@ -428,7 +322,7 @@ mod tests {
                 min_version,
             } => {
                 assert_eq!(contract, "math");
-                assert_eq!(contract_id, 42);
+                assert_eq!(contract_id, b_contract_id);
                 assert_eq!(min_version, "1.0");
             }
             other => panic!("unexpected variant: {:?}", other),
@@ -436,34 +330,17 @@ mod tests {
     }
 
     #[test]
-    fn raw_dep_resolve_by_contract_zero_contract_id() {
-        // contract_id=0 is allowed — the resolve path does not validate the id.
-        let dep: RawManifestDependency = RawManifestDependency {
-            kind: "contract".to_owned(),
-            contract: "audio".to_owned(),
-            min_version: "0.1".to_owned(),
-            bundle: None,
-            contract_id: 0,
-            bundle_id: None,
-        };
-        let resolved: Option<ManifestDependency> = dep.resolve();
-        match resolved.expect("should resolve even with contract_id=0") {
-            ManifestDependency::ByContract { contract_id, .. } => {
-                assert_eq!(contract_id, 0);
-            }
-            other => panic!("unexpected variant: {:?}", other),
-        }
-    }
-
-    #[test]
     fn raw_dep_resolve_by_bundle() {
+        let b_contract_id: PluginContractId = PluginContractId::new("test", 1);
+        let b_bundle_id: BundleId = BundleId::new("test");
+
         let dep: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
             contract: "math".to_owned(),
             min_version: "1.0".to_owned(),
             bundle: Some("math-bundle".to_owned()),
-            contract_id: 42,
-            bundle_id: Some(99),
+            contract_id: b_contract_id,
+            bundle_id: Some(b_bundle_id),
         };
         let resolved: Option<ManifestDependency> = dep.resolve();
         match resolved.expect("should resolve") {
@@ -475,9 +352,9 @@ mod tests {
                 min_version,
             } => {
                 assert_eq!(bundle, "math-bundle");
-                assert_eq!(bundle_id, 99);
+                assert_eq!(bundle_id, b_bundle_id);
                 assert_eq!(contract, "math");
-                assert_eq!(contract_id, 42);
+                assert_eq!(contract_id, b_contract_id);
                 assert_eq!(min_version, "1.0");
             }
             other => panic!("unexpected variant: {:?}", other),
@@ -486,12 +363,14 @@ mod tests {
 
     #[test]
     fn raw_dep_resolve_by_bundle_missing_bundle_id_returns_none() {
+        let b_contract_id: PluginContractId = PluginContractId::new("test", 1);
+
         let dep: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
             contract: "math".to_owned(),
             min_version: "1.0".to_owned(),
             bundle: Some("math-bundle".to_owned()),
-            contract_id: 42,
+            contract_id: b_contract_id,
             bundle_id: None,
         };
         let resolved: Option<ManifestDependency> = dep.resolve();
@@ -501,30 +380,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn raw_dep_resolve_by_bundle_zero_bundle_id_is_valid() {
-        // bundle_id=Some(0) is a valid (if unusual) id — must NOT be treated as None.
-        let dep: RawManifestDependency = RawManifestDependency {
-            kind: "bundle".to_owned(),
-            contract: "video".to_owned(),
-            min_version: "2.0".to_owned(),
-            bundle: Some("video-bundle".to_owned()),
-            contract_id: 7,
-            bundle_id: Some(0),
-        };
-        let resolved: Option<ManifestDependency> = dep.resolve();
-        match resolved.expect("bundle_id=Some(0) must resolve") {
-            ManifestDependency::ByBundle { bundle_id, .. } => {
-                assert_eq!(bundle_id, 0);
-            }
-            other => panic!("unexpected variant: {:?}", other),
-        }
-    }
-
     // ── resolved_dependencies helper ──────────────────────────────────────
 
     #[test]
     fn resolved_dependencies_skips_bundle_dep_with_no_bundle_id() {
+        let b_contract_id_1: PluginContractId = PluginContractId::new("test1", 1);
+        let b_contract_id_2: PluginContractId = PluginContractId::new("test2", 1);
+
         let mut m: ManifestData = make_manifest("p.so", "p");
         m.dependencies = vec![
             RawManifestDependency {
@@ -532,7 +394,7 @@ mod tests {
                 contract: "x".to_owned(),
                 min_version: "1.0".to_owned(),
                 bundle: Some("x-bundle".to_owned()),
-                contract_id: 1,
+                contract_id: b_contract_id_1,
                 bundle_id: None, // missing — must be skipped
             },
             RawManifestDependency {
@@ -540,7 +402,7 @@ mod tests {
                 contract: "y".to_owned(),
                 min_version: "1.0".to_owned(),
                 bundle: None,
-                contract_id: 2,
+                contract_id: b_contract_id_2,
                 bundle_id: None,
             },
         ];

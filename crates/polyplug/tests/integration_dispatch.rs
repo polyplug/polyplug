@@ -4,7 +4,7 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
@@ -54,7 +54,7 @@ unsafe extern "C" fn registry_register_callback(
     // Register with thread-local Registry.
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
@@ -139,8 +139,8 @@ unsafe extern "C" fn noop_get_host_contract(
 }
 
 std::thread_local! {
-    static DISPATCH_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
+    static DISPATCH_REGISTRY: core::cell::RefCell<PluginRegistry> =
+        core::cell::RefCell::new(PluginRegistry::new());
 }
 
 /// AddArgs — mirrors the struct in test_plugin (must be `#[repr(C)]`).
@@ -176,7 +176,7 @@ fn test_dispatch_add_function() {
 
     // Reset the thread-local registry before the test.
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     let host_vtable: HostVTable = HostVTable {
@@ -275,7 +275,7 @@ fn test_dispatch_add_with_zero() {
 
     // Reset registry.
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     let host_vtable: HostVTable = HostVTable {
@@ -358,7 +358,7 @@ fn test_dispatch_add_wrapping_overflow() {
     };
 
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     let host_vtable: HostVTable = HostVTable {

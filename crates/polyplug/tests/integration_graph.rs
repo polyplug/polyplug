@@ -9,7 +9,7 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostVTable;
@@ -144,8 +144,8 @@ unsafe extern "C" fn noop_get_host_contract(
 }
 
 std::thread_local! {
-    static GRAPH_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
+    static GRAPH_REGISTRY: core::cell::RefCell<PluginRegistry> =
+        core::cell::RefCell::new(PluginRegistry::new());
 }
 
 /// Load the test_plugin and call polyplug_init, storing results in GRAPH_REGISTRY.
@@ -203,7 +203,7 @@ fn load_and_init_plugin() -> libloading::Library {
 
 #[test]
 fn test_single_contract_registration_and_lookup() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = Registry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -238,7 +238,7 @@ fn test_single_contract_registration_and_lookup() {
 
 #[test]
 fn test_unknown_contract_returns_not_found() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = Registry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -256,7 +256,7 @@ fn test_unknown_contract_returns_not_found() {
 
 #[test]
 fn test_duplicate_registration_allowed() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = Registry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -305,7 +305,7 @@ fn test_duplicate_registration_allowed() {
 
 #[test]
 fn test_stale_handle_detected_after_explicit_construction() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = Registry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -332,7 +332,7 @@ fn test_stale_handle_detected_after_explicit_construction() {
 
 #[test]
 fn test_multi_lookup_consistent() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = Registry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 

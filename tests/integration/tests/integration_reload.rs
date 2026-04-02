@@ -71,7 +71,7 @@ fn test_b_in_flight_safety() {
                 rt_clone.find_by_contract(contract_id, 0);
             if let Ok(handle) = handle_result {
                 let vt_result: Result<
-                    polyplug::registry::PluginGuard,
+                    polyplug::plugin_registry::PluginGuard,
                     polyplug::error::RegistryError,
                 > = rt_clone.resolve_plugin(handle);
                 if let Ok(guard) = vt_result {

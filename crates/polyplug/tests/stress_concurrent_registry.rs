@@ -9,9 +9,9 @@ use std::sync::Barrier;
 use std::time::Instant;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::PluginGuard;
-use polyplug::registry::Registry;
-use polyplug::registry::VTableSlot;
+use polyplug::plugin_registry::PluginGuard;
+use polyplug::plugin_registry::PluginRegistry;
+use polyplug::plugin_registry::VTableSlot;
 use polyplug_abi::{
     DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
     StringView,
@@ -120,12 +120,12 @@ fn wait_for_quiescence(old_arc: &Arc<VTableSlot>, timeout: Duration) -> bool {
 
 #[test]
 fn stress_concurrent_register_find_resolve() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(THREADS));
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(THREADS);
 
     for idx in 0_usize..THREADS {
-        let reg_clone: Arc<Registry> = Arc::clone(&registry);
+        let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let barrier_clone: Arc<Barrier> = Arc::clone(&barrier);
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             let descriptor: PluginDescriptor =
@@ -189,7 +189,7 @@ fn stress_concurrent_register_find_resolve() {
 
 #[test]
 fn stress_concurrent_swaps_with_resolvers() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "stress.swap.contract");
     // SAFETY: VTABLE_SWAP_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
@@ -210,7 +210,7 @@ fn stress_concurrent_swaps_with_resolvers() {
         Vec::with_capacity(RESOLVER_THREADS);
 
     for _thread_idx in 0_usize..RESOLVER_THREADS {
-        let reg_clone: Arc<Registry> = Arc::clone(&registry);
+        let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let resolve_counter: Arc<AtomicUsize> = Arc::clone(&resolve_count);

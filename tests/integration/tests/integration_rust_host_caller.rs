@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-use polyplug::registry::PluginGuard;
+use polyplug::plugin_registry::PluginGuard;
 use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;

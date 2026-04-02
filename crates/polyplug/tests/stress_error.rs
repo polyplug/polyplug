@@ -11,7 +11,7 @@ use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::ABI_ERROR_PANIC;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
@@ -46,8 +46,8 @@ struct ChainArgs {
 // ─── Thread-local registry ────────────────────────────────────────────────────
 
 std::thread_local! {
-    static ERROR_REGISTRY: core::cell::RefCell<Registry> =
-        core::cell::RefCell::new(Registry::new());
+    static ERROR_REGISTRY: core::cell::RefCell<PluginRegistry> =
+        core::cell::RefCell::new(PluginRegistry::new());
 }
 
 // ─── HostVTable callbacks (for Test 3 chain dispatch) ───────────────────────
@@ -62,7 +62,7 @@ unsafe extern "C" fn chain_find_by_contract(
     _min_version: u32,
 ) -> PluginHandle {
     ERROR_REGISTRY.with(|cell| {
-        let registry: core::cell::Ref<'_, Registry> = cell.borrow();
+        let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
         match registry.find(contract_id, 0) {
             Ok(handle) => handle,
             Err(_) => PluginHandle {
@@ -110,7 +110,7 @@ unsafe extern "C" fn chain_resolve_plugin(
     handle: PluginHandle,
 ) -> *const PluginInterface {
     ERROR_REGISTRY.with(|cell| {
-        let registry: core::cell::Ref<'_, Registry> = cell.borrow();
+        let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
         registry.resolve(handle).unwrap_or(core::ptr::null())
     })
 }
@@ -225,7 +225,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
@@ -273,7 +273,7 @@ fn load_error_plugin() -> libloading::Library {
 fn init_error_plugin(library: &libloading::Library) -> *const PluginInterface {
     // Reset registry before each use.
     ERROR_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature.

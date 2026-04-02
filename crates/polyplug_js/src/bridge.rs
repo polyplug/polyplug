@@ -366,6 +366,8 @@ unsafe impl Sync for JsHostBridge {}
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+    use polyplug_abi::abi_error_is_ok;
+
     use super::*;
 
     #[test]
@@ -508,7 +510,7 @@ mod tests {
         // Call it
         let result: AbiError =
             bridge.call_host_contract(1234, 5, std::ptr::null(), std::ptr::null_mut());
-        assert!(result.is_ok());
+        assert!(abi_error_is_ok(&result));
     }
 
     #[test]

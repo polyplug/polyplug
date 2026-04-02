@@ -1,6 +1,6 @@
-#![allow(clippy::expect_used)]
-
 //! Integration tests: version negotiation, compatibility modes, and warning callbacks.
+
+#![allow(clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::manifest::RawManifestDependency;
 use polyplug::runtime::Runtime;
-use polyplug::version::Compatibility;
+use polyplug::compatibility::Compatibility;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;

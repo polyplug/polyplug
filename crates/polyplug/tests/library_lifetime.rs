@@ -9,7 +9,7 @@
 
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::parse_manifest;
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
@@ -145,7 +145,7 @@ fn library_handle_outlives_load_call() {
         get_host_contract: stub_get_host_contract,
     }));
 
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
     let runtime: Runtime = Runtime::builder()
         .build()
         .expect("runtime build should succeed");

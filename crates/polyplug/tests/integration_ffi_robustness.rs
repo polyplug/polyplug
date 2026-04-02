@@ -3,7 +3,7 @@
 use core::cell::RefCell;
 use std::sync::Arc;
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
@@ -20,7 +20,7 @@ use polyplug_abi::ffi::polyplug_host_free;
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
 std::thread_local! {
-    static FFI_REGISTRY: RefCell<Registry> = RefCell::new(Registry::new());
+    static FFI_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
 }
 
 #[repr(C)]
@@ -54,7 +54,7 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     let result: Result<PluginHandle, _> = FFI_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
@@ -144,7 +144,7 @@ fn load_memory_plugin() -> libloading::Library {
 }
 fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInterface {
     FFI_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature.

@@ -11,10 +11,11 @@ name = "polyplug"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+polyplug_utils = { workspace = true }
 polyplug_abi = { workspace = true }
+
 arc-swap = { workspace = true }
 thiserror = { workspace = true }
-libloading = { workspace = true }
 petgraph = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

@@ -52,7 +52,7 @@ mod tests {
     use super::make_desc;
     use super::make_static_vtable;
     use polyplug::error::RegistryError;
-    use polyplug::registry::Registry;
+    use polyplug::plugin_registry::PluginRegistry;
     use polyplug_abi::PluginDescriptor;
     use polyplug_abi::PluginHandle;
     use polyplug_abi::PluginInterface;
@@ -64,7 +64,7 @@ mod tests {
     /// Single plugin registered for a contract — find_by_contract returns a valid handle.
     #[test]
     fn find_by_contract_single_plugin() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
         let bid: u64 = bundle_id("audio-engine");
         let vtable: &'static PluginInterface = make_static_vtable(cid);
@@ -86,7 +86,7 @@ mod tests {
     /// find_all_by_contract returns both.
     #[test]
     fn find_all_returns_two_impls() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
         let vtable_a: &'static PluginInterface = make_static_vtable(cid);
         let vtable_b: &'static PluginInterface = make_static_vtable(cid);
@@ -128,7 +128,7 @@ mod tests {
     /// not the first-registered one.
     #[test]
     fn find_by_bundle_specificity() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
         let bid_a: u64 = bundle_id("bundle-a");
         let bid_b: u64 = bundle_id("bundle-b");
@@ -179,7 +179,7 @@ mod tests {
     /// A handle with a wrong generation is rejected by resolve_guard with StaleHandle.
     #[test]
     fn stale_handle_rejected() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let cid: u64 = contract_id("audio.Decoder", 0);
         let vtable: &'static PluginInterface = make_static_vtable(cid);
 

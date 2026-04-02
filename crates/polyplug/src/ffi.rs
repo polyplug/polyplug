@@ -3,18 +3,15 @@
 //! All functions use `catch_unwind` to prevent Rust panics from unwinding across
 //! the C ABI boundary. Errors are stored per-runtime in the Runtime's last_error field.
 
-#![allow(clippy::std_instead_of_core)]
+use std::sync::Arc;
 
-use crate::loader::BundleLoader;
-use crate::registry::VTableSlot;
-use crate::reload::ReloadPhase;
-use crate::runtime::Runtime;
-use crate::runtime::RuntimeConfig;
-use polyplug_abi::plugin_handle_is_null;
-use polyplug_abi::plugin_handle_null;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
-use std::sync::Arc;
+
+use crate::loader::BundleLoader;
+use crate::plugin_registry::VTableSlot;
+use crate::reload::ReloadPhase;
+use crate::runtime::Runtime;
 
 pub struct OpaqueRuntime(pub Runtime);
 
@@ -36,29 +33,6 @@ pub enum ReloadPhaseType {
     Reloaded = 1,
     /// `Failed` variant.
     Failed = 2,
-}
-
-/// C-compatible string view for passing strings across the FFI boundary.
-///
-/// The pointer must remain valid for the duration of the callback call.
-/// This is a borrowed view — the callback must NOT free the memory.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct StringViewC {
-    /// Pointer to UTF-8 bytes.
-    pub ptr: *const u8,
-    /// Length in bytes.
-    pub len: usize,
-}
-
-impl StringViewC {
-    /// Create a `StringViewC` from a Rust string slice.
-    fn from_str(s: &str) -> StringViewC {
-        StringViewC {
-            ptr: s.as_ptr(),
-            len: s.len(),
-        }
-    }
 }
 
 /// C-compatible representation of `ReloadPhase`.
@@ -133,42 +107,10 @@ impl ReloadPhaseC {
     }
 }
 
-/// C-compatible configuration for hot-reload behavior.
-///
-/// Pass this to `polyplug_runtime_create_with_options` to configure the runtime.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RuntimeConfigC {
-    /// Whether hot-reload is enabled for this runtime.
-    /// 0 = disabled, non-zero = enabled.
-    pub hot_reload_enabled: u8,
-    /// Maximum number of retry attempts for hot-reload operations.
-    pub hot_reload_max_retries: u32,
-    /// Interval between hot-reload retry attempts, in milliseconds.
-    pub hot_reload_retry_interval_ms: u64,
-    /// Whether to abort the runtime when max retries are exhausted.
-    /// 0 = false (continue retrying), non-zero = true (abort).
-    pub hot_reload_abort_on_max_retries: u8,
-}
-
-impl RuntimeConfigC {
-    /// Convert to the Rust `RuntimeConfig` type.
-    fn into_runtime_config(self) -> RuntimeConfig {
-        RuntimeConfig {
-            hot_reload_enabled: self.hot_reload_enabled != 0,
-            hot_reload_max_retries: self.hot_reload_max_retries,
-            hot_reload_retry_interval: core::time::Duration::from_millis(
-                self.hot_reload_retry_interval_ms,
-            ),
-            hot_reload_abort_on_max_retries: self.hot_reload_abort_on_max_retries != 0,
-        }
-    }
-}
-
 // ─── Helper functions ──────────────────────────────────────────────────────────
 
 fn pack_handle(h: PluginHandle) -> u64 {
-    if plugin_handle_is_null(&h) {
+    if h.is_null() {
         u64::MAX
     } else {
         (h.generation as u64) << 32 | h.index as u64
@@ -177,7 +119,7 @@ fn pack_handle(h: PluginHandle) -> u64 {
 
 fn unpack_handle(packed: u64) -> PluginHandle {
     if packed == u64::MAX {
-        plugin_handle_null()
+        PluginHandle::null()
     } else {
         PluginHandle {
             index: (packed & 0xFFFF_FFFF) as u32,
@@ -232,7 +174,7 @@ pub unsafe extern "C" fn polyplug_runtime_create_with_options(
             if !opts.config.is_null() {
                 // SAFETY: opts.config is non-null and points to a valid RuntimeConfigC per ABI contract.
                 let config_c: RuntimeConfigC = unsafe { *opts.config };
-                let runtime_config: RuntimeConfig = config_c.into_runtime_config();
+                let runtime_config: RuntimeConfigC = config_c.into_runtime_config();
                 builder = builder.config(runtime_config);
             }
 
@@ -830,8 +772,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_concurrent_operations() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -993,8 +935,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_parallel_mixed_ops() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
         let success_count: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));

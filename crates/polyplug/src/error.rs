@@ -1,7 +1,8 @@
 //! Error — error type hierarchy for polyplug.
 
-use crate::version::Version;
 use thiserror::Error;
+
+use polyplug_abi::types::Version;
 
 /// Top-level runtime error — this is what the public API returns.
 #[derive(Debug, Error)]
@@ -53,9 +54,6 @@ pub enum RuntimeError {
     #[error("hot-reload is disabled in runtime config")]
     HotReloadDisabled,
 }
-
-/// Convenience alias — the public API surface uses this name.
-pub type PolyplugError = RuntimeError;
 
 /// Errors from the bundle loading phase.
 #[derive(Debug, Error)]
@@ -267,15 +265,15 @@ pub enum HostContractError {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::{
-        AllocatorError, GraphError, HostContractError, LoaderError, PolyplugError, RegistryError,
+        AllocatorError, GraphError, HostContractError, LoaderError, RuntimeError, RegistryError,
     };
-    use crate::version::Version;
+    use polyplug_abi::types::Version;
 
     // --- PolyplugError / RuntimeError ---
 
     #[test]
     fn polyplug_error_undeclared_dependency_display() {
-        let err: PolyplugError = PolyplugError::UndeclaredDependency {
+        let err: RuntimeError = RuntimeError::UndeclaredDependency {
             bundle_id: 0xDEAD_BEEF_0000_0001,
             contract_id: 0xCAFE_BABE_0000_0002,
         };
@@ -298,7 +296,7 @@ mod tests {
 
     #[test]
     fn polyplug_error_dependency_not_found_display() {
-        let err: PolyplugError = PolyplugError::DependencyNotFound {
+        let err: RuntimeError = RuntimeError::DependencyNotFound {
             contract_name: "my_contract".to_owned(),
             min_version: 3,
         };
@@ -310,7 +308,7 @@ mod tests {
 
     #[test]
     fn polyplug_error_bundle_not_found_display() {
-        let err: PolyplugError = PolyplugError::BundleNotFound {
+        let err: RuntimeError = RuntimeError::BundleNotFound {
             bundle_name: "audio_plugin".to_owned(),
             contract_name: "audio_contract".to_owned(),
         };
@@ -322,7 +320,7 @@ mod tests {
 
     #[test]
     fn polyplug_error_reload_failed_display() {
-        let err: PolyplugError = PolyplugError::ReloadFailed {
+        let err: RuntimeError = RuntimeError::ReloadFailed {
             bundle: "my_bundle".to_owned(),
             reason: "library locked".to_owned(),
         };
@@ -334,7 +332,7 @@ mod tests {
 
     #[test]
     fn polyplug_error_quiescence_timeout_display() {
-        let err: PolyplugError = PolyplugError::QuiescenceTimeout {
+        let err: RuntimeError = RuntimeError::QuiescenceTimeout {
             bundle: "slow_bundle".to_owned(),
         };
         let s: String = err.to_string();
@@ -344,7 +342,7 @@ mod tests {
 
     #[test]
     fn polyplug_error_invalid_utf8_display() {
-        let err: PolyplugError = PolyplugError::InvalidUtf8 {
+        let err: RuntimeError = RuntimeError::InvalidUtf8 {
             context: "plugin_name_field".to_owned(),
         };
         let s: String = err.to_string();
@@ -436,8 +434,8 @@ mod tests {
     fn loader_error_version_mismatch_display() {
         let err: LoaderError = LoaderError::VersionMismatch {
             contract: "audio_v2".to_owned(),
-            required: Version { major: 2, minor: 0 },
-            found: Version { major: 1, minor: 9 },
+            required: Version { major: 2, minor: 0, patch: 0 },
+            found: Version { major: 1, minor: 9, patch: 0 },
         };
         let s: String = err.to_string();
         assert!(s.contains("version mismatch"), "got: {s}");

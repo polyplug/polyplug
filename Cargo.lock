@@ -1561,7 +1561,6 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "criterion",
- "libloading",
  "notify",
  "petgraph",
  "polyplug_abi",
@@ -1650,6 +1649,7 @@ dependencies = [
 name = "polyplug_native"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "polyplug",
  "polyplug_abi",
 ]

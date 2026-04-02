@@ -1,10 +1,7 @@
 use core::ffi::c_void;
 
 use crate::{
-    plugin::{
-        plugin_descriptor::PluginDescriptor, plugin_handle::PluginHandle,
-        plugin_interface::PluginInterface,
-    },
+    plugin::{PluginDescriptor, PluginHandle, PluginInterface},
     types::AbiError,
 };
 

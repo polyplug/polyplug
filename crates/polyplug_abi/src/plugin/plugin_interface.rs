@@ -1,3 +1,5 @@
+use polyplug_utils::PluginContractId;
+
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
     types::Version,
@@ -14,7 +16,7 @@ use crate::{
 #[repr(C)]
 pub struct PluginInterface {
     /// FNV-1a hash of "contract_name@major_version".
-    pub contract_id: u64,
+    pub contract_id: PluginContractId,
     /// Contract version.
     pub contract_version: Version,
     /// Dispatch mechanism type (Native or VirtualMachine).

@@ -11,7 +11,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
@@ -34,7 +34,7 @@ const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 // ─── Thread-local registry ────────────────────────────────────────────────────
 
 std::thread_local! {
-    static STRESS_REGISTRY: RefCell<Registry> = RefCell::new(Registry::new());
+    static STRESS_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
     static TLS_TRACKING_ALLOC: RefCell<unsafe extern "C" fn(usize, usize) -> *mut u8> =
         RefCell::new(polyplug_host_alloc);
     static TLS_TRACKING_FREE: RefCell<unsafe extern "C" fn(*mut u8, usize, usize)> =
@@ -194,7 +194,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, Registry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
     });
@@ -234,7 +234,7 @@ fn load_memory_plugin() -> libloading::Library {
 fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInterface {
     // Reset registry before each use.
     STRESS_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature.

@@ -9,58 +9,33 @@
 //! This ensures code pages remain mapped for the entire lifetime of the `Registry`
 //! (i.e., the `Runtime`). Dropping a `Library` calls `dlclose()` which unmaps
 //! plugin code — any vtable fn pointer into those pages would become dangling.
-pub mod manifest;
-pub mod scanner;
+
+mod manifest;
+mod bundle_loader;
+mod loaded_bundle;
+
+pub use loaded_bundle::LoadedBundle;
+
+pub use manifest::{ManifestData, ManifestDependency, RawManifestDependency};
+pub use bundle_loader::BundleLoader;
+use polyplug_abi::plugin::PluginContext;
+use polyplug_abi::types::AbiErrorCode;
+use polyplug_abi::types::StringView;
+use polyplug_utils::PluginContractId;
 
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::error::LoaderError;
-use crate::registry::Registry;
-use crate::runtime::HostContext;
-use crate::runtime::Runtime;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
+use polyplug_abi::types::AbiError;
 use polyplug_abi::HostVTable;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 use std::sync::Arc;
 
+use crate::error::LoaderError;
+use crate::plugin_registry::PluginRegistry;
+use crate::runtime::HostContext;
+use crate::runtime::Runtime;
 use crate::error::PolyplugError;
-use crate::loader::manifest::ManifestData;
-use crate::loader::manifest::RawManifestDependency;
-
-/// Trait implemented by all bundle loaders (native and adapter crates).
-///
-/// The runtime dispatches each bundle to the loader whose `runtime_name()`
-/// matches the `runtime` field in the bundle's `manifest.toml`.
-pub trait BundleLoader: Send + Sync {
-    /// The runtime identifier this loader handles.
-    ///
-    /// Must match the `runtime` field in `manifest.toml` exactly (case-sensitive).
-    /// The built-in native loader returns `"native"`.
-    fn runtime_name(&self) -> &'static str;
-
-    /// All runtime identifiers this loader handles.
-    ///
-    /// Defaults to a single-element vec containing `runtime_name()`.
-    /// Override this method if your loader handles multiple runtime names.
-    /// `JsLoader` does NOT need to override this — each `JsLoader` instance handles exactly one name.
-    fn runtime_names(&self) -> Vec<String> {
-        vec![self.runtime_name().to_owned()]
-    }
-
-    /// Load a bundle given its manifest.
-    ///
-    /// The manifest contains all metadata needed to load the bundle:
-    /// - `manifest.path` - the bundle directory
-    /// - `manifest.file` - the plugin file (relative to bundle directory)
-    /// - `manifest.id` - the bundle ID
-    ///
-    /// # Errors
-    /// Returns `Err(PolyplugError::...)` on any failure. For stub loaders,
-    /// returns `Err(PolyplugError::Loader(LoaderError::JsRuntimePanic { .. }))`.
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError>;
-}
 
 /// The built-in loader for native (Rust/C++/NativeAOT) bundles.
 ///
@@ -70,14 +45,14 @@ pub trait BundleLoader: Send + Sync {
 /// The `Library` handle for each loaded bundle is stored in the injected `Registry`,
 /// not in this struct, to guarantee it outlives all vtable function pointers.
 pub(crate) struct NativeBundleLoader {
-    registry: Arc<Registry>,
+    registry: Arc<PluginRegistry>,
     host_vtable: &'static HostVTable,
 }
 
 impl NativeBundleLoader {
     /// Create a new `NativeBundleLoader` with the given registry and host vtable.
     pub(crate) fn new(
-        registry: Arc<Registry>,
+        registry: Arc<PluginRegistry>,
         host_vtable: &'static HostVTable,
     ) -> NativeBundleLoader {
         NativeBundleLoader {
@@ -117,70 +92,6 @@ impl BundleLoader for NativeBundleLoader {
     }
 }
 
-/// A successfully loaded bundle.
-//
-//  The `library` field is intentionally never dropped — it lives for the entire
-//  process lifetime. All vtable function pointers extracted from it are 'static.
-pub struct LoadedBundle {
-    pub path: PathBuf,
-    /// libloading handle — intentionally leaked (never dropped).
-    pub library: Box<libloading::Library>,
-}
-
-/// Read and parse `manifest.toml` from a bundle directory.
-///
-/// `bundle_dir` must be a path to a directory containing `manifest.toml`.
-///
-/// # Errors
-/// - `BundleNotADirectory`: if `bundle_dir` is not a directory
-/// - `ManifestParse`: if `manifest.toml` is not found or is malformed
-/// - `ManifestMissingFile`: if the `file` field is absent or empty
-pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
-    if !bundle_dir.is_dir() {
-        return Err(LoaderError::BundleNotADirectory {
-            path: bundle_dir.to_path_buf(),
-        });
-    }
-
-    let manifest_path: PathBuf = bundle_dir.join("manifest.toml");
-
-    if !manifest_path.exists() {
-        return Err(LoaderError::ManifestParse {
-            path: manifest_path.to_string_lossy().into_owned(),
-            reason: "manifest.toml not found in bundle directory".to_owned(),
-        });
-    }
-
-    let contents: String =
-        std::fs::read_to_string(&manifest_path).map_err(|_e: std::io::Error| {
-            LoaderError::ManifestParse {
-                path: manifest_path.to_string_lossy().into_owned(),
-                reason: "failed to read manifest file".to_owned(),
-            }
-        })?;
-
-    let mut data: ManifestData =
-        ManifestData::parse_from_str(&contents).map_err(|e| LoaderError::ManifestParse {
-            path: manifest_path.to_string_lossy().into_owned(),
-            reason: match e {
-                LoaderError::ManifestParse { reason, .. } => reason,
-                _ => e.to_string(),
-            },
-        })?;
-
-    let trimmed: &str = data.runtime.trim();
-    if trimmed.is_empty() {
-        return Err(LoaderError::ManifestParse {
-            path: manifest_path.to_string_lossy().into_owned(),
-            reason: "runtime field cannot be empty".to_owned(),
-        });
-    }
-    data.runtime = trimmed.to_owned();
-    data.validate_file()?;
-    data.path = bundle_dir.to_path_buf();
-    Ok(data)
-}
-
 /// Load a single native bundle.
 ///
 /// # Steps
@@ -201,7 +112,7 @@ pub fn parse_manifest(bundle_dir: &Path) -> Result<ManifestData, LoaderError> {
 pub fn load_bundle(
     path: &Path,
     manifest: &ManifestData,
-    registry: &Registry,
+    registry: &PluginRegistry,
     host_vtable: &'static HostVTable,
     runtime: &Runtime,
 ) -> Result<(), LoaderError> {
@@ -216,7 +127,7 @@ pub fn load_bundle(
             if dep.contract_id != 0 {
                 dep.contract_id
             } else {
-                polyplug_abi::contract_id(&dep.contract, 0)
+                PluginContractId::new(&dep.contract, 0)
             }
         })
         .collect::<Vec<u64>>();
@@ -296,6 +207,7 @@ pub fn load_bundle(
                     symbol: "polyplug_init".to_owned(),
                 })?
         };
+
         // SAFETY: Deref of Symbol<F> where F is a fn pointer type (Copy).
         // This copies the function address out of the Symbol without cloning Library.
         *sym
@@ -310,11 +222,11 @@ pub fn load_bundle(
     registry.push_library(library);
 
     // Step 4: Create PluginContext with bundle path, host ABI version, and bundle_id
-    let bundle_path_sv: polyplug_abi::StringView = polyplug_abi::StringView {
+    let bundle_path_sv = StringView {
         ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
         len: bundle_dir.as_os_str().as_encoded_bytes().len(),
     };
-    let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+    let ctx = PluginContext {
         bundle_path: bundle_path_sv,
         host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: manifest.id,
@@ -345,7 +257,7 @@ pub fn load_bundle(
         });
     }
 
-    if init_result.code != ABI_OK {
+    if init_result.code != AbiErrorCode::Ok {
         // Step 7: On init failure: the library is already stored in registry.loaded_libraries
         // and will NOT be unloaded. The never-unload invariant means we never call
         // dlclose on a library once any code from it has run. Failed slots remain
@@ -373,18 +285,3 @@ pub fn load_bundle(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-    use super::*;
-
-    #[test]
-    fn parse_manifest_requires_directory() {
-        let result: Result<ManifestData, LoaderError> =
-            parse_manifest(Path::new("/nonexistent/path"));
-        match result {
-            Err(LoaderError::BundleNotADirectory { .. }) => {}
-            _ => panic!("expected BundleNotADirectory error"),
-        }
-    }
-}

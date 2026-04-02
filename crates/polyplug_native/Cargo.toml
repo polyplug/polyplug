@@ -1,6 +1,6 @@
 [package]
 name = "polyplug_native"
-description = "Native loader for polyplug - loads C ABI plugins (.so/.dll)"
+description = "Native loader for polyplug - loads C ABI plugins (.so/.dll/.dylib)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,8 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 polyplug = { workspace = true }
 polyplug_abi = { workspace = true }
+
+libloading = { workspace = true }
 
 [lints]
 workspace = true

@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use polyplug::ReloadPhase;
 use polyplug::error::PolyplugError;
-use polyplug::registry::Registry;
-use polyplug::registry::VTableSlot;
+use polyplug::plugin_registry::PluginRegistry;
+use polyplug::plugin_registry::VTableSlot;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
 
@@ -109,7 +109,7 @@ fn make_hot_reload_runtime() -> Runtime {
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let guard: polyplug::registry::PluginGuard = rt.resolve_plugin(handle).ok()?;
+    let guard: polyplug::plugin_registry::PluginGuard = rt.resolve_plugin(handle).ok()?;
     let vtable_ptr: *const PluginInterface = guard.vtable();
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable_ptr).dispatch.native.functions;
@@ -180,7 +180,7 @@ fn stress_memory_vtable_slot_released_after_reload() {
     const CYCLES: usize = 50_usize;
     const QUIESCENCE_MS: u64 = 500_u64;
 
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
         name: polyplug_abi::StringView::from_static(b"stress-mem-plugin"),
@@ -242,7 +242,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
     const READER_HOLD_MS: u64 = 3_u64;
     const QUIESCENCE_TIMEOUT_SECS: u64 = 10_u64;
 
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
     let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
         name: polyplug_abi::StringView::from_static(b"quiescence-load-plugin"),
@@ -270,7 +270,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
     let mut reader_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(READER_THREADS);
 
     for _thread_idx in 0_usize..READER_THREADS {
-        let reg_clone: Arc<Registry> = Arc::clone(&registry);
+        let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let stop_clone: Arc<core::sync::atomic::AtomicBool> = Arc::clone(&stop_flag);
 
         let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -281,7 +281,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
                 > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64, 0_u32);
                 if let Ok(resolved_handle) = find_result {
                     let guard_result: Result<
-                        polyplug::registry::PluginGuard,
+                        polyplug::plugin_registry::PluginGuard,
                         polyplug::error::RegistryError,
                     > = reg_clone.resolve_guard(resolved_handle);
                     if let Ok(guard) = guard_result {
@@ -368,7 +368,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
 
                 if let Ok(plugin_handle) = handle_result {
                     let guard_result: Result<
-                        polyplug::registry::PluginGuard,
+                        polyplug::plugin_registry::PluginGuard,
                         polyplug::error::RegistryError,
                     > = rt_clone.resolve_plugin(plugin_handle);
 

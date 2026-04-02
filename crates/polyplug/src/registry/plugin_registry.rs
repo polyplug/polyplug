@@ -9,8 +9,6 @@
 //! find_all_by_contract(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice.
 
-use core::cell::Cell;
-use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -19,47 +17,19 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use arc_swap::ArcSwap;
+use polyplug_abi::plugin::{PluginDescriptor, PluginHandle, PluginInterface};
+use polyplug_utils::{BundleId, PluginContractId};
 
 use crate::error::RegistryError;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::string_view_from_static;
 
-/// A `Send + Sync` wrapper around a raw interface pointer.
-/// The pointer is guaranteed to point to `'static` data that is never mutated after registration.
-pub struct VTableSlot(pub *const PluginInterface);
-
-// SAFETY: *const PluginInterface points to 'static plugin data. Once registered, the data is never
-// mutated. The pointer remains valid for the lifetime of the loaded library. Aliasing is safe
-// because all access is read-only through PluginGuard.
-unsafe impl Send for VTableSlot {}
-// SAFETY: Same reasoning as Send above — read-only access to 'static data.
-unsafe impl Sync for VTableSlot {}
-
-/// An Arc-backed guard that keeps a vtable slot alive.
-/// This is Rust-only and never crosses the C ABI boundary.
-/// Intentionally NOT Send: the guard must be used on the same thread that called
-/// resolve_guard(), or re-resolved per-call from a new thread.
-pub struct PluginGuard {
-    pub(crate) slot: Arc<VTableSlot>,
-    /// Opt-out of Send. Cell<()> is !Send, so PluginGuard becomes !Send automatically.
-    _not_send: PhantomData<Cell<()>>,
-}
-
-impl PluginGuard {
-    /// Construct a new guard wrapping the given slot.
-    pub(crate) fn new(slot: Arc<VTableSlot>) -> Self {
-        Self {
-            slot,
-            _not_send: PhantomData,
-        }
-    }
-
-    /// Returns the raw interface pointer. The pointer is valid as long as this guard is alive.
-    pub fn vtable(&self) -> *const PluginInterface {
-        self.slot.0
-    }
+/// Live plugin registration data.
+pub(crate) struct RegistryEntry {
+    /// Plugin metadata — used by other crates for introspection.
+    pub descriptor: PluginDescriptor,
+    /// Full contract name string for collision detection.
+    pub contract_name: String,
+    /// The bundle this registration originates from.
+    pub bundle_id: BundleId,
 }
 
 /// A single slot in the registry's storage array.
@@ -76,17 +46,6 @@ pub(crate) struct RegistrySlot {
     pub vtable: Option<ArcSwap<VTableSlot>>,
 }
 
-/// Live plugin registration data.
-pub(crate) struct RegistryEntry {
-    /// Plugin metadata — used by other crates for introspection.
-    #[allow(dead_code)]
-    pub descriptor: PluginDescriptor,
-    /// Full contract name string for collision detection.
-    pub contract_name: String,
-    /// The bundle this registration originates from.
-    pub bundle_id: u64,
-}
-
 /// Internal data protected by a single RwLock.
 ///
 /// This structure groups all mutable registry state together to enable
@@ -94,12 +53,12 @@ pub(crate) struct RegistryEntry {
 struct RegistryData {
     /// Slot storage — each slot holds a plugin registration or is vacant.
     slots: Vec<RegistrySlot>,
-    /// Maps contract_id (FNV-1a u64) to the Vec of registered slot indices (multi-impl support).
-    contract_index: HashMap<u64, Vec<u32>>,
+    /// Maps contract_id to the Vec of registered slot indices (multi-impl support).
+    contract_index: HashMap<PluginContractId, Vec<u32>>,
     /// Maps bundle_id to the first slot index registered for that bundle.
-    bundle_index: HashMap<u64, u32>,
+    bundle_index: HashMap<BundleId, u32>,
     /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
-    declared_deps: HashMap<u64, HashSet<u64>>,
+    declared_deps: HashMap<BundleId, HashSet<PluginContractId>>,
 }
 
 impl RegistryData {
@@ -119,7 +78,7 @@ impl RegistryData {
 //  Uses a single RwLock to protect all mutable state, reducing lock acquisition
 //  overhead on the hot path. Writes (registration/unload) are rare, so contention
 //  is minimal. Reads (find, resolve) take a read guard and are concurrent.
-pub struct Registry {
+pub struct PluginRegistry {
     /// Library handles for all loaded native bundles.
     /// Declared FIRST so they drop LAST (Rust drops fields in reverse order).
     /// This ensures vtable pointers in `slots` are never dangling during drop.
@@ -128,10 +87,10 @@ pub struct Registry {
     data: RwLock<RegistryData>,
 }
 
-impl Registry {
+impl PluginRegistry {
     /// Create an empty registry.
-    pub fn new() -> Registry {
-        Registry {
+    pub fn new() -> PluginRegistry {
+        PluginRegistry {
             loaded_libraries: Mutex::new(Vec::new()),
             data: RwLock::new(RegistryData::new()),
         }
@@ -252,15 +211,15 @@ impl Registry {
     /// Prevents undeclared dependency resolution at runtime.
     pub fn declare_deps(
         &self,
-        bundle_id: u64,
-        contract_ids: Vec<u64>,
+        bundle_id: BundleId,
+        contract_ids: Vec<PluginContractId>,
     ) -> Result<(), RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let set: &mut HashSet<u64> = data.declared_deps.entry(bundle_id).or_default();
+        let set: &mut HashSet<PluginContractId> = data.declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
             set.insert(cid);
         }
@@ -648,9 +607,9 @@ impl Registry {
     }
 }
 
-impl Default for Registry {
-    fn default() -> Registry {
-        Registry::new()
+impl Default for PluginRegistry {
+    fn default() -> PluginRegistry {
+        PluginRegistry::new()
     }
 }
 
@@ -689,7 +648,7 @@ mod tests {
 
     #[test]
     fn register_and_find() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "image.decode");
         // contract_id comes from MOCK_INTERFACE.contract_id (0x1234_5678_9ABC_DEF0)
         // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
@@ -712,7 +671,7 @@ mod tests {
 
     #[test]
     fn stale_handle_detection() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "audio.decode");
 
         // We need an interface whose contract_id differs from MOCK_INTERFACE to avoid collision
@@ -743,7 +702,7 @@ mod tests {
 
     #[test]
     fn duplicate_provider_allowed() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "image.decode");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "image.decode");
         // Same bundle_id can register same contract multiple times (multi-impl support)
@@ -768,7 +727,7 @@ mod tests {
 
     #[test]
     fn collision_detection() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "contract.a");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
         // Different bundle_ids: collision is about hash collision on contract_id (same id, different name)
@@ -795,7 +754,7 @@ mod tests {
 
     #[test]
     fn resolve_returns_interface_pointer() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "test.contract");
         // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
@@ -844,7 +803,7 @@ mod tests {
             },
         };
 
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let d1: PluginDescriptor = make_descriptor("bundle_a_plugin", "multi.contract");
         let d2: PluginDescriptor = make_descriptor("bundle_b_plugin", "multi.contract");
 
@@ -872,7 +831,7 @@ mod tests {
 
     #[test]
     fn declare_deps_and_query() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let bundle_id: u64 = 42u64;
         let contract_a: u64 = 0x1111_2222_3333_4444;
         let contract_b: u64 = 0x5555_6666_7777_8888;
@@ -905,7 +864,7 @@ mod tests {
             },
         };
 
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.contract");
         // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
@@ -968,7 +927,7 @@ mod tests {
             },
         };
 
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let bundle_id: u64 = 999u64;
         let d1: PluginDescriptor = make_descriptor("bundle_plugin_x", "bundle.contract.x");
         let d2: PluginDescriptor = make_descriptor("bundle_plugin_y", "bundle.contract.y");
@@ -989,7 +948,7 @@ mod tests {
 
     #[test]
     fn concurrent_generation_reads() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor =
             make_descriptor("concurrent_test", "concurrent.contract");
         // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
@@ -1023,7 +982,7 @@ mod tests {
 
     #[test]
     fn generation_increment_during_swap() {
-        let registry: Registry = Registry::new();
+        let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("swap_test", "swap.test.contract");
         // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {

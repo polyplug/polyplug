@@ -7,7 +7,7 @@
 #![allow(clippy::expect_used)]
 
 use polyplug::error::PolyplugError;
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
 
@@ -51,13 +51,13 @@ fn test_quiescence_timeout() {
     let generation: u32 = handle.generation;
 
     // Clone registry Arc for the background thread (Arc<Registry> is Send).
-    let registry_arc: std::sync::Arc<Registry> = std::sync::Arc::clone(rt.registry());
+    let registry_arc: std::sync::Arc<PluginRegistry> = std::sync::Arc::clone(rt.registry());
 
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         // Reconstruct handle on this thread.
         let h: polyplug_abi::PluginHandle = polyplug_abi::PluginHandle { index, generation };
         // Resolve guard HERE — PluginGuard is !Send, must stay on this thread.
-        let guard: polyplug::registry::PluginGuard = registry_arc
+        let guard: polyplug::plugin_registry::PluginGuard = registry_arc
             .resolve_guard(h)
             .expect("resolve_guard must succeed for loaded plugin");
         // Hold for 7s — longer than the 5s QUIESCENCE_TIMEOUT.

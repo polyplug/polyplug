@@ -13,17 +13,18 @@ use std::time::Instant;
 
 use crate::error::PolyplugError;
 use crate::loader::manifest::ManifestData;
-use crate::registry::VTableSlot;
+use crate::plugin_registry::VTableSlot;
 use crate::runtime::HostContext;
 use crate::runtime::Runtime;
 use polyplug_abi::abi_error_ok;
+use polyplug_abi::plugin::PluginInterface;
 
 const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5_u64);
 const MAX_CASCADE_DEPTH: usize = 16_usize;
 
 /// A raw pointer wrapper for PluginInterface that implements Send and Sync.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct VTablePtr(pub *const polyplug_abi::PluginInterface);
+pub(crate) struct VTablePtr(pub *const PluginInterface);
 
 // SAFETY: VTablePtr wraps a raw pointer to a PluginInterface from a loaded library.
 // The vtable remains valid for the lifetime of the loaded library, which is managed

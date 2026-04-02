@@ -24,7 +24,7 @@
 
 use core::any::Any;
 
-use polyplug_abi::{AbiError, HostRuntime};
+use polyplug_abi::{RuntimeLanguage, types::AbiError};
 
 /// Errors from the host runtime bridge operations.
 #[derive(Debug, thiserror::Error)]
@@ -61,7 +61,7 @@ pub enum BridgeError {
 
     /// The bridge is not initialized or has been shut down.
     #[error("host runtime bridge not initialized for runtime={runtime:?}")]
-    BridgeNotInitialized { runtime: HostRuntime },
+    BridgeNotInitialized { runtime: RuntimeLanguage },
 }
 
 /// Trait that bridges between the polyplug runtime and VM-based hosts.
@@ -124,7 +124,7 @@ pub trait HostRuntimeBridge: Send + Sync {
     /// Returns the host runtime type this bridge supports.
     ///
     /// This identifies whether the bridge handles Python, Lua, JavaScript, or Rust.
-    fn runtime_type(&self) -> HostRuntime;
+    fn runtime_type(&self) -> RuntimeLanguage;
 
     /// Register a host contract implementation.
     ///
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn bridge_error_bridge_not_initialized_display() {
         let err: BridgeError = BridgeError::BridgeNotInitialized {
-            runtime: HostRuntime::Python,
+            runtime: RuntimeLanguage::Python,
         };
         let s: String = err.to_string();
         assert!(s.contains("not initialized"), "got: {s}");

@@ -14,7 +14,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::DispatchType;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
@@ -51,7 +51,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 // ─── Benchmark: resolve_guard with single slot ───────────────────────────────
 
 fn bench_registry_resolve_guard_single(c: &mut Criterion) {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_VTABLE is 'static, pointer is valid for Registry lifetime.
@@ -67,7 +67,7 @@ fn bench_registry_resolve_guard_single(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("resolve_guard", "single_slot"), |b| {
         b.iter(|| {
-            let result: Result<polyplug::registry::PluginGuard, _> =
+            let result: Result<polyplug::plugin_registry::PluginGuard, _> =
                 registry.resolve_guard(black_box(handle));
             let _ = black_box(result);
         });
@@ -79,7 +79,7 @@ fn bench_registry_resolve_guard_single(c: &mut Criterion) {
 // ─── Benchmark: resolve_guard with multiple slots ─────────────────────────────
 
 fn bench_registry_resolve_guard_multiple_slots(c: &mut Criterion) {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     // Use leaked Box to get 'static vtables
     let vtables: Vec<Box<PluginInterface>> = (0..100_u64)
@@ -132,7 +132,7 @@ fn bench_registry_resolve_guard_multiple_slots(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("resolve_guard", "100_slots"), |b| {
         b.iter(|| {
-            let result: Result<polyplug::registry::PluginGuard, _> =
+            let result: Result<polyplug::plugin_registry::PluginGuard, _> =
                 registry.resolve_guard(black_box(handle));
             let _ = black_box(result);
         });
@@ -144,7 +144,7 @@ fn bench_registry_resolve_guard_multiple_slots(c: &mut Criterion) {
 // ─── Benchmark: resolve_guard with stale handle ──────────────────────────────
 
 fn bench_registry_resolve_guard_stale(c: &mut Criterion) {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_VTABLE is 'static, pointer is valid for Registry lifetime.
@@ -165,7 +165,7 @@ fn bench_registry_resolve_guard_stale(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("resolve_guard", "stale_handle"), |b| {
         b.iter(|| {
-            let result: Result<polyplug::registry::PluginGuard, _> =
+            let result: Result<polyplug::plugin_registry::PluginGuard, _> =
                 registry.resolve_guard(black_box(stale_handle));
             let _ = black_box(result);
         });

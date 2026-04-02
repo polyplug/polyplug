@@ -2,15 +2,16 @@
 //!
 //! Type definitions are sourced from `abi.toml` in this crate's root.
 
-pub mod compatibility;
 pub mod contract_type;
 pub mod dispatch;
 pub mod ffi;
 pub mod host;
 pub mod plugin;
-pub mod runtime_language;
+mod runtime_language;
 pub mod tracking;
 pub mod types;
+
+pub use runtime_language::RuntimeLanguage;
 
 // ABI version sentinel — all bundles must export a function returning this value.
 pub const POLYPLUG_ABI_VERSION: u32 = 1;
@@ -25,6 +26,6 @@ mod tests {
     fn test_abi_error_ok() {
         let e: AbiError = AbiError::ok();
         assert!(e.is_ok());
-        assert_eq!(e.code, AbiErrorCode::Ok as u32);
+        assert_eq!(e.code, AbiErrorCode::Ok);
     }
 }

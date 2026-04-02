@@ -10,9 +10,9 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::PluginGuard;
-use polyplug::registry::Registry;
-use polyplug::registry::VTableSlot;
+use polyplug::plugin_registry::PluginGuard;
+use polyplug::plugin_registry::PluginRegistry;
+use polyplug::plugin_registry::VTableSlot;
 use polyplug_abi::{
     DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
     StringView,
@@ -271,7 +271,7 @@ fn run_quiescence_loop(old_arcs: &[Arc<VTableSlot>]) -> Result<(), ()> {
 
 #[test]
 fn stress_quiescence_no_contention() {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin", "quie.race.contract1");
 
     // SAFETY: VTABLE_RACE_1_V1 is a static reference valid for the test lifetime.
@@ -314,7 +314,7 @@ fn stress_quiescence_no_contention() {
 
 #[test]
 fn stress_quiescence_succeeds_after_guard_released() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin2", "quie.race.contract2");
 
     // SAFETY: VTABLE_RACE_2_V1 is a static reference valid for the test lifetime.
@@ -330,7 +330,7 @@ fn stress_quiescence_succeeds_after_guard_released() {
     };
 
     let (ready_tx, ready_rx): (Sender<()>, Receiver<()>) = std::sync::mpsc::channel();
-    let reg_clone: Arc<Registry> = Arc::clone(&registry);
+    let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
     let handle_for_thread: PluginHandle = handle;
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         let guard: PluginGuard = reg_clone
@@ -374,7 +374,7 @@ fn stress_quiescence_succeeds_after_guard_released() {
 
 #[test]
 fn stress_quiescence_timeout_fires() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor = make_descriptor("qtest_plugin3", "quie.race.contract3");
 
     // SAFETY: VTABLE_TIMEOUT_V1 is a static reference valid for the test lifetime.
@@ -390,7 +390,7 @@ fn stress_quiescence_timeout_fires() {
     };
 
     let (ready_tx, ready_rx): (Sender<()>, Receiver<()>) = std::sync::mpsc::channel();
-    let reg_clone: Arc<Registry> = Arc::clone(&registry);
+    let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
     let handle_for_thread: PluginHandle = handle;
     let hold_thread: std::thread::JoinHandle<()> = std::thread::spawn(move || {
         let guard: PluginGuard = reg_clone
@@ -432,7 +432,7 @@ fn stress_quiescence_timeout_fires() {
 
 #[test]
 fn stress_quiescence_multiple_arcs_all_must_quiesce() {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     // SAFETY: VTABLE_SLOT0_V1 is a static reference valid for the test lifetime.
     let h0: PluginHandle = unsafe {
@@ -514,7 +514,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
     const SWAP_ROUNDS: usize = 20_usize;
     const HOLD_MILLIS: u64 = 5_u64;
 
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
     // SAFETY: VTABLE_CONC_A is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
@@ -533,7 +533,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
         Vec::with_capacity(RESOLVER_THREADS);
 
     for _thread_idx in 0_usize..RESOLVER_THREADS {
-        let reg_clone: Arc<Registry> = Arc::clone(&registry);
+        let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
         let resolver_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
@@ -580,7 +580,7 @@ fn stress_quiescence_concurrent_resolvers_and_swaps() {
 
 #[test]
 fn stress_quiescence_waits_for_last_clone() {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     // SAFETY: VTABLE_LAST_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {

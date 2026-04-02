@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::PluginGuard;
-use polyplug::registry::Registry;
-use polyplug::registry::VTableSlot;
+use polyplug::plugin_registry::PluginGuard;
+use polyplug::plugin_registry::PluginRegistry;
+use polyplug::plugin_registry::VTableSlot;
 use polyplug_abi::{
     DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
     StringView,
@@ -49,7 +49,7 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
     static VTABLE_B: PluginInterface = make_interface!(0xEEEE_0000_0000_0002_u64, 2_u32 << 16);
     static VTABLE_C: PluginInterface = make_interface!(0xEEEE_0000_0000_0003_u64, 3_u32 << 16);
 
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor_a: PluginDescriptor = make_descriptor("plugin_a", "contract.a");
     let descriptor_b: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
@@ -118,7 +118,7 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
 fn resolve_guard_vacant_slot_returns_stale_handle() {
     static VTABLE: PluginInterface = make_interface!(0xEEEE_0000_0000_0010_u64, 1_u32 << 16);
 
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor: PluginDescriptor = make_descriptor("plugin_single", "contract.single");
     // SAFETY: VTABLE is 'static, pointer is valid for Registry lifetime.
@@ -216,7 +216,7 @@ static CONCURRENT_VTABLES: [PluginInterface; CONCURRENT_THREADS] = [
 
 #[test]
 fn resolve_guard_concurrent_access_thread_safety() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(CONCURRENT_THREADS));
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> =
         Vec::with_capacity(CONCURRENT_THREADS);
@@ -240,7 +240,7 @@ fn resolve_guard_concurrent_access_thread_safety() {
     }
 
     for idx in 0_usize..CONCURRENT_THREADS {
-        let registry_clone: Arc<Registry> = Arc::clone(&registry);
+        let registry_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let barrier_clone: Arc<Barrier> = Arc::clone(&barrier);
         let handle: PluginHandle = handles[idx];
         let expected_contract_id: u64 = CONCURRENT_CONTRACT_IDS[idx];
@@ -282,7 +282,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
     static VTABLE_IMPL_B: PluginInterface = make_interface!(MULTI_CONTRACT_ID, 2_u32 << 16);
     static VTABLE_IMPL_C: PluginInterface = make_interface!(MULTI_CONTRACT_ID, 3_u32 << 16);
 
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor_a: PluginDescriptor = make_descriptor("impl_a", "multi.contract");
     let descriptor_b: PluginDescriptor = make_descriptor("impl_b", "multi.contract");
@@ -385,7 +385,7 @@ fn swap_vtable_during_active_resolve_guard() {
     static VTABLE_V1: PluginInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
     static VTABLE_V2: PluginInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
 
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
     // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.

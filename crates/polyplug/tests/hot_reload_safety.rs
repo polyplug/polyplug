@@ -10,7 +10,7 @@
 use core::time::Duration;
 use std::sync::Arc;
 
-use polyplug::registry::{PluginGuard, Registry, VTableSlot};
+use polyplug::plugin_registry::{PluginGuard, PluginRegistry, VTableSlot};
 use polyplug_abi::{
     DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
     StringView,
@@ -65,7 +65,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 /// alive until the guard is dropped.
 #[test]
 fn test_vtable_swap_while_call_in_progress() {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("hot_reload_plugin", "hot.reload.contract");
 
     // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.
@@ -133,7 +133,7 @@ fn test_vtable_swap_while_call_in_progress() {
 /// old handles become stale (return StaleHandle error) after the swap.
 #[test]
 fn test_generation_increment_on_swap() {
-    let registry: Registry = Registry::new();
+    let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("gen_test_plugin", "gen.test.contract");
 
     // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.
@@ -227,7 +227,7 @@ fn test_generation_increment_on_swap() {
 /// is only truly released when strong_count drops to 1 (only the caller's Arc).
 #[test]
 fn test_arc_reference_count_during_quiescence() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor = make_descriptor("quiescence_plugin", "quiescence.contract");
 
     // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.
@@ -243,7 +243,7 @@ fn test_arc_reference_count_during_quiescence() {
 
     // Spawn a background thread that holds a guard for a duration.
     // This simulates an in-flight call that takes time to complete.
-    let registry_clone: Arc<Registry> = Arc::clone(&registry);
+    let registry_clone: Arc<PluginRegistry> = Arc::clone(&registry);
     let handle_for_thread: PluginHandle = PluginHandle {
         index: handle.index,
         generation: handle.generation,
@@ -317,7 +317,7 @@ fn test_arc_reference_count_during_quiescence() {
 /// and the Arc is only released when ALL guards are dropped.
 #[test]
 fn test_multiple_guards_keep_arc_alive() {
-    let registry: Arc<Registry> = Arc::new(Registry::new());
+    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor =
         make_descriptor("multi_guard_plugin", "multi.guard.contract");
 
@@ -337,7 +337,7 @@ fn test_multiple_guards_keep_arc_alive() {
 
     // Spawn multiple threads, each holding a guard.
     for _ in 0_usize..NUM_GUARDS {
-        let registry_clone: Arc<Registry> = Arc::clone(&registry);
+        let registry_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let handle_for_thread: PluginHandle = PluginHandle {
             index: handle.index,
             generation: handle.generation,

@@ -12,7 +12,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::Registry;
+use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::Buffer;
@@ -49,7 +49,7 @@ struct FillArgs {
 // ─── Thread-local registry and captured vtable state ─────────────────────────
 
 thread_local! {
-    static BENCH_REGISTRY: RefCell<Registry> = RefCell::new(Registry::new());
+    static BENCH_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
     static LAST_VTABLE: core::cell::Cell<*const PluginInterface> = const { core::cell::Cell::new(core::ptr::null()) };
     static LAST_CONTRACT_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
     static RT_CTX: core::cell::Cell<*mut core::ffi::c_void> = const { core::cell::Cell::new(core::ptr::null_mut()) };
@@ -291,7 +291,7 @@ fn get_vtable_fn(fn_id: usize) -> unsafe extern "C" fn(*const (), *mut ()) -> Ab
 fn bench_dispatch_noop(c: &mut Criterion) {
     // Reset registry for a clean slate.
     BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
@@ -330,7 +330,7 @@ fn bench_dispatch_noop(c: &mut Criterion) {
 fn bench_dispatch_buffer_arg(c: &mut Criterion) {
     // Reset registry for a clean slate.
     BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     let _library: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
@@ -387,7 +387,7 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
 fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
     // Reset registry for a clean slate.
     BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
@@ -433,7 +433,7 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
 fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     // Reset registry for a clean slate.
     BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = Registry::new();
+        *cell.borrow_mut() = PluginRegistry::new();
     });
 
     // Load memory_plugin into BENCH_REGISTRY so find_by_contract can locate it.
