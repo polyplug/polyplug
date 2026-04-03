@@ -2,19 +2,17 @@
 
 pub mod config;
 pub(crate) mod context;
-pub mod error;
 pub mod ffi;
 pub mod version;
 pub use config::DotnetConfig;
 pub use config::HostfxrLocation;
-pub use error::DotnetLoaderError;
 
 use std::path::Path;
 
 use netcorehost::pdcstring::PdCString;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
@@ -38,22 +36,22 @@ impl DotnetLoader {
 pub(crate) fn check_version_compatibility(
     tfm: &str,
     min_framework: &str,
-) -> Result<(), PolyplugError> {
+) -> Result<(), RuntimeError> {
     if tfm.is_empty() {
         return Ok(());
     }
     let req_str: &str = min_framework.strip_prefix("net").unwrap_or(min_framework);
     let mut req_parts = req_str.split('.');
     let req_major_str: &str = req_parts.next().ok_or_else(|| {
-        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
-            tfm: min_framework.to_owned(),
-            reason: "missing major version".to_owned(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: min_framework.to_owned(),
+            error: format!("invalid framework version '{}': missing major version", min_framework),
         })
     })?;
     let required_major: u32 = req_major_str.parse().map_err(|_| {
-        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
-            tfm: min_framework.to_owned(),
-            reason: format!("invalid major version: {req_major_str}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: min_framework.to_owned(),
+            error: format!("invalid framework version '{}': invalid major version '{}'", min_framework, req_major_str),
         })
     })?;
     // Lenient parsing: non-numeric minor version components are treated as 0.
@@ -64,15 +62,15 @@ pub(crate) fn check_version_compatibility(
     let found_ver: &str = tfm.strip_prefix(".NETCoreApp,Version=v").unwrap_or(tfm);
     let mut found_parts = found_ver.split('.');
     let found_major_str: &str = found_parts.next().ok_or_else(|| {
-        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
-            tfm: tfm.to_owned(),
-            reason: "missing major version".to_owned(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: tfm.to_owned(),
+            error: format!("invalid framework version '{}': missing major version", tfm),
         })
     })?;
     let found_major: u32 = found_major_str.parse().map_err(|_| {
-        PolyplugError::Loader(LoaderError::InvalidFrameworkVersion {
-            tfm: tfm.to_owned(),
-            reason: format!("invalid major version: {found_major_str}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: tfm.to_owned(),
+            error: format!("invalid framework version '{}': invalid major version '{}'", tfm, found_major_str),
         })
     })?;
     // Lenient parsing: non-numeric minor version components are treated as 0.
@@ -81,9 +79,9 @@ pub(crate) fn check_version_compatibility(
         .map(|s: &str| s.parse::<u32>().unwrap_or(0))
         .unwrap_or(0);
     if found_major != required_major {
-        return Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch {
-            required: min_framework.to_owned(),
-            found: tfm.to_owned(),
+        return Err(RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: min_framework.to_owned(),
+            error: format!("runtime version mismatch: required={}, found={}", min_framework, tfm),
         }));
     }
     if found_minor > required_minor + 2 {
@@ -103,18 +101,19 @@ impl BundleLoader for DotnetLoader {
         &self,
         manifest: &polyplug::loader::manifest::ManifestData,
         runtime: &Runtime,
-    ) -> Result<(), PolyplugError> {
+    ) -> Result<(), RuntimeError> {
         let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
-            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
                 bundle: manifest.name.clone(),
             }));
         };
 
         if !bundle_path.exists() {
-            return Err(PolyplugError::Loader(LoaderError::AssemblyNotFound {
-                path: bundle_path.to_string_lossy().into_owned(),
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("assembly not found at path '{}'", bundle_path.to_string_lossy()),
             }));
         }
 
@@ -122,8 +121,9 @@ impl BundleLoader for DotnetLoader {
         check_version_compatibility(&tfm, &self.config.min_framework)?;
 
         let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
-            PolyplugError::Loader(LoaderError::AssemblyNotFound {
-                path: bundle_path.to_string_lossy().into_owned(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("assembly canonicalize failed for path '{}'", bundle_path.to_string_lossy()),
             })
         })?;
 
@@ -141,13 +141,13 @@ impl BundleLoader for DotnetLoader {
 
         let type_name_pdc: PdCString = PdCString::from_os_str(std::ffi::OsStr::new(&type_name_str))
             .map_err(|_| {
-                PolyplugError::Loader(LoaderError::InitSymbolMissing {
+                RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: bundle_name.clone(),
                 })
             })?;
         let method_name_pdc: PdCString =
             PdCString::from_os_str(std::ffi::OsStr::new("PolyplugInit")).map_err(|_| {
-                PolyplugError::Loader(LoaderError::InitSymbolMissing {
+                RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: bundle_name.clone(),
                 })
             })?;
@@ -182,7 +182,7 @@ impl BundleLoader for DotnetLoader {
         let result: u32 =
             unsafe { (*managed_init)(rt_ctx, host_vtable as *const HostVTable, &ctx) };
         if result != 0 {
-            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
                 error: format!("PolyplugInit returned {result}"),
             }));
@@ -195,18 +195,15 @@ impl BundleLoader for DotnetLoader {
         &self,
         _manifest: &polyplug::loader::manifest::ManifestData,
         _runtime: &Runtime,
-    ) -> Result<(), PolyplugError> {
-        Err(PolyplugError::Loader(LoaderError::InitFailed {
-            bundle: String::new(),
-            error: "hot-reload not supported for .NET bundles".to_owned(),
-        }))
+    ) -> Result<(), RuntimeError> {
+        Err(RuntimeError::HotReloadDisabled)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use polyplug::error::LoaderError;
-    use polyplug::error::PolyplugError;
+    use polyplug::error::RuntimeError;
 
     use super::check_version_compatibility;
 
@@ -214,13 +211,13 @@ mod tests {
 
     #[test]
     fn empty_tfm_always_ok() {
-        let result: Result<(), PolyplugError> = check_version_compatibility("", "net10.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility("", "net10.0");
         assert!(result.is_ok(), "empty TFM must be unconditionally accepted");
     }
 
     #[test]
     fn empty_tfm_empty_min_framework_ok() {
-        let result: Result<(), PolyplugError> = check_version_compatibility("", "");
+        let result: Result<(), RuntimeError> = check_version_compatibility("", "");
         assert!(result.is_ok());
     }
 
@@ -228,7 +225,7 @@ mod tests {
 
     #[test]
     fn same_major_version_ok() {
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.0", "net6.0");
         assert!(result.is_ok());
     }
@@ -236,7 +233,7 @@ mod tests {
     #[test]
     fn same_major_minor_within_window_ok() {
         // found minor (2) == required minor (0) + 2 → at the boundary → ok (not a warning trigger)
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.2", "net6.0");
         assert!(result.is_ok());
     }
@@ -244,7 +241,7 @@ mod tests {
     #[test]
     fn higher_minor_beyond_window_still_ok() {
         // found minor (5) > required minor (0) + 2 → triggers eprintln warning but still Ok
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.5", "net6.0");
         assert!(
             result.is_ok(),
@@ -254,30 +251,32 @@ mod tests {
 
     #[test]
     fn net7_assembly_against_net6_requirement_fails() {
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v7.0", "net6.0");
         match result {
-            Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
-                assert_eq!(required, "net6.0");
-                assert_eq!(found, ".NETCoreApp,Version=v7.0");
+            Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+                assert_eq!(bundle, "net6.0");
+                assert!(error.contains("runtime version mismatch"));
+                assert!(error.contains("net6.0"));
+                assert!(error.contains(".NETCoreApp,Version=v7.0"));
             }
-            other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+            other => panic!("expected InitFailed with runtime version mismatch, got {other:?}"),
         }
     }
 
     #[test]
     fn net6_assembly_against_net7_requirement_fails() {
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.0", "net7.0");
         match result {
-            Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
-            other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
+            other => panic!("expected InitFailed, got {other:?}"),
         }
     }
 
     #[test]
     fn net10_assembly_against_net10_requirement_ok() {
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v10.0", "net10.0");
         assert!(result.is_ok());
     }
@@ -286,16 +285,16 @@ mod tests {
     fn tfm_without_prefix_parsed_as_raw_version() {
         // When no ".NETCoreApp,Version=v" prefix is present, the TFM is parsed directly.
         // "6.0" should parse as major=6 against net6.0 → ok.
-        let result: Result<(), PolyplugError> = check_version_compatibility("6.0", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility("6.0", "net6.0");
         assert!(result.is_ok());
     }
 
     #[test]
     fn tfm_without_prefix_major_mismatch_fails() {
-        let result: Result<(), PolyplugError> = check_version_compatibility("7.0", "net6.0");
+        let result: Result<(), RuntimeError> = check_version_compatibility("7.0", "net6.0");
         match result {
-            Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
-            other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
+            other => panic!("expected InitFailed, got {other:?}"),
         }
     }
 
@@ -304,22 +303,22 @@ mod tests {
     #[test]
     fn invalid_min_framework_non_numeric_major_returns_error() {
         // min_framework with non-numeric major after stripping "net" prefix.
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.0", "netXYZ.0");
         match result {
-            Err(PolyplugError::Loader(LoaderError::InvalidFrameworkVersion { .. })) => {}
-            other => panic!("expected InvalidFrameworkVersion, got {other:?}"),
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
+            other => panic!("expected InitFailed, got {other:?}"),
         }
     }
 
     #[test]
     fn invalid_tfm_non_numeric_major_returns_error() {
         // TFM with non-numeric major after stripping ".NETCoreApp,Version=v" prefix.
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=vBAD.0", "net6.0");
         match result {
-            Err(PolyplugError::Loader(LoaderError::InvalidFrameworkVersion { .. })) => {}
-            other => panic!("expected InvalidFrameworkVersion, got {other:?}"),
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
+            other => panic!("expected InitFailed, got {other:?}"),
         }
     }
 
@@ -327,18 +326,18 @@ mod tests {
     fn min_framework_missing_major_returns_error() {
         // Empty string after stripping "net" prefix — next() returns None → error.
         // Input: "net" alone after strip_prefix gives "", split('.').next() = Some("") which parse fails.
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.0", "net");
         match result {
-            Err(PolyplugError::Loader(LoaderError::InvalidFrameworkVersion { .. })) => {}
-            other => panic!("expected InvalidFrameworkVersion, got {other:?}"),
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. })) => {}
+            other => panic!("expected InitFailed, got {other:?}"),
         }
     }
 
     #[test]
     fn min_framework_no_minor_version_defaults_to_zero() {
         // "net6" has no minor component — minor defaults to 0.
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6.0", "net6");
         assert!(result.is_ok());
     }
@@ -346,7 +345,7 @@ mod tests {
     #[test]
     fn tfm_no_minor_version_defaults_to_zero() {
         // TFM with no minor component — found minor defaults to 0.
-        let result: Result<(), PolyplugError> =
+        let result: Result<(), RuntimeError> =
             check_version_compatibility(".NETCoreApp,Version=v6", "net6.0");
         assert!(result.is_ok());
     }
