@@ -59,9 +59,9 @@ Plans:
 **Plans:** 5 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Update NativeLoader: remove error.rs, inline load_internal, use InitFailed directly
+- [x] 02-01-PLAN.md — Update NativeLoader: remove error.rs, inline load_internal, use InitFailed directly
 - [ ] 02-02-PLAN.md — Update PythonLoader: remove error.rs, replace all error sites with InitFailed
-- [ ] 02-03-PLAN.md — Update LuaLoader: remove error.rs, replace all error sites with InitFailed
+- [x] 02-03-PLAN.md — Update LuaLoader: remove error.rs, replace all error sites with InitFailed
 - [ ] 02-04-PLAN.md — Update JsLoader: remove error.rs, replace ~45 error sites, fix hot-reload
 - [ ] 02-05-PLAN.md — Update DotnetLoader: remove error.rs, replace error sites, fix hot-reload
 
