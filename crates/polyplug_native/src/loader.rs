@@ -1,21 +1,43 @@
-//! Native bundle loader — delegates to `polyplug::loader::load_bundle`.
+//! Native bundle loader — loads .so/.dll/.dylib plugins.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+use polyplug::error::{LoaderError, RuntimeError};
+use polyplug::loader::{BundleLoader, ManifestData};
+use polyplug::reload::wait_for_quiescence;
+use polyplug::runtime::HostContext;
+use polyplug::Runtime;
+use polyplug_abi::host::host_vtable::HostVTable;
+use polyplug_abi::plugin::PluginContext;
+use polyplug_abi::types::AbiError;
+use polyplug_abi::types::AbiErrorCode;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
-use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
-use polyplug::loader::manifest::ManifestData;
-use polyplug::runtime::Runtime;
 
+/// Native (shared library) plugin loader.
+///
+/// Handles .so/.dll/.dylib bundles using dlopen/LoadLibrary.
+/// Owns library handles internally — NOT stored in registry.
 pub struct NativeLoader {
-    pub config: NativeConfig,
+    config: NativeConfig,
+    /// Active library handles, keyed by BundleId.
+    libraries: Mutex<HashMap<BundleId, libloading::Library>>,
+    /// Host vtable for plugin registration.
+    host_vtable: &'static HostVTable,
 }
 
 impl NativeLoader {
-    pub fn new(config: NativeConfig) -> NativeLoader {
-        NativeLoader { config }
+    /// Create a new NativeLoader.
+    pub fn new(config: NativeConfig, host_vtable: &'static HostVTable) -> Self {
+        Self {
+            config,
+            libraries: Mutex::new(HashMap::new()),
+            host_vtable,
+        }
     }
 }
 
@@ -24,12 +46,9 @@ impl BundleLoader for NativeLoader {
         "native"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError> {
-        let registry = runtime.registry();
-        let host_vtable = runtime.host_vtable();
-
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
         if manifest.id == 0 {
-            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
                 error: "manifest.id is required but was 0 or missing".to_owned(),
             }));
@@ -38,12 +57,255 @@ impl BundleLoader for NativeLoader {
         let bundle_path: PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
-            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
                 bundle: manifest.name.clone(),
             }));
         };
 
-        polyplug::loader::load_bundle(&bundle_path, manifest, registry, host_vtable, runtime)
-            .map_err(PolyplugError::Loader)
+        let path_str: String = bundle_path.to_string_lossy().into_owned();
+
+        // ─── Step 1: dlopen the library ────────────────────────────────────────────
+        // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
+        let library: libloading::Library = unsafe {
+            libloading::Library::new(&bundle_path).map_err(|e| RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("failed to load plugin library at {}: {}", path_str, e),
+            }))?
+        };
+
+        // ─── Step 2: Check ABI version sentinel BEFORE calling init ──────────────────────
+        // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
+        let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
+            library.get(b"polyplug_abi_version\0").map_err(|_| RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("missing symbol 'polyplug_abi_version' in bundle '{}'", path_str),
+            }))?
+        };
+        let found_version: u32 = unsafe { abi_version_symbol() };
+        if found_version != POLYPLUG_ABI_VERSION {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("ABI version mismatch in {}: expected={}, found={}", path_str, POLYPLUG_ABI_VERSION, found_version),
+            }));
+        }
+
+        // ─── Step 3: Resolve init symbol ──────────────────────────────────────────────
+        // SAFETY: polyplug_init is guaranteed by the plugin build process.
+        let init_fn_ptr: unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError = {
+            let sym: libloading::Symbol<
+                '_,
+                unsafe extern "C" fn(
+                    *mut core::ffi::c_void,
+                    *const HostVTable,
+                    *const PluginContext,
+                ) -> AbiError,
+            > = unsafe {
+                library
+                    .get(b"polyplug_init\0")
+                    .map_err(|_| RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: manifest.name.clone(),
+                    }))?
+            };
+            *sym
+        };
+
+        // ─── Step 4: Create PluginContext ────────────────────────────────────────────
+        let bundle_dir = bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        let ctx: PluginContext = PluginContext {
+            bundle_id: BundleId::new(&manifest.name).id(),
+            bundle_path: polyplug_abi::types::StringView {
+                ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
+                len: bundle_dir.as_os_str().as_encoded_bytes().len(),
+            },
+            host_abi_version: POLYPLUG_ABI_VERSION,
+        };
+
+        // ─── Step 5: Create HostContext for dependency enforcement ─────────────────────
+        let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id: expected_bundle_id.id(),
+        };
+
+        // ─── Step 6: Call init ────────────────────────────────────────────────────────
+        let rt_ctx: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        let init_result: AbiError =
+            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const HostVTable, &ctx) };
+
+        // ─── Step 7: Verify bundle_id wasn't tampered ─────────────────────────────────────
+        // Note: host_ctx.bundle_id is modified by init if tampering occurs
+        if host_ctx.bundle_id != expected_bundle_id.id() {
+            return Err(RuntimeError::Loader(LoaderError::BundleTampered {
+                bundle: manifest.name.clone(),
+                expected: expected_bundle_id.id(),
+                found: host_ctx.bundle_id,
+            }));
+        }
+
+        if init_result.code != AbiErrorCode::Ok {
+            let error_msg: String = if init_result.message.ptr.is_null() {
+                format!("init returned error code {:?}", init_result.code)
+            } else {
+                // SAFETY: ptr is non-null and points to valid UTF-8 bytes
+                let bytes: &[u8] = unsafe {
+                    core::slice::from_raw_parts(init_result.message.ptr, init_result.message.len)
+                };
+                String::from_utf8_lossy(bytes).into_owned()
+            };
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: error_msg,
+            }));
+        }
+
+        // ─── Step 8: Store library handle ─────────────────────────────────────────────
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+        self.libraries.lock().unwrap().insert(bundle_id, library);
+
+        Ok(())
+    }
+
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
+        if !runtime.config().hot_reload_enabled {
+            return Err(RuntimeError::HotReloadDisabled);
+        }
+
+        let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+        if manifest.file.is_empty() {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
+                bundle: manifest.name.clone(),
+            }));
+        }
+
+        let bundle_path: PathBuf = manifest.path.join(&manifest.file);
+
+        let path_str: String = bundle_path.to_string_lossy().into_owned();
+
+        // ─── Step 1: Load new library (inline, same as load()) ───────────────────────────
+        // SAFETY: path points to a compiled plugin bundle; libloading validates the shared library.
+        let new_library: libloading::Library = unsafe {
+            libloading::Library::new(&bundle_path).map_err(|e| RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("failed to load plugin library at {}: {}", path_str, e),
+            }))?
+        };
+
+        // ─── Step 2: Check ABI version sentinel ──────────────────────────────────────────
+        // SAFETY: polyplug_abi_version is a C function with signature `extern "C" fn() -> u32`.
+        let abi_version_symbol: libloading::Symbol<'_, unsafe extern "C" fn() -> u32> = unsafe {
+            new_library.get(b"polyplug_abi_version\0").map_err(|_| RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("missing symbol 'polyplug_abi_version' in bundle '{}'", path_str),
+            }))?
+        };
+        let found_version: u32 = unsafe { abi_version_symbol() };
+        if found_version != POLYPLUG_ABI_VERSION {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("ABI version mismatch in {}: expected={}, found={}", path_str, POLYPLUG_ABI_VERSION, found_version),
+            }));
+        }
+
+        // ─── Step 3: Resolve init symbol ────────────────────────────────────────────────
+        // SAFETY: polyplug_init is guaranteed by the plugin build process.
+        let init_fn_ptr: unsafe extern "C" fn(
+            *mut core::ffi::c_void,
+            *const HostVTable,
+            *const PluginContext,
+        ) -> AbiError = {
+            let sym: libloading::Symbol<
+                '_,
+                unsafe extern "C" fn(
+                    *mut core::ffi::c_void,
+                    *const HostVTable,
+                    *const PluginContext,
+                ) -> AbiError,
+            > = unsafe {
+                new_library
+                    .get(b"polyplug_init\0")
+                    .map_err(|_| RuntimeError::Loader(LoaderError::InitSymbolMissing {
+                        bundle: manifest.name.clone(),
+                    }))?
+            };
+            *sym
+        };
+
+        // ─── Step 4: Create PluginContext ──────────────────────────────────────────────
+        let bundle_dir = bundle_path.parent().unwrap_or(std::path::Path::new("."));
+        let ctx: PluginContext = PluginContext {
+            bundle_id: BundleId::new(&manifest.name).id(),
+            bundle_path: polyplug_abi::types::StringView {
+                ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
+                len: bundle_dir.as_os_str().as_encoded_bytes().len(),
+            },
+            host_abi_version: POLYPLUG_ABI_VERSION,
+        };
+
+        // ─── Step 5: Create HostContext for dependency enforcement ───────────────────────
+        let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
+        let host_ctx: HostContext = HostContext {
+            runtime: runtime as *const Runtime as *mut Runtime,
+            bundle_id: expected_bundle_id.id(),
+        };
+
+        // ─── Step 6: Call init ──────────────────────────────────────────────────────────
+        let rt_ctx: *mut core::ffi::c_void =
+            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        let init_result: AbiError =
+            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const HostVTable, &ctx) };
+
+        // ─── Step 7: Verify bundle_id wasn't tampered ─────────────────────────────────────
+        if host_ctx.bundle_id != expected_bundle_id.id() {
+            return Err(RuntimeError::Loader(LoaderError::BundleTampered {
+                bundle: manifest.name.clone(),
+                expected: expected_bundle_id.id(),
+                found: host_ctx.bundle_id,
+            }));
+        }
+
+        if init_result.code != AbiErrorCode::Ok {
+            let error_msg: String = if init_result.message.ptr.is_null() {
+                format!("init returned error code {:?}", init_result.code)
+            } else {
+                // SAFETY: ptr is non-null and points to valid UTF-8 bytes
+                let bytes: &[u8] = unsafe {
+                    core::slice::from_raw_parts(init_result.message.ptr, init_result.message.len)
+                };
+                String::from_utf8_lossy(bytes).into_owned()
+            };
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: error_msg,
+            }));
+        }
+
+        // ─── Step 8: Wait for quiescence (no in-flight calls using old vtables) ───────────
+        wait_for_quiescence(
+            runtime.registry(),
+            bundle_id,
+            std::time::Duration::from_secs(5),
+        )?;
+
+        // ─── Step 9: Remove and DROP old library ─────────────────────────────────────────
+        // SAFETY CONTRACT: Host must not have cached raw function pointers!
+        // If they did, this will cause SIGSEGV - that's a HOST BUG.
+        // The `on_reload_cb(ReloadPhase::Reloaded)` already fired, giving host a chance to clean up.
+        if let Some(old_library) = self.libraries.lock().unwrap().remove(&bundle_id) {
+            drop(old_library); // dlclose() - unmaps code pages
+        }
+
+        // ─── Step 10: Store new library ───────────────────────────────────────────────────
+        self.libraries
+            .lock()
+            .unwrap()
+            .insert(bundle_id, new_library);
+
+        Ok(())
     }
 }
