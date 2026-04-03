@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-03T08:08:54.338Z"
+last_updated: "2026-04-03T08:10:12.848Z"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 10
-  completed_plans: 7
-  percent: 70
+  completed_plans: 8
+  percent: 80
 ---
 
 # STATE: polyplug Error Decoupling
@@ -37,7 +37,7 @@ Plan: 1 of 5
 **Phase:** 2
 **Plan:** Not started
 **Status:** Executing Phase 02
-**Progress:** [███████░░░] 70%
+**Progress:** [████████░░] 80%
 
 ### Phase 01 Completion Summary
 
@@ -61,6 +61,7 @@ Plan: 1 of 5
 | Days in progress | 0 |
 | Last activity | 2026-04-03 |
 | Phase 02 P03 | 5 | 3 tasks | 3 files |
+| Phase 02 P05 | 7min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,8 @@ Plan: 1 of 5
 - [Phase 01]: InitSymbolMissing retained in core - used by both Python and .NET loaders (not loader-specific)
 - [Phase 01]: InitFailed retained as generic catch-all - loaders convert local errors to this variant
 - [Phase 02]: LuaLoader uses InitFailed pattern directly at 13 error sites - no local error type needed
+- [Phase 02]: D-01: Use LoaderError::InitFailed for all loader-specific errors with descriptive messages
+- [Phase 02]: D-03: Use RuntimeError::HotReloadDisabled for hot-reload disabled
 
 ### Active TODOs
 
