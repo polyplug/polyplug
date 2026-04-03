@@ -11,7 +11,7 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 ## Phases
 
 - [x] **Phase 1: Define Loader-Local Error Types** - Move error variants from core to loader crates (completed 2026-04-03)
-- [ ] **Phase 2: Update Loader Implementations** - Loaders use crate-local errors with boundary conversion
+- [x] **Phase 2: Update Loader Implementations** - Loaders use unified InitFailed pattern (completed 2026-04-03)
 - [ ] **Phase 3: Verify Compatibility** - Ensure tests pass and FFI compatibility maintained
 
 ## Phase Details
@@ -56,7 +56,7 @@ Plans:
 3. Local error types from Phase 1 (`PythonLoaderError`, etc.) are removed or marked unused
 4. All loaders return `RuntimeError::HotReloadDisabled` for unsupported hot-reload (consistency)
 
-**Plans:** 4/5 plans executed
+**Plans:** 5 plans (all complete)
 
 Plans:
 - [x] 02-01-PLAN.md — Update NativeLoader: remove error.rs, inline load_internal, use InitFailed directly
@@ -89,7 +89,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Define Loader-Local Error Types | 5/5 | Complete | 2026-04-03 |
-| 2. Update Loader Implementations | 4/5 | In Progress|  |
+| 2. Update Loader Implementations | 5/5 | Complete | 2026-04-03 |
 | 3. Verify Compatibility | 0/1 | Not started | - |
 
 ## Coverage Map
@@ -101,12 +101,12 @@ Plans:
 | ERR-03 | Phase 1 | Complete |
 | ERR-04 | Phase 1 | Complete |
 | ERR-05 | Phase 1 | Complete |
-| ERR-06 | Phase 2 | Pending |
+| ERR-06 | Phase 2 | Complete |
 | COMP-01 | Phase 3 | Pending |
 | COMP-02 | Phase 3 | Pending |
 
-**Coverage:** 5/8 requirements complete (62.5%)
+**Coverage:** 6/8 requirements complete (75%)
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 1 completion verified*
+*Last updated: 2026-04-03 after Phase 2 completion*
