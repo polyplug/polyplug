@@ -17,7 +17,7 @@
 ### Compatibility
 
 - [x] **COMP-01**: All existing tests pass after error type migration
-- [ ] **COMP-02**: No breaking changes to public FFI API (error messages are strings at FFI boundary)
+- [x] **COMP-02**: No breaking changes to public FFI API (error messages are strings at FFI boundary)
 
 ## v2 Requirements
 
@@ -42,7 +42,7 @@ Deferred to future release.
 | ERR-05 | Phase 1 | Complete |
 | ERR-06 | Phase 2 | Complete |
 | COMP-01 | Phase 3 | Complete |
-| COMP-02 | Phase 3 | Pending |
+| COMP-02 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 8 total
