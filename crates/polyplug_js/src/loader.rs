@@ -19,17 +19,15 @@ use rquickjs::Runtime;
 use rquickjs::Value;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
+use polyplug::error::RuntimeError;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime as PolyplugRuntime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginDispatch;
@@ -37,6 +35,8 @@ use polyplug_abi::PluginHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
+use polyplug_abi::ABI_OK;
+use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::config::JsConfig;
 
@@ -45,9 +45,9 @@ use crate::config::JsConfig;
 use core::cell::RefCell;
 use std::rc::Rc;
 
-use rquickjs::JsLifetime;
 use rquickjs::runtime::UserDataError;
 use rquickjs::runtime::UserDataGuard;
+use rquickjs::JsLifetime;
 
 /// Registration data collected from the JS plugin during polyplug_init.
 ///
@@ -240,7 +240,8 @@ fn register_host_functions<'js>(
     polyplug_obj: &Object<'js>,
     host_vtable: *const HostVTable,
     rt_ctx: *mut core::ffi::c_void,
-) -> Result<(), PolyplugError> {
+    bundle_name: &str,
+) -> Result<(), RuntimeError> {
     // Store host context pointers as JS globals on the polyplug object
     let vtable_usize: usize = host_vtable as usize;
     let rt_ctx_usize: usize = rt_ctx as usize;
@@ -248,33 +249,33 @@ fn register_host_functions<'js>(
     polyplug_obj
         .set("_hostVtableLo", vtable_usize as u32)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("_hostVtableLo set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: _hostVtableLo set failed: {e}"),
             })
         })?;
     polyplug_obj
         .set("_hostVtableHi", (vtable_usize >> 32) as u32)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("_hostVtableHi set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: _hostVtableHi set failed: {e}"),
             })
         })?;
     polyplug_obj
         .set("_rtCtxLo", rt_ctx_usize as u32)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("_rtCtxLo set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: _rtCtxLo set failed: {e}"),
             })
         })?;
     polyplug_obj
         .set("_rtCtxHi", (rt_ctx_usize >> 32) as u32)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("_rtCtxHi set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: _rtCtxHi set failed: {e}"),
             })
         })?;
 
@@ -290,18 +291,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("findByContract function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: findByContract function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("findByContract", find_by_contract_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("findByContract set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: findByContract set failed: {e}"),
             })
         })?;
 
@@ -318,18 +319,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("findByBundle function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: findByBundle function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("findByBundle", find_by_bundle_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("findByBundle set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: findByBundle set failed: {e}"),
             })
         })?;
 
@@ -355,18 +356,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("findAllByContract function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: findAllByContract function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("findAllByContract", find_all_by_contract_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("findAllByContract set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: findAllByContract set failed: {e}"),
             })
         })?;
 
@@ -386,18 +387,18 @@ fn register_host_functions<'js>(
             }
         })
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("resolvePlugin function creation failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: resolvePlugin function creation failed: {e}"),
             })
         })?;
 
     polyplug_obj
         .set("resolvePlugin", resolve_plugin_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("resolvePlugin set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: resolvePlugin set failed: {e}"),
             })
         })?;
 
@@ -416,18 +417,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("getHostContract function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: getHostContract function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("getHostContract", get_host_contract_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("getHostContract set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: getHostContract set failed: {e}"),
             })
         })?;
 
@@ -477,18 +478,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("registerVtable function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: registerVtable function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("registerVtable", register_vtable_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("registerVtable set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: registerVtable set failed: {e}"),
             })
         })?;
 
@@ -517,18 +518,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("alloc function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: alloc function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("alloc", alloc_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("alloc set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: alloc set failed: {e}"),
             })
         })?;
 
@@ -545,18 +546,18 @@ fn register_host_functions<'js>(
         unsafe { ((*hvt).free)(rt_ctx, ptr, 0, 1) };
     })
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("free function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: free function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("free", free_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("free set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: free set failed: {e}"),
             })
         })?;
 
@@ -574,18 +575,18 @@ fn register_host_functions<'js>(
             unsafe { *ptr }
         })
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("readI32 function creation failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readI32 function creation failed: {e}"),
             })
         })?;
 
     polyplug_obj
         .set("readI32", read_i32_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("readI32 set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readI32 set failed: {e}"),
             })
         })?;
 
@@ -607,18 +608,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("writeI32 function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: writeI32 function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("writeI32", write_i32_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("writeI32 set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: writeI32 set failed: {e}"),
             })
         })?;
 
@@ -636,18 +637,18 @@ fn register_host_functions<'js>(
             unsafe { *ptr as u32 }
         })
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("readByte function creation failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readByte function creation failed: {e}"),
             })
         })?;
 
     polyplug_obj
         .set("readByte", read_byte_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("readByte set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readByte set failed: {e}"),
             })
         })?;
 
@@ -669,18 +670,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("writeByte function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: writeByte function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("writeByte", write_byte_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("writeByte set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: writeByte set failed: {e}"),
             })
         })?;
 
@@ -719,18 +720,18 @@ fn register_host_functions<'js>(
         },
     )
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("readMemory function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: readMemory function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("readMemory", read_memory_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("readMemory set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readMemory set failed: {e}"),
             })
         })?;
 
@@ -747,18 +748,18 @@ fn register_host_functions<'js>(
         value
     })
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("readU32 function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: readU32 function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("readU32", read_u32_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("readU32 set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: readU32 set failed: {e}"),
             })
         })?;
 
@@ -774,18 +775,18 @@ fn register_host_functions<'js>(
         }
     })
     .map_err(|e: rquickjs::Error| {
-        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-            runtime: "js-quickjs".to_owned(),
-            message: format!("writeU32 function creation failed: {e}"),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: bundle_name.to_owned(),
+            error: format!("JS runtime js-quickjs error: writeU32 function creation failed: {e}"),
         })
     })?;
 
     polyplug_obj
         .set("writeU32", write_u32_fn)
         .map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("writeU32 set failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: bundle_name.to_owned(),
+                error: format!("JS runtime js-quickjs error: writeU32 set failed: {e}"),
             })
         })?;
 
@@ -814,7 +815,7 @@ impl BundleLoader for JsLoader {
         &self,
         manifest: &ManifestData,
         runtime: &PolyplugRuntime,
-    ) -> Result<(), PolyplugError> {
+    ) -> Result<(), RuntimeError> {
         let host_vtable: &'static HostVTable = runtime.host_vtable();
         let bundle_id: u64 = manifest.id;
 
@@ -825,7 +826,7 @@ impl BundleLoader for JsLoader {
         };
         let bundle_js: String =
             std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
-                PolyplugError::Loader(LoaderError::ManifestParse {
+                RuntimeError::Loader(LoaderError::ManifestParse {
                     path: bundle_path.display().to_string(),
                     reason: e.to_string(),
                 })
@@ -834,15 +835,16 @@ impl BundleLoader for JsLoader {
         let bundle_dir: &Path = &manifest.path;
 
         let qjs_runtime: Runtime = Runtime::new().map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimeInitFailed {
-                reason: format!("QuickJS runtime init failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("JS runtime init failed: QuickJS runtime init failed: {e}"),
             })
         })?;
 
         let ctx: Context = Context::full(&qjs_runtime).map_err(|e: rquickjs::Error| {
-            PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("context creation failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("JS runtime js-quickjs error: context creation failed: {e}"),
             })
         })?;
 
@@ -862,9 +864,9 @@ impl BundleLoader for JsLoader {
                 .store_userdata(Rc::clone(&registration_slot))
                 .map_err(
                     |_: UserDataError<Rc<RefCell<Option<JsRegistrationData>>>>| {
-                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                            runtime: "js-quickjs".to_owned(),
-                            message: "failed to store registration slot in userdata".to_owned(),
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: "JS runtime js-quickjs error: failed to store registration slot in userdata".to_owned(),
                         })
                     },
                 )?;
@@ -872,9 +874,9 @@ impl BundleLoader for JsLoader {
             let globals: Object<'_> = ctx_ref.globals();
             let polyplug_obj: Object<'_> =
                 Object::new(ctx_ref.clone()).map_err(|e: rquickjs::Error| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-quickjs".to_owned(),
-                        message: format!("object creation failed: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!("JS runtime js-quickjs error: object creation failed: {e}"),
                     })
                 })?;
             register_host_functions(
@@ -882,13 +884,14 @@ impl BundleLoader for JsLoader {
                 &polyplug_obj,
                 host_vtable as *const HostVTable,
                 rt_ctx,
+                &manifest.name,
             )?;
             globals
                 .set("polyplug", polyplug_obj)
                 .map_err(|e: rquickjs::Error| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-quickjs".to_owned(),
-                        message: format!("global set failed: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!("JS runtime js-quickjs error: global set failed: {e}"),
                     })
                 })?;
 
@@ -896,18 +899,18 @@ impl BundleLoader for JsLoader {
             ctx_ref
                 .eval::<Value<'_>, _>(set_bundle.as_str())
                 .map_err(|e: rquickjs::Error| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-quickjs".to_owned(),
-                        message: format!("bundlePath injection failed: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!("JS runtime js-quickjs error: bundlePath injection failed: {e}"),
                     })
                 })?;
 
             ctx_ref
                 .eval::<Value<'_>, _>(bundle_js.as_str())
                 .map_err(|e: rquickjs::Error| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-quickjs".to_owned(),
-                        message: format!("bundle eval failed: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!("JS runtime js-quickjs error: bundle eval failed: {e}"),
                     })
                 })?;
 
@@ -915,7 +918,7 @@ impl BundleLoader for JsLoader {
                 .globals()
                 .get::<&str, Function<'_>>("polyplug_init")
                 .map_err(|_| {
-                    PolyplugError::Loader(LoaderError::InitSymbolMissing {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
                         bundle: bundle_dir_str.clone(),
                     })
                 })?;
@@ -939,27 +942,27 @@ impl BundleLoader for JsLoader {
             let rt_ctx_bigint: rquickjs::BigInt<'_> =
                 rquickjs::BigInt::from_i64(ctx_ref.clone(), rt_ctx_i64).map_err(
                     |e: rquickjs::Error| {
-                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                            runtime: "js-quickjs".to_owned(),
-                            message: format!("rt_ctx BigInt creation failed: {e}"),
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!("JS runtime js-quickjs error: rt_ctx BigInt creation failed: {e}"),
                         })
                     },
                 )?;
             let host_vtable_bigint: rquickjs::BigInt<'_> =
                 rquickjs::BigInt::from_i64(ctx_ref.clone(), host_vtable_i64).map_err(
                     |e: rquickjs::Error| {
-                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                            runtime: "js-quickjs".to_owned(),
-                            message: format!("host_vtable BigInt creation failed: {e}"),
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!("JS runtime js-quickjs error: host_vtable BigInt creation failed: {e}"),
                         })
                     },
                 )?;
             let ctx_ptr_bigint: rquickjs::BigInt<'_> =
                 rquickjs::BigInt::from_i64(ctx_ref.clone(), ctx_ptr_i64).map_err(
                     |e: rquickjs::Error| {
-                        PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                            runtime: "js-quickjs".to_owned(),
-                            message: format!("ctx_ptr BigInt creation failed: {e}"),
+                        RuntimeError::Loader(LoaderError::InitFailed {
+                            bundle: manifest.name.clone(),
+                            error: format!("JS runtime js-quickjs error: ctx_ptr BigInt creation failed: {e}"),
                         })
                     },
                 )?;
@@ -971,20 +974,20 @@ impl BundleLoader for JsLoader {
                     rquickjs::BigInt<'_>,
                 ), ()>((rt_ctx_bigint, host_vtable_bigint, ctx_ptr_bigint))
                 .map_err(|e: rquickjs::Error| {
-                    PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                        runtime: "js-quickjs".to_owned(),
-                        message: format!("polyplug_init call failed: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: manifest.name.clone(),
+                        error: format!("JS runtime js-quickjs error: polyplug_init call failed: {e}"),
                     })
                 })?;
 
-            Ok::<(), PolyplugError>(())
+            Ok::<(), RuntimeError>(())
         })?;
 
         let registration_data: JsRegistrationData =
             registration_slot.borrow_mut().take().ok_or_else(|| {
-                PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                    runtime: "js-quickjs".to_owned(),
-                    message: "polyplug_init did not call registerVtable".to_owned(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: "JS runtime js-quickjs error: polyplug_init did not call registerVtable".to_owned(),
                 })
             })?;
 
@@ -1030,13 +1033,21 @@ impl BundleLoader for JsLoader {
             unsafe { (host_vtable.register_plugin)(rt_ctx, &descriptor, static_interface) };
 
         if abi_result.code != ABI_OK {
-            return Err(PolyplugError::Loader(LoaderError::JsRuntimePanic {
-                runtime: "js-quickjs".to_owned(),
-                message: format!("register_plugin returned error code {}", abi_result.code),
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("JS runtime js-quickjs error: register_plugin returned error code {}", abi_result.code),
             }));
         }
 
         Ok(())
+    }
+
+    fn reload(
+        &self,
+        _manifest: &ManifestData,
+        _runtime: &PolyplugRuntime,
+    ) -> Result<(), RuntimeError> {
+        Err(RuntimeError::HotReloadDisabled)
     }
 }
 
