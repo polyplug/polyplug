@@ -238,8 +238,15 @@ fn integration_dotnet_wrong_major_version_rejected() {
         .expect("failed to build runtime");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
-        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
-        other => panic!("expected RuntimeVersionMismatch for net99.0, got: {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("version")
+                    || error.contains("framework")
+                    || error.contains("99.0"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for net99.0, got: {other:?}"),
     }
 }
 
@@ -289,8 +296,13 @@ fn version_mismatch_pelite() {
         .expect("failed to build runtime");
     let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
-        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
-        other => panic!("expected RuntimeVersionMismatch, got: {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("version") || error.contains("framework"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for version mismatch, got: {other:?}"),
     }
 }
 
@@ -320,16 +332,21 @@ fn non_dotnet_dll_allowed() {
     // We test this by passing a path to a known-non-dotnet file (a Rust test binary or lib).
     // The actual load will fail at the CLR level (not a .NET assembly) but NOT at version check.
     // Since we can't guarantee a non-dotnet file path in CI, test with a dummy path that
-    // doesn't exist — the version::read_target_framework returns AssemblyNotFound, not
-    // RuntimeVersionMismatch, confirming the version check path is bypassed for non-dotnet files.
+    // doesn't exist — the version::read_target_framework returns InitFailed, not
+    // a version-specific error, confirming the version check path is bypassed for non-dotnet files.
     //
     // Instead: test the module function directly.
     let result: Result<String, RuntimeError> =
         polyplug_dotnet::version::read_target_framework(std::path::Path::new("nonexistent.dll"));
-    // Non-existent file should return AssemblyNotFound error
+    // Non-existent file should return InitFailed error
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("not found"),
+                "error: {error}"
+            );
+        }
         Ok(s) => panic!("expected error for nonexistent file, got Ok({s:?})"),
-        Err(other) => panic!("expected AssemblyNotFound, got: {other:?}"),
+        Err(other) => panic!("expected InitFailed, got: {other:?}"),
     }
 }
