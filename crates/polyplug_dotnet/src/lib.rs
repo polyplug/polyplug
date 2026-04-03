@@ -2,10 +2,12 @@
 
 pub mod config;
 pub(crate) mod context;
+pub mod error;
 pub mod ffi;
 pub mod version;
 pub use config::DotnetConfig;
 pub use config::HostfxrLocation;
+pub use error::DotnetLoaderError;
 
 use std::path::Path;
 
@@ -19,9 +21,9 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::HostVTable;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-use crate::context::CLR_CONTEXT;
-use crate::context::InitFn;
 use crate::context::init_context;
+use crate::context::InitFn;
+use crate::context::CLR_CONTEXT;
 
 pub struct DotnetLoader {
     config: DotnetConfig,
@@ -187,6 +189,17 @@ impl BundleLoader for DotnetLoader {
         }
 
         Ok(())
+    }
+
+    fn reload(
+        &self,
+        _manifest: &polyplug::loader::manifest::ManifestData,
+        _runtime: &Runtime,
+    ) -> Result<(), PolyplugError> {
+        Err(PolyplugError::Loader(LoaderError::InitFailed {
+            bundle: String::new(),
+            error: "hot-reload not supported for .NET bundles".to_owned(),
+        }))
     }
 }
 
