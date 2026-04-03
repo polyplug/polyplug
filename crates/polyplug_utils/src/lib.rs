@@ -4,12 +4,17 @@
 //! with zero external dependencies (only std).
 
 mod bundle_id;
+mod guest_contract_id;
 mod host_contract_id;
-mod plugin_contract_id;
 
 pub use bundle_id::BundleId;
+pub use guest_contract_id::GuestContractId;
 pub use host_contract_id::HostContractId;
-pub use plugin_contract_id::PluginContractId;
+
+/// Deprecated type alias for GuestContractId.
+/// Use GuestContractId directly for new code.
+#[deprecated(since = "1.1.0", note = "Use GuestContractId instead")]
+pub type PluginContractId = GuestContractId;
 
 // ─── FNV-1a 64-bit Hash ───────────────────────────────────────────────────────
 
@@ -45,7 +50,7 @@ fn contract_id(prefix: &str, name: &str, major_version: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FNV_OFFSET, FNV_PRIME, HostContractId, PluginContractId};
+    use crate::{FNV_OFFSET, FNV_PRIME, HostContractId, GuestContractId};
 
     use super::{contract_id, fnv1a_64};
 
@@ -85,11 +90,11 @@ mod tests {
 
     #[test]
     fn contract_id_collision() {
-        // Host and plugin contract IDs must never collide for same name+major
+        // Host and guest contract IDs must never collide for same name+major
         assert_ne!(
             HostContractId::new("logger", 1).id(),
-            PluginContractId::new("logger", 1).id(),
-            "host and plugin contract IDs must differ"
+            GuestContractId::new("logger", 1).id(),
+            "host and guest contract IDs must differ"
         );
     }
 
