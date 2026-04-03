@@ -108,13 +108,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
