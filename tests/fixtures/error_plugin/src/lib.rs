@@ -60,7 +60,7 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
     let ptr: *mut u8 = unsafe { polyplug_host_alloc(len, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
@@ -68,7 +68,7 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
     unsafe {
         core::ptr::copy_nonoverlapping(msg.as_ptr(), ptr, len);
         let abi_error: AbiError = AbiError {
-            code: 99_u32,
+            code: unsafe { core::mem::transmute(99_u32) },
             message: StringView {
                 ptr: ptr as *const u8,
                 len,
@@ -94,7 +94,7 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
     match result {
         Ok(()) => abi_error_ok(), // unreachable — the closure always panics
         Err(_) => AbiError {
-            code: AbiErrorCode::Panic as u32,
+            code: AbiErrorCode::Panic,
             message: string_view_from_static(b"plugin panicked"),
         },
     }
@@ -121,7 +121,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // Dispatch through the interface if non-null and fn_id is in range.
     let inner_result: AbiError = if iface_ptr.is_null() {
         AbiError {
-            code: AbiErrorCode::NotFound as u32,
+            code: AbiErrorCode::NotFound,
             message: string_view_null(),
         }
     } else {
@@ -129,7 +129,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
         let iface: &PluginInterface = unsafe { &*iface_ptr };
         if chain_args.target_fn_id >= iface.function_count {
             AbiError {
-                code: AbiErrorCode::FunctionNotAvailable as u32,
+                code: AbiErrorCode::FunctionNotAvailable,
                 message: string_view_null(),
             }
         } else {
@@ -226,13 +226,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
