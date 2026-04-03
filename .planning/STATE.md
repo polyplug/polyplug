@@ -8,8 +8,8 @@ progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -33,18 +33,18 @@ progress:
 ## Current Position
 
 Phase: 01 (abi-types) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 **Phase:** 01-abi-types
-**Plan:** 01-02 Complete
-**Status:** Executing Phase 01, Plan 03 next
-**Progress:** [█████░░░░░] 50%
+**Plan:** 01-03 Complete
+**Status:** Executing Phase 01, Plan 04 next
+**Progress:** [███████░░░] 75%
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
 | Phases completed | 0/7 |
-| Plans completed | 2 |
+| Plans completed | 3 |
 | Requirements covered | 50/50 mapped |
 
 ### Plan Execution Times
@@ -53,6 +53,7 @@ Plan: 3 of 4
 |------|----------|-------|-------|
 | Phase 01-abi-types P01 | 113s | 2 | 2 |
 | Phase 01-abi-types P02 | 836s | 7 | 14 |
+| Phase 01-abi-types P03 | 300s | 6 | 9 |
 
 ## Accumulated Context
 
@@ -81,6 +82,10 @@ Plan: 3 of 4
 | 2026-04-03 | HostContractInterface 64 bytes | singleton bool causes padding cascade |
 | 2026-04-03 | RuntimeAbi 64 bytes | call_method + get_host_contract added |
 | 2026-04-03 | Legacy aliases PluginInterface/HostVTable | Smooth transition for dependent code |
+| 2026-04-03 | Compatibility moved to polyplug_abi/runtime | #[repr(u32)] for FFI stability |
+| 2026-04-03 | RuntimeConfig moved to polyplug_abi/runtime | #[repr(C)], 24 bytes, single source of truth |
+| 2026-04-03 | ReloadPhaseData as FFI-safe variant | StringView fields, kept Rust ReloadPhase for internal use |
+| 2026-04-03 | Rust ReloadPhase enum preserved | String-based convenience, not replaced by FFI variant |
 
 ### Active TODOs
 
@@ -108,7 +113,7 @@ Roadmap created for v1.1 Architecture Refactor:
 
 Total: 50+ requirements, 7 phases.
 
-**Project Status:** Phase 01 Plan 02 complete. Next: Phase 01 Plan 03
+**Project Status:** Phase 01 Plan 03 complete. Next: Phase 01 Plan 04
 
 ---
 *State initialized: 2026-04-03*

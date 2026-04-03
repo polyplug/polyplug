@@ -35,7 +35,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 Plans:
 - [x] 01-01-PLAN.md — Rename PluginContractId to GuestContractId in polyplug_utils
 - [x] 01-02-PLAN.md — Rename/extend core ABI types: PluginInterface->GuestContractInterface, HostVTable->RuntimeAbi, add instance handles
-- [ ] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
+- [x] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
 - [ ] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
 
 ### Phase 2: Registry
