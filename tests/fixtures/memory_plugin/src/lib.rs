@@ -77,19 +77,19 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
     let required_align: usize = align_of::<u64>();
     if cap < len {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     if cap > 0 && ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     if cap > 0 && (ptr as usize) % required_align != 0 {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
@@ -126,7 +126,7 @@ extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> Abi
     let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.rt_ctx, size, 1) };
     if ptr.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
@@ -164,7 +164,7 @@ extern "C" fn memory_echo_string_view(args: *const (), out: *mut ()) -> AbiError
     let bytes: &[u8] = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
     if core::str::from_utf8(bytes).is_err() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32, // invalid UTF-8
+            code: AbiErrorCode::Generic, // invalid UTF-8
             message: string_view_null(),
         };
     }
@@ -193,6 +193,28 @@ extern "C" fn memory_zero_length_roundtrip(args: *const (), out: *mut ()) -> Abi
     abi_error_ok()
 }
 
+// ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
+
+/// Stub create_instance for test plugin - returns null instance.
+///
+/// # Safety
+/// Test plugins don't need real instances; dispatch uses global state.
+unsafe extern "C" fn create_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for test plugin - no cleanup needed.
+///
+/// # Safety
+/// Test plugins don't own instance data.
+unsafe extern "C" fn destroy_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {}
+
 // ─── Static VTable ────────────────────────────────────────────────────────────
 
 /// Wrapper for a function pointer stored in a static vtable array.
@@ -220,13 +242,14 @@ static MEMORY_TEST_FNS: [FnPtr; 4] = [
 ];
 
 static MEMORY_TEST_INTERFACE: PluginInterface = PluginInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: MEMORY_TEST_CONTRACT_ID,
-    contract_version: 1_u32 << 16, // minor=1, patch=0
-    function_count: 4,
+    contract_id: GuestContractId::from_u64(MEMORY_TEST_CONTRACT_ID),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
+    create_instance: create_instance_stub,
+    destroy_instance: destroy_instance_stub,
     dispatch: PluginDispatch {
         native: NativeDispatch {
+            function_count: 4,
             functions: MEMORY_TEST_FNS.as_ptr() as *const *const (),
         },
     },
@@ -241,9 +264,7 @@ static MEMORY_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"memory.test".as_ptr(),
         len: 11,
     },
-    version_major: 1,
-    version_minor: 0,
-    version_patch: 0,
+    version: Version { major: 1, minor: 0, patch: 0 },
 };
 
 // ─── ABI Exports ─────────────────────────────────────────────────────────────
@@ -268,13 +289,13 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
@@ -282,10 +303,10 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
     let host: &HostVTable = unsafe { &*host_vtable };
 
-    // SAFETY: register_plugin is a valid function pointer set by the host.
+    // SAFETY: register_contract is a valid function pointer set by the host.
     // MEMORY_TEST_DESCRIPTOR and MEMORY_TEST_INTERFACE are 'static.
     unsafe {
-        (host.register_plugin)(
+        (host.register_contract)(
             rt_ctx,
             &MEMORY_TEST_DESCRIPTOR as *const PluginDescriptor,
             &MEMORY_TEST_INTERFACE as *const PluginInterface,

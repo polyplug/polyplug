@@ -3,7 +3,7 @@
 //! This crate provides common utility functions used across the polyplug ecosystem,
 //! with zero external dependencies (only std).
 
-mod bundle_id;
+pub mod bundle_id;
 mod guest_contract_id;
 mod host_contract_id;
 

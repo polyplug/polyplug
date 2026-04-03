@@ -88,6 +88,43 @@ pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 /// ABI error codes — use `AbiErrorCode::Ok`, `AbiErrorCode::Generic`, etc.
 pub use polyplug_abi::AbiErrorCode;
 
+/// Legacy constant for ABI_OK (deprecated - use AbiErrorCode::Ok)
+pub const ABI_OK: u32 = 0;
+
+/// Legacy constant for ABI_ERROR_GENERIC (deprecated - use AbiErrorCode::Generic)
+pub const ABI_ERROR_GENERIC: u32 = 1;
+
+/// Legacy constant for ABI_ERROR_PANIC (deprecated - use AbiErrorCode::Panic)
+pub const ABI_ERROR_PANIC: u32 = 3;
+
+/// Legacy constant for ABI_ERROR_INVALID_POINTER (deprecated - use AbiErrorCode::InvalidPointer)
+pub const ABI_ERROR_INVALID_POINTER: u32 = 8;
+
+/// Legacy constant for ABI_HOST_CONTRACT_NOT_FOUND (deprecated - use AbiErrorCode::HostContractNotFound)
+pub const ABI_HOST_CONTRACT_NOT_FOUND: u32 = 100;
+
+/// Legacy constant for ABI_HOST_CONTRACT_VERSION_MISMATCH (deprecated - use AbiErrorCode::HostContractVersionMismatch)
+pub const ABI_HOST_CONTRACT_VERSION_MISMATCH: u32 = 101;
+
+/// Legacy constant for ABI_HOST_CONTRACT_CALL_FAILED (deprecated - use AbiErrorCode::HostContractCallFailed)
+pub const ABI_HOST_CONTRACT_CALL_FAILED: u32 = 102;
+
+// ─── Helper Functions ─────────────────────────────────────────────────────────
+
+/// Create an AbiError success response.
+pub use polyplug_abi::abi_error_ok;
+
+/// Create a null/empty StringView.
+pub use polyplug_abi::string_view_null;
+
+/// Create a StringView from static bytes.
+pub use polyplug_abi::string_view_from_static;
+
+/// Create an AbiError panic response.
+pub fn abi_error_panic_caught() -> polyplug_abi::AbiError {
+    polyplug_abi::AbiError::panic_caught()
+}
+
 // ─── ABI Types ────────────────────────────────────────────────────────────────
 
 /// Non-owning UTF-8 string view. Never null-terminated.
@@ -131,6 +168,25 @@ pub use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 
 /// Union of dispatch mechanisms.
 pub use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
+
+/// Legacy alias for DispatchMechanisms.
+pub type PluginDispatch = DispatchMechanisms;
+
+/// Legacy alias for DispatchMechanisms (host contract variant).
+pub type HostContractDispatch = DispatchMechanisms;
+
+/// Legacy alias for NativeDispatch (host contract variant).
+pub type NativeHostContractDispatch = NativeDispatch;
+
+/// Legacy alias for VmDispatch (host contract variant).
+pub type VmHostContractDispatch = VmDispatch;
+
+/// Legacy alias for HostContractInterface.
+pub type HostContractVTable = polyplug_abi::HostContractInterface;
+
+/// Legacy alias for host contract vtable header.
+/// The header portion of HostContractInterface.
+pub type HostContractVTableHeader = polyplug_abi::HostContractInterface;
 
 /// Host capabilities passed to every plugin at init time.
 ///

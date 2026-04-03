@@ -21,7 +21,7 @@ pub use runtime::{Compatibility, RuntimeConfig, ReloadPhaseData, ReloadPhaseType
 
 // ─── Type exports ───────────────────────────────────────────────────────────
 
-pub use types::{AbiError, AbiErrorCode, StringView, Version};
+pub use types::{AbiError, AbiErrorCode, StringView, Version, Buffer};
 
 // ─── Dispatch exports ────────────────────────────────────────────────────────
 

@@ -33,6 +33,28 @@ const DEPENDER_TEST_CONTRACT_ID: u64 = 0x54DC2212C30F900D_u64;
 
 const POLYPLUG_ABI_VERSION: u32 = 1_u32;
 
+// ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
+
+/// Stub create_instance for test plugin - returns null instance.
+///
+/// # Safety
+/// Test plugins don't need real instances; dispatch uses global state.
+unsafe extern "C" fn create_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for test plugin - no cleanup needed.
+///
+/// # Safety
+/// Test plugins don't own instance data.
+unsafe extern "C" fn destroy_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {}
+
 // SAFETY: init_count_fn is a C-compatible function with no side effects.
 unsafe extern "C" fn init_count_fn() -> u32 {
     INIT_COUNT.load(Ordering::SeqCst)
@@ -41,13 +63,14 @@ unsafe extern "C" fn init_count_fn() -> u32 {
 static FUNCTIONS: [FnPtr; 1] = [FnPtr(init_count_fn as *const ())];
 
 static INTERFACE: PluginInterface = PluginInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: DEPENDER_TEST_CONTRACT_ID,
-    contract_version: 1_u32 << 16,
-    function_count: 1_u32,
+    contract_id: GuestContractId::from_u64(DEPENDER_TEST_CONTRACT_ID),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
+    create_instance: create_instance_stub,
+    destroy_instance: destroy_instance_stub,
     dispatch: PluginDispatch {
         native: NativeDispatch {
+            function_count: 1,
             functions: FUNCTIONS.as_ptr() as *const *const (),
         },
     },
@@ -62,9 +85,7 @@ static DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"depender.test".as_ptr(),
         len: 13,
     },
-    version_major: 1_u32,
-    version_minor: 0_u32,
-    version_patch: 0_u32,
+    version: Version { major: 1, minor: 0, patch: 0 },
 };
 
 #[unsafe(no_mangle)]
@@ -86,23 +107,23 @@ pub unsafe extern "C" fn polyplug_init(
 ) -> AbiError {
     if host_vtable.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     if ctx.is_null() {
         return AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: string_view_null(),
         };
     }
     INIT_COUNT.fetch_add(1_u32, Ordering::SeqCst);
     // SAFETY: host_vtable is a valid non-null pointer from the host runtime, outlives this call.
     let host: &HostVTable = unsafe { &*host_vtable };
-    // SAFETY: register_plugin is a valid function pointer set by the host.
+    // SAFETY: register_contract is a valid function pointer set by the host.
     // DESCRIPTOR and INTERFACE are 'static.
     unsafe {
-        (host.register_plugin)(
+        (host.register_contract)(
             rt_ctx,
             &DESCRIPTOR as *const PluginDescriptor,
             &INTERFACE as *const PluginInterface,
