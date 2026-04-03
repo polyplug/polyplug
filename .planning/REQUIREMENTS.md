@@ -18,7 +18,7 @@
 - [ ] **ABI-08**: Rename `HostVTable` to `RuntimeAbi`
 - [ ] **ABI-09**: Update `VmDispatch` to include `GuestContractInstance` parameter
 - [ ] **ABI-10**: Add `call_method` to `RuntimeAbi` with `GuestContractInstance` param
-- [ ] **ABI-11**: Rename ID types: `PluginContractId` → `GuestContractId`
+- [x] **ABI-11**: Rename ID types: `PluginContractId` → `GuestContractId`
 - [ ] **ABI-12**: Ensure all public ABI structs are `#[repr(C)]`
 - [ ] **ABI-13**: Create `GuestContractInstance` opaque handle struct
 - [ ] **ABI-14**: Create `HostContractInstance` opaque handle struct

@@ -1,15 +1,15 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: Architecture Refactor
-status: planning
-last_updated: "2026-04-03T12:00:00.000Z"
+milestone_name: milestone
+status: executing
+last_updated: "2026-04-03T16:47:32.873Z"
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 4
+  completed_plans: 1
+  percent: 25
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -25,24 +25,33 @@ progress:
 **Goal:** Refactor architecture for instance-based plugin model with FFI-first design
 
 **Constraints:**
+
 - Architecture: Core crate must have zero loader-specific code or dependencies
 - Safety: Host must destroy all instances before hot-reload completes
 - Compatibility: Breaking changes acceptable — not published yet
 
 ## Current Position
 
-**Phase:** —
-**Plan:** Not started
-**Status:** Roadmap created, ready for planning
-**Progress:** [----------] 0%
+Phase: 01 (abi-types) — EXECUTING
+Plan: 2 of 4
+**Phase:** 01-abi-types
+**Plan:** 01-01 Complete
+**Status:** Executing Phase 01, Plan 02 next
+**Progress:** [███░░░░░░░] 25%
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
 | Phases completed | 0/7 |
-| Plans completed | 0 |
+| Plans completed | 1 |
 | Requirements covered | 50/50 mapped |
+
+### Plan Execution Times
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01-abi-types P01 | 113s | 2 | 2 |
 
 ## Accumulated Context
 
@@ -66,6 +75,7 @@ progress:
 | 2026-04-03 | GuestContractInstance/HostContractInstance opaque handles | Type-safe instance handles, not bare pointers |
 | 2026-04-03 | Manifest parsing stays in core | Move TOML dependency later, not blocking this milestone |
 | 2026-04-03 | GuestContractId hash prefix: "guest_contract:" | Consistent naming with Guest/Host terminology (breaking change) |
+| 2026-04-03 | Deprecation alias PluginContractId = GuestContractId | Smooth migration for dependent code |
 
 ### Active TODOs
 
@@ -82,6 +92,7 @@ None.
 ### Session Continuity
 
 Roadmap created for v1.1 Architecture Refactor:
+
 - Phase 1: ABI Types (19 requirements)
 - Phase 2: Registry (6 requirements)
 - Phase 3: Instance Model (16 requirements)
