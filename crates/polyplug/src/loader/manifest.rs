@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use polyplug_utils::{BundleId, PluginContractId};
+use polyplug_utils::{BundleId, GuestContractId};
 use serde::Deserializer;
 
 const fn current_os() -> &'static str {
@@ -116,7 +116,7 @@ pub struct RawManifestDependency {
     #[serde(default)]
     pub bundle: Option<String>,
     #[serde(default)]
-    pub contract_id: PluginContractId,
+    pub contract_id: GuestContractId,
     #[serde(default)]
     pub bundle_id: Option<BundleId>,
 }
@@ -157,14 +157,14 @@ impl RawManifestDependency {
 pub enum ManifestDependency {
     ByContract {
         contract: String,
-        contract_id: PluginContractId,
+        contract_id: GuestContractId,
         min_version: String,
     },
     ByBundle {
         bundle: String,
         bundle_id: BundleId,
         contract: String,
-        contract_id: PluginContractId,
+        contract_id: GuestContractId,
         min_version: String,
     },
 }
@@ -287,7 +287,7 @@ pub fn parse_manifest(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
-    use polyplug_utils::{BundleId, PluginContractId};
+    use polyplug_utils::{BundleId, GuestContractId};
 
     use super::{ManifestData, ManifestDependency, RawManifestDependency};
     use std::collections::HashMap;
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn raw_dep_resolve_by_contract() {
-        let b_contract_id: PluginContractId = PluginContractId::new("test", 1);
+        let b_contract_id: GuestContractId = GuestContractId::new("test", 1);
         let dep = RawManifestDependency {
             kind: "contract".to_owned(),
             contract: "math".to_owned(),
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn raw_dep_resolve_by_bundle() {
-        let b_contract_id: PluginContractId = PluginContractId::new("test", 1);
+        let b_contract_id: GuestContractId = GuestContractId::new("test", 1);
         let b_bundle_id: BundleId = BundleId::new("test");
 
         let dep: RawManifestDependency = RawManifestDependency {
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn raw_dep_resolve_by_bundle_missing_bundle_id_returns_none() {
-        let b_contract_id: PluginContractId = PluginContractId::new("test", 1);
+        let b_contract_id: GuestContractId = GuestContractId::new("test", 1);
 
         let dep: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
@@ -443,8 +443,8 @@ mod tests {
 
     #[test]
     fn resolved_dependencies_skips_bundle_dep_with_no_bundle_id() {
-        let b_contract_id_1: PluginContractId = PluginContractId::new("test1", 1);
-        let b_contract_id_2: PluginContractId = PluginContractId::new("test2", 1);
+        let b_contract_id_1: GuestContractId = GuestContractId::new("test1", 1);
+        let b_contract_id_2: GuestContractId = GuestContractId::new("test2", 1);
 
         let mut m: ManifestData = make_manifest("p.so", "p");
         m.dependencies = vec![
