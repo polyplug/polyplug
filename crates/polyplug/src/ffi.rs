@@ -78,7 +78,7 @@ impl ReloadPhaseC {
                 retry_count,
             } => ReloadPhaseC {
                 phase_type: ReloadPhaseType::Preparing as u32,
-                bundle_id: *bundle_id,
+                bundle_id: bundle_id.id(),
                 bundle_name: string_view_from_str(bundle_name.as_str()),
                 retry_count: *retry_count,
                 reason: StringView::null(),
@@ -88,7 +88,7 @@ impl ReloadPhaseC {
                 bundle_name,
             } => ReloadPhaseC {
                 phase_type: ReloadPhaseType::Reloaded as u32,
-                bundle_id: *bundle_id,
+                bundle_id: bundle_id.id(),
                 bundle_name: string_view_from_str(bundle_name.as_str()),
                 retry_count: 0,
                 reason: StringView::null(),
@@ -99,7 +99,7 @@ impl ReloadPhaseC {
                 reason,
             } => ReloadPhaseC {
                 phase_type: ReloadPhaseType::Failed as u32,
-                bundle_id: *bundle_id,
+                bundle_id: bundle_id.id(),
                 bundle_name: string_view_from_str(bundle_name.as_str()),
                 retry_count: 0,
                 reason: string_view_from_str(reason.as_str()),
