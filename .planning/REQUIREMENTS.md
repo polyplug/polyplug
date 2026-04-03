@@ -40,9 +40,9 @@ Deferred to future release.
 | ERR-03 | Phase 1 | Pending |
 | ERR-04 | Phase 1 | Pending |
 | ERR-05 | Phase 1 | Pending |
-| ERR-06 | Phase 1 | Pending |
-| COMP-01 | Phase 1 | Pending |
-| COMP-02 | Phase 1 | Pending |
+| ERR-06 | Phase 2 | Pending |
+| COMP-01 | Phase 3 | Pending |
+| COMP-02 | Phase 3 | Pending |
 
 **Coverage:**
 - v1 requirements: 8 total
@@ -51,4 +51,4 @@ Deferred to future release.
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after initialization*
+*Last updated: 2026-04-03 after roadmap creation*
