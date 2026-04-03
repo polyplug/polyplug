@@ -1,4 +1,4 @@
-use polyplug_utils::PluginContractId;
+use polyplug_utils::GuestContractId;
 
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
@@ -16,7 +16,7 @@ use crate::{
 #[repr(C)]
 pub struct PluginInterface {
     /// FNV-1a hash of "contract_name@major_version".
-    pub contract_id: PluginContractId,
+    pub contract_id: GuestContractId,
     /// Contract version.
     pub contract_version: Version,
     /// Dispatch mechanism type (Native or VirtualMachine).
@@ -34,7 +34,7 @@ mod tests {
     #[test]
     fn layout_plugin_interface() {
         // PluginInterface layout:
-        //   contract_id (PluginContractId/u64): 8 bytes @ offset 0
+        //   contract_id (GuestContractId/u64): 8 bytes @ offset 0
         //   contract_version (Version/3xu32): 12 bytes @ offset 8
         //   dispatch_type (DispatchType/u32): 4 bytes @ offset 20
         //   [padding 4 bytes for alignment]
