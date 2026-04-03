@@ -8,64 +8,479 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 
 The core runtime is loader-agnostic — the `polyplug` crate knows about the `BundleLoader` trait and `PluginRegistry`, but NOT about `libloading`, `dlopen`, or any specific loader implementation.
 
-## Requirements
+## Architecture
 
-### Validated
+### Crate Structure
 
-- ✓ Native loader in separate crate (`polyplug_native`) — decoupled from core
-- ✓ `libloading` dependency removed from core `Cargo.toml`
-- ✓ No auto-registration of native loader — users must register explicitly
-- ✓ `NativeLoader` owns library handles internally — not stored in registry
-- ✓ Generic `reload.rs` with `wait_for_quiescence()` utility — all loaders use it
-- ✓ `BundleLoader.reload()` method — mandatory for all loaders
-- ✓ Python/Lua/JS/.NET loaders already properly decoupled — each owns its VM state
-- ✓ Loader-local error types defined (Phase 01) — `PythonLoaderError`, `LuaLoaderError`, `JsLoaderError`, `DotnetLoaderError`
-- ✓ Core `LoaderError` stripped of loader-specific variants — only generic Loader variants remain
-- ✓ All loaders use `LoaderError::InitFailed` directly (Phase 02) — language-specific error types removed
-- ✓ Hot-reload returns `RuntimeError::HotReloadDisabled` consistently across all loaders
-- ✓ Error handling refactoring verified (Phase 03) — no removed variants remain, FFI string conversion confirmed
+```
+crates/
+├── polyplug_abi/        # FFI types - ALL public structs are #[repr(C)]
+│   └── src/
+│       ├── contract/    # GuestContractInterface, HostContractInterface
+│       ├── dispatch/    # DispatchType, DispatchMechanisms, NativeDispatch, VmDispatch
+│       ├── context/     # RuntimeContext, PluginContext
+│       ├── types/       # StringView, Buffer, Version, AbiError, etc.
+│       ├── handle/      # ContractHandle, BundleId, GuestContractId, HostContractId
+│       └── abi/         # RuntimeAbi (the ABI function table)
+│
+├── polyplug_utils/      # Zero-dependency ID types
+│   └── src/
+│       ├── bundle_id.rs        # BundleId (FNV-1a hash of bundle name)
+│       ├── guest_contract_id.rs # GuestContractId (hash of "contract@major")
+│       └── host_contract_id.rs  # HostContractId (hash of "host_contract:name@major")
+│
+├── polyplug/            # Core runtime - NO loader-specific code
+│   └── src/
+│       ├── runtime.rs           # Runtime struct (opaque, not repr(C))
+│       ├── runtime_builder.rs   # Builder pattern for runtime creation
+│       ├── registry/            # PluginRegistry - stores GuestContractInterface
+│       ├── loader/              # BundleLoader trait, manifest types
+│       ├── reload.rs            # Hot-reload callback mechanism
+│       ├── ffi.rs               # C ABI exports for other languages
+│       └── error.rs             # RuntimeError, LoaderError, etc.
+│
+├── polyplug_native/     # Native loader (libloading/dlopen)
+├── polyplug_python/     # Python loader (pyo3)
+├── polyplug_lua/        # Lua loader (mlua/LuaJIT)
+├── polyplug_js/         # JavaScript loader (rquickjs/QuickJS)
+├── polyplug_dotnet/     # .NET loader (netcorehost)
+│
+├── polyplugc/           # CLI code generator
+└── polyplug_codegen/    # Code generation library (IR, language generators)
 
-### Active
+sdks/
+├── rust/
+│   ├── guest/           # Re-exports polyplug_abi + helpers
+│   └── host/            # Runtime wrapper, manifest parsing
+├── python/
+│   ├── abi/             # ctypes mirrors of polyplug_abi types
+│   ├── guest/           # Plugin author library
+│   └── host/            # Runtime class, PluginGuard
+├── csharp/
+│   ├── Abi/             # C# mirrors of polyplug_abi types
+│   ├── Guest/           # Plugin author library
+│   └── Host/            # Runtime class, PluginGuard
+├── lua/
+│   ├── abi/             # FFI cdef of polyplug_abi types
+│   ├── guest/           # Plugin author library
+│   └── host/            # Runtime class
+└── js/
+    ├── abi/             # TypeScript interfaces
+    ├── guest/           # Plugin author library
+    └── host/            # Runtime class
+```
 
-(None — all phases complete)
+### Key Concepts
 
-### Out of Scope
+#### Bundle
+A deployment unit containing one or more plugin implementations. A bundle is a directory with:
+- `manifest.toml` - metadata (name, version, runtime, dependencies, provides)
+- Plugin file (`.so`, `.dll`, `.dylib`, `.py`, `.lua`, `.js`)
 
-- WASM runtime support — deliberate exclusion, native plugin system is the design
-- Plugin sandboxing/security boundaries — host is responsible for trust
+One bundle can provide multiple contracts (multi-plugin bundles).
 
-## Context
+#### Contract
+A named interface with versioned methods. Two types:
+- **Guest Contract** - Implemented by plugins, consumed by host
+- **Host Contract** - Implemented by host, consumed by plugins
 
-**Active Work:** None — all planned phases complete.
+#### Interface
+The `GuestContractInterface` and `HostContractInterface` structs define how to call a contract:
+- Contract identification (ID, version)
+- Dispatch mechanism (native function pointers or VM dispatch)
+- Instance lifecycle (create_instance, destroy_instance)
 
-**Completed Phases:**
-1. ✅ Update `BundleLoader` trait (add reload method)
-2. ✅ Create generic reload framework in core
-3. ✅ Create `NativeLoader` in `polyplug_native`
-4. ✅ Remove native coupling from core
-5. ✅ Require explicit `runtime` in manifest
-6. ✅ Use newtype IDs (`BundleId`, `PluginContractId`)
-7. ✅ Define loader-local error types — each loader has its own error enum
-8. ✅ Strip loader-specific variants from core `LoaderError`
-9. ✅ Update loader implementations — unified `InitFailed` pattern, removed language-specific error types
-10. ✅ Verify compatibility — structural verification passed (COMP-02 verified; COMP-01 blocked by pre-existing core crate WIP)
+#### Instance
+A concrete instance of a contract with state. Instances are:
+- Created by `interface.create_instance(rt_ctx)`
+- Owned by the host (RAII pattern in generated code)
+- Passed as first argument to all dispatch calls
+- Destroyed by `interface.destroy_instance(rt_ctx, instance)`
 
-**Deferred:** Test execution verification pending core crate WIP refactoring completion (documented in 03-VERIFICATION.md).
+Host contracts can be:
+- **Singleton** - same instance returned every time
+- **Multi-instance** - new instance created each time
+
+#### Registry
+Stores `GuestContractInterface` pointers, indexed by `GuestContractId`. Supports:
+- `find_contract(contract_id, min_version)` - find any implementation
+- `resolve_contract(handle)` - get interface pointer
+- Multi-impl support (multiple bundles can implement same contract)
+
+Does NOT store:
+- Instance state (host owns instances)
+- Bundle data (stored separately)
+
+## FFI Types (polyplug_abi)
+
+All public structs are `#[repr(C)]` for ABI stability.
+
+### GuestContractInterface
+
+```rust
+#[repr(C)]
+pub struct GuestContractInterface {
+    pub contract_id: GuestContractId,
+    pub contract_version: Version,
+    pub dispatch_type: DispatchType,
+    pub dispatch: DispatchMechanisms,
+    pub create_instance: unsafe extern "C" fn(rt_ctx: *mut c_void) -> *mut c_void,
+    pub destroy_instance: unsafe extern "C" fn(rt_ctx: *mut c_void, instance: *mut c_void),
+}
+```
+
+### HostContractInterface
+
+```rust
+#[repr(C)]
+pub struct HostContractInterface {
+    pub contract_id: HostContractId,
+    pub contract_version: Version,
+    pub singleton: bool,
+    pub dispatch_type: DispatchType,
+    pub dispatch: DispatchMechanisms,
+    pub create_instance: unsafe extern "C" fn(rt_ctx: *mut c_void) -> *mut c_void,
+    pub destroy_instance: unsafe extern "C" fn(rt_ctx: *mut c_void, instance: *mut c_void),
+}
+```
+
+### RuntimeAbi
+
+The ABI table passed to plugins during initialization:
+
+```rust
+#[repr(C)]
+pub struct RuntimeAbi {
+    // Registration
+    pub register_plugin: unsafe extern "C" fn(rt_ctx, descriptor, interface) -> AbiError,
+    
+    // Memory
+    pub alloc: unsafe extern "C" fn(rt_ctx, size, align) -> *mut u8,
+    pub free: unsafe extern "C" fn(rt_ctx, ptr, size, align),
+    
+    // Contract resolution (for plugin-plugin dependencies)
+    pub find_contract: unsafe extern "C" fn(rt_ctx, contract_id, min_version) -> ContractHandle,
+    pub resolve_contract: unsafe extern "C" fn(rt_ctx, handle) -> *const GuestContractInterface,
+    
+    // Host contract access
+    pub get_host_contract: unsafe extern "C" fn(rt_ctx, contract_id, min_version) -> *mut c_void,
+    
+    // Cross-dispatch method call
+    pub call_method: unsafe extern "C" fn(rt_ctx, interface, instance, fn_id, args, out) -> AbiError,
+}
+```
+
+### Dispatch Mechanisms
+
+```rust
+#[repr(u32)]
+pub enum DispatchType {
+    Native = 0,         // Direct function pointer calls
+    VirtualMachine = 1, // Call through VM dispatch function
+}
+
+#[repr(C)]
+pub struct NativeDispatch {
+    pub functions: *const *const (),  // Array of function pointers
+}
+
+#[repr(C)]
+pub struct VmDispatch {
+    pub call: unsafe extern "C" fn(
+        loader_data: *mut c_void,  // VM state
+        instance: *mut c_void,      // Instance (NEW: first arg)
+        fn_id: u32,
+        args: *const (),
+        out: *mut (),
+    ) -> AbiError,
+    pub loader_data: *mut c_void,
+}
+```
+
+Instance is passed as first argument for both native and VM dispatch.
+
+### Contexts
+
+```rust
+// Passed during polyplug_init only
+#[repr(C)]
+pub struct PluginContext {
+    pub bundle_id: BundleId,
+    pub bundle_path: StringView,
+    pub bundle_version: Version,
+}
+
+// Opaque runtime pointer - passed to all ABI functions
+// Type: *mut c_void, points to Runtime internally
+```
+
+### Handles
+
+```rust
+#[repr(C)]
+pub struct ContractHandle {
+    pub index: u32,  // No generation - instances destroyed before hot-reload
+}
+
+// ID types (from polyplug_utils)
+pub struct BundleId(pub u64);           // FNV-1a of bundle name
+pub struct GuestContractId(pub u64);    // FNV-1a of "contract@major"
+pub struct HostContractId(pub u64);     // FNV-1a of "host_contract:name@major"
+```
+
+## Dispatch Flow
+
+### Host Calling Plugin
+
+```
+Host Code
+    │
+    ▼
+Generated Instance Wrapper (codegen)
+    │
+    │  runtime.find_contract(contract_id, 0) -> ContractHandle
+    │  runtime.resolve_contract(handle) -> &GuestContractInterface
+    │  interface.create_instance(rt_ctx) -> *mut c_void (instance)
+    │
+    ▼
+Method Call
+    │
+    │  match interface.dispatch_type
+    │    Native: dispatch.native.functions[fn_id](instance, args, out)
+    │    VM: dispatch.vm.call(loader_data, instance, fn_id, args, out)
+    │
+    ▼
+Plugin Implementation
+    │
+    ▼
+Result/AbiError
+```
+
+### Plugin Calling Plugin
+
+Same flow, but plugin uses RuntimeAbi:
+1. `abi.find_contract(rt_ctx, contract_id, 0)` → ContractHandle
+2. `abi.resolve_contract(rt_ctx, handle)` → interface pointer
+3. `(interface.create_instance)(rt_ctx)` → instance pointer
+4. Dispatch through interface (or use `abi.call_method` for cross-dispatch)
+5. `(interface.destroy_instance)(rt_ctx, instance)`
+
+### Plugin Calling Host Contract
+
+1. `abi.get_host_contract(rt_ctx, contract_id, 0)` → instance pointer
+2. Dispatch through stored HostContractInterface
+3. For singleton: same instance each time
+4. For multi-instance: new instance each time, caller owns it
+
+## Hot-Reload
+
+### Mechanism
+
+1. Host triggers `runtime.reload_bundle(bundle_id)`
+2. Runtime fires `ReloadPhase::Preparing` callback
+3. Host destroys ALL instances from that bundle
+4. Callback returns → Runtime assumes no remaining instances
+5. Runtime atomically swaps `GuestContractInterface` pointers
+6. Runtime fires `ReloadPhase::Reloaded` callback
+7. Host creates new instances from new interfaces
+8. Any remaining instances (leaked) → warning callback, UB if used
+
+### Instance Safety
+
+- No generation counters in handles
+- Safety enforced by callback contract: host MUST destroy instances
+- Leaked instances → undefined behavior after hot-reload
+- Warning callback fires if runtime detects remaining instances
+
+## Code Generation
+
+### polyplugc CLI
+
+```bash
+# Generate host SDK (from api.toml)
+polyplugc generate --api api.toml --lang rust --out src/generated
+
+# Generate guest SDK (from bundle.toml)
+polyplugc generate --bundle bundle.toml --lang rust --out src/generated
+```
+
+### Generated Artifacts
+
+**Host SDK** (for app developers):
+- `types.rs` - Enums, structs, contract ID constants
+- `guest_callers.rs` - RAII instance wrappers with type-safe methods
+- `host_contract_impl.rs` - Trait to implement host contracts
+- `host_contract_vtables.rs` - Factory functions for HostContractInterface
+
+**Guest SDK** (for plugin authors):
+- `types.rs` - Shared types
+- `contracts.rs` - Traits to implement for each guest contract
+- `vtables.rs` - ABI wrappers and GuestContractInterface statics
+- `init.rs` - `polyplug_init` entry point
+- `host_callers.rs` - Wrappers to call host contracts
+
+### Instance Wrapper Pattern (Generated)
+
+```rust
+// Generated by codegen
+pub struct DecoderInstance {
+    interface: &'static GuestContractInterface,
+    instance: *mut c_void,
+}
+
+impl DecoderInstance {
+    pub fn create(runtime: &Runtime, contract_id: GuestContractId) -> Result<Self, Error> {
+        let handle = runtime.find_contract(contract_id, 0)?;
+        let interface = runtime.resolve_contract(handle)?;
+        let instance = unsafe { (interface.create_instance)(runtime.ctx()) };
+        if instance.is_null() {
+            return Err(Error::CreateFailed);
+        }
+        Ok(Self { interface, instance })
+    }
+    
+    pub fn decode(&self, input: &str) -> Result<String, Error> {
+        // Pack args, dispatch through interface, unpack result
+    }
+}
+
+impl Drop for DecoderInstance {
+    fn drop(&mut self) {
+        unsafe {
+            // Note: need rt_ctx here - stored in wrapper or passed
+            (self.interface.destroy_instance)(rt_ctx, self.instance);
+        }
+    }
+}
+```
+
+## Bundle Loading
+
+### Manifest (manifest.toml)
+
+```toml
+id = 123456789
+name = "decoder_bundle"
+version = "1.0.0"
+runtime = "native"
+file = { linux.x86_64 = "libdecoder.so", macos.aarch64 = "libdecoder.dylib" }
+
+provides = ["pipeline.Decoder@1.0"]
+
+[[dependency]]
+kind = "contract"
+contract = "image.loader@1.0"
+contract_id = 0xABCDEF...
+min_version = "1.0"
+
+[function_count]
+"pipeline.Decoder@1" = 3
+```
+
+### Load Flow
+
+1. **Discovery**: Scanner finds `manifest.toml` in plugin directories
+2. **Graph Build**: CapabilityGraph from manifests, detect cycles
+3. **Topological Sort**: Providers before dependents
+4. **Dispatch**: Match `manifest.runtime` to `BundleLoader::runtime_name()`
+5. **Loader Load**:
+   - Native: dlopen, check ABI version, resolve polyplug_init
+   - VM: create VM instance, load script
+6. **Init**: Call `polyplug_init(rt_ctx, abi, plugin_ctx)`
+7. **Registration**: Plugin calls `abi.register_plugin(descriptor, interface)`
+8. **Storage**: Runtime stores interface in registry, loader stores library handle
+
+### BundleLoader Trait
+
+```rust
+pub trait BundleLoader: Send + Sync {
+    fn runtime_name(&self) -> &'static str;
+    fn runtime_names(&self) -> Vec<String> { vec![self.runtime_name().to_owned()] }
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError>;
+    fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError>;
+}
+```
+
+## Memory Management
+
+### Host Allocator
+
+All cross-boundary memory uses the host allocator:
+- `polyplug_host_alloc(size, align)` - allocate
+- `polyplug_host_free(ptr, size, align)` - free
+
+### StringView vs Buffer
+
+- `StringView { ptr, len }` - Borrowed string, receiver must NOT free
+- `Buffer { ptr, len, cap }` - Owning buffer, must free with host_free
+
+### Interface Lifetime
+
+- `GuestContractInterface` must be `'static` or intentionally leaked
+- Never stack-allocated
+- Lives as long as the bundle is loaded
+
+## Error Handling
+
+### Error Types
+
+```rust
+pub enum RuntimeError {
+    Loader(LoaderError),
+    Registry(RegistryError),
+    Graph(GraphError),
+    HotReloadDisabled,
+    QuiescenceTimeout { ... },
+}
+
+pub enum LoaderError {
+    InitFailed { bundle: String, error: String },
+    NoLoaderForRuntime { bundle: String, runtime_name: String },
+    DuplicateLoader { runtime_name: String },
+    // ... others
+}
+
+pub enum RegistryError {
+    ContractNotFound { contract_id: u64, min_version: u32 },
+    ContractIdCollision { id: u64, name_a: String, name_b: String },
+}
+```
+
+### FFI Error Reporting
+
+- FFI functions return `AbiError { code, message }`
+- Runtime stores last error in `Mutex<String>`
+- `polyplug_runtime_last_error()` retrieves error message
 
 ## Constraints
 
 - **Architecture:** Core crate must have zero loader-specific code or dependencies
-- **Safety:** Hot-reload safety contract — hosts must not cache raw function pointers
+- **Safety:** Host must destroy all instances before hot-reload completes
 - **Compatibility:** Breaking changes acceptable — not published yet
+- **FFI:** All public ABI structs are `#[repr(C)]`
+- **Pointers:** Raw pointers only at FFI boundary, not in internal Rust code
 
-## Key Decisions
+## Current Milestone: v1.1 Architecture Refactor
 
-| Decision | Rationale | Outcome |
-|----------|-----------|---------|
-| No WASM runtime | Native shared libraries give zero-overhead dispatch; WASM would add interpretation layer | ✓ Correct |
-| Mandatory `reload()` in trait | Every loader must support hot-reload, not just native | ✓ Implemented |
-| Library handles owned by loader | Registry only stores vtable pointers; loaders own their resources | ✓ Implemented |
-| Fail-fast on stale pointers | If host caches raw pointers after reload, SIGSEGV is a host bug | ✓ Documented in safety contract |
+### Goal
+
+Refactor the core architecture to:
+1. Remove "vtable" terminology - use `GuestContractInterface`
+2. Remove `VTableSlot` wrapper - registry stores interfaces directly
+3. Replace `PluginGuard` with instance-based RAII pattern
+4. Make all public ABI structs `#[repr(C)]` in `polyplug_abi`
+5. Remove `*C` suffix types - single source of truth in `polyplug_abi`
+6. Move manifest parsing out of core runtime
+7. Implement instance model with factory/RAII pattern
+8. Support singleton and multi-instance host contracts
+
+### Target Features
+
+- Instance-based plugin model (host creates/owns instances)
+- Hot-reload via callback-based instance destruction
+- Cross-dispatch method calls for plugin-plugin communication
+- Clear Host/Guest naming throughout
+- FFI-first design - Rust SDK uses same types as other languages
 
 ---
-*Last updated: 2026-04-03 after Phase 03 completion (verification with COMP-02 verified, COMP-01 deferred)*
+*Last updated: 2026-04-03*
