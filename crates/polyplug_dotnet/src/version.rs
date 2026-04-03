@@ -49,15 +49,17 @@ const TFM_MARKER: &[u8] = b".NETCoreApp,Version=v";
 pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
     // Step 1: Read file bytes.
     let bytes: Vec<u8> = std::fs::read(dll_path).map_err(|_| {
-        RuntimeError::Loader(LoaderError::AssemblyNotFound {
-            path: dll_path.to_string_lossy().into_owned(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: dll_path.to_string_lossy().into_owned(),
+            error: "assembly not found or unreadable".to_owned(),
         })
     })?;
 
     // Step 2: Parse PE file — auto-detects PE32 vs PE32+.
     let pe: PeFile<'_> = PeFile::from_bytes(&bytes).map_err(|_| {
-        RuntimeError::Loader(LoaderError::AssemblyNotFound {
-            path: dll_path.to_string_lossy().into_owned(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: dll_path.to_string_lossy().into_owned(),
+            error: "invalid PE format".to_owned(),
         })
     })?;
 
@@ -75,8 +77,9 @@ pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
 
     // Step 4: Read COR20 header at the COM descriptor RVA.
     let cor20: &ImageCor20Header = pe.derva(com_dir.VirtualAddress).map_err(|_| {
-        RuntimeError::Loader(LoaderError::AssemblyNotFound {
-            path: dll_path.to_string_lossy().into_owned(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: dll_path.to_string_lossy().into_owned(),
+            error: "COR20 header not found or invalid".to_owned(),
         })
     })?;
 
@@ -84,8 +87,9 @@ pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
     let metadata_slice: &[u8] = pe
         .derva_slice(cor20.metadata_rva, cor20.metadata_size as usize)
         .map_err(|_| {
-            RuntimeError::Loader(LoaderError::AssemblyNotFound {
-                path: dll_path.to_string_lossy().into_owned(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: dll_path.to_string_lossy().into_owned(),
+                error: "CLI metadata section not found or invalid".to_owned(),
             })
         })?;
 
