@@ -1,3 +1,6 @@
+//! VM dispatch data — call through a dispatch function.
+
+use crate::guest::GuestContractInstance;
 use crate::types::AbiError;
 
 /// VM dispatch data — call through a dispatch function.
@@ -11,11 +14,13 @@ pub struct VmDispatch {
     ///
     /// # Arguments
     /// - `loader_data`: VM-specific data (cast from `*mut c_void`)
+    /// - `instance`: The guest contract instance (opaque handle)
     /// - `fn_id`: Function index within the contract
     /// - `args`: Pointer to packed arguments (ABI-specific layout)
     /// - `out`: Pointer to output buffer for return value
     pub call: unsafe extern "C" fn(
         loader_data: *mut core::ffi::c_void,
+        instance: GuestContractInstance,
         fn_id: u32,
         args: *const (),
         out: *mut (),
@@ -43,6 +48,8 @@ mod tests {
 
     #[test]
     fn layout_vm_dispatch() {
+        // VmDispatch: function pointer (8) + raw pointer (8) = 16 bytes
+        // The instance parameter is passed to the call function, not stored in the struct
         assert_eq!(size_of::<VmDispatch>(), 16);
         assert_eq!(align_of::<VmDispatch>(), 8);
         assert_eq!(offset_of!(VmDispatch, call), 0);
