@@ -56,11 +56,11 @@ Plans:
 3. Local error types from Phase 1 (`PythonLoaderError`, etc.) are removed or marked unused
 4. All loaders return `RuntimeError::HotReloadDisabled` for unsupported hot-reload (consistency)
 
-**Plans:** 5 plans
+**Plans:** 4/5 plans executed
 
 Plans:
 - [x] 02-01-PLAN.md — Update NativeLoader: remove error.rs, inline load_internal, use InitFailed directly
-- [ ] 02-02-PLAN.md — Update PythonLoader: remove error.rs, replace all error sites with InitFailed
+- [x] 02-02-PLAN.md — Update PythonLoader: remove error.rs, replace all error sites with InitFailed
 - [x] 02-03-PLAN.md — Update LuaLoader: remove error.rs, replace all error sites with InitFailed
 - [ ] 02-04-PLAN.md — Update JsLoader: remove error.rs, replace ~45 error sites, fix hot-reload
 - [x] 02-05-PLAN.md — Update DotnetLoader: remove error.rs, replace error sites, fix hot-reload
@@ -89,7 +89,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Define Loader-Local Error Types | 5/5 | Complete | 2026-04-03 |
-| 2. Update Loader Implementations | 0/5 | Not started | - |
+| 2. Update Loader Implementations | 4/5 | In Progress|  |
 | 3. Verify Compatibility | 0/1 | Not started | - |
 
 ## Coverage Map
