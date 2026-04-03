@@ -124,7 +124,7 @@ pub fn new(name: &str, major_version: u32) -> Self {
 }
 ```
 
-After rename to `GuestContractId`, the prefix should remain `"plugin_contract:"` to maintain ABI stability OR change to `"guest_contract:"` (DECISION NEEDED).
+After rename to `GuestContractId`, the prefix will change to `"guest_contract:"` for consistent Guest/Host naming (DECIDED: breaking change accepted).
 
 **HostContractId** already exists with prefix `"host_contract:"`.
 
@@ -463,7 +463,7 @@ pub struct VmDispatch {
 
 5. **HostContractVTable family** is documented in `docs/HOST_CONTRACTS_API.md` but NOT implemented in code - needs creation in polyplug_abi
 
-6. **PluginContractId** uses `"plugin_contract:"` hash prefix - recommend keeping prefix after rename to avoid ABI breakage
+6. **PluginContractId** uses `"plugin_contract:"` hash prefix - will change to `"guest_contract:"` for naming consistency (breaking change accepted)
 
 ### File Created
 
@@ -478,10 +478,10 @@ pub struct VmDispatch {
 | Pitfalls | HIGH | Identified ReloadPhase FFI incompatibility, circular dependency chains |
 | Missing Types | MEDIUM | HostContractVTable family documented but not yet implemented |
 
-### Open Questions
+### Open Questions (RESOLVED)
 
-1. GuestContractId hash prefix - keep `"plugin_contract:"` or change to `"guest_contract:"`?
-2. ReloadPhase FFI representation - redesign enum or create separate FFI struct?
+1. GuestContractId hash prefix — RESOLVED: Use `"guest_contract:"` (breaking change accepted)
+2. ReloadPhase FFI representation — RESOLVED: Create ReloadPhaseData FFI struct
 3. RuntimeCreateOptions definition - not found in current codebase
 
 ### Ready for Planning
