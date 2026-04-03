@@ -19,6 +19,14 @@ pub use runtime_language::RuntimeLanguage;
 
 pub use runtime::{Compatibility, RuntimeConfig, ReloadPhaseData, ReloadPhaseType};
 
+// ─── Type exports ───────────────────────────────────────────────────────────
+
+pub use types::AbiErrorCode;
+
+// ─── FFI Helper Function exports ────────────────────────────────────────────
+
+pub use types::{abi_error_ok, string_view_null, string_view_from_static};
+
 // ─── New exports from guest module ───────────────────────────────────────────
 
 pub use guest::{GuestContractInterface, GuestContractInstance};
