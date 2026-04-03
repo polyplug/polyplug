@@ -5,7 +5,7 @@ milestone_name: Architecture Refactor
 status: planning
 last_updated: "2026-04-03T12:00:00.000Z"
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -31,13 +31,18 @@ progress:
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
 **Phase:** —
 **Plan:** Not started
-**Status:** Milestone v1.1 initialized
+**Status:** Roadmap created, ready for planning
 **Progress:** [----------] 0%
+
+## Performance Metrics
+
+| Metric | Value |
+|--------|-------|
+| Phases completed | 0/6 |
+| Plans completed | 0 |
+| Requirements covered | 48/48 mapped |
 
 ## Accumulated Context
 
@@ -51,8 +56,8 @@ Status: Defining requirements
 | 2026-04-03 | create/destroy_instance in interfaces | Contract-specific factory pattern |
 | 2026-04-03 | Instance as first dispatch arg | Consistent for native and VM dispatch |
 | 2026-04-03 | Hot-reload via callback | Host destroys instances; no Arc quiescence pattern |
-| 2026-04-03 | Rename Plugin Contract → Guest Contract | Clear Host/Guest separation |
-| 2026-04-03 | RuntimeAbi naming | Clearer than HostVTable (host ≠ runtime) |
+| 2026-04-03 | Rename Plugin Contract -> Guest Contract | Clear Host/Guest separation |
+| 2026-04-03 | RuntimeAbi naming | Clearer than HostVTable (host != runtime) |
 | 2026-04-03 | All public ABI structs repr(C) | Single source of truth, no *C types |
 | 2026-04-03 | Host contracts: singleton or multi-instance | Flexibility for host-provided services |
 | 2026-04-03 | ContractHandle without generation | Instances destroyed before hot-reload |
@@ -61,7 +66,7 @@ Status: Defining requirements
 
 ### Active TODOs
 
-(None — milestone just initialized)
+(None — roadmap just created)
 
 ### Blockers
 
@@ -69,20 +74,18 @@ None.
 
 ### Session Continuity
 
-Milestone v1.1 initialized after deep exploration of:
-- Current architecture (ABI, utils, runtime, registry, dispatch)
-- PluginGuard/VTableSlot patterns
-- BundleLoader and bundle loading flow
-- Codegen system (host/guest SDK generation)
-- Manifest and dependency handling
+Roadmap created for v1.1 Architecture Refactor:
+- Phase 4: ABI Types (17 requirements)
+- Phase 5: Registry (6 requirements)
+- Phase 6: Instance Model (16 requirements)
+- Phase 7: Hot-Reload (6 requirements)
+- Phase 8: SDK Updates (7 requirements)
+- Phase 9: Cleanup (4 requirements)
 
-Key architectural decisions made:
-1. Instance model replaces "guard" model
-2. Factory pattern in interfaces (create/destroy_instance)
-3. Callback-based hot-reload (host destroys instances)
-4. Clear naming: Guest Contract, Host Contract, RuntimeAbi
+Total: 48 requirements, 100% coverage.
 
-**Project Status:** Ready for requirements definition.
+**Project Status:** Roadmap ready. Next: `/gsd:plan-phase 4`
 
 ---
 *State initialized: 2026-04-03*
+*Roadmap created: 2026-04-03*

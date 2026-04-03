@@ -1,121 +1,129 @@
-# ROADMAP: polyplug Error Decoupling
+# Roadmap: polyplug v1.1 Architecture Refactor
 
+**Milestone:** v1.1 Architecture Refactor
 **Created:** 2026-04-03
-**Granularity:** Coarse
-**Core Value:** Core runtime is loader-agnostic — no loader-specific code or types
+**Granularity:** Coarse (6 phases)
+**Coverage:** 48/48 requirements mapped
 
-## Overview
+## Core Value
 
-This roadmap addresses error type decoupling, moving loader-specific error variants from the core `LoaderError` enum to their respective loader crates. Each phase delivers a verifiable capability that advances toward full decoupling.
+The core runtime is loader-agnostic — the `polyplug` crate knows about the `BundleLoader` trait and `PluginRegistry`, but NOT about `libloading`, `dlopen`, or any specific loader implementation.
 
 ## Phases
 
-- [x] **Phase 1: Define Loader-Local Error Types** - Move error variants from core to loader crates (completed 2026-04-03)
-- [x] **Phase 2: Update Loader Implementations** - Loaders use unified InitFailed pattern (completed 2026-04-03)
-- [ ] **Phase 3: Verify Compatibility** - Ensure tests pass and FFI compatibility maintained
+- [ ] **Phase 4: ABI Types** - Foundation types moved to polyplug_abi with renamed interfaces
+- [ ] **Phase 5: Registry** - Simplified registry with direct interface storage
+- [ ] **Phase 6: Instance Model** - Factory-based instance lifecycle with codegen support
+- [ ] **Phase 7: Hot-Reload** - Callback-based reload with instance safety contract
+- [ ] **Phase 8: SDK Updates** - All five SDKs updated to use polyplug_abi types
+- [ ] **Phase 9: Cleanup** - Naming consistency and documentation updates
 
 ## Phase Details
 
-### Phase 1: Define Loader-Local Error Types
-
-**Goal:** Each loader crate defines and exports its own error type with migrated variants
-
-**Depends on:** Nothing (first phase)
-
-**Requirements:** ERR-01, ERR-02, ERR-03, ERR-04, ERR-05
-
+### Phase 4: ABI Types
+**Goal:** All FFI types consolidated in polyplug_abi with renamed interfaces
+**Depends on:** Nothing (foundation phase)
+**Requirements:** ABI-01, ABI-02, ABI-03, ABI-04, ABI-05, ABI-06, ABI-07, ABI-08, ABI-09, ABI-10, ABI-11, ABI-12, RTABI-01, RTABI-02, RTABI-03, RTABI-04, RTABI-05
 **Success Criteria** (what must be TRUE):
-1. Core `LoaderError` enum contains no Python, Lua, JS, or .NET specific variants
-2. `polyplug_python` crate exports `PythonLoaderError` enum with migrated variants
-3. `polyplug_lua` crate exports `LuaLoaderError` enum with migrated variants
-4. `polyplug_js` crate exports `JsLoaderError` enum with migrated variants
-5. `polyplug_dotnet` crate exports `DotnetLoaderError` enum with migrated variants
+1. GuestContractInterface and HostContractInterface structs defined in polyplug_abi with create_instance/destroy_instance fields
+2. RuntimeConfig, ReloadPhase, and RuntimeCreateOptions moved from polyplug crate to polyplug_abi
+3. RuntimeAbi (renamed from HostVTable) contains all ABI functions including call_method
+4. All ID types renamed: PluginContractId -> GuestContractId throughout codebase
+5. All public ABI structs are #[repr(C)] and compile successfully
+**Plans:** TBD
 
-**Plans:** 5 plans (all complete)
-
-Plans:
-- [x] 01-PLAN.md — Define PythonLoaderError in polyplug_python crate (ERR-01) ✓
-- [x] 02-PLAN.md — Define LuaLoaderError in polyplug_lua crate (ERR-02) ✓
-- [x] 03-PLAN.md — Define JsLoaderError in polyplug_js crate (ERR-03) ✓
-- [x] 04-PLAN.md — Define DotnetLoaderError in polyplug_dotnet crate (ERR-04) ✓
-- [x] 05-PLAN.md — Strip loader-specific variants from core LoaderError (ERR-01-05 completion) ✓
-
----
-
-### Phase 2: Update Loader Implementations
-
-**Goal:** All loaders use `LoaderError::InitFailed` directly with descriptive string messages
-
-**Depends on:** Phase 1
-
-**Requirements:** ERR-06
-
+### Phase 5: Registry
+**Goal:** Simplified registry stores GuestContractInterface directly without wrappers
+**Depends on:** Phase 4
+**Requirements:** REG-01, REG-02, REG-03, REG-04, REG-05, REG-06
 **Success Criteria** (what must be TRUE):
-1. Each loader uses `LoaderError::InitFailed { bundle, error }` directly at each error site
-2. Error messages are descriptive strings (no intermediate error types)
-3. Local error types from Phase 1 (`PythonLoaderError`, etc.) are removed or marked unused
-4. All loaders return `RuntimeError::HotReloadDisabled` for unsupported hot-reload (consistency)
+1. RegistrySlot stores Arc<GuestContractInterface> directly (no VTableSlot wrapper)
+2. PluginGuard removed from codebase (replaced by instance model in Phase 6)
+3. ContractHandle has only index field (no generation counter)
+4. find_contract returns ContractHandle without generation validation
+5. Registry compiles and all existing tests pass
+**Plans:** TBD
 
-**Plans:** 5 plans (all complete)
-
-Plans:
-- [x] 02-01-PLAN.md — Update NativeLoader: remove error.rs, inline load_internal, use InitFailed directly
-- [x] 02-02-PLAN.md — Update PythonLoader: remove error.rs, replace all error sites with InitFailed
-- [x] 02-03-PLAN.md — Update LuaLoader: remove error.rs, replace all error sites with InitFailed
-- [x] 02-04-PLAN.md — Update JsLoader: remove error.rs, replace ~45 error sites, fix hot-reload
-- [x] 02-05-PLAN.md — Update DotnetLoader: remove error.rs, replace error sites, fix hot-reload
-
----
-
-### Phase 3: Verify Compatibility
-
-**Goal:** Error decoupling verified working with all tests passing
-
-**Depends on:** Phase 2
-
-**Requirements:** COMP-01, COMP-02
-
+### Phase 6: Instance Model
+**Goal:** Host creates and owns plugin instances via factory pattern with generated RAII wrappers
+**Depends on:** Phase 5
+**Requirements:** INST-01, INST-02, INST-03, INST-04, INST-05, INST-06, HC-01, HC-02, HC-03, HC-04, CG-01, CG-02, CG-03, CG-04, CG-05, CG-06
 **Success Criteria** (what must be TRUE):
-1. All existing tests pass (`cargo test --workspace`)
-2. FFI error messages remain strings at the boundary (no breaking changes)
-3. Example hosts compile and run correctly
+1. Generated *Instance wrappers call create_instance on construction and destroy_instance on drop
+2. Instance pointer passed as first argument to all dispatch calls (native and VM)
+3. HostContractInterface supports singleton field; get_host_contract returns same instance for singletons
+4. Codegen generates instance wrappers for guest contracts and host contract implementations
+5. Cross-dispatch call_method works for plugin-plugin calls across dispatch types
+**Plans:** TBD
 
-**Plans:** 7 plans
+### Phase 7: Hot-Reload
+**Goal:** Hot-reload uses callback-based model where host destroys instances before swap
+**Depends on:** Phase 6
+**Requirements:** HR-01, HR-02, HR-03, HR-04, HR-05, HR-06
+**Success Criteria** (what must be TRUE):
+1. ReloadPhase::Preparing callback fires before interface swap, giving host chance to destroy instances
+2. Runtime atomically swaps interfaces after callback returns
+3. ReloadPhase::Reloaded callback fires after swap for host to create new instances
+4. Warning callback fires if any instances remain after Preparing callback (UB warning)
+5. Arc::strong_count quiescence wait removed from hot-reload code
+**Plans:** TBD
 
-Plans:
-- [x] 03-01-PLAN.md — Fix Python source file (context.rs) to use InitFailed pattern (COMP-01)
-- [x] 03-02-PLAN.md — Fix .NET source files (version.rs, context.rs) to use InitFailed pattern (COMP-01)
-- [x] 03-03-PLAN.md — Fix Python test files to use InitFailed pattern (COMP-01)
-- [x] 03-04-PLAN.md — Fix .NET test files to use InitFailed pattern (COMP-01)
-- [x] 03-05-PLAN.md — Fix Lua test files to use InitFailed pattern (COMP-01)
-- [x] 03-06-PLAN.md — Fix integration_loader_dispatch.rs test file (COMP-01)
-- [x] 03-07-PLAN.md — Run verification tests and confirm FFI compatibility (COMP-01, COMP-02)
+### Phase 8: SDK Updates
+**Goal:** All five SDKs use types from polyplug_abi without duplicates
+**Depends on:** Phase 7
+**Requirements:** SDK-01, SDK-02, SDK-03, SDK-04, SDK-05, SDK-06, SDK-07
+**Success Criteria** (what must be TRUE):
+1. Rust host SDK imports RuntimeConfig, ReloadPhase from polyplug_abi (no duplicates)
+2. Python SDK removes RuntimeConfigC duplicate, uses abi module types
+3. C# SDK removes RuntimeConfigC duplicate, uses Abi namespace types
+4. Lua SDK uses FFI cdef types from polyplug_abi
+5. JS SDK uses TypeScript interfaces from polyplug_abi
+6. PluginGuard removed from all SDKs (replaced by instance wrappers)
+7. All SDKs generate instance-based wrappers via codegen
+**Plans:** TBD
 
----
+### Phase 9: Cleanup
+**Goal:** Consistent Guest/Host naming throughout with no vtable terminology
+**Depends on:** Phase 8
+**Requirements:** CLN-01, CLN-02, CLN-03, CLN-04
+**Success Criteria** (what must be TRUE):
+1. No "vtable" naming remains in codebase (search: vtable, VTable, VTABLE)
+2. No *C suffix types in FFI (all types from polyplug_abi are canonical)
+3. Documentation uses Guest Contract / Host Contract terminology consistently
+4. All tests pass with new instance model and naming
+**Plans:** TBD
 
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Define Loader-Local Error Types | 5/5 | Complete | 2026-04-03 |
-| 2. Update Loader Implementations | 5/5 | Complete | 2026-04-03 |
-| 3. Verify Compatibility | 0/7 | In progress | - |
+| 4. ABI Types | 0/0 | Not started | - |
+| 5. Registry | 0/0 | Not started | - |
+| 6. Instance Model | 0/0 | Not started | - |
+| 7. Hot-Reload | 0/0 | Not started | - |
+| 8. SDK Updates | 0/0 | Not started | - |
+| 9. Cleanup | 0/0 | Not started | - |
 
-## Coverage Map
+## Dependencies
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| ERR-01 | Phase 1 | Complete |
-| ERR-02 | Phase 1 | Complete |
-| ERR-03 | Phase 1 | Complete |
-| ERR-04 | Phase 1 | Complete |
-| ERR-05 | Phase 1 | Complete |
-| ERR-06 | Phase 2 | Complete |
-| COMP-01 | Phase 3 | In progress |
-| COMP-02 | Phase 3 | In progress |
-
-**Coverage:** 6/8 requirements complete (75%)
+```
+Phase 4 (ABI Types)
+    |
+    v
+Phase 5 (Registry)
+    |
+    v
+Phase 6 (Instance Model)
+    |
+    v
+Phase 7 (Hot-Reload)
+    |
+    v
+Phase 8 (SDK Updates)
+    |
+    v
+Phase 9 (Cleanup)
+```
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 3 planning*
