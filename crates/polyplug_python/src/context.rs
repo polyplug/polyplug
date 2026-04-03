@@ -18,8 +18,7 @@ static PYTHON_INIT: OnceLock<()> = OnceLock::new();
 ///
 /// Subsequent calls are no-ops (OnceLock is already set).
 ///
-/// Returns `Err(LoaderError::PythonInitFailed)` if initialization fails or
-/// `Err(LoaderError::RuntimeVersionMismatch)` if the version is too old.
+/// Returns `Err(LoaderError::InitFailed)` if the version is too old.
 pub(crate) fn ensure_python_initialized(config: &PythonConfig) -> Result<(), RuntimeError> {
     // Step 1: Initialize CPython exactly once.
     // OnceLock::get_or_init is used (not get_or_try_init) because
@@ -34,9 +33,12 @@ pub(crate) fn ensure_python_initialized(config: &PythonConfig) -> Result<(), Run
         let ver: pyo3::PythonVersionInfo<'_> = py.version_info();
         let (req_major, req_minor): (u32, u32) = config.min_version;
         if (ver.major as u32, ver.minor as u32) < (req_major, req_minor) {
-            return Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch {
-                required: format!("{}.{}", req_major, req_minor),
-                found: format!("{}.{}", ver.major, ver.minor),
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "python".to_owned(),
+                error: format!(
+                    "runtime version mismatch: required {}.{}, found {}.{}",
+                    req_major, req_minor, ver.major, ver.minor
+                ),
             }));
         }
         Ok(())
