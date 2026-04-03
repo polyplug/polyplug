@@ -42,6 +42,36 @@ Items discovered during execution that are out of scope per deviation rules.
 
 ---
 
+## Plan 07 Deferred Items (Added 2026-04-03)
+
+After fixing bundle_id.id() conversion (lines 81, 91, 102), additional pre-existing errors remain:
+
+### 5. RuntimeConfigC vs RuntimeConfig mismatch (ffi.rs lines 208-209)
+
+**Issue:** `config_c.into_runtime_config()` returns RuntimeConfig, but builder expects RuntimeConfigC. Type conversion error between FFI C struct and Rust type.
+
+**Why deferred:** Pre-existing type mismatch not caused by bundle_id.id() change. Not covered by gap closure plans 05-09.
+
+### 6. HostContractInterface.header field access (ffi.rs line 594)
+
+**Issue:** Code accesses `vtable_ref.header.contract_id` but HostContractInterface has no `header` field. Available fields: `contract_id`, `contract_version`, `singleton`, `dispatch_type`, `create_instance`, etc.
+
+**Why deferred:** Pre-existing struct field access error. Requires code review to determine correct field path.
+
+### 7. GuestContractId/BundleId missing serde traits (manifest.rs)
+
+**Issue:** GuestContractId and BundleId lack `serde::Deserialize` and `Default` trait implementations. Required for manifest parsing with `#[serde(default)]` attributes.
+
+**Why deferred:** Trait implementations needed in polyplug_utils crate. Not covered by gap closure plans.
+
+### 8. plugin_registry.rs contract_id type mismatch (line 149)
+
+**Issue:** `(*interface_ptr).contract_id` is GuestContractId, not u64. Expected type mismatch on extraction.
+
+**Why deferred:** Pre-existing type mismatch. May need `.id()` call or type change.
+
+---
+
 ## Notes
 
 The backward compatibility alias `PluginContractId = GuestContractId` in polyplug_utils allows old code to continue functioning with deprecation warnings. This is intentional for smooth migration.
