@@ -160,7 +160,7 @@ fn load_valid_bundle_succeeds() {
 
 // ── 4. Bundle loading — syntax error ─────────────────────────────────────────
 
-/// A Lua script with a syntax error must produce a `LuaScriptLoadFailed` error.
+/// A Lua script with a syntax error must produce a `LoaderError::InitFailed` error.
 #[test]
 fn load_syntax_error_returns_script_load_failed() {
     let (_dir, path) = write_temp_bundle(
@@ -173,9 +173,9 @@ fn load_syntax_error_returns_script_load_failed() {
     assert!(
         matches!(
             err,
-            RuntimeError::Loader(LoaderError::LuaScriptLoadFailed { .. })
+            RuntimeError::Loader(LoaderError::InitFailed { .. })
         ),
-        "expected LuaScriptLoadFailed, got: {:?}",
+        "expected InitFailed for syntax error, got: {:?}",
         err
     );
 }
@@ -183,7 +183,7 @@ fn load_syntax_error_returns_script_load_failed() {
 // ── 5. Bundle loading — runtime error in polyplug_init ───────────────────────
 
 /// A script where `polyplug_init` raises a Lua error at runtime must produce
-/// `LuaInitRaisedError`.
+/// `LoaderError::InitFailed`.
 #[test]
 fn load_runtime_error_in_init_returns_init_raised_error() {
     let (_dir, path) = write_temp_bundle(
@@ -196,9 +196,9 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
     assert!(
         matches!(
             err,
-            RuntimeError::Loader(LoaderError::LuaInitRaisedError { .. })
+            RuntimeError::Loader(LoaderError::InitFailed { .. })
         ),
-        "expected LuaInitRaisedError, got: {:?}",
+        "expected InitFailed for runtime error in init, got: {:?}",
         err
     );
 }
@@ -206,7 +206,7 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
 // ── 6. Missing polyplug_init ─────────────────────────────────────────────────
 
 /// A script that does not define `polyplug_init` must return
-/// `LuaInitFunctionMissing`.
+/// `LoaderError::InitFailed`.
 #[test]
 fn load_missing_polyplug_init_returns_typed_error() {
     let (_dir, path) =
@@ -217,9 +217,9 @@ fn load_missing_polyplug_init_returns_typed_error() {
     assert!(
         matches!(
             err,
-            RuntimeError::Loader(LoaderError::LuaInitFunctionMissing { .. })
+            RuntimeError::Loader(LoaderError::InitFailed { .. })
         ),
-        "expected LuaInitFunctionMissing, got: {:?}",
+        "expected InitFailed for missing polyplug_init, got: {:?}",
         err
     );
 }
@@ -236,9 +236,9 @@ fn load_nonexistent_path_returns_script_load_failed() {
     assert!(
         matches!(
             err,
-            RuntimeError::Loader(LoaderError::LuaScriptLoadFailed { .. })
+            RuntimeError::Loader(LoaderError::InitFailed { .. })
         ),
-        "expected LuaScriptLoadFailed for missing file, got: {:?}",
+        "expected InitFailed for missing file, got: {:?}",
         err
     );
 }
