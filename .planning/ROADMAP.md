@@ -31,7 +31,14 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 4. `polyplug_js` crate exports `JsLoaderError` enum with migrated variants
 5. `polyplug_dotnet` crate exports `DotnetLoaderError` enum with migrated variants
 
-**Plans:** TBD
+**Plans:** 5 plans
+
+Plans:
+- [ ] 01-PLAN.md — Define PythonLoaderError in polyplug_python crate (ERR-01)
+- [ ] 02-PLAN.md — Define LuaLoaderError in polyplug_lua crate (ERR-02)
+- [ ] 03-PLAN.md — Define JsLoaderError in polyplug_js crate (ERR-03)
+- [ ] 04-PLAN.md — Define DotnetLoaderError in polyplug_dotnet crate (ERR-04)
+- [ ] 05-PLAN.md — Strip loader-specific variants from core LoaderError (ERR-01-05 completion)
 
 ---
 
@@ -74,7 +81,7 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Define Loader-Local Error Types | 0/1 | Not started | - |
+| 1. Define Loader-Local Error Types | 0/5 | Ready for execution | - |
 | 2. Update Loader Implementations | 0/1 | Not started | - |
 | 3. Verify Compatibility | 0/1 | Not started | - |
 
@@ -82,11 +89,11 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ERR-01 | Phase 1 | Pending |
-| ERR-02 | Phase 1 | Pending |
-| ERR-03 | Phase 1 | Pending |
-| ERR-04 | Phase 1 | Pending |
-| ERR-05 | Phase 1 | Pending |
+| ERR-01 | Phase 1 | Planned |
+| ERR-02 | Phase 1 | Planned |
+| ERR-03 | Phase 1 | Planned |
+| ERR-04 | Phase 1 | Planned |
+| ERR-05 | Phase 1 | Planned |
 | ERR-06 | Phase 2 | Pending |
 | COMP-01 | Phase 3 | Pending |
 | COMP-02 | Phase 3 | Pending |
@@ -95,3 +102,4 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 
 ---
 *Roadmap created: 2026-04-03*
+*Last updated: 2026-04-03 after Phase 1 planning*
