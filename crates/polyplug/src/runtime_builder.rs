@@ -1,15 +1,14 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use polyplug_abi::host::host_vtable::HostVTable;
-use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::{RuntimeAbi, RuntimeLanguage};
 
 use crate::{
     compatibility::{CapabilityGraph, Compatibility},
-    error::{GraphError, LoaderError, RuntimeError, RuntimeError},
+    error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
     registry::plugin_registry::PluginRegistry,
-    reload::ReloadCb,
-    runtime::{Runtime, WarningCb},
+    reload::ReloadPhase,
+    runtime::{Runtime, WarningCb, ReloadCb},
     RuntimeConfig,
 };
 
@@ -101,15 +100,15 @@ impl RuntimeBuilder {
     pub fn build(self) -> Result<Runtime, RuntimeError> {
         let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
-        // Build the static HostVTable. This must be 'static.
-        let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
-            register_plugin: crate::runtime::host_register_plugin,
+        // Build the static RuntimeAbi. This must be 'static.
+        let host_vtable: &'static RuntimeAbi = Box::leak(Box::new(RuntimeAbi {
+            register_contract: crate::runtime::host_register_contract,
             alloc: crate::runtime::host_alloc,
             free: crate::runtime::host_free,
             find_by_contract: crate::runtime::host_find_by_contract,
-            find_by_bundle: crate::runtime::host_find_by_bundle,
             find_all_by_contract: crate::runtime::host_find_all_by_contract,
-            resolve_plugin: crate::runtime::host_resolve_plugin,
+            resolve_contract: crate::runtime::host_resolve_contract,
+            call_method: crate::runtime::host_call_method,
             get_host_contract: crate::runtime::host_get_host_contract,
         }));
 
@@ -139,7 +138,7 @@ impl RuntimeBuilder {
             crate::loader::scanner::scan_dirs(&self.plugin_dirs);
 
         // Snapshot manifests for hot-reload cascade detection.
-        let mut manifests_map: HashMap<String, crate::loader::manifest::ManifestData> =
+        let mut manifests_map: HashMap<String, crate::loader::ManifestData> =
             HashMap::new();
         for (path, manifest) in &discovered {
             let mut stored_manifest: ManifestData = manifest.clone();

@@ -4,9 +4,11 @@
 pub use polyplug_abi::runtime::Compatibility;
 
 mod bundle_node;
-mod capability_graph;
+pub mod capability_graph;
 mod contract_capability;
 mod dependency_edge;
+
+pub use capability_graph::CapabilityGraph;
 
 #[cfg(test)]
 mod tests {

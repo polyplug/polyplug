@@ -20,10 +20,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use polyplug_abi::host::host_vtable::HostVTable;
-use polyplug_abi::plugin::{PluginDescriptor, PluginHandle, PluginInterface};
-use polyplug_abi::RuntimeLanguage;
-use polyplug_abi::types::Version;
+use polyplug_abi::{GuestContractInterface, HostContractInterface, PluginDescriptor, PluginHandle, RuntimeAbi, RuntimeLanguage};
+use polyplug_abi::host::host_context::HostContext;
+use polyplug_abi::types::{AbiError, AbiErrorCode, StringView, Version};
 
 use crate::compatibility::Compatibility;
 use crate::error::HostContractError;
@@ -35,15 +34,17 @@ use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
 use crate::registry::PluginRegistry;
+use crate::registry::PluginGuard;
+use crate::runtime_builder::RuntimeBuilder;
 use crate::RuntimeConfig;
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
 
 /// Type alias for the warning callback to avoid repetition.
-type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
+pub type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Type alias for the reload callback.
-type ReloadCb = Arc<dyn Fn(crate::reload::ReloadPhase) + Send + Sync>;
+pub type ReloadCb = Arc<dyn Fn(crate::reload::ReloadPhase) + Send + Sync>;
 
 /// Options for `Runtime::load_bundle_with`.
 ///
@@ -59,8 +60,8 @@ pub struct Runtime {
     registry: Arc<PluginRegistry>,
     /// Loaded bundles, never dropped.
     _bundles: Vec<LoadedBundle>,
-    /// The static HostVTable given to plugins. Must be 'static.
-    host_vtable: &'static HostVTable,
+    /// The static RuntimeAbi given to plugins. Must be 'static.
+    host_vtable: &'static RuntimeAbi,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
     pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
@@ -74,7 +75,7 @@ pub struct Runtime {
     /// Last error message for FFI error reporting.
     last_error: Mutex<String>,
     /// Registered host contracts, keyed by contract_id.
-    host_contracts: RwLock<HashMap<u64, &'static HostContractVTable>>,
+    host_contracts: RwLock<HashMap<u64, &'static HostContractInterface>>,
     /// Host runtime type identifier.
     host_runtime: RuntimeLanguage,
 }
@@ -136,7 +137,7 @@ impl Runtime {
     pub fn resolve_plugin(
         &self,
         handle: PluginHandle,
-    ) -> Result<crate::plugin_registry::PluginGuard, RegistryError> {
+    ) -> Result<PluginGuard, RegistryError> {
         self.registry.resolve_guard(handle)
     }
 
@@ -145,9 +146,9 @@ impl Runtime {
     pub fn register_host_contract(
         &self,
         contract_id: u64,
-        vtable: &'static HostContractVTable,
+        vtable: &'static HostContractInterface,
     ) -> Result<(), HostContractError> {
-        let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractVTable>> =
+        let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>> =
             self.host_contracts.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
                 e.into_inner()
@@ -162,7 +163,7 @@ impl Runtime {
     /// Unregister a host contract vtable.
     /// Returns `true` if the contract was registered and removed, `false` if it was not found.
     pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
-        let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractVTable>> =
+        let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>> =
             self.host_contracts.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
                 e.into_inner()
@@ -176,15 +177,14 @@ impl Runtime {
         &self,
         contract_id: u64,
         min_version: u32,
-    ) -> Option<&'static HostContractVTable> {
-        let guard: std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractVTable>> =
+    ) -> Option<&'static HostContractInterface> {
+        let guard: std::sync::RwLockReadGuard<'_, HashMap<u64, &'static HostContractInterface>> =
             self.host_contracts.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
         guard.get(&contract_id).and_then(|vtable| {
-            let header: &polyplug_abi::HostContractVTableHeader = &vtable.header;
-            let version: u32 = (header.contract_major << 16) | header.contract_minor;
+            let version: u32 = (vtable.contract_version.major << 16) | vtable.contract_version.minor;
             if version >= min_version {
                 Some(*vtable)
             } else {
@@ -199,9 +199,9 @@ impl Runtime {
         self.host_runtime
     }
 
-    /// Get the HostVTable for use in plugin registrars.
+    /// Get the RuntimeAbi for use in plugin registrars.
     #[inline(always)]
-    pub fn host_vtable(&self) -> &'static HostVTable {
+    pub fn host_vtable(&self) -> &'static RuntimeAbi {
         self.host_vtable
     }
 
@@ -519,21 +519,21 @@ fn parse_manifest_version(v: &str, bundle_name: &str) -> Result<Version, Runtime
 
 // ─── HostVTable C ABI callbacks ───────────────────────────────────────────────
 
-/// HostVTable.register_plugin callback — registers a plugin vtable with the runtime.
+/// RuntimeAbi.register_contract callback — registers a guest contract implementation with the runtime.
 ///
 /// # Safety
 /// - rt_ctx must be a valid pointer to a HostContext
 /// - descriptor must point to a valid PluginDescriptor
-/// - vtable must point to a valid PluginInterface that remains valid for the Runtime lifetime
-pub(crate) unsafe extern "C" fn host_register_plugin(
+/// - vtable must point to a valid GuestContractInterface that remains valid for the Runtime lifetime
+pub(crate) unsafe extern "C" fn host_register_contract(
     rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
-) -> polyplug_abi::AbiError {
+    vtable: *const GuestContractInterface,
+) -> polyplug_abi::types::AbiError {
     if rt_ctx.is_null() {
-        return polyplug_abi::AbiError {
-            code: polyplug_abi::ABI_ERROR_GENERIC,
-            message: polyplug_abi::string_view_null(),
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::Generic,
+            message: polyplug_abi::types::StringView::null(),
         };
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host during polyplug_init
@@ -550,9 +550,9 @@ pub(crate) unsafe extern "C" fn host_register_plugin(
     let desc: PluginDescriptor = unsafe { *descriptor };
 
     if desc.contract_name.ptr.is_null() || desc.contract_name.len == 0 {
-        return polyplug_abi::AbiError {
-            code: polyplug_abi::ABI_ERROR_GENERIC,
-            message: polyplug_abi::string_view_from_static(
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::Generic,
+            message: polyplug_abi::types::StringView::from_static(
                 b"PluginDescriptor.contract_name is null or empty",
             ),
         };
@@ -561,20 +561,20 @@ pub(crate) unsafe extern "C" fn host_register_plugin(
     // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes
     let contract_name: String = unsafe { string_view_to_string_owned(&desc.contract_name) };
 
-    // SAFETY: vtable is a valid 'static PluginInterface from the plugin binary
+    // SAFETY: vtable is a valid 'static GuestContractInterface from the plugin binary
     match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
-        Ok(_handle) => polyplug_abi::abi_error_ok(),
+        Ok(_handle) => polyplug_abi::types::AbiError::ok(),
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
-            polyplug_abi::AbiError {
-                code: polyplug_abi::ABI_ERROR_GENERIC,
-                message: polyplug_abi::string_view_null(),
+            polyplug_abi::types::AbiError {
+                code: polyplug_abi::types::AbiErrorCode::Generic,
+                message: polyplug_abi::types::StringView::null(),
             }
         }
     }
 }
 
-/// HostVTable.alloc callback — allocate memory via the host allocator.
+/// RuntimeAbi.alloc callback — allocate memory via the host allocator.
 ///
 /// # Safety
 /// rt_ctx is ignored (system allocator is global). Standard alloc safety applies.
@@ -586,7 +586,7 @@ pub(crate) unsafe extern "C" fn host_alloc(
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
-/// HostVTable.free callback — free memory via the host allocator.
+/// RuntimeAbi.free callback — free memory via the host allocator.
 ///
 /// # Safety
 /// rt_ctx is ignored (system allocator is global). Standard free safety applies.
@@ -600,7 +600,7 @@ pub(crate) unsafe extern "C" fn host_free(
     unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
 }
 
-/// HostVTable.find_by_contract callback — dispatches to runtime's registry with dependency enforcement.
+/// RuntimeAbi.find_by_contract callback — dispatches to runtime's registry with dependency enforcement.
 ///
 /// # Safety
 /// rt_ctx must be a valid pointer to a HostContext.
@@ -631,37 +631,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     }
 }
 
-/// HostVTable.find_by_bundle callback — dispatches to runtime's registry with dependency enforcement.
-///
-/// # Safety
-/// rt_ctx must be a valid pointer to a HostContext.
-pub(crate) unsafe extern "C" fn host_find_by_bundle(
-    rt_ctx: *mut core::ffi::c_void,
-    bundle_id: u64,
-    contract_id: u64,
-    min_version: u32,
-) -> PluginHandle {
-    if rt_ctx.is_null() {
-        return plugin_handle_null();
-    }
-    // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
-    let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
-    let registry: &PluginRegistry = &runtime.registry;
-    let caller_bundle_id: u64 = ctx.bundle_id;
-
-    if caller_bundle_id != 0 && !registry.is_dependency_declared(caller_bundle_id, contract_id) {
-        return plugin_handle_null();
-    }
-    match registry.find_by_bundle(bundle_id, contract_id, min_version) {
-        Ok(h) => h,
-        Err(_) => plugin_handle_null(),
-    }
-}
-
-/// HostVTable.find_all_by_contract callback — fills out buffer, NO dependency enforcement.
+/// RuntimeAbi.find_all_by_contract callback — fills out buffer, NO dependency enforcement.
 ///
 /// # Safety
 /// - rt_ctx must be a valid pointer to a HostContext
@@ -693,14 +663,14 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     registry.find_all_by_contract(contract_id, min_version, out_slice)
 }
 
-/// HostVTable.resolve_plugin callback — returns raw vtable pointer for a handle.
+/// RuntimeAbi.resolve_contract callback — returns interface pointer for a handle.
 ///
 /// # Safety
 /// rt_ctx must be a valid pointer to a HostContext.
-pub(crate) unsafe extern "C" fn host_resolve_plugin(
+pub(crate) unsafe extern "C" fn host_resolve_contract(
     rt_ctx: *mut core::ffi::c_void,
     handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     if rt_ctx.is_null() {
         return core::ptr::null();
     }
@@ -717,7 +687,42 @@ pub(crate) unsafe extern "C" fn host_resolve_plugin(
     }
 }
 
-/// HostVTable.get_host_contract callback — returns the vtable for a host contract.
+/// RuntimeAbi.call_method callback — cross-dispatch method call for guest contracts.
+///
+/// # Safety
+/// - rt_ctx must be a valid pointer to a HostContext.
+/// - interface must be a valid pointer to a GuestContractInterface.
+/// - instance must be a valid GuestContractInstance.
+/// - args must point to valid ABI-packed arguments for the method.
+/// - out must point to a valid output buffer sized for the return type.
+pub(crate) unsafe extern "C" fn host_call_method(
+    rt_ctx: *mut core::ffi::c_void,
+    instance: polyplug_abi::GuestContractInstance,
+    method_id: u32,
+    args: *const (),
+    out: *mut (),
+) -> polyplug_abi::types::AbiError {
+    if rt_ctx.is_null() {
+        return polyplug_abi::types::AbiError {
+            code: polyplug_abi::types::AbiErrorCode::Generic,
+            message: polyplug_abi::types::StringView::null(),
+        };
+    }
+    // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
+    let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
+    // SAFETY: ctx.runtime is a valid pointer to a Runtime
+    let runtime: &Runtime = unsafe { &*ctx.runtime };
+
+    // TODO: Implement cross-dispatch logic. For now, return an error.
+    // This will be fully implemented in Phase 3 (Instance Model).
+    runtime.set_last_error("call_method not yet implemented");
+    polyplug_abi::types::AbiError {
+        code: polyplug_abi::types::AbiErrorCode::Generic,
+        message: polyplug_abi::types::StringView::null(),
+    }
+}
+
+/// RuntimeAbi.get_host_contract callback — returns the interface for a host contract.
 ///
 /// # Safety
 /// rt_ctx must be a valid pointer to a HostContext.
@@ -725,7 +730,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     rt_ctx: *mut core::ffi::c_void,
     contract_id: u64,
     min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
+) -> *const polyplug_abi::HostContractInterface {
     if rt_ctx.is_null() {
         return core::ptr::null();
     }
@@ -735,7 +740,7 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     let runtime: &Runtime = unsafe { &*ctx.runtime };
 
     match runtime.get_host_contract(contract_id, min_version) {
-        Some(vtable) => vtable as *const HostContractVTable,
+        Some(vtable) => vtable as *const HostContractInterface,
         None => core::ptr::null(),
     }
 }
@@ -819,22 +824,28 @@ mod tests {
         contract_id: u64,
         bundle_id: u64,
     ) -> PluginHandle {
-        use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
-        let vtable: &'static PluginInterface = Box::leak(Box::new(PluginInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id,
-            contract_version: 0_u32,
-            function_count: 0_u32,
+        use polyplug_abi::{
+            DispatchType,
+            dispatch::dispatch_mechanisms::DispatchMechanisms,
+            dispatch::native_dispatch::NativeDispatch,
+            GuestContractInterface,
+            GuestContractInstance,
+        };
+        let vtable: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
+            contract_id: polyplug_utils::GuestContractId(contract_id),
+            contract_version: polyplug_abi::types::Version::new(0, 0, 0),
             dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
+            dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     functions: core::ptr::null(),
                 },
             },
+            create_instance: |_rt_ctx: *mut core::ffi::c_void, _args: *const ()| GuestContractInstance { data: core::ptr::null_mut() },
+            destroy_instance: |_rt_ctx: *mut core::ffi::c_void, _instance: GuestContractInstance| {},
         }));
         let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::string_view_from_static(b"stub"),
-            contract_name: polyplug_abi::string_view_from_static(b"stub.contract"),
+            name: polyplug_abi::types::StringView::from_static(b"stub"),
+            contract_name: polyplug_abi::types::StringView::from_static(b"stub.contract"),
             version_major: 1_u32,
             version_minor: 0_u32,
             version_patch: 0_u32,
@@ -1250,19 +1261,17 @@ mod tests {
         contract_id: u64,
         major: u32,
         minor: u32,
-    ) -> &'static HostContractVTable {
-        Box::leak(Box::new(HostContractVTable {
-            header: polyplug_abi::HostContractVTableHeader {
-                vtable_version: 1,
-                contract_id,
-                contract_major: major,
-                contract_minor: minor,
-                function_count: 1,
-                dispatch_type: polyplug_abi::DispatchType::Native,
-            },
-            dispatch: polyplug_abi::HostContractDispatch {
-                native: polyplug_abi::NativeHostContractDispatch {
-                    impl_ptr: core::ptr::null(),
+    ) -> &'static HostContractInterface {
+        use polyplug_abi::{dispatch::dispatch_mechanisms::DispatchMechanisms, dispatch::native_dispatch::NativeDispatch, GuestContractInstance};
+        Box::leak(Box::new(HostContractInterface {
+            contract_id: polyplug_utils::HostContractId(contract_id),
+            contract_version: polyplug_abi::types::Version { major, minor, patch: 0 },
+            singleton: true,
+            dispatch_type: polyplug_abi::DispatchType::Native,
+            create_instance: |_rt_ctx, _args| GuestContractInstance { data: core::ptr::null_mut() },
+            destroy_instance: |_rt_ctx, _instance| {},
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
                     functions: core::ptr::null(),
                 },
             },
@@ -1276,17 +1285,17 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
-        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
 
         let result: Result<(), HostContractError> =
             runtime.register_host_contract(contract_id, vtable);
         assert!(result.is_ok(), "registration should succeed");
 
-        let found: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
+        let found: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
         assert!(found.is_some(), "contract should be found");
-        let found_vtable: &HostContractVTable =
+        let found_vtable: &HostContractInterface =
             found.expect("contract should be present after is_some check");
-        assert_eq!(found_vtable.header.contract_id, contract_id);
+        assert_eq!(found_vtable.contract_id.0, contract_id);
     }
 
     #[test]
@@ -1296,8 +1305,8 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
-        let vtable1: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
-        let vtable2: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 1);
+        let vtable1: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable2: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 1);
 
         let result1: Result<(), HostContractError> =
             runtime.register_host_contract(contract_id, vtable1);
@@ -1322,7 +1331,7 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
-        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
 
         runtime
             .register_host_contract(contract_id, vtable)
@@ -1340,7 +1349,7 @@ mod tests {
             "unregister should return false for non-existent contract"
         );
 
-        let found: Option<&'static HostContractVTable> = runtime.get_host_contract(contract_id, 0);
+        let found: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
         assert!(
             found.is_none(),
             "contract should not be found after unregister"
@@ -1354,28 +1363,28 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 2);
-        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 2, 5);
+        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 2, 5);
 
         runtime
             .register_host_contract(contract_id, vtable)
             .expect("registration should succeed");
 
-        let found_low: Option<&'static HostContractVTable> =
+        let found_low: Option<&'static HostContractInterface> =
             runtime.get_host_contract(contract_id, 0);
         assert!(found_low.is_some(), "should find with min_version=0");
 
-        let found_exact: Option<&'static HostContractVTable> =
+        let found_exact: Option<&'static HostContractInterface> =
             runtime.get_host_contract(contract_id, (2 << 16) | 5);
         assert!(found_exact.is_some(), "should find with exact version");
 
-        let found_higher_minor: Option<&'static HostContractVTable> =
+        let found_higher_minor: Option<&'static HostContractInterface> =
             runtime.get_host_contract(contract_id, (2 << 16) | 3);
         assert!(
             found_higher_minor.is_some(),
             "should find with lower minor version requirement"
         );
 
-        let found_higher_major: Option<&'static HostContractVTable> =
+        let found_higher_major: Option<&'static HostContractInterface> =
             runtime.get_host_contract(contract_id, 3 << 16);
         assert!(
             found_higher_major.is_none(),
@@ -1407,7 +1416,7 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_abi::host_contract_id("host.test", 1);
-        let vtable: &'static HostContractVTable = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
 
         runtime
             .register_host_contract(contract_id, vtable)
@@ -1421,16 +1430,16 @@ mod tests {
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
-        let result: *const HostContractVTable =
+        let result: *const HostContractInterface =
             unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
         assert!(
             !result.is_null(),
             "callback should return non-null for registered contract"
         );
 
-        // SAFETY: result is a valid HostContractVTable pointer
-        let found_vtable: &HostContractVTable = unsafe { &*result };
-        assert_eq!(found_vtable.header.contract_id, contract_id);
+        // SAFETY: result is a valid HostContractInterface pointer
+        let found_vtable: &HostContractInterface = unsafe { &*result };
+        assert_eq!(found_vtable.contract_id.0, contract_id);
     }
 
     #[test]
@@ -1449,7 +1458,7 @@ mod tests {
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
-        let result: *const HostContractVTable =
+        let result: *const HostContractInterface =
             unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
         assert!(
             result.is_null(),

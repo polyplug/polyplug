@@ -5,18 +5,26 @@
 
 use std::sync::Arc;
 
-use polyplug_abi::plugin::{PluginHandle, PluginInterface};
+use polyplug_abi::{GuestContractInterface, PluginHandle, types::StringView};
 
 use crate::loader::BundleLoader;
-use crate::registry::plugin_registry::VTableSlot;
+use crate::registry::VTableSlot;
 use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
+
+/// Helper to create a StringView from a Rust string slice.
+fn string_view_from_str(s: &str) -> StringView {
+    StringView {
+        ptr: s.as_ptr(),
+        len: s.len(),
+    }
+}
 
 pub struct OpaqueRuntime(pub Runtime);
 
 #[repr(C)]
 pub struct ResolveHandle {
-    pub vtable: *const PluginInterface,
+    pub vtable: *const GuestContractInterface,
     _arc: Arc<VTableSlot>,
 }
 
@@ -53,11 +61,11 @@ pub struct ReloadPhaseC {
     /// Bundle ID (valid for all variants).
     pub bundle_id: u64,
     /// Bundle name (valid for all variants).
-    pub bundle_name: StringViewC,
+    pub bundle_name: StringView,
     /// Retry count (valid only for `Preparing` variant).
     pub retry_count: u32,
     /// Failure reason (valid only for `Failed` variant).
-    pub reason: StringViewC,
+    pub reason: StringView,
 }
 
 impl ReloadPhaseC {
@@ -71,12 +79,9 @@ impl ReloadPhaseC {
             } => ReloadPhaseC {
                 phase_type: ReloadPhaseType::Preparing as u32,
                 bundle_id: *bundle_id,
-                bundle_name: StringViewC::from_str(bundle_name.as_str()),
+                bundle_name: string_view_from_str(bundle_name.as_str()),
                 retry_count: *retry_count,
-                reason: StringViewC {
-                    ptr: core::ptr::null(),
-                    len: 0,
-                },
+                reason: StringView::null(),
             },
             ReloadPhase::Reloaded {
                 bundle_id,
@@ -84,12 +89,9 @@ impl ReloadPhaseC {
             } => ReloadPhaseC {
                 phase_type: ReloadPhaseType::Reloaded as u32,
                 bundle_id: *bundle_id,
-                bundle_name: StringViewC::from_str(bundle_name.as_str()),
+                bundle_name: string_view_from_str(bundle_name.as_str()),
                 retry_count: 0,
-                reason: StringViewC {
-                    ptr: core::ptr::null(),
-                    len: 0,
-                },
+                reason: StringView::null(),
             },
             ReloadPhase::Failed {
                 bundle_id,
@@ -98,9 +100,9 @@ impl ReloadPhaseC {
             } => ReloadPhaseC {
                 phase_type: ReloadPhaseType::Failed as u32,
                 bundle_id: *bundle_id,
-                bundle_name: StringViewC::from_str(bundle_name.as_str()),
+                bundle_name: string_view_from_str(bundle_name.as_str()),
                 retry_count: 0,
-                reason: StringViewC::from_str(reason.as_str()),
+                reason: string_view_from_str(reason.as_str()),
             },
         }
     }
@@ -141,6 +143,36 @@ pub unsafe extern "C" fn polyplug_runtime_create() -> *mut OpaqueRuntime {
         }
     }))
     .unwrap_or(core::ptr::null_mut())
+}
+
+/// C-compatible runtime configuration.
+///
+/// This is a C ABI compatible version of RuntimeConfig, using integers for booleans
+/// and omitting the compatibility field (uses default Strict mode).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeConfigC {
+    /// Whether hot-reload is enabled (0 = false, non-zero = true).
+    pub hot_reload_enabled: u32,
+    /// Maximum retry attempts for hot-reload.
+    pub hot_reload_max_retries: u32,
+    /// Interval between retries in milliseconds.
+    pub hot_reload_retry_interval_ms: u64,
+    /// Abort runtime when max retries exhausted (0 = false, non-zero = true).
+    pub hot_reload_abort_on_max_retries: u32,
+}
+
+impl RuntimeConfigC {
+    /// Convert to the Rust RuntimeConfig type.
+    fn into_runtime_config(self) -> crate::RuntimeConfig {
+        crate::RuntimeConfig {
+            hot_reload_enabled: self.hot_reload_enabled != 0,
+            hot_reload_max_retries: self.hot_reload_max_retries,
+            hot_reload_retry_interval_ms: self.hot_reload_retry_interval_ms,
+            hot_reload_abort_on_max_retries: self.hot_reload_abort_on_max_retries != 0,
+            compatibility: polyplug_abi::Compatibility::Strict,
+        }
+    }
 }
 
 /// Options for creating a runtime instance.
@@ -378,7 +410,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
 
 /// Resolve a plugin handle and return an opaque vtable handle.
 ///
-/// The returned pointer's first field is the vtable pointer (`*const PluginInterface`),
+/// The returned pointer's first field is the vtable pointer (`*const GuestContractInterface`),
 /// so callers can cast and dereference it directly to access the vtable.
 ///
 /// # Safety
@@ -387,7 +419,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
 /// - The returned pointer is valid until `polyplug_runtime_release_plugin` is called.
 ///
 /// # Returns
-/// - Non-null pointer on success (cast to `*const PluginInterface` to use)
+/// - Non-null pointer on success (cast to `*const GuestContractInterface` to use)
 /// - Null on error (check `polyplug_runtime_last_error` for details)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
@@ -407,7 +439,7 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime.0.registry().resolve_guard(handle) {
             Ok(guard) => {
-                let vtable: *const PluginInterface = guard.vtable();
+                let vtable: *const GuestContractInterface = guard.vtable();
                 let arc: Arc<VTableSlot> = Arc::clone(&guard.slot);
                 let handle: Box<ResolveHandle> = Box::new(ResolveHandle { vtable, _arc: arc });
                 Box::into_raw(handle)
@@ -528,11 +560,11 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
 /// Register a host contract vtable with the runtime.
 ///
 /// This function allows VM-based hosts (Python, Lua, JavaScript) to register
-/// host contract implementations through a HostContractVTable.
+/// host contract implementations through a HostContractInterface.
 ///
 /// # Safety
 /// - `rt` must be a valid non-null pointer returned by `polyplug_runtime_create`.
-/// - `vtable` must be a valid non-null pointer to a `HostContractVTable` that:
+/// - `vtable` must be a valid non-null pointer to a `HostContractInterface` that:
 ///   - Has correct header fields (contract_id, version, function_count)
 ///   - Uses `DispatchType::VirtualMachine` for VM-based hosts
 ///   - Has a valid `dispatch.vm.call` function pointer
@@ -548,7 +580,7 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_register_host_contract(
     rt: *mut OpaqueRuntime,
-    vtable: *const polyplug_abi::HostContractVTable,
+    vtable: *const polyplug_abi::HostContractInterface,
 ) -> u32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() || vtable.is_null() {
@@ -556,9 +588,9 @@ pub unsafe extern "C" fn polyplug_runtime_register_host_contract(
         }
         // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
         let runtime: &mut Runtime = unsafe { &mut (*rt).0 };
-        // SAFETY: vtable is a valid *const HostContractVTable per ABI contract.
+        // SAFETY: vtable is a valid *const HostContractInterface per ABI contract.
         // The caller guarantees the vtable remains valid for the runtime's lifetime.
-        let vtable_ref: &'static polyplug_abi::HostContractVTable = unsafe { &*vtable };
+        let vtable_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*vtable };
         match runtime.register_host_contract(vtable_ref.header.contract_id, vtable_ref) {
             Ok(()) => 0u32,
             Err(crate::error::HostContractError::DuplicateContract { .. }) => 2u32,

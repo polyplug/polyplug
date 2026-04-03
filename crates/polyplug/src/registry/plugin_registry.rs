@@ -16,10 +16,42 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use arc_swap::ArcSwap;
-use polyplug_abi::plugin::{PluginDescriptor, PluginHandle, PluginInterface};
-use polyplug_utils::{BundleId, PluginContractId};
+use polyplug_abi::{GuestContractInterface, PluginDescriptor, PluginHandle};
+use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
+
+/// Wrapper for a guest contract interface pointer.
+///
+/// This newtype exists to provide type safety and clarity around
+/// the stored interface pointer. The inner value is a raw pointer
+/// to a `'static` GuestContractInterface.
+pub struct VTableSlot(pub *const GuestContractInterface);
+
+/// RAII guard for accessing a plugin's vtable.
+///
+/// This guard holds an `Arc<VTableSlot>`, keeping the interface alive
+/// for the duration of the access. The guard provides access to the
+/// raw interface pointer for dispatch.
+pub struct PluginGuard {
+    pub(crate) slot: Arc<VTableSlot>,
+}
+
+impl PluginGuard {
+    /// Create a new PluginGuard from an Arc<VTableSlot>.
+    pub fn new(slot: Arc<VTableSlot>) -> Self {
+        Self { slot }
+    }
+
+    /// Get the raw interface pointer.
+    ///
+    /// # Safety
+    /// The returned pointer is valid for the lifetime of this guard.
+    /// The caller must not cache the pointer beyond the guard's lifetime.
+    pub fn vtable(&self) -> *const GuestContractInterface {
+        self.slot.0
+    }
+}
 
 /// Live plugin registration data.
 pub(crate) struct RegistryEntry {
@@ -53,11 +85,11 @@ struct RegistryData {
     /// Slot storage — each slot holds a plugin registration or is vacant.
     slots: Vec<RegistrySlot>,
     /// Maps contract_id to the Vec of registered slot indices (multi-impl support).
-    contract_index: HashMap<PluginContractId, Vec<u32>>,
+    contract_index: HashMap<GuestContractId, Vec<u32>>,
     /// Maps bundle_id to the first slot index registered for that bundle.
     bundle_index: HashMap<BundleId, u32>,
     /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
-    declared_deps: HashMap<BundleId, HashSet<PluginContractId>>,
+    declared_deps: HashMap<BundleId, HashSet<GuestContractId>>,
 }
 
 impl RegistryData {
@@ -94,7 +126,7 @@ impl PluginRegistry {
     ///
     /// # Safety
     ///
-    /// `interface_ptr` must be a valid pointer to a `'static` `PluginInterface` that remains valid
+    /// `interface_ptr` must be a valid pointer to a `'static` `GuestContractInterface` that remains valid
     /// for the entire lifetime of the `Registry`. The caller must ensure the backing library
     /// is not unloaded while this registry holds the pointer.
     //
@@ -108,11 +140,11 @@ impl PluginRegistry {
     pub unsafe fn register(
         &self,
         descriptor: PluginDescriptor,
-        interface_ptr: *const PluginInterface,
+        interface_ptr: *const GuestContractInterface,
         contract_name: String,
         bundle_id: u64,
     ) -> Result<PluginHandle, RegistryError> {
-        // SAFETY: interface_ptr is a valid 'static PluginInterface supplied by the caller.
+        // SAFETY: interface_ptr is a valid 'static GuestContractInterface supplied by the caller.
         // The ABI contract requires the pointer to remain valid for the library lifetime.
         let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
 
@@ -188,14 +220,14 @@ impl PluginRegistry {
     pub fn declare_deps(
         &self,
         bundle_id: BundleId,
-        contract_ids: Vec<PluginContractId>,
+        contract_ids: Vec<GuestContractId>,
     ) -> Result<(), RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let set: &mut HashSet<PluginContractId> = data.declared_deps.entry(bundle_id).or_default();
+        let set: &mut HashSet<GuestContractId> = data.declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
             set.insert(cid);
         }
@@ -245,7 +277,7 @@ impl PluginRegistry {
                 && let Some(ref arc_vtable) = slot.vtable
             {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 points to 'static PluginInterface, valid for Registry lifetime.
+                // SAFETY: VTableSlot.0 points to 'static GuestContractInterface, valid for Registry lifetime.
                 // The pointer is written once at registration and never mutated.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
@@ -290,9 +322,9 @@ impl PluginRegistry {
             && let Some(ref arc_vtable) = slot.vtable
         {
             let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-            // SAFETY: VTableSlot.0 is 'static PluginInterface valid for Registry lifetime.
+            // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
             // Written once at registration, never mutated.
-            let vtable_ref: &PluginInterface = unsafe { &*guard.0 };
+            let vtable_ref: &GuestContractInterface = unsafe { &*guard.0 };
             if entry.bundle_id == bundle_id
                 && vtable_ref.contract_id == contract_id
                 && vtable_ref.contract_version >= min_version
@@ -340,7 +372,7 @@ impl PluginRegistry {
                 && let Some(ref arc_vtable) = slot.vtable
             {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static PluginInterface valid for Registry lifetime.
+                // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
                 // Read-only access after registration.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
@@ -393,7 +425,7 @@ impl PluginRegistry {
                 && let Some(ref arc_vtable) = slot.vtable
             {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static PluginInterface valid for Registry lifetime.
+                // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
                 // Read-only access after registration.
                 let version: u32 = unsafe { (*guard.0).contract_version };
                 if version >= min_version {
@@ -453,7 +485,7 @@ impl PluginRegistry {
     /// Find a plugin by contract_id and minimum version.
     //
     //  Delegates to find_by_contract(). Kept for API compatibility.
-    //  min_version encoding: (minor << 16 | patch), same as PluginInterface::contract_version.
+    //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
     //  Pass 0 to accept any version.
     pub fn find(&self, contract_id: u64, min_version: u32) -> Result<PluginHandle, RegistryError> {
         self.find_by_contract(contract_id, min_version)
@@ -463,7 +495,7 @@ impl PluginRegistry {
     //
     //  Delegates to resolve_guard(). Kept for API compatibility.
     //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
-    pub fn resolve(&self, handle: PluginHandle) -> Result<*const PluginInterface, RegistryError> {
+    pub fn resolve(&self, handle: PluginHandle) -> Result<*const GuestContractInterface, RegistryError> {
         let guard: PluginGuard = self.resolve_guard(handle)?;
         Ok(guard.vtable())
     }
@@ -543,7 +575,7 @@ impl PluginRegistry {
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
         let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
         let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
-        // SAFETY: VTableSlot.0 is a valid 'static PluginInterface written at registration.
+        // SAFETY: VTableSlot.0 is a valid 'static GuestContractInterface written at registration.
         Some(unsafe { (*guard.0).contract_id })
     }
 
@@ -592,7 +624,7 @@ mod tests {
 
     const MOCK_FNS: [*const (); 0] = [];
 
-    static MOCK_INTERFACE: PluginInterface = PluginInterface {
+    static MOCK_INTERFACE: GuestContractInterface = GuestContractInterface {
         rt_ctx: core::ptr::null(),
         contract_id: 0x1234_5678_9ABC_DEF0,
         contract_version: (1 << 16),
@@ -662,7 +694,7 @@ mod tests {
             index: handle.index,
             generation: handle.generation + 1,
         };
-        let result: Result<*const PluginInterface, RegistryError> = registry.resolve(stale);
+        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(stale);
         assert!(
             matches!(result, Err(RegistryError::StaleHandle { .. })),
             "expected StaleHandle error"
@@ -736,7 +768,7 @@ mod tests {
         }
         .expect("registration should succeed");
 
-        let interface_ptr: *const PluginInterface =
+        let interface_ptr: *const GuestContractInterface =
             registry.resolve(handle).expect("resolve should succeed");
         // SAFETY: interface_ptr points to MOCK_INTERFACE which is 'static.
         let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
@@ -747,7 +779,7 @@ mod tests {
     fn multi_impl_different_bundles() {
         // Two different bundles may register the same contract_id.
         // Both should succeed; find_all_by_contract should return both.
-        static INTERFACE_A: PluginInterface = PluginInterface {
+        static INTERFACE_A: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD,
             contract_version: (1 << 16),
@@ -759,7 +791,7 @@ mod tests {
                 },
             },
         };
-        static INTERFACE_B: PluginInterface = PluginInterface {
+        static INTERFACE_B: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0xAAAA_BBBB_CCCC_DDDD,
             contract_version: (2 << 16),
@@ -820,7 +852,7 @@ mod tests {
     }
     #[test]
     fn swap_vtable_returns_old_arc_and_bumps_generation() {
-        static NEW_INTERFACE: PluginInterface = PluginInterface {
+        static NEW_INTERFACE: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0x1234_5678_9ABC_DEF0,
             contract_version: (2 << 16),
@@ -871,7 +903,7 @@ mod tests {
 
     #[test]
     fn find_slots_by_bundle_returns_all_slots() {
-        static INTERFACE_X: PluginInterface = PluginInterface {
+        static INTERFACE_X: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0xDEAD_BEEF_0000_0001,
             contract_version: (1 << 16),
@@ -883,7 +915,7 @@ mod tests {
                 },
             },
         };
-        static INTERFACE_Y: PluginInterface = PluginInterface {
+        static INTERFACE_Y: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0xDEAD_BEEF_0000_0002,
             contract_version: (1 << 16),
@@ -964,7 +996,7 @@ mod tests {
         }
         .expect("registration should succeed");
 
-        static NEW_INTERFACE: PluginInterface = PluginInterface {
+        static NEW_INTERFACE: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0x1234_5678_9ABC_DEF0,
             contract_version: (3 << 16),
@@ -983,7 +1015,7 @@ mod tests {
             .swap_vtable(handle.index, new_arc)
             .expect("swap_vtable should succeed");
 
-        let result: Result<*const PluginInterface, RegistryError> = registry.resolve(handle);
+        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(handle);
         assert!(
             matches!(result, Err(RegistryError::StaleHandle { .. })),
             "old handle should be stale after generation bump"
