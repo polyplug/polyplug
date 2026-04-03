@@ -1,27 +1,109 @@
-# Requirements: polyplug Error Decoupling
+# Requirements: polyplug v1.1 Architecture Refactor
 
-**Defined:** 2026-04-03
+**Milestone:** v1.1 Architecture Refactor
+**Created:** 2026-04-03
 **Core Value:** Core runtime is loader-agnostic — no loader-specific code or types
 
-## v1 Requirements
+## v1.1 Requirements
+
+### Category: ABI Types
+
+- [ ] **ABI-01**: Rename `PluginInterface` to `GuestContractInterface`
+- [ ] **ABI-02**: Create `HostContractInterface` with `singleton` field
+- [ ] **ABI-03**: Add `create_instance` and `destroy_instance` to `GuestContractInterface`
+- [ ] **ABI-04**: Add `create_instance` and `destroy_instance` to `HostContractInterface`
+- [ ] **ABI-05**: Move `RuntimeConfig` from `polyplug` crate to `polyplug_abi`
+- [ ] **ABI-06**: Move `ReloadPhase` struct to `polyplug_abi`
+- [ ] **ABI-07**: Move `RuntimeCreateOptions` to `polyplug_abi`
+- [ ] **ABI-08**: Rename `HostVTable` to `RuntimeAbi`
+- [ ] **ABI-09**: Update `VmDispatch` to include `instance` parameter
+- [ ] **ABI-10**: Add `call_method` to `RuntimeAbi` for cross-dispatch
+- [ ] **ABI-11**: Rename ID types: `PluginContractId` → `GuestContractId`
+- [ ] **ABI-12**: Ensure all public ABI structs are `#[repr(C)]`
+
+### Category: Registry
+
+- [ ] **REG-01**: Remove `VTableSlot` wrapper - store `GuestContractInterface` directly
+- [ ] **REG-02**: Remove `PluginGuard` - replaced by instance model
+- [ ] **REG-03**: Remove generation counter from handles (`ContractHandle`)
+- [ ] **REG-04**: Remove `ArcSwap` pattern - hot-reload uses callback instead
+- [ ] **REG-05**: Simplify `RegistrySlot` to store interface directly
+- [ ] **REG-06**: Update `find_contract` to return `ContractHandle` without generation
+
+### Category: Instance Model
+
+- [ ] **INST-01**: Update codegen to generate `*Instance` RAII wrappers
+- [ ] **INST-02**: Generated wrapper calls `create_instance` on construction
+- [ ] **INST-03**: Generated wrapper calls `destroy_instance` on drop
+- [ ] **INST-04**: Instance passed as first argument to all dispatch calls
+- [ ] **INST-05**: Native dispatch: `functions[fn_id](instance, args, out)`
+- [ ] **INST-06**: VM dispatch: `call(loader_data, instance, fn_id, args, out)`
+
+### Category: Hot-Reload
+
+- [ ] **HR-01**: Remove `wait_for_quiescence` with `Arc::strong_count`
+- [ ] **HR-02**: Update hot-reload to use callback-only model
+- [ ] **HR-03**: `ReloadPhase::Preparing` fires before interface swap
+- [ ] **HR-04**: Host destroys all instances in callback
+- [ ] **HR-05**: Runtime swaps interfaces after callback returns
+- [ ] **HR-06**: Warning callback if instances remain (UB warning)
+
+### Category: Host Contracts
+
+- [ ] **HC-01**: `HostContractInterface` supports `singleton: bool` field
+- [ ] **HC-02**: `get_host_contract` returns same instance for singleton
+- [ ] **HC-03**: `get_host_contract` creates new instance for multi-instance
+- [ ] **HC-04**: Update codegen for host contract implementations
+
+### Category: RuntimeAbi
+
+- [ ] **RTABI-01**: Rename `register_plugin` (was `register_contract`)
+- [ ] **RTABI-02**: `find_contract` returns `ContractHandle`
+- [ ] **RTABI-03**: `resolve_contract` returns `*const GuestContractInterface`
+- [ ] **RTABI-04**: `get_host_contract` returns instance pointer
+- [ ] **RTABI-05**: Remove `find_by_bundle` from ABI (internal only)
+
+### Category: SDK Updates
+
+- [ ] **SDK-01**: Update Rust host SDK to use `polyplug_abi` types
+- [ ] **SDK-02**: Update Python SDK - remove `RuntimeConfigC` duplicate
+- [ ] **SDK-03**: Update C# SDK - remove `RuntimeConfigC` duplicate
+- [ ] **SDK-04**: Update Lua SDK - use types from `polyplug_abi`
+- [ ] **SDK-05**: Update JS SDK - use types from `polyplug_abi`
+- [ ] **SDK-06**: Remove `PluginGuard` from all SDKs
+- [ ] **SDK-07**: Add instance-based wrappers to all SDKs (codegen)
+
+### Category: Codegen
+
+- [ ] **CG-01**: Update codegen to use `GuestContractInterface` naming
+- [ ] **CG-02**: Update codegen to generate instance wrappers
+- [ ] **CG-03**: Generated instance wrappers hold `interface` + `instance` pointer
+- [ ] **CG-04**: Generated wrappers call `create_instance`/`destroy_instance`
+- [ ] **CG-05**: Update host contract vtable generation for `HostContractInterface`
+- [ ] **CG-06**: Generate `singleton` support for host contracts
+
+### Category: Cleanup
+
+- [ ] **CLN-01**: Remove all "vtable" naming from codebase
+- [ ] **CLN-02**: Remove `*C` suffix types from FFI
+- [ ] **CLN-03**: Update documentation to use Guest/Host terminology
+- [ ] **CLN-04**: Update tests to use new instance model
+
+## v1 Requirements (Complete)
 
 ### Error Types
 
-- [x] **ERR-01**: Remove `PythonInitFailed`, `PythonModuleImportFailed`, `PythonInitRaisedException` from core `LoaderError` — move to `polyplug_python`
-- [x] **ERR-02**: Remove `LuaVmInitFailed`, `LuaScriptLoadFailed`, `LuaInitFunctionMissing`, `LuaInitRaisedError` from core `LoaderError` — move to `polyplug_lua`
-- [x] **ERR-03**: Remove `RolldownNotFound`, `JsRuntimePanic`, `JsRuntimeInitFailed`, `ModuleResolutionFailed`, `JsExecutionFailed` from core `LoaderError` — move to `polyplug_js`
-- [x] **ERR-04**: Remove `HostfxrNotFound`, `ClrInitFailed`, `AssemblyNotFound`, `RuntimeVersionMismatch`, `InvalidFrameworkVersion` from core `LoaderError` — move to `polyplug_dotnet`
-- [x] **ERR-05**: Ensure each loader crate exports its own error type (e.g., `PythonLoaderError`, `LuaLoaderError`)
-- [x] **ERR-06**: Update loader `load()` and `reload()` implementations to use `LoaderError::InitFailed` directly with descriptive string messages (no intermediate error types)
+- [x] **ERR-01**: Remove Python-specific error variants from core `LoaderError`
+- [x] **ERR-02**: Remove Lua-specific error variants from core `LoaderError`
+- [x] **ERR-03**: Remove JS-specific error variants from core `LoaderError`
+- [x] **ERR-04**: Remove .NET-specific error variants from core `LoaderError`
+- [x] **ERR-05**: Ensure each loader crate exports its own error type
+- [x] **ERR-06**: Update loaders to use `LoaderError::InitFailed` directly
 
 ### Compatibility
 
 - [x] **COMP-01**: All existing tests pass after error type migration
-- [x] **COMP-02**: No breaking changes to public FFI API (error messages are strings at FFI boundary)
-
-## v2 Requirements
-
-Deferred to future release.
+- [x] **COMP-02**: No breaking changes to public FFI API
 
 ## Out of Scope
 
@@ -29,26 +111,28 @@ Deferred to future release.
 |---------|--------|
 | WASM runtime support | Architectural decision — native plugins are the design |
 | Plugin sandboxing | Host responsibility for trust |
+| Manifest parsing move | Can be done later, not blocking |
 | New loader implementations | Out of scope for this refactor |
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| ERR-01 | Phase 1 | Complete |
-| ERR-02 | Phase 1 | Complete |
-| ERR-03 | Phase 1 | Complete |
-| ERR-04 | Phase 1 | Complete |
-| ERR-05 | Phase 1 | Complete |
-| ERR-06 | Phase 2 | Complete |
-| COMP-01 | Phase 3 | Complete |
-| COMP-02 | Phase 3 | Complete |
+| Requirement | Phase |
+|-------------|-------|
+| ABI-01 through ABI-12 | Phase 1: ABI Types |
+| REG-01 through REG-06 | Phase 2: Registry |
+| INST-01 through INST-06 | Phase 3: Instance Model |
+| HR-01 through HR-06 | Phase 4: Hot-Reload |
+| HC-01 through HC-04 | Phase 3: Instance Model |
+| RTABI-01 through RTABI-05 | Phase 1: ABI Types |
+| SDK-01 through SDK-07 | Phase 5: SDK Updates |
+| CG-01 through CG-06 | Phase 3: Instance Model |
+| CLN-01 through CLN-04 | Phase 6: Cleanup |
 
 **Coverage:**
-- v1 requirements: 8 total
-- Mapped to phases: 8
+- v1.1 requirements: 48 total
+- Mapped to phases: 48
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 after roadmap creation*
+*Last updated: 2026-04-03 for v1.1 Architecture Refactor*

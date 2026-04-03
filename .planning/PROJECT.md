@@ -459,6 +459,76 @@ pub enum RegistryError {
 - **Compatibility:** Breaking changes acceptable — not published yet
 - **FFI:** All public ABI structs are `#[repr(C)]`
 - **Pointers:** Raw pointers only at FFI boundary, not in internal Rust code
+- **Manifest:** Core runtime should NOT parse TOML - manifest parsing is external concern
+- **Type Source:** No `*C` suffix types - all FFI types defined once in `polyplug_abi`
+
+## Types Moving to polyplug_abi
+
+These types currently exist in `crates/polyplug/src/` but should move to `polyplug_abi`:
+
+| Type | Current Location | New Location |
+|------|------------------|--------------|
+| `RuntimeConfig` | `runtime_config.rs` | `polyplug_abi/src/config/` |
+| `ReloadPhase` | `reload.rs` (Rust enum) | `polyplug_abi/src/types/` |
+| `RuntimeCreateOptions` | `ffi.rs` | `polyplug_abi/src/config/` |
+
+After move:
+- Rust SDK imports from `polyplug_abi` (same as Python/C#/Lua/JS)
+- No duplicate `RuntimeConfigC` in each SDK
+- Single source of truth
+
+## Manifest Parsing Location
+
+**Decision:** Manifest parsing stays in core runtime for now (not a blocker for architecture refactor).
+
+**Future consideration:** Move to `polyplug_manifest` crate or host SDKs.
+
+**Why not urgent:**
+- Runtime needs `ManifestData` internally for loading
+- TOML parsing doesn't leak through FFI
+- Host SDKs can wrap `load_bundle(path)` without parsing
+
+## Rust SDK Restructure
+
+Currently Rust uses `polyplug` crate directly. After refactor:
+
+```
+sdks/rust/
+├── guest/              # Plugin author library
+│   ├── src/lib.rs      # Re-exports polyplug_abi + helpers
+│   └── Cargo.toml      # Depends on polyplug_abi, polyplug_utils
+│
+└── host/               # Host application library  
+    ├── src/lib.rs      # Runtime wrapper, uses polyplug_abi types
+    ├── src/runtime.rs  # High-level Runtime API
+    └── Cargo.toml      # Depends on polyplug, polyplug_abi
+```
+
+Rust becomes a "first-class FFI consumer" - uses same types as other languages.
+
+## Registry Simplification
+
+**Current (complex):**
+```rust
+struct RegistrySlot {
+    generation: AtomicU32,        // For stale handle detection
+    entry: Option<RegistryEntry>, // Descriptor + metadata
+    vtable: Option<ArcSwap<VTableSlot>>, // VTableSlot wraps *const PluginInterface
+}
+```
+
+**Target (simple):**
+```rust
+struct RegistrySlot {
+    interface: Arc<GuestContractInterface>, // Direct storage, no wrapper
+    descriptor: ContractDescriptor,          // Metadata
+    bundle_id: BundleId,                     // Which bundle
+}
+
+// Index by contract_id for find_contract()
+// No generation counter - hot-reload destroys instances first
+// No VTableSlot wrapper - store interface directly
+```
 
 ## Current Milestone: v1.1 Architecture Refactor
 
