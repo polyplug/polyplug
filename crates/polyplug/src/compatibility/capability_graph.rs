@@ -6,7 +6,7 @@ use petgraph::algo;
 use petgraph::graph::DiGraph;
 use petgraph::graph::NodeIndex;
 use polyplug_abi::types::Version;
-use polyplug_utils::PluginContractId;
+use polyplug_utils::GuestContractId;
 
 use crate::compatibility::contract_capability::ContractCapability;
 use crate::error::GraphError;
@@ -55,7 +55,7 @@ impl CapabilityGraph {
     //  Returns Err(UnsatisfiedCapability) if any requirement has no provider.
     pub fn build_edges(&mut self) -> Result<(), GraphError> {
         // Collect provider map: contract_id → (provider_name, NodeIndex)
-        let mut provider_map: HashMap<PluginContractId, (String, NodeIndex)> = HashMap::new();
+        let mut provider_map: HashMap<GuestContractId, (String, NodeIndex)> = HashMap::new();
         for idx in self.graph.node_indices() {
             let bundle_name: String = self.graph[idx].name.clone();
             for cap in &self.graph[idx].provides {
