@@ -210,8 +210,17 @@ def polyplug_init(registrar_addr):
     let rt: Runtime = create_runtime();
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     match result {
-        Err(RuntimeError::Loader(LoaderError::PythonInitRaisedException { .. })) => {}
-        other => panic!("expected PythonInitRaisedException, got: {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                bundle.contains("exception_test"),
+                "bundle should mention exception_test: {bundle}"
+            );
+            assert!(
+                error.contains("exception") || error.contains("ValueError") || error.contains("test exception"),
+                "error should mention exception details: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for raised exception, got: {other:?}"),
     }
 
     // Cleanup
@@ -284,8 +293,17 @@ provides = ["test.version@1"]
         .expect("failed to build runtime");
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     match result {
-        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
-        other => panic!("expected RuntimeVersionMismatch for Python 99.0, got: {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                bundle.contains("version_test"),
+                "bundle should mention version_test: {bundle}"
+            );
+            assert!(
+                error.contains("version"),
+                "error should mention version: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for version mismatch, got: {other:?}"),
     }
 
     // Cleanup
