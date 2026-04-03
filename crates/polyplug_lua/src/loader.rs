@@ -14,12 +14,12 @@ use mlua::Value;
 
 use crate::config::LuaConfig;
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
-use polyplug::loader::BundleLoader;
+use polyplug::error::RuntimeError;
 use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::contract_id;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
@@ -27,7 +27,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
-use polyplug_abi::contract_id;
+use polyplug_abi::ABI_OK;
 
 /// The path to the sdks/lua/guest/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
@@ -115,19 +115,22 @@ impl BundleLoader for LuaLoader {
         "lua"
     }
 
-    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), PolyplugError> {
+    fn load(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), RuntimeError> {
         let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
             manifest.path.join(&manifest.file)
         } else {
-            return Err(PolyplugError::Loader(LoaderError::ManifestMissingFile {
+            return Err(RuntimeError::Loader(LoaderError::ManifestMissingFile {
                 bundle: manifest.name.clone(),
             }));
         };
 
         if !bundle_path.exists() {
-            return Err(PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
-                path: bundle_path.display().to_string(),
-                reason: "file does not exist".to_owned(),
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "Lua script load failed at {}: file does not exist",
+                    bundle_path.display()
+                ),
             }));
         }
 
@@ -149,8 +152,9 @@ impl BundleLoader for LuaLoader {
         lua.load(&guest_path_code)
             .exec()
             .map_err(|e: mlua::Error| {
-                PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                    reason: format!("failed to set guest package.path: {}", e),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!("Lua VM init failed: failed to set guest package.path: {}", e),
                 })
             })?;
 
@@ -160,17 +164,22 @@ impl BundleLoader for LuaLoader {
             ABI_LUA_DIR.replace('\\', "/")
         );
         lua.load(&abi_path_code).exec().map_err(|e: mlua::Error| {
-            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                reason: format!("failed to set abi package.path: {}", e),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua VM init failed: failed to set abi package.path: {}", e),
             })
         })?;
 
         // Read the plugin script source.
         let source: String =
             std::fs::read_to_string(&bundle_path).map_err(|e: std::io::Error| {
-                PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
-                    path: bundle_path.display().to_string(),
-                    reason: e.to_string(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: manifest.name.clone(),
+                    error: format!(
+                        "Lua script load failed at {}: {}",
+                        bundle_path.display(),
+                        e
+                    ),
                 })
             })?;
 
@@ -180,8 +189,9 @@ impl BundleLoader for LuaLoader {
             bundle_dir_fwd, bundle_dir_fwd
         );
         lua.load(&path_code).exec().map_err(|e: mlua::Error| {
-            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                reason: format!("package.path injection failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua VM init failed: package.path injection failed: {e}"),
             })
         })?;
         let cpath_ext: &str = if cfg!(windows) { "dll" } else { "so" };
@@ -190,15 +200,20 @@ impl BundleLoader for LuaLoader {
             bundle_dir_fwd, cpath_ext
         );
         lua.load(&cpath_code).exec().map_err(|e: mlua::Error| {
-            PolyplugError::Loader(LoaderError::LuaVmInitFailed {
-                reason: format!("package.cpath injection failed: {e}"),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!("Lua VM init failed: package.cpath injection failed: {e}"),
             })
         })?;
         // Execute the script. This defines polyplug_init in the global environment.
         lua.load(&source).exec().map_err(|e: mlua::Error| {
-            PolyplugError::Loader(LoaderError::LuaScriptLoadFailed {
-                path: bundle_path.display().to_string(),
-                reason: e.to_string(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "Lua script load failed at {}: {}",
+                    bundle_path.display(),
+                    e
+                ),
             })
         })?;
 
@@ -213,8 +228,12 @@ impl BundleLoader for LuaLoader {
             lua.globals()
                 .get::<Function>("polyplug_init")
                 .map_err(|_: mlua::Error| {
-                    PolyplugError::Loader(LoaderError::LuaInitFunctionMissing {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
+                        error: format!(
+                            "Lua plugin missing polyplug_init function: bundle={}",
+                            bundle_name
+                        ),
                     })
                 })?;
 
@@ -247,9 +266,9 @@ impl BundleLoader for LuaLoader {
         init_fn
             .call::<()>((rt_ctx_i64, host_vtable_i64, ctx_ptr))
             .map_err(|e: mlua::Error| {
-                PolyplugError::Loader(LoaderError::LuaInitRaisedError {
+                RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
-                    message: e.to_string(),
+                    error: format!("Lua polyplug_init raised error: {}", e),
                 })
             })?;
 
@@ -258,8 +277,9 @@ impl BundleLoader for LuaLoader {
             lua.globals()
                 .get::<Table>("_polyplug_handlers")
                 .map_err(|_: mlua::Error| {
-                    PolyplugError::Loader(LoaderError::LuaInitFunctionMissing {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
+                        error: format!("Lua plugin missing _polyplug_handlers: bundle={}", bundle_name),
                     })
                 })?;
 
@@ -278,9 +298,9 @@ impl BundleLoader for LuaLoader {
             handlers
                 .get::<Table>("functions")
                 .map_err(|e: mlua::Error| {
-                    PolyplugError::Loader(LoaderError::LuaInitRaisedError {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        message: format!("missing functions table: {}", e),
+                        error: format!("Lua handlers error: missing functions table: {}", e),
                     })
                 })?;
 
@@ -306,9 +326,9 @@ impl BundleLoader for LuaLoader {
                 functions_table
                     .get::<Function>(slot_idx as i64)
                     .map_err(|e: mlua::Error| {
-                        PolyplugError::Loader(LoaderError::LuaInitRaisedError {
+                        RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: bundle_name.clone(),
-                            message: format!("function slot {} error: {}", slot_idx, e),
+                            error: format!("Lua function slot {} error: {}", slot_idx, e),
                         })
                     })?;
             lua_functions.push(lua_fn);
@@ -378,13 +398,21 @@ impl BundleLoader for LuaLoader {
         };
 
         if reg_result.code != ABI_OK {
-            return Err(PolyplugError::Loader(LoaderError::LuaInitRaisedError {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
-                message: format!("register_plugin returned error code {}", reg_result.code),
+                error: format!("register_plugin error: code={}", reg_result.code),
             }));
         }
 
         Ok(())
+    }
+
+    fn reload(
+        &self,
+        _manifest: &ManifestData,
+        _runtime: &Runtime,
+    ) -> Result<(), polyplug::error::RuntimeError> {
+        Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
 }
 
