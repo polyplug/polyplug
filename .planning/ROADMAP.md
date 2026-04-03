@@ -80,7 +80,16 @@ Plans:
 2. FFI error messages remain strings at the boundary (no breaking changes)
 3. Example hosts compile and run correctly
 
-**Plans:** TBD
+**Plans:** 7 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Fix Python source file (context.rs) to use InitFailed pattern (COMP-01)
+- [ ] 03-02-PLAN.md — Fix .NET source files (version.rs, context.rs) to use InitFailed pattern (COMP-01)
+- [ ] 03-03-PLAN.md — Fix Python test files to use InitFailed pattern (COMP-01)
+- [ ] 03-04-PLAN.md — Fix .NET test files to use InitFailed pattern (COMP-01)
+- [ ] 03-05-PLAN.md — Fix Lua test files to use InitFailed pattern (COMP-01)
+- [ ] 03-06-PLAN.md — Fix integration_loader_dispatch.rs test file (COMP-01)
+- [ ] 03-07-PLAN.md — Run verification tests and confirm FFI compatibility (COMP-01, COMP-02)
 
 ---
 
@@ -90,7 +99,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Define Loader-Local Error Types | 5/5 | Complete | 2026-04-03 |
 | 2. Update Loader Implementations | 5/5 | Complete | 2026-04-03 |
-| 3. Verify Compatibility | 0/1 | Not started | - |
+| 3. Verify Compatibility | 0/7 | In progress | - |
 
 ## Coverage Map
 
@@ -102,11 +111,11 @@ Plans:
 | ERR-04 | Phase 1 | Complete |
 | ERR-05 | Phase 1 | Complete |
 | ERR-06 | Phase 2 | Complete |
-| COMP-01 | Phase 3 | Pending |
-| COMP-02 | Phase 3 | Pending |
+| COMP-01 | Phase 3 | In progress |
+| COMP-02 | Phase 3 | In progress |
 
 **Coverage:** 6/8 requirements complete (75%)
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 2 completion*
+*Last updated: 2026-04-03 after Phase 3 planning*
