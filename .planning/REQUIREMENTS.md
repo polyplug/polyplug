@@ -8,20 +8,20 @@
 
 ### Category: ABI Types
 
-- [ ] **ABI-01**: Rename `PluginInterface` to `GuestContractInterface`
-- [ ] **ABI-02**: Create `HostContractInterface` with `singleton` field
-- [ ] **ABI-03**: Add `create_instance` and `destroy_instance` to `GuestContractInterface` returning `GuestContractInstance`
-- [ ] **ABI-04**: Add `create_instance` and `destroy_instance` to `HostContractInterface` returning `HostContractInstance`
+- [x] **ABI-01**: Rename `PluginInterface` to `GuestContractInterface`
+- [x] **ABI-02**: Create `HostContractInterface` with `singleton` field
+- [x] **ABI-03**: Add `create_instance` and `destroy_instance` to `GuestContractInterface` returning `GuestContractInstance`
+- [x] **ABI-04**: Add `create_instance` and `destroy_instance` to `HostContractInterface` returning `HostContractInstance`
 - [ ] **ABI-05**: Move `RuntimeConfig` from `polyplug` crate to `polyplug_abi`
 - [ ] **ABI-06**: Create FFI-safe `ReloadPhaseData` struct in `polyplug_abi` (existing `ReloadPhase` enum with String fields stays in `polyplug` for internal Rust use)
 - [ ] **ABI-07**: Move `RuntimeCreateOptions` to `polyplug_abi` — **DEFERRED**: Type does not exist in current codebase; may be addressed in later phase if needed
-- [ ] **ABI-08**: Rename `HostVTable` to `RuntimeAbi`
-- [ ] **ABI-09**: Update `VmDispatch` to include `GuestContractInstance` parameter
-- [ ] **ABI-10**: Add `call_method` to `RuntimeAbi` with `GuestContractInstance` param
+- [x] **ABI-08**: Rename `HostVTable` to `RuntimeAbi`
+- [x] **ABI-09**: Update `VmDispatch` to include `GuestContractInstance` parameter
+- [x] **ABI-10**: Add `call_method` to `RuntimeAbi` with `GuestContractInstance` param
 - [x] **ABI-11**: Rename ID types: `PluginContractId` → `GuestContractId`
 - [ ] **ABI-12**: Ensure all public ABI structs are `#[repr(C)]`
-- [ ] **ABI-13**: Create `GuestContractInstance` opaque handle struct
-- [ ] **ABI-14**: Create `HostContractInstance` opaque handle struct
+- [x] **ABI-13**: Create `GuestContractInstance` opaque handle struct
+- [x] **ABI-14**: Create `HostContractInstance` opaque handle struct
 
 ### Category: Registry
 
@@ -59,11 +59,11 @@
 
 ### Category: RuntimeAbi
 
-- [ ] **RTABI-01**: Rename `register_plugin` (was `register_contract`)
-- [ ] **RTABI-02**: `find_contract` returns `ContractHandle`
-- [ ] **RTABI-03**: `resolve_contract` returns `*const GuestContractInterface`
-- [ ] **RTABI-04**: `get_host_contract` returns `HostContractInstance` (not bare pointer)
-- [ ] **RTABI-05**: Remove `find_by_bundle` from ABI (internal only)
+- [x] **RTABI-01**: Rename `register_plugin` (was `register_contract`)
+- [x] **RTABI-02**: `find_contract` returns `ContractHandle`
+- [x] **RTABI-03**: `resolve_contract` returns `*const GuestContractInterface`
+- [x] **RTABI-04**: `get_host_contract` returns `HostContractInstance` (not bare pointer)
+- [x] **RTABI-05**: Remove `find_by_bundle` from ABI (internal only)
 
 ### Category: SDK Updates
 

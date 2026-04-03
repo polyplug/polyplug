@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-03T16:47:32.873Z"
+last_updated: "2026-04-03T17:03:06Z"
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 2
+  percent: 50
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -33,18 +33,18 @@ progress:
 ## Current Position
 
 Phase: 01 (abi-types) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 **Phase:** 01-abi-types
-**Plan:** 01-01 Complete
-**Status:** Executing Phase 01, Plan 02 next
-**Progress:** [███░░░░░░░] 25%
+**Plan:** 01-02 Complete
+**Status:** Executing Phase 01, Plan 03 next
+**Progress:** [█████░░░░░] 50%
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
 | Phases completed | 0/7 |
-| Plans completed | 1 |
+| Plans completed | 2 |
 | Requirements covered | 50/50 mapped |
 
 ### Plan Execution Times
@@ -52,6 +52,7 @@ Plan: 2 of 4
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01-abi-types P01 | 113s | 2 | 2 |
+| Phase 01-abi-types P02 | 836s | 7 | 14 |
 
 ## Accumulated Context
 
@@ -76,10 +77,14 @@ Plan: 2 of 4
 | 2026-04-03 | Manifest parsing stays in core | Move TOML dependency later, not blocking this milestone |
 | 2026-04-03 | GuestContractId hash prefix: "guest_contract:" | Consistent naming with Guest/Host terminology (breaking change) |
 | 2026-04-03 | Deprecation alias PluginContractId = GuestContractId | Smooth migration for dependent code |
+| 2026-04-03 | GuestContractInterface 56 bytes | Version 12 bytes causes padding alignment |
+| 2026-04-03 | HostContractInterface 64 bytes | singleton bool causes padding cascade |
+| 2026-04-03 | RuntimeAbi 64 bytes | call_method + get_host_contract added |
+| 2026-04-03 | Legacy aliases PluginInterface/HostVTable | Smooth transition for dependent code |
 
 ### Active TODOs
 
-(None — roadmap just created)
+(None — executing phase plans)
 
 ### Blockers
 
@@ -103,7 +108,7 @@ Roadmap created for v1.1 Architecture Refactor:
 
 Total: 50+ requirements, 7 phases.
 
-**Project Status:** Roadmap ready. Next: `/gsd:plan-phase 1`
+**Project Status:** Phase 01 Plan 02 complete. Next: Phase 01 Plan 03
 
 ---
 *State initialized: 2026-04-03*
