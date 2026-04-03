@@ -10,16 +10,18 @@
 
 - [ ] **ABI-01**: Rename `PluginInterface` to `GuestContractInterface`
 - [ ] **ABI-02**: Create `HostContractInterface` with `singleton` field
-- [ ] **ABI-03**: Add `create_instance` and `destroy_instance` to `GuestContractInterface`
-- [ ] **ABI-04**: Add `create_instance` and `destroy_instance` to `HostContractInterface`
+- [ ] **ABI-03**: Add `create_instance` and `destroy_instance` to `GuestContractInterface` returning `GuestContractInstance`
+- [ ] **ABI-04**: Add `create_instance` and `destroy_instance` to `HostContractInterface` returning `HostContractInstance`
 - [ ] **ABI-05**: Move `RuntimeConfig` from `polyplug` crate to `polyplug_abi`
 - [ ] **ABI-06**: Move `ReloadPhase` struct to `polyplug_abi`
 - [ ] **ABI-07**: Move `RuntimeCreateOptions` to `polyplug_abi`
 - [ ] **ABI-08**: Rename `HostVTable` to `RuntimeAbi`
-- [ ] **ABI-09**: Update `VmDispatch` to include `instance` parameter
-- [ ] **ABI-10**: Add `call_method` to `RuntimeAbi` for cross-dispatch
+- [ ] **ABI-09**: Update `VmDispatch` to include `GuestContractInstance` parameter
+- [ ] **ABI-10**: Add `call_method` to `RuntimeAbi` with `GuestContractInstance` param
 - [ ] **ABI-11**: Rename ID types: `PluginContractId` → `GuestContractId`
 - [ ] **ABI-12**: Ensure all public ABI structs are `#[repr(C)]`
+- [ ] **ABI-13**: Create `GuestContractInstance` opaque handle struct
+- [ ] **ABI-14**: Create `HostContractInstance` opaque handle struct
 
 ### Category: Registry
 
@@ -60,7 +62,7 @@
 - [ ] **RTABI-01**: Rename `register_plugin` (was `register_contract`)
 - [ ] **RTABI-02**: `find_contract` returns `ContractHandle`
 - [ ] **RTABI-03**: `resolve_contract` returns `*const GuestContractInterface`
-- [ ] **RTABI-04**: `get_host_contract` returns instance pointer
+- [ ] **RTABI-04**: `get_host_contract` returns `HostContractInstance` (not bare pointer)
 - [ ] **RTABI-05**: Remove `find_by_bundle` from ABI (internal only)
 
 ### Category: SDK Updates
@@ -118,19 +120,19 @@
 
 | Requirement | Phase |
 |-------------|-------|
-| ABI-01 through ABI-12 | Phase 4: ABI Types |
-| RTABI-01 through RTABI-05 | Phase 4: ABI Types |
-| REG-01 through REG-06 | Phase 5: Registry |
-| INST-01 through INST-06 | Phase 6: Instance Model |
-| HC-01 through HC-04 | Phase 6: Instance Model |
-| CG-01 through CG-06 | Phase 6: Instance Model |
-| HR-01 through HR-06 | Phase 7: Hot-Reload |
-| SDK-01 through SDK-07 | Phase 8: SDK Updates |
-| CLN-01 through CLN-04 | Phase 9: Cleanup |
+| ABI-01 through ABI-14 | Phase 1: ABI Types |
+| RTABI-01 through RTABI-05 | Phase 1: ABI Types |
+| REG-01 through REG-06 | Phase 2: Registry |
+| INST-01 through INST-06 | Phase 3: Instance Model |
+| HC-01 through HC-04 | Phase 3: Instance Model |
+| CG-01 through CG-06 | Phase 3: Instance Model |
+| HR-01 through HR-06 | Phase 4: Hot-Reload |
+| SDK-01 through SDK-07 | Phase 5: SDK Updates |
+| CLN-01 through CLN-04 | Phase 6: Cleanup |
 
 **Coverage:**
-- v1.1 requirements: 48 total
-- Mapped to phases: 48
+- v1.1 requirements: 50 total
+- Mapped to phases: 50
 - Unmapped: 0
 
 ---

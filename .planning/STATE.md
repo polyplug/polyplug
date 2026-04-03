@@ -42,7 +42,7 @@ progress:
 |--------|-------|
 | Phases completed | 0/6 |
 | Plans completed | 0 |
-| Requirements covered | 48/48 mapped |
+| Requirements covered | 50/50 mapped |
 
 ## Accumulated Context
 
@@ -63,6 +63,8 @@ progress:
 | 2026-04-03 | ContractHandle without generation | Instances destroyed before hot-reload |
 | 2026-04-03 | PluginContext init-time only | Two-context model: rt_ctx always, PluginContext during init |
 | 2026-04-03 | call_method for cross-dispatch | Plugin-plugin across different dispatch types |
+| 2026-04-03 | GuestContractInstance/HostContractInstance opaque handles | Type-safe instance handles, not bare pointers |
+| 2026-04-03 | Manifest parsing stays in core | Move TOML dependency later, not blocking this milestone |
 
 ### Active TODOs
 
@@ -75,16 +77,16 @@ None.
 ### Session Continuity
 
 Roadmap created for v1.1 Architecture Refactor:
-- Phase 4: ABI Types (17 requirements)
-- Phase 5: Registry (6 requirements)
-- Phase 6: Instance Model (16 requirements)
-- Phase 7: Hot-Reload (6 requirements)
-- Phase 8: SDK Updates (7 requirements)
-- Phase 9: Cleanup (4 requirements)
+- Phase 1: ABI Types (19 requirements)
+- Phase 2: Registry (6 requirements)
+- Phase 3: Instance Model (16 requirements)
+- Phase 4: Hot-Reload (6 requirements)
+- Phase 5: SDK Updates (7 requirements)
+- Phase 6: Cleanup (4 requirements)
 
-Total: 48 requirements, 100% coverage.
+Total: 50 requirements, 100% coverage.
 
-**Project Status:** Roadmap ready. Next: `/gsd:plan-phase 4`
+**Project Status:** Roadmap ready. Next: `/gsd:plan-phase 1`
 
 ---
 *State initialized: 2026-04-03*

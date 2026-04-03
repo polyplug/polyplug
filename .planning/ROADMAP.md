@@ -11,16 +11,16 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 ## Phases
 
-- [ ] **Phase 4: ABI Types** - Foundation types moved to polyplug_abi with renamed interfaces
-- [ ] **Phase 5: Registry** - Simplified registry with direct interface storage
-- [ ] **Phase 6: Instance Model** - Factory-based instance lifecycle with codegen support
-- [ ] **Phase 7: Hot-Reload** - Callback-based reload with instance safety contract
-- [ ] **Phase 8: SDK Updates** - All five SDKs updated to use polyplug_abi types
-- [ ] **Phase 9: Cleanup** - Naming consistency and documentation updates
+- [ ] **Phase 1: ABI Types** - Foundation types moved to polyplug_abi with renamed interfaces
+- [ ] **Phase 2: Registry** - Simplified registry with direct interface storage
+- [ ] **Phase 3: Instance Model** - Factory-based instance lifecycle with codegen support
+- [ ] **Phase 4: Hot-Reload** - Callback-based reload with instance safety contract
+- [ ] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
+- [ ] **Phase 6: Cleanup** - Naming consistency and documentation updates
 
 ## Phase Details
 
-### Phase 4: ABI Types
+### Phase 1: ABI Types
 **Goal:** All FFI types consolidated in polyplug_abi with renamed interfaces
 **Depends on:** Nothing (foundation phase)
 **Requirements:** ABI-01, ABI-02, ABI-03, ABI-04, ABI-05, ABI-06, ABI-07, ABI-08, ABI-09, ABI-10, ABI-11, ABI-12, RTABI-01, RTABI-02, RTABI-03, RTABI-04, RTABI-05
@@ -32,21 +32,21 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 5. All public ABI structs are #[repr(C)] and compile successfully
 **Plans:** TBD
 
-### Phase 5: Registry
+### Phase 2: Registry
 **Goal:** Simplified registry stores GuestContractInterface directly without wrappers
-**Depends on:** Phase 4
+**Depends on:** Phase 1
 **Requirements:** REG-01, REG-02, REG-03, REG-04, REG-05, REG-06
 **Success Criteria** (what must be TRUE):
 1. RegistrySlot stores Arc<GuestContractInterface> directly (no VTableSlot wrapper)
-2. PluginGuard removed from codebase (replaced by instance model in Phase 6)
+2. PluginGuard removed from codebase (replaced by instance model in Phase 3)
 3. ContractHandle has only index field (no generation counter)
 4. find_contract returns ContractHandle without generation validation
 5. Registry compiles and all existing tests pass
 **Plans:** TBD
 
-### Phase 6: Instance Model
+### Phase 3: Instance Model
 **Goal:** Host creates and owns plugin instances via factory pattern with generated RAII wrappers
-**Depends on:** Phase 5
+**Depends on:** Phase 2
 **Requirements:** INST-01, INST-02, INST-03, INST-04, INST-05, INST-06, HC-01, HC-02, HC-03, HC-04, CG-01, CG-02, CG-03, CG-04, CG-05, CG-06
 **Success Criteria** (what must be TRUE):
 1. Generated *Instance wrappers call create_instance on construction and destroy_instance on drop
@@ -56,9 +56,9 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 5. Cross-dispatch call_method works for plugin-plugin calls across dispatch types
 **Plans:** TBD
 
-### Phase 7: Hot-Reload
+### Phase 4: Hot-Reload
 **Goal:** Hot-reload uses callback-based model where host destroys instances before swap
-**Depends on:** Phase 6
+**Depends on:** Phase 3
 **Requirements:** HR-01, HR-02, HR-03, HR-04, HR-05, HR-06
 **Success Criteria** (what must be TRUE):
 1. ReloadPhase::Preparing callback fires before interface swap, giving host chance to destroy instances
@@ -68,9 +68,9 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 5. Arc::strong_count quiescence wait removed from hot-reload code
 **Plans:** TBD
 
-### Phase 8: SDK Updates
+### Phase 5: SDK Updates
 **Goal:** All five SDKs use types from polyplug_abi without duplicates
-**Depends on:** Phase 7
+**Depends on:** Phase 4
 **Requirements:** SDK-01, SDK-02, SDK-03, SDK-04, SDK-05, SDK-06, SDK-07
 **Success Criteria** (what must be TRUE):
 1. Rust host SDK imports RuntimeConfig, ReloadPhase from polyplug_abi (no duplicates)
@@ -82,9 +82,9 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 7. All SDKs generate instance-based wrappers via codegen
 **Plans:** TBD
 
-### Phase 9: Cleanup
+### Phase 6: Cleanup
 **Goal:** Consistent Guest/Host naming throughout with no vtable terminology
-**Depends on:** Phase 8
+**Depends on:** Phase 5
 **Requirements:** CLN-01, CLN-02, CLN-03, CLN-04
 **Success Criteria** (what must be TRUE):
 1. No "vtable" naming remains in codebase (search: vtable, VTable, VTABLE)
@@ -97,32 +97,32 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 4. ABI Types | 0/0 | Not started | - |
-| 5. Registry | 0/0 | Not started | - |
-| 6. Instance Model | 0/0 | Not started | - |
-| 7. Hot-Reload | 0/0 | Not started | - |
-| 8. SDK Updates | 0/0 | Not started | - |
-| 9. Cleanup | 0/0 | Not started | - |
+| 1. ABI Types | 0/0 | Not started | - |
+| 2. Registry | 0/0 | Not started | - |
+| 3. Instance Model | 0/0 | Not started | - |
+| 4. Hot-Reload | 0/0 | Not started | - |
+| 5. SDK Updates | 0/0 | Not started | - |
+| 6. Cleanup | 0/0 | Not started | - |
 
 ## Dependencies
 
 ```
-Phase 4 (ABI Types)
+Phase 1 (ABI Types)
     |
     v
-Phase 5 (Registry)
+Phase 2 (Registry)
     |
     v
-Phase 6 (Instance Model)
+Phase 3 (Instance Model)
     |
     v
-Phase 7 (Hot-Reload)
+Phase 4 (Hot-Reload)
     |
     v
-Phase 8 (SDK Updates)
+Phase 5 (SDK Updates)
     |
     v
-Phase 9 (Cleanup)
+Phase 6 (Cleanup)
 ```
 
 ---
