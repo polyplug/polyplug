@@ -31,7 +31,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 4. All ID types renamed: PluginContractId -> GuestContractId throughout codebase
 5. All public ABI structs are #[repr(C)] and compile successfully
 6. Workspace compiles (cargo build --workspace)
-**Plans:** 7 plans (4 main + 3 gap closure)
+**Plans:** 9 plans (4 main + 5 gap closure)
 
 Plans:
 - [x] 01-01-PLAN.md — Rename PluginContractId to GuestContractId in polyplug_utils
@@ -39,8 +39,10 @@ Plans:
 - [x] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
 - [ ] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
 - [ ] 01-05-PLAN.md — Gap closure: Export AbiErrorCode and helper functions from polyplug_abi root
-- [ ] 01-06-PLAN.md — Gap closure: Fix deprecated PluginContractId usage and ffi.rs bundle_id type mismatch
-- [ ] 01-07-PLAN.md — Gap closure: Remove ABI_* constant imports from SDK, fix fixture AbiError.code usage
+- [ ] 01-06-PLAN.md — Gap closure: Fix deprecated PluginContractId usage in compatibility files
+- [ ] 01-07-PLAN.md — Gap closure: Fix ffi.rs bundle_id type mismatch, verify polyplug compiles
+- [ ] 01-08-PLAN.md — Gap closure: Remove ABI_* constant imports from SDK guest library
+- [ ] 01-09-PLAN.md — Gap closure: Fix fixture AbiError.code usage, verify workspace compiles
 
 ### Phase 2: Registry
 **Goal:** Simplified registry stores GuestContractInterface directly without wrappers
@@ -119,7 +121,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. ABI Types | 0/7 | Executing (gap closure) | - |
+| 1. ABI Types | 0/9 | Executing (gap closure) | - |
 | 2. Registry | 0/0 | Not started | - |
 | 3. Instance Model | 0/0 | Not started | - |
 | 4. Hot-Reload | 0/0 | Not started | - |
@@ -136,7 +138,7 @@ Phase 1 (ABI Types)
 Phase 2 (Registry)
     |
     v
-Phase 3 (Instance Model)
+Phase 3 (InstanceModel)
     |
     v
 Phase 4 (Hot-Reload)
@@ -155,3 +157,4 @@ Phase 7 (Typed Handles)
 *Roadmap created: 2026-04-03*
 *Phase 1 plans added: 2026-04-03*
 *Gap closure plans added: 2026-04-03*
+*Plans split per checker feedback: 2026-04-03*
