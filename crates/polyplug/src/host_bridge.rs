@@ -1,4 +1,4 @@
-//! HostRuntimeBridge — trait for bridging between runtime and VM-based hosts.
+//! RuntimeLanguageBridge — trait for bridging between runtime and VM-based hosts.
 //!
 //! This trait defines the interface that VM-based host implementations (Python, Lua, JavaScript)
 //! must provide to enable host contract registration and dispatch. The bridge allows VM-based
@@ -87,16 +87,16 @@ pub enum BridgeError {
 /// # Example
 ///
 /// ```rust,ignore
-/// use polyplug::host_bridge::{HostRuntimeBridge, BridgeError};
-/// use polyplug_abi::{HostRuntime, AbiError};
+/// use polyplug::host_bridge::{RuntimeLanguageBridge, BridgeError};
+/// use polyplug_abi::{RuntimeLanguage, AbiError};
 ///
 /// struct PythonBridge {
 ///     // Python VM state and registered contracts
 /// }
 ///
-/// impl HostRuntimeBridge for PythonBridge {
-///     fn runtime_type(&self) -> HostRuntime {
-///         HostRuntime::Python
+/// impl RuntimeLanguageBridge for PythonBridge {
+///     fn runtime_type(&self) -> RuntimeLanguage {
+///         RuntimeLanguage::Python
 ///     }
 ///
 ///     fn register_host_contract(
@@ -120,7 +120,7 @@ pub enum BridgeError {
 ///     }
 /// }
 /// ```
-pub trait HostRuntimeBridge: Send + Sync {
+pub trait RuntimeLanguageBridge: Send + Sync {
     /// Returns the host runtime type this bridge supports.
     ///
     /// This identifies whether the bridge handles Python, Lua, JavaScript, or Rust.

@@ -12,19 +12,19 @@
 //!  - find_by_contract() is a read-only RwLock read guard
 //!  - No locks in the hot path
 
-use core::sync::atomic::AtomicBool;
-use core::sync::atomic::Ordering;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use notify::Watcher;
+use polyplug_abi::host::host_vtable::HostVTable;
+use polyplug_abi::plugin::{PluginDescriptor, PluginHandle, PluginInterface};
 use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::types::Version;
 
-use crate::RuntimeConfig;
 use crate::compatibility::Compatibility;
 use crate::error::HostContractError;
 use crate::error::LoaderError;
@@ -33,8 +33,9 @@ use crate::error::RuntimeError;
 use crate::loader::BundleLoader;
 use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
-use crate::loader::ManifestData;
+use crate::loader::ManifestDependency;
 use crate::registry::PluginRegistry;
+use crate::RuntimeConfig;
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
 
@@ -61,26 +62,17 @@ pub struct Runtime {
     /// The static HostVTable given to plugins. Must be 'static.
     host_vtable: &'static HostVTable,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
-    loaders: HashMap<String, Box<dyn BundleLoader>>,
+    pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
     /// Used by reload_bundle() for cascade detection.
     pub(crate) bundle_manifests: Mutex<HashMap<String, ManifestData>>,
-    /// Library handles for reloaded native bundles — these ARE droppable (unlike loaded_libraries).
-    /// Keyed by bundle_id. On each reload the old handle is removed and dropped after quiescence.
-    pub(crate) reload_libraries: Mutex<HashMap<u64, libloading::Library>>,
     /// Optional callback fired after vtable swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCb>,
-    /// Background watcher thread handle. Joined on Drop.
-    watcher_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-    /// Stop flag sent to watcher thread.
-    watcher_stop: Mutex<Option<Arc<AtomicBool>>>,
     config: RuntimeConfig,
     /// Optional warning callback. If None, warnings go to stderr.
     warning_cb: Option<WarningCb>,
     /// Last error message for FFI error reporting.
     last_error: Mutex<String>,
-    /// Captured vtables during hot-reload. Used by reload_register_callback.
-    pub(crate) reload_captured_vtables: Mutex<Vec<crate::reload::VTablePtr>>,
     /// Registered host contracts, keyed by contract_id.
     host_contracts: RwLock<HashMap<u64, &'static HostContractVTable>>,
     /// Host runtime type identifier.
@@ -203,7 +195,7 @@ impl Runtime {
 
     /// Get the host runtime type.
     #[inline(always)]
-    pub fn host_runtime(&self) -> HostRuntime {
+    pub fn host_runtime(&self) -> RuntimeLanguage {
         self.host_runtime
     }
 
@@ -222,6 +214,12 @@ impl Runtime {
     #[inline(always)]
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
+    }
+
+    /// Get the reload callback.
+    #[inline(always)]
+    pub fn on_reload_cb(&self) -> &Option<ReloadCb> {
+        &self.on_reload_cb
     }
 
     /// Emit a warning message via the registered warning callback, or to stderr if none.
@@ -303,7 +301,7 @@ impl Runtime {
     ///
     /// Reads the companion manifest, finds the matching loader, and dispatches.
     /// Does NOT perform graph pre-validation — intended for programmatic loads.
-    pub fn load_bundle(&self, path: &Path) -> Result<(), PolyplugError> {
+    pub fn load_bundle(&self, path: &Path) -> Result<(), RuntimeError> {
         self.load_bundle_with(
             path,
             LoadOptions {
@@ -314,7 +312,7 @@ impl Runtime {
     }
 
     /// Load a single plugin bundle explicitly with options.
-    pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), PolyplugError> {
+    pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), RuntimeError> {
         // Determine the bundle directory: if path is a file, use its parent; otherwise use path as-is.
         let bundle_dir: &Path = if path.is_file() {
             path.parent().unwrap_or(path)
@@ -323,9 +321,9 @@ impl Runtime {
         };
 
         let manifest: ManifestData = crate::loader::parse_manifest(bundle_dir)
-            .map_err(|e: LoaderError| PolyplugError::Loader(e))?;
+            .map_err(|e: LoaderError| RuntimeError::Loader(e))?;
         if manifest.id == 0 {
-            return Err(PolyplugError::Loader(LoaderError::InitFailed {
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: path.display().to_string(),
                 error: "manifest.id is required but was 0 or missing".to_owned(),
             }));
@@ -352,7 +350,7 @@ impl Runtime {
                         manifest.name, contract, key
                     );
                     if opts.compatibility == Compatibility::Strict {
-                        return Err(PolyplugError::Loader(LoaderError::FunctionCountMismatch {
+                        return Err(RuntimeError::Loader(LoaderError::FunctionCountMismatch {
                             contract: contract.clone(),
                             // sentinel 0/0: entry is missing entirely; actual count is unknown without loading the .so
                             expected: 0,
@@ -372,13 +370,13 @@ impl Runtime {
             .get(runtime_name)
             .map(Box::as_ref)
             .ok_or_else(|| {
-                PolyplugError::Loader(LoaderError::NoLoaderForRuntime {
+                RuntimeError::Loader(LoaderError::NoLoaderForRuntime {
                     bundle: path.display().to_string(),
                     runtime_name: runtime_name.to_owned(),
                 })
             })?;
 
-        let result: Result<(), PolyplugError> = loader.load(&manifest, self);
+        let result: Result<(), RuntimeError> = loader.load(&manifest, self);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
             let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
@@ -389,146 +387,6 @@ impl Runtime {
             manifests.insert(bundle_name, manifest);
         }
         result
-    }
-}
-
-impl Drop for Runtime {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = self.watcher_stop.lock()
-            && let Some(flag) = guard.take()
-        {
-            flag.store(true, core::sync::atomic::Ordering::Relaxed);
-        }
-        if let Ok(mut guard) = self.watcher_thread.lock()
-            && let Some(handle) = guard.take()
-        {
-            let _: std::thread::Result<()> = handle.join();
-        }
-    }
-}
-
-impl Runtime {
-    /// Start a background file watcher on `dir`.
-    ///
-    /// Automatically calls `reload_bundle()` when a `.so` / `.dll` / `.dylib`
-    /// file in the watched directory is modified or created.
-    /// Uses a 100ms debounce to suppress duplicate events.
-    ///
-    /// The caller must hold this `Runtime` in an `Arc`. Pass `Arc::clone(&rt)`
-    /// as `self_arc` — e.g. `Runtime::watch_plugin_dir(Arc::clone(&rt), dir)`.
-    pub fn watch_plugin_dir(
-        self_arc: Arc<Runtime>,
-        dir: &std::path::Path,
-    ) -> Result<(), crate::error::PolyplugError> {
-        let canonical_dir: PathBuf = dir.canonicalize().map_err(|e: std::io::Error| {
-            crate::error::PolyplugError::WatcherFailed {
-                reason: e.to_string(),
-            }
-        })?;
-
-        let stop_flag: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-        let stop_flag_thread: Arc<AtomicBool> = Arc::clone(&stop_flag);
-
-        let debounce: Arc<Mutex<HashMap<PathBuf, std::time::Instant>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let debounce_cb: Arc<Mutex<HashMap<PathBuf, std::time::Instant>>> = Arc::clone(&debounce);
-
-        let runtime_weak: std::sync::Weak<Runtime> = Arc::downgrade(&self_arc);
-
-        let mut watcher: notify::RecommendedWatcher =
-            notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-                let event: notify::Event = match res {
-                    Ok(e) => e,
-                    Err(_) => return,
-                };
-                if !matches!(
-                    event.kind,
-                    notify::EventKind::Modify(_) | notify::EventKind::Create(_)
-                ) {
-                    return;
-                }
-                for path in &event.paths {
-                    let ext: &str = path
-                        .extension()
-                        .and_then(|s: &std::ffi::OsStr| s.to_str())
-                        .unwrap_or("");
-                    if !matches!(ext, "so" | "dll" | "dylib") {
-                        continue;
-                    }
-                    let now: std::time::Instant = std::time::Instant::now();
-                    let mut debounce_map: std::sync::MutexGuard<
-                        '_,
-                        HashMap<PathBuf, std::time::Instant>,
-                    > = debounce_cb.lock().unwrap_or_else(|e| {
-                        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                        e.into_inner()
-                    });
-                    let last: std::time::Instant =
-                        debounce_map.get(path).copied().unwrap_or_else(|| {
-                            now.checked_sub(core::time::Duration::from_secs(1_u64))
-                                .unwrap_or(now)
-                        });
-                    if now.duration_since(last) < core::time::Duration::from_millis(100_u64) {
-                        continue;
-                    }
-                    debounce_map.insert(path.clone(), now);
-                    drop(debounce_map);
-                    let bundle_path_str: String = path.to_string_lossy().into_owned();
-                    if let Some(rt) = runtime_weak.upgrade() {
-                        match crate::reload::reload_bundle_impl(
-                            &rt,
-                            std::path::Path::new(&bundle_path_str),
-                            0_usize,
-                        ) {
-                            Ok(()) => {}
-                            Err(e) => {
-                                rt.emit_warning(&format!(
-                                    "hot-reload: auto-reload failed for {bundle_path_str}: {e}"
-                                ));
-                            }
-                        }
-                    }
-                }
-            })
-            .map_err(|e: notify::Error| {
-                crate::error::PolyplugError::WatcherFailed {
-                    reason: e.to_string(),
-                }
-            })?;
-
-        watcher
-            .watch(&canonical_dir, notify::RecursiveMode::Recursive)
-            .map_err(
-                |e: notify::Error| crate::error::PolyplugError::WatcherFailed {
-                    reason: e.to_string(),
-                },
-            )?;
-
-        let handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
-            // Keep watcher alive for the thread lifetime.
-            let _watcher: notify::RecommendedWatcher = watcher;
-            while !stop_flag_thread.load(Ordering::Relaxed) {
-                std::thread::sleep(core::time::Duration::from_millis(10_u64));
-            }
-        });
-
-        self_arc
-            .watcher_stop
-            .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
-            .replace(stop_flag);
-        self_arc
-            .watcher_thread
-            .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
-                e.into_inner()
-            })
-            .replace(handle);
-        Ok(())
     }
 }
 
@@ -559,16 +417,16 @@ pub(crate) fn validate_bundle_compatibility(
 
     for (_path, manifest) in manifests {
         // Check version compatibility for each dependency
-        let resolved: Vec<crate::loader::manifest::ManifestDependency> =
+        let resolved: Vec<ManifestDependency> =
             manifest.resolved_dependencies();
         for dep in &resolved {
             let (dep_contract, dep_min_version_str): (&str, &str) = match dep {
-                crate::loader::manifest::ManifestDependency::ByContract {
+                ManifestDependency::ByContract {
                     contract,
                     min_version,
                     ..
                 } => (contract.as_str(), min_version.as_str()),
-                crate::loader::manifest::ManifestDependency::ByBundle {
+                ManifestDependency::ByBundle {
                     contract,
                     min_version,
                     ..
@@ -584,7 +442,7 @@ pub(crate) fn validate_bundle_compatibility(
                 None => continue, // graph already validates this
             };
 
-            let required: Version = match Version::parse(dep_min_version_str, &manifest.name) {
+            let required: Version = match Version::from_str(dep_min_version_str) {
                 Ok(v) => v,
                 Err(e) => return Err(RuntimeError::Loader(e)),
             };
@@ -1004,11 +862,19 @@ mod tests {
             &self,
             _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::PolyplugError> {
+        ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::UndeclaredDependency {
                 bundle_id: self.error_bundle_id,
                 contract_id: self.contract_id,
             })
+        }
+
+        fn reload(
+            &self,
+            _manifest: &crate::loader::manifest::ManifestData,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::RuntimeError> {
+            Err(RuntimeError::HotReloadDisabled)
         }
     }
 
@@ -1025,7 +891,7 @@ mod tests {
             &self,
             _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::PolyplugError> {
+        ) -> Result<(), crate::error::RuntimeError> {
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
             {
                 Ok(g) => g,
@@ -1033,6 +899,14 @@ mod tests {
             };
             *guard = Some(true);
             Ok(())
+        }
+
+        fn reload(
+            &self,
+            _manifest: &crate::loader::manifest::ManifestData,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::RuntimeError> {
+            Err(RuntimeError::HotReloadDisabled)
         }
     }
 
@@ -1047,8 +921,16 @@ mod tests {
             &self,
             _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::PolyplugError> {
+        ) -> Result<(), crate::error::RuntimeError> {
             panic!("intentional panic in PanicLoader");
+        }
+
+        fn reload(
+            &self,
+            _manifest: &crate::loader::manifest::ManifestData,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::RuntimeError> {
+            Err(RuntimeError::HotReloadDisabled)
         }
     }
 
@@ -1071,7 +953,7 @@ mod tests {
             &self,
             _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::PolyplugError> {
+        ) -> Result<(), crate::error::RuntimeError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
@@ -1090,7 +972,7 @@ mod tests {
             drop(state);
             // SAFETY: runtime_ptr was set from a valid &Runtime during load_bundle.
             let runtime_ref: &Runtime = unsafe { &*(runtime_ptr as *const Runtime) };
-            let inner_result: Result<(), crate::error::PolyplugError> = runtime_ref
+            let inner_result: Result<(), crate::error::RuntimeError> = runtime_ref
                 .load_bundle_with(
                     inner_bundle.as_path(),
                     LoadOptions {
@@ -1107,6 +989,14 @@ mod tests {
                 st2.inner_load_completed = Some(true);
             }
             Ok(())
+        }
+
+        fn reload(
+            &self,
+            _manifest: &crate::loader::manifest::ManifestData,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::RuntimeError> {
+            Err(RuntimeError::HotReloadDisabled)
         }
     }
 
@@ -1127,7 +1017,7 @@ mod tests {
             &self,
             _manifest: &crate::loader::manifest::ManifestData,
             _runtime: &Runtime,
-        ) -> Result<(), crate::error::PolyplugError> {
+        ) -> Result<(), crate::error::RuntimeError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {
                 Ok(g) => g,
                 Err(e) => e.into_inner(),
@@ -1136,6 +1026,14 @@ mod tests {
                 state.observed_init = Some(true);
             }
             Ok(())
+        }
+
+        fn reload(
+            &self,
+            _manifest: &crate::loader::manifest::ManifestData,
+            _runtime: &Runtime,
+        ) -> Result<(), crate::error::RuntimeError> {
+            Err(RuntimeError::HotReloadDisabled)
         }
     }
 
@@ -1160,10 +1058,10 @@ mod tests {
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
         let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xBEEF_u64);
-        let result: Result<(), crate::error::PolyplugError> =
+        let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
         match result {
-            Err(PolyplugError::UndeclaredDependency {
+            Err(RuntimeError::UndeclaredDependency {
                 bundle_id,
                 contract_id,
             }) => {
@@ -1195,7 +1093,7 @@ mod tests {
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
         let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xCAFE_u64);
-        let result: Result<(), crate::error::PolyplugError> =
+        let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
         if let Err(e) = result {
             panic!("load_bundle failed: {e}");
@@ -1272,7 +1170,7 @@ mod tests {
             };
             guard.runtime_ptr = &runtime as *const Runtime as usize;
         }
-        let result: Result<(), crate::error::PolyplugError> = runtime.load_bundle_with(
+        let result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
             outer_bundle.as_path(),
             LoadOptions {
                 compatibility: crate::compatibility::Compatibility::default(),
@@ -1320,7 +1218,7 @@ mod tests {
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
         let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xFACE_u64);
-        let result: Result<(), crate::error::PolyplugError> =
+        let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(outer_bundle.as_path());
         if let Err(e) = result {
             panic!("outer load failed: {e}");
@@ -1334,7 +1232,7 @@ mod tests {
             Some(true),
             "init should have been observed during lazy loader init"
         );
-        let inner_result: Result<(), crate::error::PolyplugError> = runtime.load_bundle_with(
+        let inner_result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
             inner_bundle.as_path(),
             LoadOptions {
                 compatibility: crate::compatibility::Compatibility::default(),
@@ -1490,16 +1388,16 @@ mod tests {
         let runtime: Runtime = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
-        assert_eq!(runtime.host_runtime(), HostRuntime::Rust);
+        assert_eq!(runtime.host_runtime(), RuntimeLanguage::Rust);
     }
 
     #[test]
     fn runtime_host_runtime_can_be_set() {
         let runtime: Runtime = Runtime::builder()
-            .host_runtime(HostRuntime::Python)
+            .host_runtime(RuntimeLanguage::Python)
             .build()
             .expect("runtime build should succeed");
-        assert_eq!(runtime.host_runtime(), HostRuntime::Python);
+        assert_eq!(runtime.host_runtime(), RuntimeLanguage::Python);
     }
 
     #[test]

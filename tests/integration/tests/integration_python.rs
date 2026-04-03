@@ -2,7 +2,7 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
@@ -57,7 +57,7 @@ fn create_runtime() -> Runtime {
         .expect("failed to build runtime")
 }
 
-fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
+fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
     rt.load_bundle(std::path::Path::new(PYTHON_PLUGIN))
 }
 
@@ -81,7 +81,7 @@ fn integration_python_runtime_name() {
 fn integration_python_bundle_loads() {
     skip_if_no_python!();
     let rt: Runtime = create_runtime();
-    let result: Result<(), PolyplugError> = load_fixture(&rt);
+    let result: Result<(), RuntimeError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
         "PythonLoader::load() must succeed for fixture: {:?}",
@@ -208,9 +208,9 @@ def polyplug_init(registrar_addr):
     std::fs::write(tmp_dir.join("plugin.py"), plugin_content).expect("write plugin.py");
 
     let rt: Runtime = create_runtime();
-    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_dir);
+    let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     match result {
-        Err(PolyplugError::Loader(LoaderError::PythonInitRaisedException { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::PythonInitRaisedException { .. })) => {}
         other => panic!("expected PythonInitRaisedException, got: {other:?}"),
     }
 
@@ -282,9 +282,9 @@ provides = ["test.version@1"]
         }))
         .build()
         .expect("failed to build runtime");
-    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_dir);
+    let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     match result {
-        Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch for Python 99.0, got: {other:?}"),
     }
 

@@ -31,7 +31,7 @@ const ABI_TYPES: &[&str] = &[
     "PluginContext",
     "ExtensionEntry",
     "RuntimeConfig",
-    "HostRuntime",
+    "RuntimeLanguage",
     "HostContractVTableHeader",
     "NativeHostContractDispatch",
     "VmHostContractDispatch",

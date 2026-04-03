@@ -7,7 +7,7 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
-use polyplug::registry::PluginGuard;
+use polyplug::plugin_registry::PluginGuard;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;

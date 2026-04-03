@@ -212,9 +212,9 @@ polyplug's position: the hot path must be a single indirect call. Plugin crash i
 Even with trusted plugins, malformed or corrupted plugin binaries are a real scenario. polyplug defends against these at load time:
 
 - **Invalid UTF-8** — all strings extracted from plugin binaries are validated via `std::str::from_utf8`. Invalid UTF-8 is a hard load error. The runtime remains healthy after rejecting a bad bundle.
-- **Truncated or wrong-magic binaries** — `libloading` returns a clean error; polyplug propagates as `PolyplugError::LoadFailed`.
-- **Missing `init` symbol** — returns `PolyplugError::MissingSymbol`. Runtime remains healthy.
-- **Unknown runtime value** — returns `PolyplugError::UnknownRuntime`.
+- **Truncated or wrong-magic binaries** — `libloading` returns a clean error; polyplug propagates as `RuntimeError::LoadFailed`.
+- **Missing `init` symbol** — returns `RuntimeError::MissingSymbol`. Runtime remains healthy.
+- **Unknown runtime value** — returns `RuntimeError::UnknownRuntime`.
 - **Null pointer inputs** — all C facade functions null-check every pointer at entry. A null pointer returns a defined error code. No null pointer ever causes UB in polyplug runtime code.
 
 ### `from_utf8_unchecked` policy

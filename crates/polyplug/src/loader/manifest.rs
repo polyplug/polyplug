@@ -2,7 +2,7 @@
 //!
 //! Reads the companion `manifest.toml` for a plugin bundle before loading.
 //! The `runtime` field determines which `BundleLoader` handles the bundle.
-//! If absent, defaults to `"native"`.
+//! REQUIRED — must be explicitly set in the manifest, no default.
 
 // TODO: Move toml parse to host rust SDK
 
@@ -11,10 +11,6 @@ use std::path::PathBuf;
 
 use polyplug_utils::{BundleId, PluginContractId};
 use serde::Deserializer;
-
-fn default_runtime() -> String {
-    "native".to_owned()
-}
 
 const fn current_os() -> &'static str {
     if cfg!(target_os = "linux") {
@@ -180,8 +176,8 @@ pub enum ManifestDependency {
 pub struct ManifestData {
     /// The runtime required to load this bundle.
     /// Matched against `BundleLoader::runtime_name()` during dispatch.
-    /// Defaults to `"native"` when the field is absent from the TOML file.
-    #[serde(default = "default_runtime")]
+    /// REQUIRED — must be explicitly set in the manifest, no default.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub runtime: String,
     /// Bundle name — human-readable identifier for this bundle.
     #[serde(default)]
@@ -223,6 +219,69 @@ impl ManifestData {
             .filter_map(|dep: &RawManifestDependency| dep.resolve())
             .collect::<Vec<ManifestDependency>>()
     }
+
+    /// Validate the manifest has all required fields.
+    pub fn validate(&self) -> Result<(), crate::error::LoaderError> {
+        if self.runtime.is_empty() {
+            return Err(crate::error::LoaderError::ManifestParse {
+                path: self.path.display().to_string(),
+                reason: "runtime field is required but was empty".to_owned(),
+            });
+        }
+        if self.name.is_empty() {
+            return Err(crate::error::LoaderError::ManifestParse {
+                path: self.path.display().to_string(),
+                reason: "name field is required but was empty".to_owned(),
+            });
+        }
+        if self.file.is_empty() {
+            return Err(crate::error::LoaderError::ManifestMissingFile {
+                bundle: self.name.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate that the file field is present and non-empty.
+    pub fn validate_file(&self) -> Result<(), crate::error::LoaderError> {
+        if self.file.trim().is_empty() {
+            return Err(crate::error::LoaderError::ManifestMissingFile {
+                bundle: self.name.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Parse a manifest from a TOML string.
+    pub fn parse_from_str(s: &str) -> Result<Self, crate::error::LoaderError> {
+        let mut manifest: ManifestData =
+            toml::from_str(s).map_err(|e| crate::error::LoaderError::ManifestParse {
+                path: String::new(),
+                reason: e.to_string(),
+            })?;
+        manifest.path = PathBuf::new();
+        Ok(manifest)
+    }
+}
+
+/// Parse a manifest.toml file from a bundle directory.
+pub fn parse_manifest(
+    bundle_dir: &std::path::Path,
+) -> Result<ManifestData, crate::error::LoaderError> {
+    let manifest_path: std::path::PathBuf = bundle_dir.join("manifest.toml");
+    let content: String = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        crate::error::LoaderError::ManifestParse {
+            path: manifest_path.display().to_string(),
+            reason: format!("failed to read: {e}"),
+        }
+    })?;
+    let mut manifest: ManifestData =
+        toml::from_str(&content).map_err(|e| crate::error::LoaderError::ManifestParse {
+            path: manifest_path.display().to_string(),
+            reason: e.to_string(),
+        })?;
+    manifest.path = bundle_dir.to_path_buf();
+    Ok(manifest)
 }
 
 #[cfg(test)]

@@ -1,6 +1,17 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::{compatibility::Compatibility, error::{LoaderError, RuntimeError}, loader::BundleLoader};
+use polyplug_abi::host::host_vtable::HostVTable;
+use polyplug_abi::RuntimeLanguage;
+
+use crate::{
+    compatibility::{CapabilityGraph, Compatibility},
+    error::{GraphError, LoaderError, RuntimeError, RuntimeError},
+    loader::{BundleLoader, ManifestData},
+    registry::plugin_registry::PluginRegistry,
+    reload::ReloadCb,
+    runtime::{Runtime, WarningCb},
+    RuntimeConfig,
+};
 
 /// Builder for constructing a Runtime.
 pub struct RuntimeBuilder {
@@ -10,7 +21,7 @@ pub struct RuntimeBuilder {
     warning_cb: Option<WarningCb>,
     on_reload_cb: Option<ReloadCb>,
     config: RuntimeConfig,
-    host_runtime: HostRuntime,
+    host_runtime: RuntimeLanguage,
 }
 
 impl RuntimeBuilder {
@@ -23,7 +34,7 @@ impl RuntimeBuilder {
             warning_cb: None,
             on_reload_cb: None,
             config: RuntimeConfig::default(),
-            host_runtime: HostRuntime::Rust,
+            host_runtime: RuntimeLanguage::Rust,
         }
     }
 
@@ -38,9 +49,6 @@ impl RuntimeBuilder {
     /// The loader is identified by `loader.runtime_name()`. Duplicate registrations
     /// (same runtime name) are detected in `build()` and cause `build()` to return
     /// `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))`.
-    ///
-    /// The native loader (`"native"`) is registered automatically during `build()`
-    /// unless a user-provided loader already claims that name.
     pub fn loader(mut self, loader: impl BundleLoader + 'static) -> RuntimeBuilder {
         self.loaders.push(Box::new(loader));
         self
@@ -79,8 +87,8 @@ impl RuntimeBuilder {
     }
 
     /// Set the host runtime type.
-    /// Defaults to `HostRuntime::Rust`.
-    pub fn host_runtime(mut self, runtime: HostRuntime) -> RuntimeBuilder {
+    /// Defaults to `RuntimeLanguage::Rust`.
+    pub fn host_runtime(mut self, runtime: RuntimeLanguage) -> RuntimeBuilder {
         self.host_runtime = runtime;
         self
     }
@@ -91,18 +99,18 @@ impl RuntimeBuilder {
     //  loads them in sorted order, registers vtables.
     //  Full capability graph resolution is a future enhancement.
     pub fn build(self) -> Result<Runtime, RuntimeError> {
-        let registry: Arc<Registry> = Arc::new(Registry::new());
+        let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
         // Build the static HostVTable. This must be 'static.
         let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
-            register_plugin: host_register_plugin,
-            alloc: host_alloc,
-            free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_by_bundle: host_find_by_bundle,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_plugin: host_resolve_plugin,
-            get_host_contract: host_get_host_contract,
+            register_plugin: crate::runtime::host_register_plugin,
+            alloc: crate::runtime::host_alloc,
+            free: crate::runtime::host_free,
+            find_by_contract: crate::runtime::host_find_by_contract,
+            find_by_bundle: crate::runtime::host_find_by_bundle,
+            find_all_by_contract: crate::runtime::host_find_all_by_contract,
+            resolve_plugin: crate::runtime::host_resolve_plugin,
+            get_host_contract: crate::runtime::host_get_host_contract,
         }));
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
@@ -126,12 +134,6 @@ impl RuntimeBuilder {
             }
         }
 
-        if !loader_map.contains_key("native") {
-            let native_loader: crate::loader::NativeBundleLoader =
-                crate::loader::NativeBundleLoader::new(Arc::clone(&registry), host_vtable);
-            loader_map.insert("native".to_owned(), Box::new(native_loader));
-        }
-
         // Phase 1: Scan plugin directories for bundles
         let discovered: Vec<(PathBuf, ManifestData)> =
             crate::loader::scanner::scan_dirs(&self.plugin_dirs);
@@ -152,16 +154,12 @@ impl RuntimeBuilder {
             host_vtable,
             loaders: loader_map,
             bundle_manifests: std::sync::Mutex::new(manifests_map),
-            reload_libraries: std::sync::Mutex::new(HashMap::new()),
             on_reload_cb: self.on_reload_cb,
-            watcher_thread: std::sync::Mutex::new(None),
-            watcher_stop: std::sync::Mutex::new(None),
             config: self.config,
             warning_cb: self.warning_cb,
             last_error: std::sync::Mutex::new(String::new()),
-            reload_captured_vtables: std::sync::Mutex::new(Vec::new()),
             host_contracts: std::sync::RwLock::new(HashMap::new()),
-            host_runtime: self.host_runtime,
+            host_runtime: self.host_runtime.into(),
         };
 
         // If nothing discovered, return Runtime with empty bundles (no graph needed)
@@ -171,7 +169,7 @@ impl RuntimeBuilder {
                 .map_err(|e: GraphError| RuntimeError::Graph(e))?;
 
             // Phase 2.5: Validate version compatibility
-            validate_bundle_compatibility(
+            crate::runtime::validate_bundle_compatibility(
                 &discovered,
                 self.compatibility,
                 runtime.warning_cb.as_ref(),
@@ -211,8 +209,8 @@ impl RuntimeBuilder {
 
                 loader
                     .load(manifest, &runtime)
-                    .map_err(|e: PolyplugError| match e {
-                        PolyplugError::Loader(le) => RuntimeError::Loader(le),
+                    .map_err(|e: RuntimeError| match e {
+                        RuntimeError::Loader(le) => RuntimeError::Loader(le),
                         other => RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: manifest.name.clone(),
                             error: other.to_string(),

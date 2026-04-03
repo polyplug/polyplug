@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
 use polyplug_abi::PluginInterface;
@@ -196,7 +196,7 @@ fn test_failed_fires_on_abort_after_max_retries() {
 
     let nonexistent_so: PathBuf =
         PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("nonexistent.so");
-    let result: Result<(), PolyplugError> = rt.reload_bundle(nonexistent_so.as_path());
+    let result: Result<(), RuntimeError> = rt.reload_bundle(nonexistent_so.as_path());
 
     assert!(result.is_err(), "reload of nonexistent .so should fail");
 
@@ -256,7 +256,7 @@ fn test_retry_count_increments_correctly() {
 
     let nonexistent_so: PathBuf =
         PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("nonexistent.so");
-    let _result: Result<(), PolyplugError> = rt.reload_bundle(nonexistent_so.as_path());
+    let _result: Result<(), RuntimeError> = rt.reload_bundle(nonexistent_so.as_path());
 
     let captured_phases: Vec<ReloadPhase> =
         phases.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -328,7 +328,7 @@ fn test_old_vtable_kept_on_abort() {
 
     let nonexistent_so: PathBuf =
         PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("nonexistent.so");
-    let result: Result<(), PolyplugError> = rt.reload_bundle(nonexistent_so.as_path());
+    let result: Result<(), RuntimeError> = rt.reload_bundle(nonexistent_so.as_path());
     assert!(result.is_err(), "reload should fail");
 
     let version_fn_after: extern "C" fn() -> u32 =

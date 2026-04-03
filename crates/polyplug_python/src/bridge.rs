@@ -29,11 +29,11 @@ use pyo3::Python;
 use pyo3::types::PyAnyMethods;
 
 use polyplug::host_bridge::BridgeError;
-use polyplug::host_bridge::HostRuntimeBridge;
+use polyplug::host_bridge::RuntimeLanguageBridge;
 use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
 use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostRuntime;
+use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::StringView;
 
 /// Bridge for Python hosts implementing host contracts.
@@ -48,7 +48,7 @@ use polyplug_abi::StringView;
 ///
 /// ```rust,ignore
 /// use polyplug_python::bridge::PythonHostBridge;
-/// use polyplug::host_bridge::HostRuntimeBridge;
+/// use polyplug::host_bridge::RuntimeLanguageBridge;
 ///
 /// let bridge = PythonHostBridge::new();
 ///
@@ -90,10 +90,10 @@ impl Default for PythonHostBridge {
     }
 }
 
-impl HostRuntimeBridge for PythonHostBridge {
-    /// Returns `HostRuntime::Python` to identify this as a Python bridge.
-    fn runtime_type(&self) -> HostRuntime {
-        HostRuntime::Python
+impl RuntimeLanguageBridge for PythonHostBridge {
+    /// Returns `RuntimeLanguage::Python` to identify this as a Python bridge.
+    fn runtime_type(&self) -> RuntimeLanguage {
+        RuntimeLanguage::Python
     }
 
     /// Register a Python callable as a host contract implementation.
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn bridge_runtime_type_returns_python() {
         let bridge: PythonHostBridge = PythonHostBridge::new();
-        assert_eq!(bridge.runtime_type(), HostRuntime::Python);
+        assert_eq!(bridge.runtime_type(), RuntimeLanguage::Python);
     }
 
     #[test]

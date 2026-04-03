@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
 use polyplug_abi::PluginInterface;
@@ -116,13 +116,13 @@ fn test_d_dlclose_timing() {
     rt.load_bundle(std::path::Path::new(env!("RELOAD_PLUGIN_V1_DIR")))
         .expect("load v1");
     let rt2: Arc<Runtime> = Arc::clone(&rt);
-    let reload_thread: std::thread::JoinHandle<Result<(), PolyplugError>> =
+    let reload_thread: std::thread::JoinHandle<Result<(), RuntimeError>> =
         std::thread::spawn(move || {
             rt2.reload_bundle(
                 &PathBuf::from(env!("RELOAD_PLUGIN_V2_DIR")).join("libreload_plugin_v2.so"),
             )
         });
-    let result: Result<(), PolyplugError> = reload_thread.join().expect("join");
+    let result: Result<(), RuntimeError> = reload_thread.join().expect("join");
     assert!(result.is_ok(), "reload should succeed: {:?}", result);
 }
 
@@ -274,10 +274,10 @@ fn test_h_multiple_reloads() {
 #[test]
 fn test_i_non_native_returns_error() {
     let rt: Runtime = create_runtime_with_native();
-    let result: Result<(), PolyplugError> =
+    let result: Result<(), RuntimeError> =
         rt.reload_bundle(std::path::Path::new("/nonexistent/fake_plugin.so"));
     assert!(
-        matches!(result, Err(PolyplugError::Loader(..))),
+        matches!(result, Err(RuntimeError::Loader(..))),
         "expected Loader error for nonexistent path, got: {result:?}"
     );
 }

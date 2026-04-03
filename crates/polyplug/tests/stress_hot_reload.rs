@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use polyplug::ReloadPhase;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::plugin_registry::PluginRegistry;
 use polyplug::plugin_registry::VTableSlot;
 use polyplug::runtime::Runtime;
@@ -142,7 +142,7 @@ fn stress_rapid_reload_cycles_100() {
         };
 
         rt.reload_bundle(so_path.as_path())
-            .unwrap_or_else(|e: PolyplugError| {
+            .unwrap_or_else(|e: RuntimeError| {
                 panic!("reload failed at cycle {i}: {e}");
             });
 
@@ -402,7 +402,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
         };
 
         rt.reload_bundle(so_path.as_path())
-            .unwrap_or_else(|e: PolyplugError| {
+            .unwrap_or_else(|e: RuntimeError| {
                 panic!("reload failed at round {i}: {e}");
             });
     }
@@ -454,7 +454,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
         };
 
         rt.reload_bundle(so_path.as_path())
-            .unwrap_or_else(|e: PolyplugError| {
+            .unwrap_or_else(|e: RuntimeError| {
                 panic!("reload failed at cycle {i}: {e}");
             });
     }
@@ -507,7 +507,7 @@ fn stress_concurrent_reload_threads_no_panic() {
                 v1_so_path()
             };
             // Ignore errors — concurrent reloads may race; what matters is no panic.
-            let _: Result<(), PolyplugError> = rt_a.reload_bundle(so_path.as_path());
+            let _: Result<(), RuntimeError> = rt_a.reload_bundle(so_path.as_path());
         }
     });
 
@@ -518,7 +518,7 @@ fn stress_concurrent_reload_threads_no_panic() {
             } else {
                 v2_so_path()
             };
-            let _: Result<(), PolyplugError> = rt_b.reload_bundle(so_path.as_path());
+            let _: Result<(), RuntimeError> = rt_b.reload_bundle(so_path.as_path());
         }
     });
 

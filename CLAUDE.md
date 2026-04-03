@@ -92,7 +92,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Constants: `SCREAMING_SNAKE_CASE` (e.g., `TEST_PLUGIN_SO`, `POLYPLUG_ABI_VERSION`, `ABI_OK`)
 - Structs: `PascalCase` (e.g., `Runtime`, `PluginRegistry`, `HostContext`)
 - Enums: `PascalCase` with `PascalCase` variants (e.g., `RuntimeError`, `LoaderError`, `ReloadPhaseType`)
-- Type aliases: `PascalCase` (e.g., `PolyplugError`, `WarningCb`, `ReloadCb`)
+- Type aliases: `PascalCase` (e.g., `RuntimeError`, `WarningCb`, `ReloadCb`)
 - Traits: `PascalCase` (e.g., `BundleLoader`, `TestAddPlugin`)
 ## Code Style
 - No explicit rustfmt configuration detected (uses default Rust style)
@@ -114,10 +114,9 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Use `thiserror::Error` derive for error types
 - Error enums organized by domain: `RuntimeError`, `LoaderError`, `RegistryError`, `GraphError`, `AllocatorError`, `HostContractError`
 - Error variants use structured fields with descriptive messages:
-- Type alias for top-level error: `pub type PolyplugError = RuntimeError;`
 - Error chaining via `#[error(transparent)]` and `#[from]`:
 - FFI boundary stores errors in `last_error: Mutex<String>` field, retrieved via `get_last_error()`
-- Public API returns `Result<T, PolyplugError>` or domain-specific error
+- Public API returns `Result<T, RuntimeError>` or domain-specific error
 - Internal functions may use domain-specific errors
 - FFI functions return error codes (`u32`), with messages in thread-local storage
 - All FFI exports wrapped in `std::panic::catch_unwind` to prevent panics crossing ABI boundary

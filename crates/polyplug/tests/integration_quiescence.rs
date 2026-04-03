@@ -6,7 +6,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::plugin_registry::PluginRegistry;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
@@ -69,13 +69,13 @@ fn test_quiescence_timeout() {
     std::thread::sleep(core::time::Duration::from_millis(100));
 
     let v2_dir: &str = env!("RELOAD_PLUGIN_V2_DIR");
-    let result: Result<(), PolyplugError> = rt.reload_bundle(std::path::Path::new(v2_dir));
+    let result: Result<(), RuntimeError> = rt.reload_bundle(std::path::Path::new(v2_dir));
 
     // Join the background thread (it will finish after QUIESCENCE_TIMEOUT fires).
     hold_thread.join().expect("hold thread must not panic");
 
     match result {
-        Err(PolyplugError::QuiescenceTimeout { .. }) => {
+        Err(RuntimeError::QuiescenceTimeout { .. }) => {
             // Expected — test passes.
         }
         Err(e) => panic!("Expected QuiescenceTimeout, got: {:?}", e),
@@ -83,7 +83,7 @@ fn test_quiescence_timeout() {
     }
 
     // Verify runtime is healthy: retry reload now that guard is dropped.
-    let result2: Result<(), PolyplugError> = rt.reload_bundle(std::path::Path::new(v2_dir));
+    let result2: Result<(), RuntimeError> = rt.reload_bundle(std::path::Path::new(v2_dir));
     assert!(
         result2.is_ok(),
         "second reload must succeed after guard is released: {:?}",

@@ -4,7 +4,7 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
@@ -66,7 +66,7 @@ fn js_quickjs_load_bundle_and_call() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(JS_PLUGIN));
+    let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(JS_PLUGIN));
     assert!(
         result.is_ok(),
         "JsLoader::load() failed: {:?}",

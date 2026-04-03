@@ -5,7 +5,7 @@
 pub enum RuntimeLanguage {
     Rust = 0,
     Cpp = 1,
-    CSharp = 2,
+    Dotnet = 2,
     Python = 3,
     Lua = 4,
     JavaScript = 5,

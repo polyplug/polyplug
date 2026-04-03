@@ -1,7 +1,7 @@
 use crate::contract_id;
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PluginContractId(u64);
 
 impl PluginContractId {

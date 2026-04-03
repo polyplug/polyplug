@@ -572,7 +572,7 @@ pub trait BundleLoader: Send + Sync {
         &self,
         path: &Path,
         registrar: &mut PluginRegistrar,
-    ) -> Result<(), PolyplugError>;
+    ) -> Result<(), RuntimeError>;
 }
 ```
 
@@ -660,7 +660,7 @@ A process can only host one CLR version:
 - Subsequent bundles: `pelite` reads `TargetFrameworkAttribute` from PE metadata
   - Compatible (same major, minor >= min_framework minor) → load silently
   - Higher minor → load with warning
-  - Different major → `PolyplugError::RuntimeVersionMismatch { required, found }`
+  - Different major → `RuntimeError::RuntimeVersionMismatch { required, found }`
 - NativeAOT is the escape hatch for plugins targeting a different major version
 
 **`DelegateLoader` caching — critical for performance:**
@@ -1497,7 +1497,7 @@ polyplug assumes plugins are trusted code vetted and distributed by the app deve
 
 Even with trusted plugins, malformed or corrupted plugin binaries are a real scenario (corrupted download, wrong architecture binary, partial write). polyplug defends against these at load time:
 
-- All strings extracted from plugin binaries (contract names, bundle names) are validated as UTF-8 via `std::str::from_utf8`. Invalid UTF-8 is a hard load error (`PolyplugError::InvalidUtf8`). `from_utf8_unchecked` is only used on host-owned data with a mandatory `// SAFETY:` comment.
+- All strings extracted from plugin binaries (contract names, bundle names) are validated as UTF-8 via `std::str::from_utf8`. Invalid UTF-8 is a hard load error (`RuntimeError::InvalidUtf8`). `from_utf8_unchecked` is only used on host-owned data with a mandatory `// SAFETY:` comment.
 - All C facade FFI functions null-check every pointer parameter at entry. Null pointers return defined errors, never UB.
 - Malformed binaries (truncated, wrong magic, missing `init` symbol) return clean `Err` results. The runtime remains healthy after rejecting a bad bundle.
 

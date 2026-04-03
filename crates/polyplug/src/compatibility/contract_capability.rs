@@ -12,9 +12,10 @@ pub struct ContractCapability {
 impl ContractCapability {
     /// Construct from a contract name and version.
     pub fn new(name: String, version: Version) -> ContractCapability {
+        let contract_id = PluginContractId::new(&name, version.major);
         ContractCapability {
             contract_name: name,
-            contract_id: PluginContractId::new(&name, version.major),
+            contract_id,
             version,
         }
     }

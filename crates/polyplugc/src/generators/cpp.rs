@@ -190,7 +190,7 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
     out.push_str("#include \"types.hpp\"\n");
     out.push_str("#include <cstdint>\n\n");
     out.push_str("namespace polyplug_plugin {\n\nusing namespace polyplug_generated;\n\n");
-    out.push_str("struct PolyplugError { uint32_t code; };\n\n");
+    out.push_str("struct RuntimeError { uint32_t code; };\n\n");
 
     for contract in &ir.contracts {
         generate_cpp_guest_contract_class(&mut out, contract);

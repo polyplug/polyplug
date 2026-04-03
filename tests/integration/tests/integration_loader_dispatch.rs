@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
@@ -28,7 +28,7 @@ impl BundleLoader for StubLoader {
         self.name
     }
 
-    fn load(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), PolyplugError> {
+    fn load(&self, _manifest: &ManifestData, _runtime: &Runtime) -> Result<(), RuntimeError> {
         Ok(())
     }
 }
@@ -146,10 +146,10 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &rt);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        Err(PolyplugError::Loader(LoaderError::ClrInitFailed { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::ClrInitFailed { .. })) => {}
         other => panic!("expected AssemblyNotFound or ClrInitFailed for dummy.dll, got: {other:?}"),
     }
 }
@@ -175,11 +175,11 @@ fn python_loader_loads_nonexistent_file_errors() {
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &rt);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
     match result {
         // Python loader is fully implemented — loading a non-existent file returns
         // PythonModuleImportFailed (path does not exist or is not accessible).
-        Err(PolyplugError::Loader(LoaderError::PythonModuleImportFailed { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::PythonModuleImportFailed { .. })) => {}
         other => panic!("expected PythonModuleImportFailed for dummy.py, got: {other:?}"),
     }
 }
@@ -205,9 +205,9 @@ fn lua_loader_returns_error_for_missing_file() {
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &rt);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
     match result {
-        Err(PolyplugError::Loader(LoaderError::LuaScriptLoadFailed { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::LuaScriptLoadFailed { .. })) => {}
         other => panic!("expected LuaScriptLoadFailed for missing file, got: {other:?}"),
     }
 }

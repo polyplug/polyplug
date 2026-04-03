@@ -1218,7 +1218,7 @@ fn test_rust_host_csharp_guest() {
         }))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+    let load_result: Result<(), polyplug::error::RuntimeError> = runtime.load_bundle(
         Path::new(TEST_CSHARP_PLUGIN_DLL)
             .parent()
             .unwrap_or(Path::new(".")),
@@ -1245,7 +1245,7 @@ fn test_cpp_host_csharp_guest() {
         }))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+    let load_result: Result<(), polyplug::error::RuntimeError> = runtime.load_bundle(
         Path::new(TEST_CSHARP_PLUGIN_DLL)
             .parent()
             .unwrap_or(Path::new(".")),
@@ -1272,7 +1272,7 @@ fn test_csharp_host_csharp_guest() {
         }))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+    let load_result: Result<(), polyplug::error::RuntimeError> = runtime.load_bundle(
         Path::new(TEST_CSHARP_PLUGIN_DLL)
             .parent()
             .unwrap_or(Path::new(".")),
@@ -1324,7 +1324,7 @@ fn test_python_host_csharp_guest() {
         }))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+    let load_result: Result<(), polyplug::error::RuntimeError> = runtime.load_bundle(
         Path::new(TEST_CSHARP_PLUGIN_DLL)
             .parent()
             .unwrap_or(Path::new(".")),
@@ -1351,7 +1351,7 @@ fn test_lua_host_csharp_guest() {
         }))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+    let load_result: Result<(), polyplug::error::RuntimeError> = runtime.load_bundle(
         Path::new(TEST_CSHARP_PLUGIN_DLL)
             .parent()
             .unwrap_or(Path::new(".")),
@@ -1378,7 +1378,7 @@ fn test_js_host_csharp_guest() {
         }))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> = runtime.load_bundle(
+    let load_result: Result<(), polyplug::error::RuntimeError> = runtime.load_bundle(
         Path::new(TEST_CSHARP_PLUGIN_DLL)
             .parent()
             .unwrap_or(Path::new(".")),
@@ -1407,7 +1407,7 @@ fn test_rust_host_python_guest() {
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1428,7 +1428,7 @@ fn test_cpp_host_python_guest() {
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1449,7 +1449,7 @@ fn test_csharp_host_python_guest() {
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1470,7 +1470,7 @@ fn test_python_host_python_guest() {
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1491,7 +1491,7 @@ fn test_lua_host_python_guest() {
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1512,7 +1512,7 @@ fn test_js_host_python_guest() {
         .loader(PythonLoader::new(PythonConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_PYTHON_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1533,7 +1533,7 @@ fn test_rust_host_lua_guest() {
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1550,7 +1550,7 @@ fn test_cpp_host_lua_guest() {
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1567,7 +1567,7 @@ fn test_csharp_host_lua_guest() {
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1584,7 +1584,7 @@ fn test_python_host_lua_guest() {
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1601,7 +1601,7 @@ fn test_lua_host_lua_guest() {
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1618,7 +1618,7 @@ fn test_js_host_lua_guest() {
         .loader(LuaLoader::new(LuaConfig::default()))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_LUA_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1640,7 +1640,7 @@ fn test_rust_host_js_guest() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1657,7 +1657,7 @@ fn test_cpp_host_js_guest() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1674,7 +1674,7 @@ fn test_csharp_host_js_guest() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1691,7 +1691,7 @@ fn test_python_host_js_guest() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1708,7 +1708,7 @@ fn test_lua_host_js_guest() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),
@@ -1725,7 +1725,7 @@ fn test_js_host_js_guest() {
         .loader(JsLoader::new(JsConfig {}))
         .build()
         .expect("failed to build runtime");
-    let load_result: Result<(), polyplug::error::PolyplugError> =
+    let load_result: Result<(), polyplug::error::RuntimeError> =
         runtime.load_bundle(Path::new(TEST_JS_PLUGIN));
     assert!(
         load_result.is_ok(),

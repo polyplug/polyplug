@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
@@ -218,7 +218,7 @@ fn test_interpreter_initializes_without_panic() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "noop_init");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "unexpected error: {result:?}");
 }
 
@@ -233,7 +233,7 @@ fn test_default_config_version_check_passes() {
         .build()
         .expect("runtime build must succeed");
     let manifest: ManifestData = make_manifest(&path, "ver_check");
-    let result: Result<(), PolyplugError> =
+    let result: Result<(), RuntimeError> =
         PythonLoader::new(PythonConfig::default()).load(&manifest, &runtime);
     assert!(
         result.is_ok(),
@@ -255,11 +255,11 @@ fn test_version_too_old_returns_version_mismatch() {
         .build()
         .expect("runtime build must succeed");
     let manifest: ManifestData = make_manifest(&path, "ver_mismatch");
-    let err: PolyplugError = PythonLoader::new(config)
+    let err: RuntimeError = PythonLoader::new(config)
         .load(&manifest, &runtime)
         .expect_err("expected version mismatch");
     match err {
-        PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found }) => {
+        RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { required, found }) => {
             assert_eq!(required, "99.0", "required mismatch");
             assert!(
                 !found.is_empty(),
@@ -278,7 +278,7 @@ fn test_valid_plugin_registers_in_registry() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "valid_plugin");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load failed: {result:?}");
     // The plugin registers with contract_id = 0xDEADBEEFCAFEBABE
     let contract_id: u64 = 0xDEADBEEFCAFEBABE;
@@ -294,11 +294,11 @@ fn test_syntax_error_returns_module_import_failed() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "syntax_err");
-    let err: PolyplugError = loader
+    let err: RuntimeError = loader
         .load(&manifest, &runtime)
         .expect_err("expected failure for syntax error plugin");
     match err {
-        PolyplugError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
+        RuntimeError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
             assert!(
                 p.contains("bundle.py"),
                 "path should mention bundle.py; got: {p}"
@@ -316,11 +316,11 @@ fn test_import_error_returns_module_import_failed() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "import_err");
-    let err: PolyplugError = loader
+    let err: RuntimeError = loader
         .load(&manifest, &runtime)
         .expect_err("expected failure for import-error plugin");
     match err {
-        PolyplugError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
+        RuntimeError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
             assert!(
                 p.contains("bundle.py"),
                 "path should mention bundle.py; got: {p}"
@@ -342,11 +342,11 @@ fn test_missing_init_returns_init_symbol_missing() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "no_init");
-    let err: PolyplugError = loader
+    let err: RuntimeError = loader
         .load(&manifest, &runtime)
         .expect_err("expected failure for plugin missing polyplug_init");
     match err {
-        PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle }) => {
+        RuntimeError::Loader(LoaderError::InitSymbolMissing { bundle }) => {
             assert!(
                 bundle.contains("bundle"),
                 "bundle name should contain 'bundle'; got: {bundle}"
@@ -363,11 +363,11 @@ fn test_raising_init_returns_init_raised_exception() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "raising_init");
-    let err: PolyplugError = loader
+    let err: RuntimeError = loader
         .load(&manifest, &runtime)
         .expect_err("expected failure for raising plugin");
     match err {
-        PolyplugError::Loader(LoaderError::PythonInitRaisedException { bundle, message }) => {
+        RuntimeError::Loader(LoaderError::PythonInitRaisedException { bundle, message }) => {
             assert!(
                 bundle.contains("bundle"),
                 "bundle name should contain 'bundle'; got: {bundle}"
@@ -400,11 +400,11 @@ fn test_nonexistent_path_returns_import_failed() {
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let err: PolyplugError = loader
+    let err: RuntimeError = loader
         .load(&manifest, &runtime)
         .expect_err("expected failure for nonexistent path");
     match err {
-        PolyplugError::Loader(LoaderError::PythonModuleImportFailed { .. }) => {}
+        RuntimeError::Loader(LoaderError::PythonModuleImportFailed { .. }) => {}
         other => panic!("expected PythonModuleImportFailed, got: {other:?}"),
     }
 }
@@ -418,7 +418,7 @@ fn test_gil_released_between_sequential_loads() {
         let name: String = format!("gil_seq_{i}");
         let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
         let manifest: ManifestData = make_manifest(&path, &name);
-        let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+        let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
         assert!(result.is_ok(), "sequential load {i} failed: {result:?}");
     }
 }
@@ -445,8 +445,8 @@ fn test_second_loader_reuses_interpreter() {
 
     let manifest1: ManifestData = make_manifest(&path1, "reuse1");
     let manifest2: ManifestData = make_manifest(&path2, "reuse2");
-    let result_a: Result<(), PolyplugError> = loader_a.load(&manifest1, &runtime_a);
-    let result_b: Result<(), PolyplugError> = loader_b.load(&manifest2, &runtime_b);
+    let result_a: Result<(), RuntimeError> = loader_a.load(&manifest1, &runtime_a);
+    let result_b: Result<(), RuntimeError> = loader_b.load(&manifest2, &runtime_b);
 
     assert!(result_a.is_ok(), "first loader failed: {result_a:?}");
     assert!(
@@ -469,7 +469,7 @@ fn test_plugin_path_with_underscore_digits_loads() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "plugin_42_ok");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "underscore-digit stem load failed: {result:?}"
@@ -519,7 +519,7 @@ file = "bundle.py"
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "sibling import failed: {result:?}");
 }
 
@@ -566,7 +566,7 @@ file = "bundle.py"
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "site-packages import failed: {result:?}");
 }
 
@@ -578,7 +578,7 @@ fn test_error_contains_bundle_name() {
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "named_raising_plugin");
-    let err: PolyplugError = loader
+    let err: RuntimeError = loader
         .load(&manifest, &runtime)
         .expect_err("expected error");
     let display: String = err.to_string();
@@ -612,7 +612,7 @@ def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(&path, "ctx_check");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "context check plugin failed: {result:?}");
 }
 
@@ -626,7 +626,7 @@ fn test_many_sequential_loads_no_state_leak() {
         let name: String = format!("stress_{i}");
         let (_dir, path) = write_bundle(&name, NOOP_PLUGIN_SRC);
         let manifest: ManifestData = make_manifest(&path, &name);
-        let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+        let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
         assert!(result.is_ok(), "stress load {i} failed: {result:?}");
     }
 }
@@ -650,6 +650,6 @@ fn test_valid_load_after_failed_load_succeeds() {
     );
 
     // Second load — should succeed.
-    let result: Result<(), PolyplugError> = loader.load(&good_manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&good_manifest, &runtime);
     assert!(result.is_ok(), "recovery load failed: {result:?}");
 }

@@ -17,7 +17,7 @@ use netcorehost::pdcstring::PdCString;
 use once_cell::sync::OnceCell;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 
 use crate::config::DotnetConfig;
 use crate::config::HostfxrLocation;
@@ -61,7 +61,7 @@ pub(crate) static CLR_CONTEXT: OnceCell<Arc<DotnetContext>> = OnceCell::new();
 pub(crate) fn init_context(
     config: &DotnetConfig,
     bundle_dir: &std::path::Path,
-) -> Result<Arc<DotnetContext>, PolyplugError> {
+) -> Result<Arc<DotnetContext>, RuntimeError> {
     // Step 1: Parse version from "net10.0" → "10.0" → "10.0.0"
     let ver_str: &str = config
         .min_framework
@@ -88,20 +88,20 @@ pub(crate) fn init_context(
         .suffix(".json")
         .tempfile()
         .map_err(|e: std::io::Error| {
-            PolyplugError::Loader(LoaderError::ClrInitFailed {
+            RuntimeError::Loader(LoaderError::ClrInitFailed {
                 path: "<tempfile>".to_owned(),
                 reason: e.to_string(),
             })
         })?;
     tmp.write_all(json.as_bytes())
         .map_err(|e: std::io::Error| {
-            PolyplugError::Loader(LoaderError::ClrInitFailed {
+            RuntimeError::Loader(LoaderError::ClrInitFailed {
                 path: "<tempfile>".to_owned(),
                 reason: e.to_string(),
             })
         })?;
     tmp.flush().map_err(|e: std::io::Error| {
-        PolyplugError::Loader(LoaderError::ClrInitFailed {
+        RuntimeError::Loader(LoaderError::ClrInitFailed {
             path: "<tempfile>".to_owned(),
             reason: e.to_string(),
         })
@@ -115,7 +115,7 @@ pub(crate) fn init_context(
 
     // Step 3: Convert path to PdCString.
     let pdcpath: PdCString = PdCString::from_os_str(temp_path.as_os_str()).map_err(|_| {
-        PolyplugError::Loader(LoaderError::ClrInitFailed {
+        RuntimeError::Loader(LoaderError::ClrInitFailed {
             path: temp_path.to_string_lossy().into_owned(),
             reason: "runtimeconfig path contains embedded nul byte".to_owned(),
         })
@@ -131,13 +131,13 @@ pub(crate) fn init_context(
     let hostfxr: netcorehost::hostfxr::Hostfxr = match &config.hostfxr {
         HostfxrLocation::Auto => {
             let fxr_path: PathBuf = find_hostfxr_auto().ok_or_else(|| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: "<hostfxr>".to_owned(),
                     reason: "hostfxr not found; install .NET or set DOTNET_ROOT".to_owned(),
                 })
             })?;
             netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).map_err(|e| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: fxr_path.to_string_lossy().into_owned(),
                     reason: e.to_string(),
                 })
@@ -145,7 +145,7 @@ pub(crate) fn init_context(
         }
         HostfxrLocation::Path(p) => {
             netcorehost::hostfxr::Hostfxr::load_from_path(p).map_err(|e| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: p.to_string_lossy().into_owned(),
                     reason: e.to_string(),
                 })
@@ -160,7 +160,7 @@ pub(crate) fn init_context(
     let context: HostfxrContext<InitializedForRuntimeConfig> = hostfxr
         .initialize_for_runtime_config(&pdcpath)
         .map_err(|e| {
-            PolyplugError::Loader(LoaderError::ClrInitFailed {
+            RuntimeError::Loader(LoaderError::ClrInitFailed {
                 path: temp_path.to_string_lossy().into_owned(),
                 reason: e.to_string(),
             })
@@ -196,14 +196,14 @@ impl DotnetContext {
         asm_path: PathBuf,
         type_name: &PdCStr,
         method_name: &PdCStr,
-    ) -> Result<ManagedFunction<InitFn>, PolyplugError> {
+    ) -> Result<ManagedFunction<InitFn>, RuntimeError> {
         // Step 1: Check cache — short-circuit if the loader is already present.
         let maybe_loader: Option<Arc<Mutex<AssemblyDelegateLoader>>> = {
             let cache: std::sync::MutexGuard<
                 '_,
                 HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>,
             > = self.loader_cache.lock().map_err(|_| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: asm_path.to_string_lossy().into_owned(),
                     reason: "loader cache mutex poisoned".to_owned(),
                 })
@@ -215,7 +215,7 @@ impl DotnetContext {
         if let Some(loader_arc) = maybe_loader {
             let loader: std::sync::MutexGuard<'_, AssemblyDelegateLoader> =
                 loader_arc.lock().map_err(|_| {
-                    PolyplugError::Loader(LoaderError::ClrInitFailed {
+                    RuntimeError::Loader(LoaderError::ClrInitFailed {
                         path: asm_path.to_string_lossy().into_owned(),
                         reason: "assembly loader mutex poisoned".to_owned(),
                     })
@@ -223,7 +223,7 @@ impl DotnetContext {
             return loader
                 .get_function_with_unmanaged_callers_only::<InitFn>(type_name, method_name)
                 .map_err(|e| {
-                    PolyplugError::Loader(LoaderError::InitSymbolMissing {
+                    RuntimeError::Loader(LoaderError::InitSymbolMissing {
                         bundle: format!("{}: error={}", asm_path.to_string_lossy().into_owned(), e),
                     })
                 });
@@ -231,7 +231,7 @@ impl DotnetContext {
 
         // Step 2: Cache miss — build the PdCString path and get a new loader from _context.
         let asm_pdc: PdCString = PdCString::from_os_str(asm_path.as_os_str()).map_err(|_| {
-            PolyplugError::Loader(LoaderError::AssemblyNotFound {
+            RuntimeError::Loader(LoaderError::AssemblyNotFound {
                 path: asm_path.to_string_lossy().into_owned(),
             })
         })?;
@@ -239,13 +239,13 @@ impl DotnetContext {
         let new_loader: AssemblyDelegateLoader = {
             let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
                 self._context.lock().map_err(|_| {
-                    PolyplugError::Loader(LoaderError::ClrInitFailed {
+                    RuntimeError::Loader(LoaderError::ClrInitFailed {
                         path: asm_path.to_string_lossy().into_owned(),
                         reason: "CLR context mutex poisoned".to_owned(),
                     })
                 })?;
             ctx.get_delegate_loader_for_assembly(asm_pdc).map_err(|e| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: asm_path.to_string_lossy().into_owned(),
                     reason: e.to_string(),
                 })
@@ -260,7 +260,7 @@ impl DotnetContext {
                 '_,
                 HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>,
             > = self.loader_cache.lock().map_err(|_| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: asm_path.to_string_lossy().into_owned(),
                     reason: "loader cache mutex poisoned (relock)".to_owned(),
                 })
@@ -277,7 +277,7 @@ impl DotnetContext {
 
         let loader: std::sync::MutexGuard<'_, AssemblyDelegateLoader> =
             loader_arc.lock().map_err(|_| {
-                PolyplugError::Loader(LoaderError::ClrInitFailed {
+                RuntimeError::Loader(LoaderError::ClrInitFailed {
                     path: asm_path.to_string_lossy().into_owned(),
                     reason: "assembly loader mutex poisoned (new)".to_owned(),
                 })
@@ -285,7 +285,7 @@ impl DotnetContext {
         loader
             .get_function_with_unmanaged_callers_only::<InitFn>(type_name, method_name)
             .map_err(|e| {
-                PolyplugError::Loader(LoaderError::InitSymbolMissing {
+                RuntimeError::Loader(LoaderError::InitSymbolMissing {
                     bundle: format!("{}: error={}", asm_path.to_string_lossy().into_owned(), e),
                 })
             })

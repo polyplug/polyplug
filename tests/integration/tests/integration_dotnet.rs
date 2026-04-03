@@ -4,7 +4,7 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
@@ -69,7 +69,7 @@ fn create_runtime() -> Runtime {
         .expect("failed to build runtime")
 }
 
-fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
+fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
     rt.load_bundle(std::path::Path::new(CSHARP_DLL))
 }
 
@@ -96,7 +96,7 @@ fn integration_dotnet_loader_registration() {
 fn integration_dotnet_bundle_loads() {
     skip_if_no_dotnet!();
     let rt: Runtime = create_runtime();
-    let result: Result<(), PolyplugError> = load_fixture(&rt);
+    let result: Result<(), RuntimeError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
         "DotnetLoader::load() must succeed for fixture DLL: {:?}",
@@ -236,9 +236,9 @@ fn integration_dotnet_wrong_major_version_rejected() {
         }))
         .build()
         .expect("failed to build runtime");
-    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
+    let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
-        Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch for net99.0, got: {other:?}"),
     }
 }
@@ -249,13 +249,13 @@ fn integration_dotnet_clr_shared_across_loads() {
     // Load the fixture twice using the same DotnetLoader.
     // CLR is a global once-initialized singleton — second load must succeed.
     let rt: Runtime = create_runtime();
-    let result1: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
+    let result1: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result1.is_ok(),
         "first load must succeed: {:?}",
         result1.err()
     );
-    let result2: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
+    let result2: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result2.is_ok(),
         "second load (CLR shared) must succeed: {:?}",
@@ -287,9 +287,9 @@ fn version_mismatch_pelite() {
         }))
         .build()
         .expect("failed to build runtime");
-    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
+    let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     match result {
-        Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { .. })) => {}
         other => panic!("expected RuntimeVersionMismatch, got: {other:?}"),
     }
 }
@@ -299,13 +299,13 @@ fn delegate_loader_cached_across_loads() {
     skip_if_no_dotnet!();
     // Load the same DLL twice — both must succeed, proving AssemblyDelegateLoader is cached and reused
     let rt: Runtime = create_runtime();
-    let result1: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
+    let result1: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result1.is_ok(),
         "first load must succeed: {:?}",
         result1.err()
     );
-    let result2: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
+    let result2: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(CSHARP_DLL));
     assert!(
         result2.is_ok(),
         "second load (cached loader) must succeed: {:?}",
@@ -324,11 +324,11 @@ fn non_dotnet_dll_allowed() {
     // RuntimeVersionMismatch, confirming the version check path is bypassed for non-dotnet files.
     //
     // Instead: test the module function directly.
-    let result: Result<String, PolyplugError> =
+    let result: Result<String, RuntimeError> =
         polyplug_dotnet::version::read_target_framework(std::path::Path::new("nonexistent.dll"));
     // Non-existent file should return AssemblyNotFound error
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         Ok(s) => panic!("expected error for nonexistent file, got Ok({s:?})"),
         Err(other) => panic!("expected AssemblyNotFound, got: {other:?}"),
     }

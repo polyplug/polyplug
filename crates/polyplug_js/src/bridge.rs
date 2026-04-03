@@ -36,11 +36,11 @@ use rquickjs::Persistent;
 use rquickjs::Runtime;
 
 use polyplug::host_bridge::BridgeError;
-use polyplug::host_bridge::HostRuntimeBridge;
+use polyplug::host_bridge::RuntimeLanguageBridge;
 use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
 use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostRuntime;
+use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::StringView;
 
 /// Errors that can occur when creating a JsHostBridge.
@@ -70,7 +70,7 @@ type PersistentFunction = Persistent<Function<'static>>;
 ///
 /// ```rust,ignore
 /// use polyplug_js::bridge::JsHostBridge;
-/// use polyplug::host_bridge::HostRuntimeBridge;
+/// use polyplug::host_bridge::RuntimeLanguageBridge;
 ///
 /// let bridge = JsHostBridge::new();
 ///
@@ -171,10 +171,10 @@ impl Drop for JsHostBridge {
     }
 }
 
-impl HostRuntimeBridge for JsHostBridge {
-    /// Returns `HostRuntime::JavaScript` to identify this as a JavaScript bridge.
-    fn runtime_type(&self) -> HostRuntime {
-        HostRuntime::JavaScript
+impl RuntimeLanguageBridge for JsHostBridge {
+    /// Returns `RuntimeLanguage::JavaScript` to identify this as a JavaScript bridge.
+    fn runtime_type(&self) -> RuntimeLanguage {
+        RuntimeLanguage::JavaScript
     }
 
     /// Register a JavaScript callable as a host contract implementation.
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn bridge_runtime_type_returns_javascript() {
         let bridge: JsHostBridge = JsHostBridge::new().expect("bridge creation");
-        assert_eq!(bridge.runtime_type(), HostRuntime::JavaScript);
+        assert_eq!(bridge.runtime_type(), RuntimeLanguage::JavaScript);
     }
 
     #[test]

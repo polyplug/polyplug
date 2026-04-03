@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use pelite::PeFile;
 use pelite::image::IMAGE_DATA_DIRECTORY;
+use pelite::PeFile;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 
 /// COR20 header layout (ECMA-335 §II.25.3.3 / MSDN IMAGE_COR20_HEADER).
 /// Used with pelite to locate the CLI metadata section.
@@ -46,17 +46,17 @@ const TFM_MARKER: &[u8] = b".NETCoreApp,Version=v";
 ///
 /// Returns the long-form TFM, e.g. `".NETCoreApp,Version=v10.0"`.
 /// Returns `Ok(String::new())` for non-.NET DLLs or if no TFM attribute is found.
-pub fn read_target_framework(dll_path: &Path) -> Result<String, PolyplugError> {
+pub fn read_target_framework(dll_path: &Path) -> Result<String, RuntimeError> {
     // Step 1: Read file bytes.
     let bytes: Vec<u8> = std::fs::read(dll_path).map_err(|_| {
-        PolyplugError::Loader(LoaderError::AssemblyNotFound {
+        RuntimeError::Loader(LoaderError::AssemblyNotFound {
             path: dll_path.to_string_lossy().into_owned(),
         })
     })?;
 
     // Step 2: Parse PE file — auto-detects PE32 vs PE32+.
     let pe: PeFile<'_> = PeFile::from_bytes(&bytes).map_err(|_| {
-        PolyplugError::Loader(LoaderError::AssemblyNotFound {
+        RuntimeError::Loader(LoaderError::AssemblyNotFound {
             path: dll_path.to_string_lossy().into_owned(),
         })
     })?;
@@ -75,7 +75,7 @@ pub fn read_target_framework(dll_path: &Path) -> Result<String, PolyplugError> {
 
     // Step 4: Read COR20 header at the COM descriptor RVA.
     let cor20: &ImageCor20Header = pe.derva(com_dir.VirtualAddress).map_err(|_| {
-        PolyplugError::Loader(LoaderError::AssemblyNotFound {
+        RuntimeError::Loader(LoaderError::AssemblyNotFound {
             path: dll_path.to_string_lossy().into_owned(),
         })
     })?;
@@ -84,7 +84,7 @@ pub fn read_target_framework(dll_path: &Path) -> Result<String, PolyplugError> {
     let metadata_slice: &[u8] = pe
         .derva_slice(cor20.metadata_rva, cor20.metadata_size as usize)
         .map_err(|_| {
-            PolyplugError::Loader(LoaderError::AssemblyNotFound {
+            RuntimeError::Loader(LoaderError::AssemblyNotFound {
                 path: dll_path.to_string_lossy().into_owned(),
             })
         })?;

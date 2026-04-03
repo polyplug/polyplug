@@ -137,7 +137,7 @@ fn load_valid_bundle_registers_vtable() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered by querying the registry.
@@ -194,7 +194,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered.
@@ -250,7 +250,7 @@ file = "bundle.js"
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "load from directory path must succeed: {result:?}"
@@ -275,7 +275,7 @@ fn load_syntax_error_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "syntax error bundle must return Err");
 
     // The error must be a JsRuntimePanic mentioning the eval failure.
@@ -300,7 +300,7 @@ fn load_runtime_error_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "runtime error bundle must return Err");
 
     let err_str: String = result
@@ -324,7 +324,7 @@ fn load_bundle_without_polyplug_init_returns_error() {
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_err(),
         "bundle without polyplug_init must return Err"
@@ -361,7 +361,7 @@ fn load_nonexistent_file_returns_error() {
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
     };
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "non-existent file must return Err");
 }
 
@@ -411,7 +411,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "bundle reading bundlePath must succeed: {result:?}"
@@ -467,7 +467,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = make_loader();
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "all polyplug methods must be present: {result:?}"
@@ -616,7 +616,7 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         result.is_ok(),
         "bundle with alloc+free must succeed: {result:?}"
@@ -779,7 +779,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
         let (_dir, path) = write_temp_bundle(&bundle);
 
         let manifest: ManifestData = make_manifest(&path, "test.bundle");
-        let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+        let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
         assert!(
             result.is_ok(),
             "sequential load {i} must succeed: {result:?}"
@@ -803,7 +803,7 @@ fn dispatch_vm_call_works_correctly() {
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     let handle: PluginHandle = runtime
@@ -890,6 +890,6 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     let loader: JsLoader = JsLoader::new(JsConfig {});
 
     let manifest: ManifestData = make_manifest(&path, "test.bundle");
-    let result: Result<(), polyplug::error::PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "Empty string test must succeed: {result:?}");
 }

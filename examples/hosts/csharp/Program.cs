@@ -54,7 +54,7 @@ class Program
 
         Console.Error.WriteLine($"loading plugins from: {pluginPath}\n");
 
-        Runtime.SetConfig(new HostRuntimeConfig
+        Runtime.SetConfig(new RuntimeLanguageConfig
         {
             HotReloadMaxRetries = 5,
             HotReloadRetryIntervalMs = 200,

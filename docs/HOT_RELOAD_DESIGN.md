@@ -111,13 +111,13 @@ impl RuntimeBuilder {
 pub struct RuntimeConfig {
     /// Whether hot-reload is enabled. Default: false
     pub hot_reload_enabled: bool,
-    
+
     /// Maximum retry attempts. Default: 3
     pub hot_reload_max_retries: u32,
-    
+
     /// Interval between retries. Default: 1 second
     pub hot_reload_retry_interval: Duration,
-    
+
     /// Whether to abort after max retries. Default: true
     pub hot_reload_abort_on_max_retries: bool,
 }
@@ -138,7 +138,7 @@ If an application doesn't need hot-reload, it shouldn't pay these costs.
 
 ```rust
 let rt = Runtime::builder().build()?;  // hot_reload_enabled = false (default)
-rt.reload_bundle(path)?;  // Returns Err(PolyplugError::HotReloadDisabled)
+rt.reload_bundle(path)?;  // Returns Err(RuntimeError::HotReloadDisabled)
 ```
 
 ### Example: Enabling Hot-Reload

@@ -8,7 +8,7 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
-struct PolyplugError { uint32_t code; };
+struct RuntimeError { uint32_t code; };
 
 /// Abstract plugin base for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
 class PipelineDecoderPlugin {

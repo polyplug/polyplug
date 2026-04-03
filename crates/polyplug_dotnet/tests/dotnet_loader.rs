@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
@@ -71,10 +71,10 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
 
 #[test]
 fn tfm_reader_nonexistent_file_returns_assembly_not_found() {
-    let result: Result<String, PolyplugError> =
+    let result: Result<String, RuntimeError> =
         read_target_framework(Path::new("/nonexistent/path/that/does/not/exist.dll"));
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { path })) => {
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { path })) => {
             assert!(path.contains("nonexistent"));
         }
         other => panic!("expected AssemblyNotFound, got {other:?}"),
@@ -84,9 +84,9 @@ fn tfm_reader_nonexistent_file_returns_assembly_not_found() {
 #[test]
 fn tfm_reader_empty_file_returns_assembly_not_found() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"");
-    let result: Result<String, PolyplugError> = read_target_framework(tmp.path());
+    let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound for empty file, got {other:?}"),
     }
 }
@@ -94,9 +94,9 @@ fn tfm_reader_empty_file_returns_assembly_not_found() {
 #[test]
 fn tfm_reader_random_bytes_returns_assembly_not_found() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"\x00\x01\x02\x03this is not a valid PE binary");
-    let result: Result<String, PolyplugError> = read_target_framework(tmp.path());
+    let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound for junk bytes, got {other:?}"),
     }
 }
@@ -106,9 +106,9 @@ fn tfm_reader_elf_magic_returns_assembly_not_found() {
     // ELF magic (0x7f 'E' 'L' 'F') is not a valid PE header — pelite rejects it.
     let tmp: NamedTempFile =
         temp_file_with_bytes(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00");
-    let result: Result<String, PolyplugError> = read_target_framework(tmp.path());
+    let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound for ELF magic, got {other:?}"),
     }
 }
@@ -208,9 +208,9 @@ fn load_nonexistent_assembly_returns_assembly_not_found() {
     let runtime: Runtime = test_runtime();
     let path: PathBuf = PathBuf::from("/does/not/exist/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "nonexistent");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound, got {other:?}"),
     }
 }
@@ -221,9 +221,9 @@ fn load_invalid_pe_file_returns_assembly_not_found() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
     let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
+        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
         other => panic!("expected AssemblyNotFound for invalid PE, got {other:?}"),
     }
 }
@@ -239,11 +239,11 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
     let runtime: Runtime = test_runtime();
     let path: PathBuf = PathBuf::from("/no/such/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "missing_dll");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         matches!(
             result,
-            Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. }))
+            Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. }))
         ),
         "expected AssemblyNotFound (not a hostfxr error), got {result:?}"
     );
@@ -267,9 +267,9 @@ fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Runtime = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(PolyplugError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
+        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
             assert_eq!(required, "net6.0");
             assert!(
                 found.contains("10"),
@@ -290,11 +290,11 @@ fn load_dll_with_matching_version_passes_tfm_check() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         !matches!(
             result,
-            Err(PolyplugError::Loader(
+            Err(RuntimeError::Loader(
                 LoaderError::RuntimeVersionMismatch { .. }
             ))
         ),
@@ -320,10 +320,10 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(cfg);
     let runtime: Runtime = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(PolyplugError::Loader(LoaderError::ClrInitFailed { path, .. }))
-        | Err(PolyplugError::Loader(LoaderError::InitSymbolMissing { bundle: path })) => {
+        Err(RuntimeError::Loader(LoaderError::ClrInitFailed { path, .. }))
+        | Err(RuntimeError::Loader(LoaderError::InitSymbolMissing { bundle: path })) => {
             assert!(
                 path.contains("nonexistent")
                     || path.contains("libhostfxr")
@@ -349,12 +349,12 @@ fn full_clr_init_reaches_init_symbol_check() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
-    let result: Result<(), PolyplugError> = loader.load(&manifest, &runtime);
+    let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
         !matches!(
             result,
-            Err(PolyplugError::Loader(LoaderError::AssemblyNotFound { .. }))
-                | Err(PolyplugError::Loader(
+            Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. }))
+                | Err(RuntimeError::Loader(
                     LoaderError::RuntimeVersionMismatch { .. }
                 ))
         ),

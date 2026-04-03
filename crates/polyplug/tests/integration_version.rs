@@ -4,13 +4,13 @@
 
 use std::collections::HashMap;
 
+use polyplug::compatibility::Compatibility;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::loader::manifest::RawManifestDependency;
+use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug::compatibility::Compatibility;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,8 +29,16 @@ impl BundleLoader for NoopLoader {
         &self,
         _manifest: &ManifestData,
         _runtime: &Runtime,
-    ) -> Result<(), polyplug::error::PolyplugError> {
+    ) -> Result<(), polyplug::error::RuntimeError> {
         Ok(())
+    }
+
+    fn reload(
+        &self,
+        _manifest: &ManifestData,
+        _runtime: &Runtime,
+    ) -> Result<(), polyplug::error::RuntimeError> {
+        Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
 }
 

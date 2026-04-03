@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::error::RuntimeError;
 use polyplug::graph::CapabilityGraph;
 use polyplug::loader::manifest::ManifestData;
@@ -315,11 +315,11 @@ fn explicit_load_bundle_missing_manifest_errors() {
 
     let rt: Runtime = Runtime::builder().build().expect("build should succeed");
 
-    let result: Result<(), PolyplugError> = rt.load_bundle(&bundle_dir);
+    let result: Result<(), RuntimeError> = rt.load_bundle(&bundle_dir);
     assert!(
         matches!(
             result,
-            Err(PolyplugError::Loader(LoaderError::ManifestParse { .. }))
+            Err(RuntimeError::Loader(LoaderError::ManifestParse { .. }))
         ),
         "expected ManifestParse error, got {:?}",
         result

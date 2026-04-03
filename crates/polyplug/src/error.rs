@@ -4,9 +4,6 @@ use thiserror::Error;
 
 use polyplug_abi::types::Version;
 
-/// Top-level error type for polyplug operations.
-pub type PolyplugError = RuntimeError;
-
 /// Top-level runtime error — this is what the public API returns.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -206,7 +203,7 @@ mod tests {
     };
     use polyplug_abi::types::Version;
 
-    // --- PolyplugError / RuntimeError ---
+    // --- RuntimeError / RuntimeError ---
 
     #[test]
     fn polyplug_error_undeclared_dependency_display() {

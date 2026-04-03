@@ -7,7 +7,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
@@ -102,7 +102,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
 }
 
 /// Load the supplied Lua source via `LuaLoader::load` and return the result.
-fn load_script(path: &Path, name: &str) -> Result<(), PolyplugError> {
+fn load_script(path: &Path, name: &str) -> Result<(), RuntimeError> {
     let loader: LuaLoader = LuaLoader::new(LuaConfig::default());
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = make_manifest(path, name);
@@ -126,7 +126,7 @@ fn lua_loader_runtime_name_is_lua() {
 #[test]
 fn lua_state_initializes_on_first_load() {
     let (_dir, path) = write_temp_bundle("lua_loader_init_test", valid_plugin_script());
-    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_init_test");
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_init_test");
     assert!(
         result.is_ok(),
         "Lua VM must initialize and bundle must load: {:?}",
@@ -141,7 +141,7 @@ fn lua_state_init_is_idempotent() {
     let (_dir, path) = write_temp_bundle("lua_loader_idempotent", valid_plugin_script());
     load_script(&path, "lua_loader_idempotent").expect("first load must succeed");
     // Second load of the same file: VM is already initialized — must not panic.
-    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_idempotent");
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_idempotent");
     assert!(
         result.is_ok(),
         "second load must succeed (idempotent VM init): {:?}",
@@ -154,7 +154,7 @@ fn lua_state_init_is_idempotent() {
 #[test]
 fn load_valid_bundle_succeeds() {
     let (_dir, path) = write_temp_bundle("lua_loader_valid", valid_plugin_script());
-    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_valid");
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_valid");
     assert!(result.is_ok(), "valid bundle must load: {:?}", result.err());
 }
 
@@ -167,13 +167,13 @@ fn load_syntax_error_returns_script_load_failed() {
         "lua_loader_syntax_error",
         b"function polyplug_init( -- SYNTAX ERROR: unclosed paren\n",
     );
-    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_syntax_error");
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_syntax_error");
     assert!(result.is_err(), "syntax error must produce an Err");
-    let err: PolyplugError = result.expect_err("expected Err for syntax error");
+    let err: RuntimeError = result.expect_err("expected Err for syntax error");
     assert!(
         matches!(
             err,
-            PolyplugError::Loader(LoaderError::LuaScriptLoadFailed { .. })
+            RuntimeError::Loader(LoaderError::LuaScriptLoadFailed { .. })
         ),
         "expected LuaScriptLoadFailed, got: {:?}",
         err
@@ -190,13 +190,13 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
         "lua_loader_runtime_err",
         b"function polyplug_init(_reg, _ctx)\n  error('deliberate runtime error')\nend\n",
     );
-    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_runtime_err");
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_runtime_err");
     assert!(result.is_err(), "runtime error in init must produce Err");
-    let err: PolyplugError = result.expect_err("expected Err for runtime error in init");
+    let err: RuntimeError = result.expect_err("expected Err for runtime error in init");
     assert!(
         matches!(
             err,
-            PolyplugError::Loader(LoaderError::LuaInitRaisedError { .. })
+            RuntimeError::Loader(LoaderError::LuaInitRaisedError { .. })
         ),
         "expected LuaInitRaisedError, got: {:?}",
         err
@@ -211,13 +211,13 @@ fn load_runtime_error_in_init_returns_init_raised_error() {
 fn load_missing_polyplug_init_returns_typed_error() {
     let (_dir, path) =
         write_temp_bundle("lua_loader_no_init", b"local x = 1  -- no polyplug_init\n");
-    let result: Result<(), PolyplugError> = load_script(&path, "lua_loader_no_init");
+    let result: Result<(), RuntimeError> = load_script(&path, "lua_loader_no_init");
     assert!(result.is_err(), "missing init must produce Err");
-    let err: PolyplugError = result.expect_err("expected Err for missing polyplug_init");
+    let err: RuntimeError = result.expect_err("expected Err for missing polyplug_init");
     assert!(
         matches!(
             err,
-            PolyplugError::Loader(LoaderError::LuaInitFunctionMissing { .. })
+            RuntimeError::Loader(LoaderError::LuaInitFunctionMissing { .. })
         ),
         "expected LuaInitFunctionMissing, got: {:?}",
         err
@@ -230,13 +230,13 @@ fn load_missing_polyplug_init_returns_typed_error() {
 fn load_nonexistent_path_returns_script_load_failed() {
     let dir: tempfile::TempDir = tempfile::tempdir().expect("tempdir");
     let path: PathBuf = dir.path().join("this_file_does_not_exist_42.lua");
-    let result: Result<(), PolyplugError> = load_script(&path, "nonexistent");
+    let result: Result<(), RuntimeError> = load_script(&path, "nonexistent");
     assert!(result.is_err(), "missing file must produce Err");
-    let err: PolyplugError = result.expect_err("expected Err for nonexistent file");
+    let err: RuntimeError = result.expect_err("expected Err for nonexistent file");
     assert!(
         matches!(
             err,
-            PolyplugError::Loader(LoaderError::LuaScriptLoadFailed { .. })
+            RuntimeError::Loader(LoaderError::LuaScriptLoadFailed { .. })
         ),
         "expected LuaScriptLoadFailed for missing file, got: {:?}",
         err
@@ -365,7 +365,7 @@ fn sequential_loads_both_succeed() {
 
 /// Spawn multiple threads, each loading the same valid plugin.  The global
 /// Mutex inside `LuaLoader` must prevent data races and every load must
-/// either succeed or produce a recognized `PolyplugError` (no panics,
+/// either succeed or produce a recognized `RuntimeError` (no panics,
 /// no UB).
 ///
 /// Each bundle gets its own isolated Lua VM, so parallel loads are safe.
@@ -375,7 +375,7 @@ fn concurrent_loaders_do_not_race() {
 
     // Spawn 4 threads that all call LuaLoader::load on the same path.
     let path_arc: std::sync::Arc<PathBuf> = std::sync::Arc::new(path);
-    let handles: Vec<std::thread::JoinHandle<Result<(), PolyplugError>>> = (0_u32..4_u32)
+    let handles: Vec<std::thread::JoinHandle<Result<(), RuntimeError>>> = (0_u32..4_u32)
         .map(|_| {
             let p: std::sync::Arc<PathBuf> = std::sync::Arc::clone(&path_arc);
             std::thread::spawn(move || {
@@ -399,15 +399,15 @@ fn concurrent_loaders_do_not_race() {
                 loader.load(&manifest, &runtime)
             })
         })
-        .collect::<Vec<std::thread::JoinHandle<Result<(), PolyplugError>>>>();
+        .collect::<Vec<std::thread::JoinHandle<Result<(), RuntimeError>>>>();
 
     for handle in handles {
         // Each thread must not panic. Errors (e.g. DuplicateProvider inside
         // the callback) are acceptable — panics are not.
-        let result: Result<(), PolyplugError> = handle
+        let result: Result<(), RuntimeError> = handle
             .join()
             .expect("thread must not panic during concurrent load");
-        // The result may be Ok or a recognized PolyplugError.
+        // The result may be Ok or a recognized RuntimeError.
         // We simply assert it is a valid discriminant (no silent UB).
         let _ = result;
     }

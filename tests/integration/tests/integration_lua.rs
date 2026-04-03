@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used)]
 
 use polyplug::error::LoaderError;
-use polyplug::error::PolyplugError;
+use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
@@ -32,7 +32,7 @@ fn create_runtime() -> Runtime {
         .expect("failed to build runtime")
 }
 
-fn load_fixture(rt: &Runtime) -> Result<(), PolyplugError> {
+fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
     rt.load_bundle(std::path::Path::new(LUA_PLUGIN))
 }
 
@@ -69,7 +69,7 @@ fn integration_lua_runtime_name() {
 #[test]
 fn integration_lua_bundle_loads() {
     let rt: Runtime = create_runtime();
-    let result: Result<(), PolyplugError> = load_fixture(&rt);
+    let result: Result<(), RuntimeError> = load_fixture(&rt);
     assert!(
         result.is_ok(),
         "LuaLoader::load() must succeed for fixture: {:?}",
@@ -191,13 +191,13 @@ provides = ["test.noinit@1"]
     std::fs::write(tmp_dir.join("plugin.lua"), b"local x = 1\n").expect("write plugin.lua");
 
     let rt: Runtime = create_runtime();
-    let result: Result<(), PolyplugError> = rt.load_bundle(&tmp_dir);
+    let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     assert!(result.is_err());
-    let err: PolyplugError = result.expect_err("expected Err(LuaInitFunctionMissing)");
+    let err: RuntimeError = result.expect_err("expected Err(LuaInitFunctionMissing)");
     assert!(
         matches!(
             err,
-            PolyplugError::Loader(LoaderError::LuaInitFunctionMissing { .. })
+            RuntimeError::Loader(LoaderError::LuaInitFunctionMissing { .. })
         ),
         "expected LuaInitFunctionMissing, got: {:?}",
         err
@@ -236,7 +236,7 @@ fn integration_lua_utf8_roundtrip() {
 fn integration_lua_second_load_succeeds() {
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("first load must succeed");
-    let result: Result<(), PolyplugError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
+    let result: Result<(), RuntimeError> = rt.load_bundle(std::path::Path::new(LUA_PLUGIN));
     assert!(
         result.is_ok(),
         "second load should succeed (multi-impl allowed): {:?}",

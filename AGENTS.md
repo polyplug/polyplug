@@ -141,7 +141,7 @@ let plugin: PluginHandle = registry.get(id)?;
 // CORRECT — handle explicitly
 let plugin: PluginHandle = match registry.get(id) {
     Some(p) => p,
-    None => return Err(PolyplugError::PluginNotFound { id }),
+    None => return Err(RuntimeError::PluginNotFound { id }),
 };
 ```
 
@@ -154,7 +154,7 @@ return Err(anyhow::anyhow!("something went wrong"));  // only if anyhow is appro
 
 // CORRECT — define and use proper error types
 #[derive(Debug, thiserror::Error)]
-pub enum PolyplugError {
+pub enum RuntimeError {
     #[error("plugin not found: contract_id={contract_id}")]
     PluginNotFound { contract_id: u64 },
 

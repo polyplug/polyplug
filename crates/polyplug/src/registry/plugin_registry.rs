@@ -13,7 +13,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::RwLock;
 
 use arc_swap::ArcSwap;
@@ -79,10 +78,6 @@ impl RegistryData {
 //  overhead on the hot path. Writes (registration/unload) are rare, so contention
 //  is minimal. Reads (find, resolve) take a read guard and are concurrent.
 pub struct PluginRegistry {
-    /// Library handles for all loaded native bundles.
-    /// Declared FIRST so they drop LAST (Rust drops fields in reverse order).
-    /// This ensures vtable pointers in `slots` are never dangling during drop.
-    loaded_libraries: Mutex<Vec<libloading::Library>>,
     /// Single RwLock protecting all mutable registry state.
     data: RwLock<RegistryData>,
 }
@@ -91,27 +86,8 @@ impl PluginRegistry {
     /// Create an empty registry.
     pub fn new() -> PluginRegistry {
         PluginRegistry {
-            loaded_libraries: Mutex::new(Vec::new()),
             data: RwLock::new(RegistryData::new()),
         }
-    }
-
-    /// Store a loaded native library handle, keeping it alive until this Registry drops.
-    ///
-    /// Called by `load_bundle()` after successfully extracting vtable pointers from
-    /// the library. The handle must outlive the Registry to prevent `dlclose()` from
-    /// unmapping code pages that vtable function pointers point into.
-    ///
-    /// `loaded_libraries` is declared as the first field in `Registry`, so it drops
-    /// last during `Registry` drop — after all `RegistrySlot` vtable pointers are gone.
-    pub fn push_library(&self, library: libloading::Library) {
-        self.loaded_libraries
-            .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            })
-            .push(library);
     }
 
     /// Register a plugin interface.
@@ -539,7 +515,7 @@ impl PluginRegistry {
     ///
     /// Returns an empty `Vec` if the bundle has no registered slots.
     /// Used by `reload_bundle()` to locate every vtable slot to swap.
-    pub fn find_slots_by_bundle(&self, bundle_id: u64) -> Vec<u32> {
+    pub fn find_slots_by_bundle(&self, bundle_id: BundleId) -> Vec<u32> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -597,13 +573,6 @@ impl PluginRegistry {
         data.contract_index.clear();
         data.bundle_index.clear();
         data.declared_deps.clear();
-        self.loaded_libraries
-            .lock()
-            .unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            })
-            .clear();
     }
 }
 

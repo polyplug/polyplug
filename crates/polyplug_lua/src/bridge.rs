@@ -34,11 +34,11 @@ use mlua::Function;
 use mlua::Lua;
 
 use polyplug::host_bridge::BridgeError;
-use polyplug::host_bridge::HostRuntimeBridge;
+use polyplug::host_bridge::RuntimeLanguageBridge;
 use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
 use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostRuntime;
+use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::StringView;
 
 /// Bridge for Lua hosts implementing host contracts.
@@ -53,7 +53,7 @@ use polyplug_abi::StringView;
 ///
 /// ```rust,ignore
 /// use polyplug_lua::bridge::LuaHostBridge;
-/// use polyplug::host_bridge::HostRuntimeBridge;
+/// use polyplug::host_bridge::RuntimeLanguageBridge;
 ///
 /// let bridge = LuaHostBridge::new();
 ///
@@ -123,10 +123,10 @@ impl Default for LuaHostBridge {
     }
 }
 
-impl HostRuntimeBridge for LuaHostBridge {
-    /// Returns `HostRuntime::Lua` to identify this as a Lua bridge.
-    fn runtime_type(&self) -> HostRuntime {
-        HostRuntime::Lua
+impl RuntimeLanguageBridge for LuaHostBridge {
+    /// Returns `RuntimeLanguage::Lua` to identify this as a Lua bridge.
+    fn runtime_type(&self) -> RuntimeLanguage {
+        RuntimeLanguage::Lua
     }
 
     /// Register a Lua callable as a host contract implementation.
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn bridge_runtime_type_returns_lua() {
         let bridge: LuaHostBridge = LuaHostBridge::new();
-        assert_eq!(bridge.runtime_type(), HostRuntime::Lua);
+        assert_eq!(bridge.runtime_type(), RuntimeLanguage::Lua);
     }
 
     #[test]
