@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-03T08:11:05.651Z"
+last_updated: "2026-04-03T08:17:00.000Z"
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 10
-  completed_plans: 9
-  percent: 90
+  completed_plans: 10
+  percent: 100
 ---
 
 # STATE: polyplug Error Decoupling
@@ -32,38 +32,51 @@ progress:
 
 ## Current Position
 
-Phase: 02 (update-loader-implementations) — EXECUTING
-Plan: 1 of 5
+Phase: 02 (update-loader-implementations) — COMPLETE
+Plan: 5 of 5
 **Phase:** 2
-**Plan:** Not started
-**Status:** Executing Phase 02
-**Progress:** [█████████░] 90%
+**Plan:** Complete
+**Status:** Phase 02 Complete
+**Progress:** [██████████] 100%
 
 ### Phase 01 Completion Summary
 
 | Plan | Error Type | Crate | Status |
 |------|------------|-------|--------|
-| 01-01 | PythonLoaderError | polyplug_python | ✓ COMPLETE |
-| 01-02 | LuaLoaderError | polyplug_lua | ✓ COMPLETE |
-| 01-03 | JsLoaderError | polyplug_js | ✓ COMPLETE |
-| 01-04 | DotnetLoaderError | polyplug_dotnet | ✓ COMPLETE |
-| 01-05 | Core LoaderError stripped | polyplug | ✓ COMPLETE |
+| 01-01 | PythonLoaderError | polyplug_python | COMPLETE |
+| 01-02 | LuaLoaderError | polyplug_lua | COMPLETE |
+| 01-03 | JsLoaderError | polyplug_js | COMPLETE |
+| 01-04 | DotnetLoaderError | polyplug_dotnet | COMPLETE |
+| 01-05 | Core LoaderError stripped | polyplug | COMPLETE |
 
 **Verification:** Passed (5/5 must-haves verified) — all loader-specific error variants removed from core.
+
+### Phase 02 Completion Summary
+
+| Plan | Loader | Error Sites | Status |
+|------|--------|-------------|--------|
+| 02-01 | NativeLoader | 6 | COMPLETE |
+| 02-02 | PythonLoader | 14 | COMPLETE |
+| 02-03 | LuaLoader | 13 | COMPLETE |
+| 02-04 | JsLoader | 48 | COMPLETE |
+| 02-05 | DotnetLoader | 8 | COMPLETE |
+
+**Verification:** All loaders use LoaderError::InitFailed directly with descriptive string messages.
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 1/3 |
-| Plans completed | 5/5 (Phase 01) |
-| Requirements addressed | 5/8 (ERR-01-05) |
+| Phases completed | 2/3 |
+| Plans completed | 10/10 (Phase 01 + Phase 02) |
+| Requirements addressed | 8/8 (ERR-01-06) |
 | Days in progress | 0 |
 | Last activity | 2026-04-03 |
-| Phase 02 P03 | 5 | 3 tasks | 3 files |
-| Phase 02 P05 | 7min | 3 tasks | 2 files |
 | Phase 02 P01 | 5min | 3 tasks | 2 files |
 | Phase 02 P02 | 7min | 3 tasks | 2 files |
+| Phase 02 P03 | 5min | 3 tasks | 3 files |
+| Phase 02 P04 | 15min | 3 tasks | 2 files |
+| Phase 02 P05 | 7min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -82,18 +95,21 @@ Plan: 1 of 5
 - [Phase 01]: DotnetLoaderError follows NativeLoaderError pattern for consistency
 - [Phase 01]: InitSymbolMissing retained in core - used by both Python and .NET loaders (not loader-specific)
 - [Phase 01]: InitFailed retained as generic catch-all - loaders convert local errors to this variant
-- [Phase 02]: LuaLoader uses InitFailed pattern directly at 13 error sites - no local error type needed
 - [Phase 02]: D-01: Use LoaderError::InitFailed for all loader-specific errors with descriptive messages
+- [Phase 02]: D-02: Keep error handling inline for all loaders, including NativeLoader
 - [Phase 02]: D-03: Use RuntimeError::HotReloadDisabled for hot-reload disabled
+- [Phase 02]: D-04: Remove unused local error types
 - [Phase 02]: NativeLoaderError removed (02-01): no longer needed with unified InitFailed pattern per D-04
 - [Phase 02]: load_internal() inlined (02-01): per D-02, direct error construction without intermediate method
-- [Phase 02]: Per D-01: PythonLoader uses LoaderError::InitFailed directly with string messages
-- [Phase 02]: Per D-04: PythonLoaderError type deleted - no longer needed with unified InitFailed pattern
+- [Phase 02]: PythonLoaderError type deleted (02-02): per D-04, no longer needed with unified InitFailed pattern
+- [Phase 02]: LuaLoaderError type deleted (02-03): per D-04, no longer needed with unified InitFailed pattern
+- [Phase 02]: JsLoaderError type deleted (02-04): per D-04, no longer needed with unified InitFailed pattern
+- [Phase 02]: JsLoader uses InitFailed pattern at 48 error sites with bundle_name parameter for context
 
 ### Active TODOs
 
-- [ ] Plan Phase 2: Update loader implementations to use crate-local errors
-- [ ] Execute Phase 2 after planning complete
+- [x] Plan Phase 2: Update loader implementations to use crate-local errors
+- [x] Execute Phase 2 after planning complete
 
 ### Blockers
 
@@ -101,13 +117,13 @@ None.
 
 ### Session Continuity
 
-Phase 01 (error type definition) is complete. The core polyplug crate is now loader-agnostic:
+Phase 02 (update-loader-implementations) is complete. All loaders now use LoaderError::InitFailed directly:
 
-- No loader-specific error variants in `LoaderError` enum
-- No loader-specific dependencies in `Cargo.toml`
-- Only `BundleLoader` trait and manifest parsing in core
+- No loader-specific error types remain
+- All error sites use descriptive string messages
+- Hot-reload disabled returns RuntimeError::HotReloadDisabled
 
-**Next Action:** Run `/gsd:plan-phase 2` to create execution plans for updating loader implementations.
+**Next Action:** Run `/gsd:execute-phase 3` for verification phase.
 
 ---
 *State initialized: 2026-04-03*
