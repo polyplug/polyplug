@@ -91,6 +91,17 @@
 - [ ] **CLN-03**: Update documentation to use Guest/Host terminology
 - [ ] **CLN-04**: Update tests to use new instance model
 
+### Category: Typed Handles (Phase 7)
+
+- [ ] **TH-01**: Replace `rt_ctx: *mut c_void` with `RuntimeContext` typed handle
+- [ ] **TH-02**: Replace `loader_data: *mut c_void` with `VmLoaderData` typed handle
+- [ ] **TH-03**: Replace `instance: *mut c_void` in native dispatch with `GuestContractInstance`
+- [ ] **TH-04**: Create `RuntimeContext` struct (opaque handle to Runtime)
+- [ ] **TH-05**: Create `VmLoaderData` struct (opaque handle to VM state)
+- [ ] **TH-06**: Update all RuntimeAbi functions to use `RuntimeContext` instead of `*mut c_void`
+- [ ] **TH-07**: Update PluginContext to use typed handles
+- [ ] **TH-08**: Ensure all opaque handles are `#[repr(C)]` with single `data` field
+
 ## v1 Requirements (Complete)
 
 ### Error Types
@@ -129,10 +140,11 @@
 | HR-01 through HR-06 | Phase 4: Hot-Reload |
 | SDK-01 through SDK-07 | Phase 5: SDK Updates |
 | CLN-01 through CLN-04 | Phase 6: Cleanup |
+| TH-01 through TH-08 | Phase 7: Typed Handles |
 
 **Coverage:**
-- v1.1 requirements: 50 total
-- Mapped to phases: 50
+- v1.1 requirements: 58 total
+- Mapped to phases: 58
 - Unmapped: 0
 
 ---

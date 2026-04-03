@@ -93,6 +93,18 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 4. All tests pass with new instance model and naming
 **Plans:** TBD
 
+### Phase 7: Typed Handles
+**Goal:** Replace all `*mut c_void` and `*const c_void` with meaningful typed handles
+**Depends on:** Phase 6
+**Requirements:** TH-01, TH-02, TH-03, TH-04, TH-05, TH-06, TH-07, TH-08
+**Success Criteria** (what must be TRUE):
+1. `RuntimeContext` typed handle replaces `*mut c_void` for rt_ctx parameter
+2. `VmLoaderData` typed handle replaces `*mut c_void` for VM loader_data
+3. All RuntimeAbi functions use `RuntimeContext` instead of bare pointer
+4. All opaque handles are `#[repr(C)]` structs with single `data` field
+5. No bare `c_void` pointers in public ABI (except in opaque handle internals)
+**Plans:** TBD
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -103,6 +115,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 | 4. Hot-Reload | 0/0 | Not started | - |
 | 5. SDK Updates | 0/0 | Not started | - |
 | 6. Cleanup | 0/0 | Not started | - |
+| 7. Typed Handles | 0/0 | Not started | - |
 
 ## Dependencies
 
@@ -123,17 +136,10 @@ Phase 5 (SDK Updates)
     |
     v
 Phase 6 (Cleanup)
+    |
+    v
+Phase 7 (Typed Handles)
 ```
-
-### Phase 7: Replace opaque c_void pointers with typed handles
-
-**Goal:** [To be planned]
-**Requirements**: TBD
-**Depends on:** Phase 6
-**Plans:** 0 plans
-
-Plans:
-- [ ] TBD (run /gsd:plan-phase 7 to break down)
 
 ---
 *Roadmap created: 2026-04-03*
