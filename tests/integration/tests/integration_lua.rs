@@ -193,13 +193,13 @@ provides = ["test.noinit@1"]
     let rt: Runtime = create_runtime();
     let result: Result<(), RuntimeError> = rt.load_bundle(&tmp_dir);
     assert!(result.is_err());
-    let err: RuntimeError = result.expect_err("expected Err(LuaInitFunctionMissing)");
+    let err: RuntimeError = result.expect_err("expected Err(InitFailed)");
     assert!(
         matches!(
             err,
-            RuntimeError::Loader(LoaderError::LuaInitFunctionMissing { .. })
+            RuntimeError::Loader(LoaderError::InitFailed { .. })
         ),
-        "expected LuaInitFunctionMissing, got: {:?}",
+        "expected InitFailed for missing polyplug_init, got: {:?}",
         err
     );
 
