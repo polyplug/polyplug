@@ -9,7 +9,7 @@ use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::reload::wait_for_quiescence;
 use polyplug::runtime::HostContext;
 use polyplug::Runtime;
-use polyplug_abi::host::host_vtable::HostVTable;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::plugin::PluginContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
@@ -27,12 +27,12 @@ pub struct NativeLoader {
     /// Active library handles, keyed by BundleId.
     libraries: Mutex<HashMap<BundleId, libloading::Library>>,
     /// Host vtable for plugin registration.
-    host_vtable: &'static HostVTable,
+    host_vtable: &'static polyplug_abi::RuntimeAbi,
 }
 
 impl NativeLoader {
     /// Create a new NativeLoader.
-    pub fn new(config: NativeConfig, host_vtable: &'static HostVTable) -> Self {
+    pub fn new(config: NativeConfig, host_vtable: &'static polyplug_abi::RuntimeAbi) -> Self {
         Self {
             config,
             libraries: Mutex::new(HashMap::new()),
@@ -93,14 +93,14 @@ impl BundleLoader for NativeLoader {
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
         let init_fn_ptr: unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const polyplug_abi::RuntimeAbi,
             *const PluginContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
                     *mut core::ffi::c_void,
-                    *const HostVTable,
+                    *const polyplug_abi::RuntimeAbi,
                     *const PluginContext,
                 ) -> AbiError,
             > = unsafe {
@@ -135,7 +135,7 @@ impl BundleLoader for NativeLoader {
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
         let init_result: AbiError =
-            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const HostVTable, &ctx) };
+            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const polyplug_abi::RuntimeAbi, &ctx) };
 
         // ─── Step 7: Verify bundle_id wasn't tampered ─────────────────────────────────────
         // Note: host_ctx.bundle_id is modified by init if tampering occurs
@@ -216,14 +216,14 @@ impl BundleLoader for NativeLoader {
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
         let init_fn_ptr: unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const polyplug_abi::RuntimeAbi,
             *const PluginContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
                     *mut core::ffi::c_void,
-                    *const HostVTable,
+                    *const polyplug_abi::RuntimeAbi,
                     *const PluginContext,
                 ) -> AbiError,
             > = unsafe {
@@ -258,7 +258,7 @@ impl BundleLoader for NativeLoader {
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
         let init_result: AbiError =
-            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const HostVTable, &ctx) };
+            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const polyplug_abi::RuntimeAbi, &ctx) };
 
         // ─── Step 7: Verify bundle_id wasn't tampered ─────────────────────────────────────
         if host_ctx.bundle_id != expected_bundle_id.id() {

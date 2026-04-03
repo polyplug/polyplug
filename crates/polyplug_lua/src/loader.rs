@@ -24,7 +24,7 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
 use polyplug_abi::ABI_OK;
@@ -246,7 +246,7 @@ impl BundleLoader for LuaLoader {
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // Get host_vtable from runtime.
-        let host_vtable: &'static polyplug_abi::HostVTable = runtime.host_vtable();
+        let host_vtable: &'static polyplug_abi::RuntimeAbi = runtime.host_vtable();
 
         // Call polyplug_init — it populates _G._polyplug_handlers.
         // Pass rt_ctx, host_vtable pointer, and PluginContext pointer.
@@ -261,7 +261,7 @@ impl BundleLoader for LuaLoader {
             bundle_id,
         };
         let rt_ctx_i64: i64 = rt_ctx as usize as i64;
-        let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::HostVTable as usize as i64;
+        let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::RuntimeAbi as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
             .call::<()>((rt_ctx_i64, host_vtable_i64, ctx_ptr))
@@ -345,8 +345,8 @@ impl BundleLoader for LuaLoader {
 
         let loader_data_ptr: *mut LuaLoaderData = Box::into_raw(loader_data);
 
-        // Build PluginInterface with VM dispatch.
-        let plugin_interface: PluginInterface = PluginInterface {
+        // Build GuestContractInterface with VM dispatch.
+        let plugin_interface: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: cid,
             contract_version,
@@ -361,9 +361,9 @@ impl BundleLoader for LuaLoader {
         };
 
         // Leak the interface so it has 'static lifetime.
-        // SAFETY: PluginInterface is leaked intentionally — the loader data must be 'static.
+        // SAFETY: GuestContractInterface is leaked intentionally — the loader data must be 'static.
         // The interface is valid for the process lifetime (Lua plugins are never unloaded).
-        let static_interface: *const PluginInterface = Box::into_raw(Box::new(plugin_interface));
+        let static_interface: *const GuestContractInterface = Box::into_raw(Box::new(plugin_interface));
 
         // Build static string slices for PluginDescriptor.
         // We leak String → &'static str so StringView ptrs remain valid indefinitely.

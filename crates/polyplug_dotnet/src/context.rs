@@ -32,7 +32,7 @@ use crate::config::HostfxrLocation;
 /// - ctx: PluginContext with bundle_path, host_abi_version, bundle_id
 pub(crate) type InitFn = unsafe extern "system" fn(
     *mut core::ffi::c_void,
-    *const polyplug_abi::HostVTable,
+    *const polyplug_abi::RuntimeAbi,
     *const polyplug_abi::PluginContext,
 ) -> u32;
 

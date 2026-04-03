@@ -27,12 +27,12 @@ use polyplug::runtime::Runtime as PolyplugRuntime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
-use polyplug_abi::HostVTable;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginDispatch;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::VmDispatch;
 use polyplug_abi::ABI_OK;
@@ -169,7 +169,7 @@ fn pack_handle(h: PluginHandle) -> Option<u64> {
 /// Helper to get host context pointers from JS globals.
 fn get_host_ctx_from_globals<'js>(
     ctx: &Ctx<'js>,
-) -> Option<(*const HostVTable, *mut core::ffi::c_void)> {
+) -> Option<(*const polyplug_abi::RuntimeAbi, *mut core::ffi::c_void)> {
     let polyplug_obj: Object<'js> = ctx
         .globals()
         .get::<&str, Object<'js>>("polyplug")
@@ -223,8 +223,8 @@ fn get_host_ctx_from_globals<'js>(
         })
         .ok()?;
 
-    let vtable_ptr: *const HostVTable =
-        ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const HostVTable;
+    let vtable_ptr: *const polyplug_abi::RuntimeAbi =
+        ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const polyplug_abi::RuntimeAbi;
     let rt_ctx: *mut core::ffi::c_void =
         ((rt_ctx_hi as u64) << 32 | rt_ctx_lo as u64) as usize as *mut core::ffi::c_void;
 
@@ -238,7 +238,7 @@ fn get_host_ctx_from_globals<'js>(
 fn register_host_functions<'js>(
     ctx: &Ctx<'js>,
     polyplug_obj: &Object<'js>,
-    host_vtable: *const HostVTable,
+    host_vtable: *const polyplug_abi::RuntimeAbi,
     rt_ctx: *mut core::ffi::c_void,
     bundle_name: &str,
 ) -> Result<(), RuntimeError> {
@@ -378,7 +378,7 @@ fn register_host_functions<'js>(
             let handle: PluginHandle = PluginHandle { index, generation };
             let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-            let vtable_ptr: *const PluginInterface =
+            let vtable_ptr: *const GuestContractInterface =
                 unsafe { ((*hvt).resolve_plugin)(rt_ctx, handle) };
             if vtable_ptr.is_null() {
                 None
@@ -816,7 +816,7 @@ impl BundleLoader for JsLoader {
         manifest: &ManifestData,
         runtime: &PolyplugRuntime,
     ) -> Result<(), RuntimeError> {
-        let host_vtable: &'static HostVTable = runtime.host_vtable();
+        let host_vtable: &'static polyplug_abi::RuntimeAbi = runtime.host_vtable();
         let bundle_id: u64 = manifest.id;
 
         let bundle_path: PathBuf = if !manifest.file.is_empty() {
@@ -882,7 +882,7 @@ impl BundleLoader for JsLoader {
             register_host_functions(
                 &ctx_ref,
                 &polyplug_obj,
-                host_vtable as *const HostVTable,
+                host_vtable as *const polyplug_abi::RuntimeAbi,
                 rt_ctx,
                 &manifest.name,
             )?;
@@ -936,7 +936,7 @@ impl BundleLoader for JsLoader {
             };
 
             let rt_ctx_i64: i64 = rt_ctx as usize as i64;
-            let host_vtable_i64: i64 = host_vtable as *const HostVTable as usize as i64;
+            let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::RuntimeAbi as usize as i64;
             let ctx_ptr_i64: i64 = &ctx as *const PluginContext as i64;
 
             let rt_ctx_bigint: rquickjs::BigInt<'_> =
@@ -999,7 +999,7 @@ impl BundleLoader for JsLoader {
 
         let loader_data_ptr: *mut JsLoaderData = Box::into_raw(loader_data);
 
-        let plugin_interface: PluginInterface = PluginInterface {
+        let plugin_interface: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: registration_data.contract_id,
             contract_version: registration_data.contract_version,
@@ -1013,7 +1013,7 @@ impl BundleLoader for JsLoader {
             },
         };
 
-        let static_interface: *const PluginInterface = Box::into_raw(Box::new(plugin_interface));
+        let static_interface: *const GuestContractInterface = Box::into_raw(Box::new(plugin_interface));
 
         let contract_name_leaked: &'static str =
             Box::leak(registration_data.contract_name.into_boxed_str());
