@@ -12,7 +12,7 @@
 - [x] **ERR-03**: Remove `RolldownNotFound`, `JsRuntimePanic`, `JsRuntimeInitFailed`, `ModuleResolutionFailed`, `JsExecutionFailed` from core `LoaderError` — move to `polyplug_js`
 - [x] **ERR-04**: Remove `HostfxrNotFound`, `ClrInitFailed`, `AssemblyNotFound`, `RuntimeVersionMismatch`, `InvalidFrameworkVersion` from core `LoaderError` — move to `polyplug_dotnet`
 - [x] **ERR-05**: Ensure each loader crate exports its own error type (e.g., `PythonLoaderError`, `LuaLoaderError`)
-- [ ] **ERR-06**: Update loader `load()` and `reload()` implementations to use crate-local error types, converting to `RuntimeError::Loader(LoaderError::InitFailed)` for cross-crate boundary
+- [ ] **ERR-06**: Update loader `load()` and `reload()` implementations to use `LoaderError::InitFailed` directly with descriptive string messages (no intermediate error types)
 
 ### Compatibility
 

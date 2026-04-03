@@ -44,17 +44,17 @@ Plans:
 
 ### Phase 2: Update Loader Implementations
 
-**Goal:** All loaders use their crate-local error types with proper boundary conversion
+**Goal:** All loaders use `LoaderError::InitFailed` directly with descriptive string messages
 
 **Depends on:** Phase 1
 
 **Requirements:** ERR-06
 
 **Success Criteria** (what must be TRUE):
-1. Each loader's `load()` method returns its crate-local error type
-2. Each loader's `reload()` method returns its crate-local error type
-3. Error conversion from crate-local to `RuntimeError::Loader(LoaderError::InitFailed)` exists at cross-crate boundary
-4. Core crate has no direct dependency on loader-specific error types
+1. Each loader uses `LoaderError::InitFailed { bundle, error }` directly at each error site
+2. Error messages are descriptive strings (no intermediate error types)
+3. Local error types from Phase 1 (`PythonLoaderError`, etc.) are removed or marked unused
+4. All loaders return `RuntimeError::HotReloadDisabled` for unsupported hot-reload (consistency)
 
 **Plans:** TBD
 
