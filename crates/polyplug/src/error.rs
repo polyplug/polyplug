@@ -84,34 +84,10 @@ pub enum LoaderError {
         runtime_name: String,
     },
 
-    #[error("hostfxr not found: searched DOTNET_ROOT, PATH, and well-known paths")]
-    HostfxrNotFound,
-
-    #[error("CLR initialization failed for runtime config `{path}`: {reason}")]
-    ClrInitFailed { path: String, reason: String },
-
-    #[error("assembly not found at path `{path}`")]
-    AssemblyNotFound { path: String },
-
     #[error(
         "init symbol missing in assembly `{bundle}`: expected `[UnmanagedCallersOnly] polyplug_init`"
     )]
     InitSymbolMissing { bundle: String },
-
-    #[error(".NET runtime version mismatch: required={required}, found={found}")]
-    RuntimeVersionMismatch { required: String, found: String },
-
-    #[error("invalid .NET framework version in TFM `{tfm}`: {reason}")]
-    InvalidFrameworkVersion { tfm: String, reason: String },
-
-    #[error("rolldown not found on PATH — js-quickjs pack requires rolldown. {hint}")]
-    RolldownNotFound { hint: String },
-
-    #[error("JS runtime \"{runtime}\" panicked during bundle load: {message}")]
-    JsRuntimePanic { runtime: String, message: String },
-
-    #[error("JS runtime initialization failed: {reason}")]
-    JsRuntimeInitFailed { reason: String },
 
     #[error("failed to read bundle at `{path}`: {source}")]
     BundleReadFailed {
@@ -119,12 +95,6 @@ pub enum LoaderError {
         #[source]
         source: std::io::Error,
     },
-
-    #[error("module resolution failed: {reason}")]
-    ModuleResolutionFailed { reason: String },
-
-    #[error("failed to execute JS script: {reason}")]
-    JsExecutionFailed { reason: String },
 
     #[error("version mismatch for contract `{contract}`: required={required}, found={found}")]
     VersionMismatch {
