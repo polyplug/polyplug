@@ -23,14 +23,20 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 ### Phase 1: ABI Types
 **Goal:** All FFI types consolidated in polyplug_abi with renamed interfaces
 **Depends on:** Nothing (foundation phase)
-**Requirements:** ABI-01, ABI-02, ABI-03, ABI-04, ABI-05, ABI-06, ABI-07, ABI-08, ABI-09, ABI-10, ABI-11, ABI-12, RTABI-01, RTABI-02, RTABI-03, RTABI-04, RTABI-05
+**Requirements:** ABI-01, ABI-02, ABI-03, ABI-04, ABI-05, ABI-06, ABI-07, ABI-08, ABI-09, ABI-10, ABI-11, ABI-12, ABI-13, ABI-14, RTABI-01, RTABI-02, RTABI-03, RTABI-04, RTABI-05
 **Success Criteria** (what must be TRUE):
 1. GuestContractInterface and HostContractInterface structs defined in polyplug_abi with create_instance/destroy_instance fields
 2. RuntimeConfig, ReloadPhase, and RuntimeCreateOptions moved from polyplug crate to polyplug_abi
 3. RuntimeAbi (renamed from HostVTable) contains all ABI functions including call_method
 4. All ID types renamed: PluginContractId -> GuestContractId throughout codebase
 5. All public ABI structs are #[repr(C)] and compile successfully
-**Plans:** TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Rename PluginContractId to GuestContractId in polyplug_utils
+- [ ] 01-02-PLAN.md — Rename/extend core ABI types: PluginInterface->GuestContractInterface, HostVTable->RuntimeAbi, add instance handles
+- [ ] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
+- [ ] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
 
 ### Phase 2: Registry
 **Goal:** Simplified registry stores GuestContractInterface directly without wrappers
@@ -109,7 +115,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. ABI Types | 0/0 | Not started | - |
+| 1. ABI Types | 0/4 | Planned | - |
 | 2. Registry | 0/0 | Not started | - |
 | 3. Instance Model | 0/0 | Not started | - |
 | 4. Hot-Reload | 0/0 | Not started | - |
@@ -143,3 +149,4 @@ Phase 7 (Typed Handles)
 
 ---
 *Roadmap created: 2026-04-03*
+*Phase 1 plans added: 2026-04-03*
