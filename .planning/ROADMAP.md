@@ -88,7 +88,7 @@ Plans:
 - [ ] 03-03-PLAN.md — Fix Python test files to use InitFailed pattern (COMP-01)
 - [ ] 03-04-PLAN.md — Fix .NET test files to use InitFailed pattern (COMP-01)
 - [x] 03-05-PLAN.md — Fix Lua test files to use InitFailed pattern (COMP-01)
-- [ ] 03-06-PLAN.md — Fix integration_loader_dispatch.rs test file (COMP-01)
+- [x] 03-06-PLAN.md — Fix integration_loader_dispatch.rs test file (COMP-01)
 - [ ] 03-07-PLAN.md — Run verification tests and confirm FFI compatibility (COMP-01, COMP-02)
 
 ---
