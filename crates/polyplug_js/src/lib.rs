@@ -5,11 +5,9 @@
 
 pub mod bridge;
 pub mod config;
-pub mod error;
 pub mod ffi;
 pub(crate) mod loader;
 
 pub use bridge::JsHostBridge;
 pub use config::JsConfig;
-pub use error::JsLoaderError;
 pub use loader::JsLoader;
