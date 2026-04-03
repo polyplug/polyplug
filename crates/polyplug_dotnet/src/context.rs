@@ -88,22 +88,22 @@ pub(crate) fn init_context(
         .suffix(".json")
         .tempfile()
         .map_err(|e: std::io::Error| {
-            RuntimeError::Loader(LoaderError::ClrInitFailed {
-                path: "<tempfile>".to_owned(),
-                reason: e.to_string(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "<tempfile>".to_owned(),
+                error: format!("CLR init failed: {}", e),
             })
         })?;
     tmp.write_all(json.as_bytes())
         .map_err(|e: std::io::Error| {
-            RuntimeError::Loader(LoaderError::ClrInitFailed {
-                path: "<tempfile>".to_owned(),
-                reason: e.to_string(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: "<tempfile>".to_owned(),
+                error: format!("CLR init failed: {}", e),
             })
         })?;
     tmp.flush().map_err(|e: std::io::Error| {
-        RuntimeError::Loader(LoaderError::ClrInitFailed {
-            path: "<tempfile>".to_owned(),
-            reason: e.to_string(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: "<tempfile>".to_owned(),
+            error: format!("CLR init failed: {}", e),
         })
     })?;
 
@@ -115,9 +115,9 @@ pub(crate) fn init_context(
 
     // Step 3: Convert path to PdCString.
     let pdcpath: PdCString = PdCString::from_os_str(temp_path.as_os_str()).map_err(|_| {
-        RuntimeError::Loader(LoaderError::ClrInitFailed {
-            path: temp_path.to_string_lossy().into_owned(),
-            reason: "runtimeconfig path contains embedded nul byte".to_owned(),
+        RuntimeError::Loader(LoaderError::InitFailed {
+            bundle: temp_path.to_string_lossy().into_owned(),
+            error: "CLR init failed: runtimeconfig path contains embedded nul byte".to_owned(),
         })
     })?;
 
@@ -131,23 +131,23 @@ pub(crate) fn init_context(
     let hostfxr: netcorehost::hostfxr::Hostfxr = match &config.hostfxr {
         HostfxrLocation::Auto => {
             let fxr_path: PathBuf = find_hostfxr_auto().ok_or_else(|| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: "<hostfxr>".to_owned(),
-                    reason: "hostfxr not found; install .NET or set DOTNET_ROOT".to_owned(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: "<hostfxr>".to_owned(),
+                    error: "CLR init failed: hostfxr not found; install .NET or set DOTNET_ROOT".to_owned(),
                 })
             })?;
             netcorehost::hostfxr::Hostfxr::load_from_path(&fxr_path).map_err(|e| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: fxr_path.to_string_lossy().into_owned(),
-                    reason: e.to_string(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: fxr_path.to_string_lossy().into_owned(),
+                    error: format!("CLR init failed: {}", e),
                 })
             })?
         }
         HostfxrLocation::Path(p) => {
             netcorehost::hostfxr::Hostfxr::load_from_path(p).map_err(|e| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: p.to_string_lossy().into_owned(),
-                    reason: e.to_string(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: p.to_string_lossy().into_owned(),
+                    error: format!("CLR init failed: {}", e),
                 })
             })?
         }
@@ -160,9 +160,9 @@ pub(crate) fn init_context(
     let context: HostfxrContext<InitializedForRuntimeConfig> = hostfxr
         .initialize_for_runtime_config(&pdcpath)
         .map_err(|e| {
-            RuntimeError::Loader(LoaderError::ClrInitFailed {
-                path: temp_path.to_string_lossy().into_owned(),
-                reason: e.to_string(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: temp_path.to_string_lossy().into_owned(),
+                error: format!("CLR init failed: {}", e),
             })
         })?;
 
@@ -203,9 +203,9 @@ impl DotnetContext {
                 '_,
                 HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>,
             > = self.loader_cache.lock().map_err(|_| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: asm_path.to_string_lossy().into_owned(),
-                    reason: "loader cache mutex poisoned".to_owned(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: asm_path.to_string_lossy().into_owned(),
+                    error: "CLR init failed: loader cache mutex poisoned".to_owned(),
                 })
             })?;
             cache.get(&asm_path).map(Arc::clone)
@@ -215,9 +215,9 @@ impl DotnetContext {
         if let Some(loader_arc) = maybe_loader {
             let loader: std::sync::MutexGuard<'_, AssemblyDelegateLoader> =
                 loader_arc.lock().map_err(|_| {
-                    RuntimeError::Loader(LoaderError::ClrInitFailed {
-                        path: asm_path.to_string_lossy().into_owned(),
-                        reason: "assembly loader mutex poisoned".to_owned(),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: asm_path.to_string_lossy().into_owned(),
+                        error: "CLR init failed: assembly loader mutex poisoned".to_owned(),
                     })
                 })?;
             return loader
@@ -231,23 +231,24 @@ impl DotnetContext {
 
         // Step 2: Cache miss — build the PdCString path and get a new loader from _context.
         let asm_pdc: PdCString = PdCString::from_os_str(asm_path.as_os_str()).map_err(|_| {
-            RuntimeError::Loader(LoaderError::AssemblyNotFound {
-                path: asm_path.to_string_lossy().into_owned(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: asm_path.to_string_lossy().into_owned(),
+                error: "CLR init failed: assembly path contains embedded nul byte".to_owned(),
             })
         })?;
 
         let new_loader: AssemblyDelegateLoader = {
             let ctx: std::sync::MutexGuard<'_, HostfxrContext<InitializedForRuntimeConfig>> =
                 self._context.lock().map_err(|_| {
-                    RuntimeError::Loader(LoaderError::ClrInitFailed {
-                        path: asm_path.to_string_lossy().into_owned(),
-                        reason: "CLR context mutex poisoned".to_owned(),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: asm_path.to_string_lossy().into_owned(),
+                        error: "CLR init failed: CLR context mutex poisoned".to_owned(),
                     })
                 })?;
             ctx.get_delegate_loader_for_assembly(asm_pdc).map_err(|e| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: asm_path.to_string_lossy().into_owned(),
-                    reason: e.to_string(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: asm_path.to_string_lossy().into_owned(),
+                    error: format!("CLR init failed: {}", e),
                 })
             })?
             // _context lock is dropped here.
@@ -260,9 +261,9 @@ impl DotnetContext {
                 '_,
                 HashMap<PathBuf, Arc<Mutex<AssemblyDelegateLoader>>>,
             > = self.loader_cache.lock().map_err(|_| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: asm_path.to_string_lossy().into_owned(),
-                    reason: "loader cache mutex poisoned (relock)".to_owned(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: asm_path.to_string_lossy().into_owned(),
+                    error: "CLR init failed: loader cache mutex poisoned (relock)".to_owned(),
                 })
             })?;
             // `or_insert` wins the race correctly — if a concurrent thread already inserted,
@@ -277,9 +278,9 @@ impl DotnetContext {
 
         let loader: std::sync::MutexGuard<'_, AssemblyDelegateLoader> =
             loader_arc.lock().map_err(|_| {
-                RuntimeError::Loader(LoaderError::ClrInitFailed {
-                    path: asm_path.to_string_lossy().into_owned(),
-                    reason: "assembly loader mutex poisoned (new)".to_owned(),
+                RuntimeError::Loader(LoaderError::InitFailed {
+                    bundle: asm_path.to_string_lossy().into_owned(),
+                    error: "CLR init failed: assembly loader mutex poisoned (new)".to_owned(),
                 })
             })?;
         loader
