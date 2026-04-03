@@ -23,10 +23,11 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - ✓ Core `LoaderError` stripped of loader-specific variants — only generic Loader variants remain
 - ✓ All loaders use `LoaderError::InitFailed` directly (Phase 02) — language-specific error types removed
 - ✓ Hot-reload returns `RuntimeError::HotReloadDisabled` consistently across all loaders
+- ✓ Error handling refactoring verified (Phase 03) — no removed variants remain, FFI string conversion confirmed
 
 ### Active
 
-- [ ] Verify compatibility and cross-phase integration (Phase 03)
+(None — all phases complete)
 
 ### Out of Scope
 
@@ -35,7 +36,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 ## Context
 
-**Active Work:** Phase 03 (verify-compatibility) — ensure cross-phase integration and build health.
+**Active Work:** None — all planned phases complete.
 
 **Completed Phases:**
 1. ✅ Update `BundleLoader` trait (add reload method)
@@ -47,8 +48,9 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 7. ✅ Define loader-local error types — each loader has its own error enum
 8. ✅ Strip loader-specific variants from core `LoaderError`
 9. ✅ Update loader implementations — unified `InitFailed` pattern, removed language-specific error types
+10. ✅ Verify compatibility — structural verification passed (COMP-02 verified; COMP-01 blocked by pre-existing core crate WIP)
 
-**Remaining Work:** Verify compatibility and cross-phase integration.
+**Deferred:** Test execution verification pending core crate WIP refactoring completion (documented in 03-VERIFICATION.md).
 
 ## Constraints
 
@@ -66,4 +68,4 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 | Fail-fast on stale pointers | If host caches raw pointers after reload, SIGSEGV is a host bug | ✓ Documented in safety contract |
 
 ---
-*Last updated: 2026-04-03 after Phase 02 completion (loader error unification)*
+*Last updated: 2026-04-03 after Phase 03 completion (verification with COMP-02 verified, COMP-01 deferred)*
