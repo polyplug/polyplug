@@ -46,7 +46,7 @@
 //!     _ctx: *const PluginContext,
 //! ) -> AbiError {
 //!     if host_vtable.is_null() {
-//!         return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+//!         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
 //!     }
 //!     let host: &HostVTable = unsafe { &*host_vtable };
 //!     unsafe {
@@ -85,41 +85,8 @@ static HOST_VTABLE: OnceLock<HostVtablePtr> = OnceLock::new();
 /// returning this value. The loader rejects plugins with a different version.
 pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 
-/// ABI success constant.
-pub use polyplug_abi::ABI_OK;
-
-/// Generic error constant.
-pub use polyplug_abi::ABI_ERROR_GENERIC;
-
-/// Buffer too small error constant.
-pub use polyplug_abi::ABI_ERROR_BUFFER_TOO_SMALL;
-
-/// Panic error constant.
-pub use polyplug_abi::ABI_ERROR_PANIC;
-
-/// Not found error constant.
-pub use polyplug_abi::ABI_ERROR_NOT_FOUND;
-
-/// Stale handle error constant.
-pub use polyplug_abi::ABI_ERROR_STALE_HANDLE;
-
-/// Function not available error constant.
-pub use polyplug_abi::ABI_ERROR_FUNCTION_NOT_AVAILABLE;
-
-/// Duplicate provider error constant.
-pub use polyplug_abi::ABI_ERROR_DUPLICATE_PROVIDER;
-
-/// Invalid pointer error constant.
-pub use polyplug_abi::ABI_ERROR_INVALID_POINTER;
-
-/// Host contract not found error constant.
-pub use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
-
-/// Host contract version mismatch error constant.
-pub use polyplug_abi::ABI_HOST_CONTRACT_VERSION_MISMATCH;
-
-/// Host contract call failed error constant.
-pub use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
+/// ABI error codes — use `AbiErrorCode::Ok`, `AbiErrorCode::Generic`, etc.
+pub use polyplug_abi::AbiErrorCode;
 
 // ─── ABI Types ────────────────────────────────────────────────────────────────
 
@@ -127,20 +94,20 @@ pub use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
 ///
 /// OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
 /// of the call. Never freed by the receiver.
-pub use polyplug_abi::StringView;
+pub use polyplug_abi::types::StringView;
 
 /// Owning byte buffer allocated via the host allocator.
 ///
 /// OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
 /// Owner calls `polyplug_host_free(ptr, cap, align)` when done.
-pub use polyplug_abi::Buffer;
+pub use polyplug_abi::types::Buffer;
 
 /// ABI error returned by value from all ABI calls.
 ///
 /// OWNERSHIP: `code` is a value type. `message.ptr` (if non-null) is
 /// allocated by the callee via `host_alloc`. Caller frees with
 /// `polyplug_host_free(message.ptr, message.len, 1)` after reading.
-pub use polyplug_abi::AbiError;
+pub use polyplug_abi::types::AbiError;
 
 /// Opaque handle to a loaded plugin — validated on every use.
 pub use polyplug_abi::PluginHandle;
@@ -151,19 +118,19 @@ pub use polyplug_abi::PluginHandle;
 pub use polyplug_abi::PluginInterface;
 
 /// Host context passed to plugins.
-pub use polyplug_abi::HostContext;
+pub use polyplug_abi::host::host_context::HostContext;
 
 /// Dispatch type for plugin interfaces.
-pub use polyplug_abi::DispatchType;
+pub use polyplug_abi::dispatch::dispatch_type::DispatchType;
 
 /// Native dispatch mechanism.
-pub use polyplug_abi::NativeDispatch;
+pub use polyplug_abi::dispatch::native_dispatch::NativeDispatch;
 
 /// VM dispatch mechanism.
-pub use polyplug_abi::VmDispatch;
+pub use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 
 /// Union of dispatch mechanisms.
-pub use polyplug_abi::PluginDispatch;
+pub use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 
 /// Host capabilities passed to every plugin at init time.
 ///
@@ -183,35 +150,16 @@ pub use polyplug_abi::PluginDescriptor;
 /// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
 pub use polyplug_abi::PluginContext;
 
-// ─── Host Contract Types (for guest-side host contract calls) ─────────────────
-
-/// Header for host contract vtables — identifies the contract and function count.
-///
-/// Used by guests when calling host contracts via generated callers.
-pub use polyplug_abi::HostContractVTableHeader;
-
-/// Native dispatch for host contracts — contains impl_ptr and function pointer array.
-///
-/// Used when `dispatch_type == DispatchType::Native`.
-pub use polyplug_abi::NativeHostContractDispatch;
-
-/// VM dispatch for host contracts — contains bridge_data and dispatch function.
-///
-/// Used when `dispatch_type == DispatchType::VirtualMachine`.
-pub use polyplug_abi::VmHostContractDispatch;
-
-/// Union of dispatch mechanisms for host contracts.
-pub use polyplug_abi::HostContractDispatch;
-
-/// Host contract vtable — registered by hosts, called by guests.
-///
-/// OWNERSHIP: `'static` vtable registered by the host runtime.
-pub use polyplug_abi::HostContractVTable;
-
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 
-pub use polyplug_utils::bundle_id;
-pub use polyplug_utils::contract_id;
+/// Bundle ID type for computing bundle identifiers.
+pub use polyplug_utils::BundleId;
+
+/// Guest contract ID type for computing guest contract identifiers.
+pub use polyplug_utils::GuestContractId;
+
+/// Host contract ID type for computing host contract identifiers.
+pub use polyplug_utils::HostContractId;
 
 // ─── Allocator ────────────────────────────────────────────────────────────────
 
@@ -313,7 +261,7 @@ pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
     let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
     if ptr.is_null() {
         return Err(PluginError {
-            code: ABI_ERROR_GENERIC,
+            code: AbiErrorCode::Generic as u32,
             message: "allocation failed".to_string(),
         });
     }
