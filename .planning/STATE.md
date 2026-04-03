@@ -5,7 +5,7 @@ milestone_name: Architecture Refactor
 status: planning
 last_updated: "2026-04-03T12:00:00.000Z"
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -40,7 +40,7 @@ progress:
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 0/6 |
+| Phases completed | 0/7 |
 | Plans completed | 0 |
 | Requirements covered | 50/50 mapped |
 
@@ -74,6 +74,10 @@ progress:
 
 None.
 
+### Roadmap Evolution
+
+- Phase 7 added: Replace opaque c_void pointers with typed handles
+
 ### Session Continuity
 
 Roadmap created for v1.1 Architecture Refactor:
@@ -83,8 +87,9 @@ Roadmap created for v1.1 Architecture Refactor:
 - Phase 4: Hot-Reload (6 requirements)
 - Phase 5: SDK Updates (7 requirements)
 - Phase 6: Cleanup (4 requirements)
+- Phase 7: Typed Handles (NEW - replace c_void pointers)
 
-Total: 50 requirements, 100% coverage.
+Total: 50+ requirements, 7 phases.
 
 **Project Status:** Roadmap ready. Next: `/gsd:plan-phase 1`
 

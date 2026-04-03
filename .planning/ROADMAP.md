@@ -125,5 +125,15 @@ Phase 5 (SDK Updates)
 Phase 6 (Cleanup)
 ```
 
+### Phase 7: Replace opaque c_void pointers with typed handles
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 6
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 7 to break down)
+
 ---
 *Roadmap created: 2026-04-03*
