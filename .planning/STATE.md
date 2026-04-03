@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-last_updated: "2026-04-03T05:22:32.700Z"
+status: executing
+last_updated: "2026-04-03T07:30:00.000Z"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 5
   completed_plans: 5
-  percent: 100
+  percent: 33
 ---
 
 # STATE: polyplug Error Decoupling
@@ -32,45 +32,32 @@ progress:
 
 ## Current Position
 
-Phase: 01 (define-loader-local-error-types) — EXECUTING
-Plan: 4 of 5
-**Phase:** 2
+**Phase:** 2 (update-loader-implementations)
 **Plan:** Not started
 **Status:** Ready to plan
-**Progress:** [██████████] 100%
+**Progress:** [███░░░░░░░] 33% (Phase 1 complete)
 
-### Current Plan Context
-
-**Completed Plans in Phase 01:**
+### Phase 01 Completion Summary
 
 | Plan | Error Type | Crate | Status |
 |------|------------|-------|--------|
-| 01-01 | PythonLoaderError | polyplug_python | COMPLETE |
-| 01-02 | LuaLoaderError | polyplug_lua | COMPLETE |
-| 01-03 | JsLoaderError | polyplug_js | COMPLETE |
-| 01-04 | DotnetLoaderError | polyplug_dotnet | COMPLETE |
-| 01-05 | NativeLoaderError migration | polyplug_native | PENDING |
+| 01-01 | PythonLoaderError | polyplug_python | ✓ COMPLETE |
+| 01-02 | LuaLoaderError | polyplug_lua | ✓ COMPLETE |
+| 01-03 | JsLoaderError | polyplug_js | ✓ COMPLETE |
+| 01-04 | DotnetLoaderError | polyplug_dotnet | ✓ COMPLETE |
+| 01-05 | Core LoaderError stripped | polyplug | ✓ COMPLETE |
 
-**Last Completed (01-03):** JsLoaderError enum defined in polyplug_js crate.
-
-- File: crates/polyplug_js/src/error.rs (created)
-- Export: lib.rs updated with error module and JsLoaderError export
-- Pattern: Follows NativeLoaderError structure
-- Variants: RolldownNotFound, JsRuntimePanic, JsRuntimeInitFailed, ModuleResolutionFailed, JsExecutionFailed
+**Verification:** Passed (5/5 must-haves verified) — all loader-specific error variants removed from core.
 
 ## Performance Metrics
 
 | Metric | Value |
 |--------|-------|
-| Phases completed | 0/3 |
-| Plans completed | 0/3 |
-| Requirements addressed | 0/8 |
+| Phases completed | 1/3 |
+| Plans completed | 5/5 (Phase 01) |
+| Requirements addressed | 5/8 (ERR-01-05) |
 | Days in progress | 0 |
 | Last activity | 2026-04-03 |
-| Phase 01 P02 | 4 | 2 tasks | 2 files |
-| Phase 01 P03 | 3 | 2 tasks | 2 files |
-| Phase 01 P04 | 2 | 2 tasks | 2 files |
-| Phase 01-define-loader-local-error-types P05 | 6min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -92,7 +79,8 @@ Plan: 4 of 5
 
 ### Active TODOs
 
-- [ ] Begin Phase 1: Define loader-local error types
+- [ ] Plan Phase 2: Update loader implementations to use crate-local errors
+- [ ] Execute Phase 2 after planning complete
 
 ### Blockers
 
@@ -100,9 +88,12 @@ None.
 
 ### Session Continuity
 
-This is a focused refactoring task to decouple error types from the core crate. The native decoupling (Phase 4.6 in prior work) is complete; this roadmap addresses the remaining error type decoupling.
+Phase 01 (error type definition) is complete. The core polyplug crate is now loader-agnostic:
+- No loader-specific error variants in `LoaderError` enum
+- No loader-specific dependencies in `Cargo.toml`
+- Only `BundleLoader` trait and manifest parsing in core
 
-**Next Action:** Run `/gsd:plan-phase 1` to create plan for defining loader-local error types.
+**Next Action:** Run `/gsd:plan-phase 2` to create execution plans for updating loader implementations.
 
 ---
 *State initialized: 2026-04-03*

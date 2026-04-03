@@ -10,7 +10,7 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 
 ## Phases
 
-- [ ] **Phase 1: Define Loader-Local Error Types** - Move error variants from core to loader crates
+- [x] **Phase 1: Define Loader-Local Error Types** - Move error variants from core to loader crates (completed 2026-04-03)
 - [ ] **Phase 2: Update Loader Implementations** - Loaders use crate-local errors with boundary conversion
 - [ ] **Phase 3: Verify Compatibility** - Ensure tests pass and FFI compatibility maintained
 
@@ -81,7 +81,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Define Loader-Local Error Types | 0/5 | Ready for execution | - |
+| 1. Define Loader-Local Error Types | 5/5 | Complete | 2026-04-03 |
 | 2. Update Loader Implementations | 0/1 | Not started | - |
 | 3. Verify Compatibility | 0/1 | Not started | - |
 
@@ -89,17 +89,17 @@ Plans:
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ERR-01 | Phase 1 | Planned |
-| ERR-02 | Phase 1 | Planned |
-| ERR-03 | Phase 1 | Planned |
-| ERR-04 | Phase 1 | Planned |
-| ERR-05 | Phase 1 | Planned |
+| ERR-01 | Phase 1 | Complete |
+| ERR-02 | Phase 1 | Complete |
+| ERR-03 | Phase 1 | Complete |
+| ERR-04 | Phase 1 | Complete |
+| ERR-05 | Phase 1 | Complete |
 | ERR-06 | Phase 2 | Pending |
 | COMP-01 | Phase 3 | Pending |
 | COMP-02 | Phase 3 | Pending |
 
-**Coverage:** 8/8 requirements mapped (100%)
+**Coverage:** 5/8 requirements complete (62.5%)
 
 ---
 *Roadmap created: 2026-04-03*
-*Last updated: 2026-04-03 after Phase 1 planning*
+*Last updated: 2026-04-03 after Phase 1 completion verified*
