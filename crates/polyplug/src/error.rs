@@ -104,18 +104,6 @@ pub enum LoaderError {
     #[error("invalid .NET framework version in TFM `{tfm}`: {reason}")]
     InvalidFrameworkVersion { tfm: String, reason: String },
 
-    #[error("lua vm init failed: {reason}")]
-    LuaVmInitFailed { reason: String },
-
-    #[error("lua script load failed: path={path}, reason={reason}")]
-    LuaScriptLoadFailed { path: String, reason: String },
-
-    #[error("lua plugin missing polyplug_init function: bundle={bundle}")]
-    LuaInitFunctionMissing { bundle: String },
-
-    #[error("lua polyplug_init raised error: bundle={bundle}, message={message}")]
-    LuaInitRaisedError { bundle: String, message: String },
-
     #[error("rolldown not found on PATH — js-quickjs pack requires rolldown. {hint}")]
     RolldownNotFound { hint: String },
 
