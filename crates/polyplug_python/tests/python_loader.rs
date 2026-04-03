@@ -242,7 +242,7 @@ fn test_default_config_version_check_passes() {
 }
 
 /// A pathologically high minimum version requirement (`(99, 0)`) must fail with
-/// `LoaderError::RuntimeVersionMismatch`.
+/// `LoaderError::InitFailed` (version mismatch is now wrapped in InitFailed).
 #[test]
 fn test_version_too_old_returns_version_mismatch() {
     let (_dir, path) = write_bundle("ver_mismatch", NOOP_PLUGIN_SRC);
@@ -259,14 +259,21 @@ fn test_version_too_old_returns_version_mismatch() {
         .load(&manifest, &runtime)
         .expect_err("expected version mismatch");
     match err {
-        RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { required, found }) => {
-            assert_eq!(required, "99.0", "required mismatch");
+        RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
             assert!(
-                !found.is_empty(),
-                "found version string must not be empty; got: {found}"
+                bundle.contains("bundle"),
+                "bundle name should contain 'bundle'; got: {bundle}"
+            );
+            assert!(
+                error.contains("version"),
+                "error should mention version: {error}"
+            );
+            assert!(
+                error.contains("99.0") || error.contains("99"),
+                "error should mention required version 99.0: {error}"
             );
         }
-        other => panic!("expected RuntimeVersionMismatch, got: {other:?}"),
+        other => panic!("expected InitFailed for version mismatch, got: {other:?}"),
     }
 }
 
@@ -287,7 +294,7 @@ fn test_valid_plugin_registers_in_registry() {
     assert!(handle.is_ok(), "plugin must be registered in registry");
 }
 
-/// A plugin with a syntax error must return `PythonModuleImportFailed`.
+/// A plugin with a syntax error must return `LoaderError::InitFailed`.
 #[test]
 fn test_syntax_error_returns_module_import_failed() {
     let (_dir, path) = write_bundle("syntax_err", SYNTAX_ERROR_PLUGIN_SRC);
@@ -298,18 +305,21 @@ fn test_syntax_error_returns_module_import_failed() {
         .load(&manifest, &runtime)
         .expect_err("expected failure for syntax error plugin");
     match err {
-        RuntimeError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
+        RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
             assert!(
-                p.contains("bundle.py"),
-                "path should mention bundle.py; got: {p}"
+                bundle.contains("bundle"),
+                "bundle name should contain 'bundle'; got: {bundle}"
             );
-            assert!(!reason.is_empty(), "reason must not be empty");
+            assert!(
+                error.contains("import") || error.contains("syntax") || error.contains("module"),
+                "error should mention import/syntax/module issue: {error}"
+            );
         }
-        other => panic!("expected PythonModuleImportFailed, got: {other:?}"),
+        other => panic!("expected InitFailed for syntax error, got: {other:?}"),
     }
 }
 
-/// A plugin that imports a missing module must return `PythonModuleImportFailed`.
+/// A plugin that imports a missing module must return `LoaderError::InitFailed`.
 #[test]
 fn test_import_error_returns_module_import_failed() {
     let (_dir, path) = write_bundle("import_err", IMPORT_ERROR_PLUGIN_SRC);
@@ -320,18 +330,17 @@ fn test_import_error_returns_module_import_failed() {
         .load(&manifest, &runtime)
         .expect_err("expected failure for import-error plugin");
     match err {
-        RuntimeError::Loader(LoaderError::PythonModuleImportFailed { path: p, reason }) => {
+        RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
             assert!(
-                p.contains("bundle.py"),
-                "path should mention bundle.py; got: {p}"
+                bundle.contains("bundle"),
+                "bundle name should contain 'bundle'; got: {bundle}"
             );
             assert!(
-                reason.contains("_polyplug_nonexistent_module_xyz_123456")
-                    || reason.contains("No module named"),
-                "reason should mention the missing module; got: {reason}"
+                error.contains("import") || error.contains("module") || error.contains("_polyplug_nonexistent_module_xyz_123456"),
+                "error should mention import/module issue: {error}"
             );
         }
-        other => panic!("expected PythonModuleImportFailed, got: {other:?}"),
+        other => panic!("expected InitFailed for import error, got: {other:?}"),
     }
 }
 
@@ -356,7 +365,7 @@ fn test_missing_init_returns_init_symbol_missing() {
     }
 }
 
-/// A `polyplug_init` that raises a Python exception must return `PythonInitRaisedException`.
+/// A `polyplug_init` that raises a Python exception must return `LoaderError::InitFailed`.
 #[test]
 fn test_raising_init_returns_init_raised_exception() {
     let (_dir, path) = write_bundle("raising_init", RAISING_PLUGIN_SRC);
@@ -367,21 +376,21 @@ fn test_raising_init_returns_init_raised_exception() {
         .load(&manifest, &runtime)
         .expect_err("expected failure for raising plugin");
     match err {
-        RuntimeError::Loader(LoaderError::PythonInitRaisedException { bundle, message }) => {
+        RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
             assert!(
                 bundle.contains("bundle"),
                 "bundle name should contain 'bundle'; got: {bundle}"
             );
             assert!(
-                message.contains("intentional test error"),
-                "message should contain the Python exception text; got: {message}"
+                error.contains("intentional test error"),
+                "error should contain the Python exception text; got: {error}"
             );
         }
-        other => panic!("expected PythonInitRaisedException, got: {other:?}"),
+        other => panic!("expected InitFailed for raised exception, got: {other:?}"),
     }
 }
 
-/// Loading a `.py` file that does not exist must return `PythonModuleImportFailed`
+/// Loading a `.py` file that does not exist must return `LoaderError::InitFailed`
 /// (path canonicalization fails).
 #[test]
 fn test_nonexistent_path_returns_import_failed() {
@@ -404,8 +413,17 @@ fn test_nonexistent_path_returns_import_failed() {
         .load(&manifest, &runtime)
         .expect_err("expected failure for nonexistent path");
     match err {
-        RuntimeError::Loader(LoaderError::PythonModuleImportFailed { .. }) => {}
-        other => panic!("expected PythonModuleImportFailed, got: {other:?}"),
+        RuntimeError::Loader(LoaderError::InitFailed { bundle, error }) => {
+            assert!(
+                bundle.contains("does_not_exist"),
+                "bundle name should mention 'does_not_exist'; got: {bundle}"
+            );
+            assert!(
+                error.contains("import") || error.contains("module") || error.contains("not found"),
+                "error should mention import/module issue: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for nonexistent path, got: {other:?}"),
     }
 }
 
