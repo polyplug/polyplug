@@ -27,8 +27,10 @@ mod tests {
 
     #[test]
     fn layout_native_dispatch() {
-        assert_eq!(size_of::<NativeDispatch>(), 8);
+        // NativeDispatch: u32 (4) + pointer (8) + padding (4) = 16 bytes
+        assert_eq!(size_of::<NativeDispatch>(), 16);
         assert_eq!(align_of::<NativeDispatch>(), 8);
-        assert_eq!(offset_of!(NativeDispatch, functions), 0);
+        assert_eq!(offset_of!(NativeDispatch, function_count), 0);
+        assert_eq!(offset_of!(NativeDispatch, functions), 8);
     }
 }

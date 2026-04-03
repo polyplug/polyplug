@@ -34,9 +34,11 @@ mod tests {
 
     #[test]
     fn layout_host_context() {
-        assert_eq!(size_of::<HostContext>(), 16);
+        // HostContext: pointer (8) + u64 (8) + u32 (4) + padding (4) = 24 bytes
+        assert_eq!(size_of::<HostContext>(), 24);
         assert_eq!(align_of::<HostContext>(), 8);
         assert_eq!(offset_of!(HostContext, runtime), 0);
         assert_eq!(offset_of!(HostContext, bundle_id), 8);
+        assert_eq!(offset_of!(HostContext, host_abi_version), 16);
     }
 }

@@ -23,7 +23,8 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn plugin_context_layout() {
-        assert_eq!(size_of::<PluginContext>(), 32);
+        // PluginContext: u64 (8) + StringView (16) = 24 bytes
+        assert_eq!(size_of::<PluginContext>(), 24);
         assert_eq!(align_of::<PluginContext>(), 8);
         assert_eq!(offset_of!(PluginContext, bundle_id), 0);
         assert_eq!(offset_of!(PluginContext, bundle_path), 8);

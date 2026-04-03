@@ -4,7 +4,7 @@ use core::ffi::c_void;
 use polyplug_utils::HostContractId;
 
 use crate::{
-    dispatch::{DispatchMechanisms, DispatchType},
+    dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
     host::HostContractInstance,
     types::Version,
 };
@@ -58,25 +58,25 @@ mod tests {
 
     #[test]
     fn layout_host_contract_interface() {
-        // Layout:
-        //   contract_id (HostContractId/u64): 8 bytes at offset 0
-        //   contract_version (Version): 6 bytes at offset 8
-        //   singleton (bool): 1 byte at offset 14
-        //   dispatch_type (DispatchType/u32): 4 bytes at offset 15
-        //   [padding 1 byte for alignment to 8]
-        //   create_instance (fn ptr): 8 bytes at offset 20
-        //   destroy_instance (fn ptr): 8 bytes at offset 28
-        //   dispatch (union): 16 bytes at offset 36
-        // [padding 4 bytes at end for alignment]
-        // Total: 56 bytes
-        assert_eq!(size_of::<HostContractInterface>(), 56);
+        // HostContractInterface layout:
+        //   contract_id (HostContractId/u64): 8 bytes @ offset 0
+        //   contract_version (Version/3xu32): 12 bytes @ offset 8
+        //   singleton (bool): 1 byte @ offset 20
+        //   [padding 3 bytes for alignment to DispatchType (4-byte align)]
+        //   dispatch_type (DispatchType/u32): 4 bytes @ offset 24
+        //   [padding 4 bytes for alignment to fn ptr (8-byte align)]
+        //   create_instance (fn ptr): 8 bytes @ offset 32
+        //   destroy_instance (fn ptr): 8 bytes @ offset 40
+        //   dispatch (union): 16 bytes @ offset 48
+        // Total: 64 bytes
+        assert_eq!(size_of::<HostContractInterface>(), 64);
         assert_eq!(align_of::<HostContractInterface>(), 8);
         assert_eq!(offset_of!(HostContractInterface, contract_id), 0);
         assert_eq!(offset_of!(HostContractInterface, contract_version), 8);
-        assert_eq!(offset_of!(HostContractInterface, singleton), 14);
-        assert_eq!(offset_of!(HostContractInterface, dispatch_type), 15);
-        assert_eq!(offset_of!(HostContractInterface, create_instance), 16);
-        assert_eq!(offset_of!(HostContractInterface, destroy_instance), 24);
-        assert_eq!(offset_of!(HostContractInterface, dispatch), 32);
+        assert_eq!(offset_of!(HostContractInterface, singleton), 20);
+        assert_eq!(offset_of!(HostContractInterface, dispatch_type), 24);
+        assert_eq!(offset_of!(HostContractInterface, create_instance), 32);
+        assert_eq!(offset_of!(HostContractInterface, destroy_instance), 40);
+        assert_eq!(offset_of!(HostContractInterface, dispatch), 48);
     }
 }
