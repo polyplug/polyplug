@@ -4,6 +4,9 @@ use thiserror::Error;
 
 use polyplug_abi::types::Version;
 
+/// Top-level error type for polyplug operations.
+pub type PolyplugError = RuntimeError;
+
 /// Top-level runtime error — this is what the public API returns.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -58,23 +61,6 @@ pub enum RuntimeError {
 /// Errors from the bundle loading phase.
 #[derive(Debug, Error)]
 pub enum LoaderError {
-    #[error("failed to load plugin bundle at `{path}`: {source}")]
-    LoadFailed {
-        path: String,
-        #[source]
-        source: libloading::Error,
-    },
-
-    #[error("ABI version mismatch in `{bundle}`: expected={expected}, found={found}")]
-    AbiVersionMismatch {
-        bundle: String,
-        expected: u32,
-        found: u32,
-    },
-
-    #[error("missing symbol `{symbol}` in bundle `{bundle}`")]
-    MissingSymbol { bundle: String, symbol: String },
-
     #[error("init failed for bundle `{bundle}`: {error}")]
     InitFailed { bundle: String, error: String },
 
@@ -117,15 +103,6 @@ pub enum LoaderError {
 
     #[error("invalid .NET framework version in TFM `{tfm}`: {reason}")]
     InvalidFrameworkVersion { tfm: String, reason: String },
-
-    #[error("Python interpreter initialization failed: {reason}")]
-    PythonInitFailed { reason: String },
-
-    #[error("failed to import Python module at `{path}`: {reason}")]
-    PythonModuleImportFailed { path: String, reason: String },
-
-    #[error("Python init function raised exception in bundle `{bundle}`: {message}")]
-    PythonInitRaisedException { bundle: String, message: String },
 
     #[error("lua vm init failed: {reason}")]
     LuaVmInitFailed { reason: String },
@@ -248,7 +225,9 @@ pub enum HostContractError {
     #[error("duplicate host contract registration: contract_id=0x{contract_id:016X}")]
     DuplicateContract { contract_id: u64 },
 
-    #[error("host contract not found: contract_id=0x{contract_id:016X}, min_version={min_version}")]
+    #[error(
+        "host contract not found: contract_id=0x{contract_id:016X}, min_version={min_version}"
+    )]
     ContractNotFound { contract_id: u64, min_version: u32 },
 
     #[error(
@@ -265,7 +244,7 @@ pub enum HostContractError {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::{
-        AllocatorError, GraphError, HostContractError, LoaderError, RuntimeError, RegistryError,
+        AllocatorError, GraphError, HostContractError, LoaderError, RegistryError, RuntimeError,
     };
     use polyplug_abi::types::Version;
 
@@ -356,32 +335,6 @@ mod tests {
     // --- LoaderError ---
 
     #[test]
-    fn loader_error_abi_version_mismatch_display() {
-        let err: LoaderError = LoaderError::AbiVersionMismatch {
-            bundle: "codec.bundle".to_owned(),
-            expected: 2,
-            found: 1,
-        };
-        let s: String = err.to_string();
-        assert!(s.contains("ABI version mismatch"), "got: {s}");
-        assert!(s.contains("codec.bundle"), "got: {s}");
-        assert!(s.contains('2'), "got: {s}");
-        assert!(s.contains('1'), "got: {s}");
-    }
-
-    #[test]
-    fn loader_error_missing_symbol_display() {
-        let err: LoaderError = LoaderError::MissingSymbol {
-            bundle: "renderer.so".to_owned(),
-            symbol: "polyplug_init".to_owned(),
-        };
-        let s: String = err.to_string();
-        assert!(s.contains("missing symbol"), "got: {s}");
-        assert!(s.contains("renderer.so"), "got: {s}");
-        assert!(s.contains("polyplug_init"), "got: {s}");
-    }
-
-    #[test]
     fn loader_error_init_failed_display() {
         let err: LoaderError = LoaderError::InitFailed {
             bundle: "init_bundle".to_owned(),
@@ -434,8 +387,16 @@ mod tests {
     fn loader_error_version_mismatch_display() {
         let err: LoaderError = LoaderError::VersionMismatch {
             contract: "audio_v2".to_owned(),
-            required: Version { major: 2, minor: 0, patch: 0 },
-            found: Version { major: 1, minor: 9, patch: 0 },
+            required: Version {
+                major: 2,
+                minor: 0,
+                patch: 0,
+            },
+            found: Version {
+                major: 1,
+                minor: 9,
+                patch: 0,
+            },
         };
         let s: String = err.to_string();
         assert!(s.contains("version mismatch"), "got: {s}");
