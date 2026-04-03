@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-03T04:55:15.446Z"
+last_updated: "2026-04-03T04:55:41.476Z"
 progress:
   total_phases: 3
   completed_phases: 0
@@ -48,7 +48,7 @@ Plan: 4 of 5
 | 01-01 | PythonLoaderError | polyplug_python | COMPLETE |
 | 01-02 | LuaLoaderError | polyplug_lua | COMPLETE |
 | 01-03 | JsLoaderError | polyplug_js | COMPLETE |
-| 01-04 | DotnetLoaderError | polyplug_dotnet | IN PROGRESS |
+| 01-04 | DotnetLoaderError | polyplug_dotnet | COMPLETE |
 | 01-05 | NativeLoaderError migration | polyplug_native | PENDING |
 
 **Last Completed (01-03):** JsLoaderError enum defined in polyplug_js crate.
@@ -83,6 +83,7 @@ Plan: 4 of 5
 
 - [Phase 01]: JsLoaderError follows NativeLoaderError pattern for consistency
 - [Phase 01]: JS-specific variants kept identical to core LoaderError for traceability
+- [Phase 01]: LuaLoaderError follows NativeLoaderError pattern exactly; variant names identical to core LoaderError for traceability
 
 ### Active TODOs
 
