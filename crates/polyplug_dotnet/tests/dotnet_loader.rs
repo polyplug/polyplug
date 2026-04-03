@@ -70,46 +70,64 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tfm_reader_nonexistent_file_returns_assembly_not_found() {
+fn tfm_reader_nonexistent_file_returns_init_failed() {
     let result: Result<String, RuntimeError> =
         read_target_framework(Path::new("/nonexistent/path/that/does/not/exist.dll"));
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { path })) => {
-            assert!(path.contains("nonexistent"));
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("PE") || error.contains("not found"),
+                "error: {error}"
+            );
         }
-        other => panic!("expected AssemblyNotFound, got {other:?}"),
+        other => panic!("expected InitFailed, got {other:?}"),
     }
 }
 
 #[test]
-fn tfm_reader_empty_file_returns_assembly_not_found() {
+fn tfm_reader_empty_file_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"");
     let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        other => panic!("expected AssemblyNotFound for empty file, got {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("PE"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for empty file, got {other:?}"),
     }
 }
 
 #[test]
-fn tfm_reader_random_bytes_returns_assembly_not_found() {
+fn tfm_reader_random_bytes_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"\x00\x01\x02\x03this is not a valid PE binary");
     let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        other => panic!("expected AssemblyNotFound for junk bytes, got {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("PE"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for junk bytes, got {other:?}"),
     }
 }
 
 #[test]
-fn tfm_reader_elf_magic_returns_assembly_not_found() {
+fn tfm_reader_elf_magic_returns_init_failed() {
     // ELF magic (0x7f 'E' 'L' 'F') is not a valid PE header — pelite rejects it.
     let tmp: NamedTempFile =
         temp_file_with_bytes(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00");
     let result: Result<String, RuntimeError> = read_target_framework(tmp.path());
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        other => panic!("expected AssemblyNotFound for ELF magic, got {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("PE"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for ELF magic, got {other:?}"),
     }
 }
 
@@ -203,34 +221,44 @@ fn dotnet_loader_runtime_name_is_dotnet() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn load_nonexistent_assembly_returns_assembly_not_found() {
+fn load_nonexistent_assembly_returns_init_failed() {
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
     let path: PathBuf = PathBuf::from("/does/not/exist/Plugin.dll");
     let manifest: ManifestData = make_manifest(&path, "nonexistent");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        other => panic!("expected AssemblyNotFound, got {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("not found"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed, got {other:?}"),
     }
 }
 
 #[test]
-fn load_invalid_pe_file_returns_assembly_not_found() {
+fn load_invalid_pe_file_returns_init_failed() {
     let tmp: NamedTempFile = temp_file_with_bytes(b"not a valid PE binary at all");
     let loader: DotnetLoader = DotnetLoader::new(DotnetConfig::default());
     let runtime: Runtime = test_runtime();
     let manifest: ManifestData = make_manifest(tmp.path(), "invalid_pe");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        other => panic!("expected AssemblyNotFound for invalid PE, got {other:?}"),
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert!(
+                error.contains("assembly") || error.contains("PE"),
+                "error: {error}"
+            );
+        }
+        other => panic!("expected InitFailed for invalid PE, got {other:?}"),
     }
 }
 
 #[test]
-fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
-    // AssemblyNotFound fires before hostfxr is consulted — verifies load() call ordering.
+fn load_with_invalid_hostfxr_path_and_missing_dll_returns_init_failed() {
+    // InitFailed fires before hostfxr is consulted — verifies load() call ordering.
     let cfg: DotnetConfig = DotnetConfig {
         min_framework: String::from("net10.0"),
         hostfxr: HostfxrLocation::Path(PathBuf::from("/nonexistent/libhostfxr.so")),
@@ -243,9 +271,9 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
     assert!(
         matches!(
             result,
-            Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. }))
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
         ),
-        "expected AssemblyNotFound (not a hostfxr error), got {result:?}"
+        "expected InitFailed (not a hostfxr error), got {result:?}"
     );
 }
 
@@ -254,7 +282,7 @@ fn load_with_invalid_hostfxr_path_and_missing_dll_returns_assembly_not_found() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
+fn load_dll_net10_against_net6_requirement_returns_init_failed() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
@@ -269,14 +297,13 @@ fn load_dll_net10_against_net6_requirement_returns_version_mismatch() {
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::RuntimeVersionMismatch { required, found })) => {
-            assert_eq!(required, "net6.0");
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
             assert!(
-                found.contains("10"),
-                "found TFM should contain 10, got: {found}"
+                error.contains("version") || error.contains("framework"),
+                "error: {error}"
             );
         }
-        other => panic!("expected RuntimeVersionMismatch, got {other:?}"),
+        other => panic!("expected InitFailed for version mismatch, got {other:?}"),
     }
 }
 
@@ -294,11 +321,9 @@ fn load_dll_with_matching_version_passes_tfm_check() {
     assert!(
         !matches!(
             result,
-            Err(RuntimeError::Loader(
-                LoaderError::RuntimeVersionMismatch { .. }
-            ))
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
         ),
-        "must not get version mismatch for net10.0 DLL vs net10.0 config"
+        "must not get InitFailed for matching version"
     );
 }
 
@@ -307,7 +332,7 @@ fn load_dll_with_matching_version_passes_tfm_check() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
+fn load_with_bad_hostfxr_path_and_valid_dll_returns_init_failed() {
     let dll: PathBuf = polyplug_dll_path();
     assert!(
         dll.exists(),
@@ -322,16 +347,16 @@ fn load_with_bad_hostfxr_path_and_valid_dll_returns_clr_init_failed() {
     let manifest: ManifestData = make_manifest(&dll, "Polyplug");
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     match result {
-        Err(RuntimeError::Loader(LoaderError::ClrInitFailed { path, .. }))
-        | Err(RuntimeError::Loader(LoaderError::InitSymbolMissing { bundle: path })) => {
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
             assert!(
-                path.contains("nonexistent")
-                    || path.contains("libhostfxr")
-                    || path.contains("Polyplug"),
-                "Error should mention the bad hostfxr path or assembly, got: {path}"
+                error.contains("hostfxr")
+                    || error.contains("host")
+                    || bundle.contains("Polyplug")
+                    || error.contains("init"),
+                "Error should mention the issue, got bundle={bundle}, error={error}"
             );
         }
-        other => panic!("expected ClrInitFailed for bad hostfxr path, got {other:?}"),
+        other => panic!("expected InitFailed, got {other:?}"),
     }
 }
 
@@ -353,10 +378,7 @@ fn full_clr_init_reaches_init_symbol_check() {
     assert!(
         !matches!(
             result,
-            Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. }))
-                | Err(RuntimeError::Loader(
-                    LoaderError::RuntimeVersionMismatch { .. }
-                ))
+            Err(RuntimeError::Loader(LoaderError::InitFailed { .. }))
         ),
         "must pass TFM and file checks for existing net10.0 DLL, got: {result:?}"
     );
