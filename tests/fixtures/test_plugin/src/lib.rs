@@ -41,6 +41,28 @@ extern "C" fn plugin_add(args: *const (), out: *mut ()) -> AbiError {
     abi_error_ok()
 }
 
+// ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
+
+/// Stub create_instance for test plugin - returns null instance.
+///
+/// # Safety
+/// Test plugins don't need real instances; dispatch uses global state.
+unsafe extern "C" fn create_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for test plugin - no cleanup needed.
+///
+/// # Safety
+/// Test plugins don't own instance data.
+unsafe extern "C" fn destroy_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {}
+
 // ─── Static VTable ────────────────────────────────────────────────────────────
 
 /// Wrapper for a function pointer stored in a static vtable array.
@@ -60,13 +82,14 @@ unsafe impl Sync for FnPtr {}
 static TEST_ADD_FNS: [FnPtr; 1] = [FnPtr(plugin_add as *const ())];
 
 static TEST_ADD_INTERFACE: PluginInterface = PluginInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: TEST_ADD_CONTRACT_ID,
-    contract_version: 1_u32 << 16, // minor=1, patch=0
-    function_count: 1,
+    contract_id: GuestContractId::from_u64(TEST_ADD_CONTRACT_ID),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
+    create_instance: create_instance_stub,
+    destroy_instance: destroy_instance_stub,
     dispatch: PluginDispatch {
         native: NativeDispatch {
+            function_count: 1,
             functions: TEST_ADD_FNS.as_ptr() as *const *const (),
         },
     },
@@ -81,9 +104,7 @@ static TEST_ADD_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"test.add".as_ptr(),
         len: 8,
     },
-    version_major: 1,
-    version_minor: 0,
-    version_patch: 0,
+    version: Version { major: 1, minor: 0, patch: 0 },
 };
 
 // ─── ABI Exports ─────────────────────────────────────────────────────────────
@@ -127,10 +148,10 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
     let host: &HostVTable = unsafe { &*host_vtable };
 
-    // SAFETY: register_plugin is a valid function pointer set by the host.
+    // SAFETY: register_contract is a valid function pointer set by the host.
     // TEST_ADD_DESCRIPTOR and TEST_ADD_INTERFACE are 'static.
     unsafe {
-        (host.register_plugin)(
+        (host.register_contract)(
             rt_ctx,
             &TEST_ADD_DESCRIPTOR as *const PluginDescriptor,
             &TEST_ADD_INTERFACE as *const PluginInterface,

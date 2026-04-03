@@ -21,7 +21,11 @@ pub use runtime::{Compatibility, RuntimeConfig, ReloadPhaseData, ReloadPhaseType
 
 // ─── Type exports ───────────────────────────────────────────────────────────
 
-pub use types::AbiErrorCode;
+pub use types::{AbiError, AbiErrorCode, StringView, Version};
+
+// ─── Dispatch exports ────────────────────────────────────────────────────────
+
+pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch};
 
 // ─── FFI Helper Function exports ────────────────────────────────────────────
 
@@ -30,6 +34,10 @@ pub use types::{abi_error_ok, string_view_null, string_view_from_static};
 // ─── New exports from guest module ───────────────────────────────────────────
 
 pub use guest::{GuestContractInterface, GuestContractInstance};
+
+// ─── ID type re-exports (from polyplug_utils) ──────────────────────────────────
+
+pub use polyplug_utils::GuestContractId;
 
 // ─── New exports from host module ────────────────────────────────────────────
 
@@ -44,6 +52,10 @@ pub type PluginInterface = GuestContractInterface;
 /// Legacy alias for RuntimeAbi during transition.
 /// Will be removed in Phase 6.
 pub type HostVTable = RuntimeAbi;
+
+/// Legacy alias for DispatchMechanisms during transition.
+/// Will be removed in Phase 6.
+pub type PluginDispatch = DispatchMechanisms;
 
 pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
 

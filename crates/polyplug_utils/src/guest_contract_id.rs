@@ -24,7 +24,7 @@ impl GuestContractId {
     /// Create a GuestContractId from a raw u64.
     ///
     /// This is used when receiving contract IDs from the ABI boundary.
-    pub fn from_u64(id: u64) -> Self {
+    pub const fn from_u64(id: u64) -> Self {
         Self(id)
     }
 }

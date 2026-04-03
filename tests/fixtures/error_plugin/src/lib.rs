@@ -68,7 +68,7 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
     unsafe {
         core::ptr::copy_nonoverlapping(msg.as_ptr(), ptr, len);
         let abi_error: AbiError = AbiError {
-            code: unsafe { core::mem::transmute(99_u32) },
+            code: core::mem::transmute(99_u32),
             message: StringView {
                 ptr: ptr as *const u8,
                 len,
@@ -115,9 +115,9 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: host.find_by_contract is a valid function pointer set by the host runtime.
     let plugin: PluginHandle =
         unsafe { (host.find_by_contract)(chain_args.rt_ctx, chain_args.target_contract_id, 0_u32) };
-    // SAFETY: host.resolve_plugin returns a 'static PluginInterface pointer for the handle.
+    // SAFETY: host.resolve_contract returns a 'static PluginInterface pointer for the handle.
     let iface_ptr: *const PluginInterface =
-        unsafe { (host.resolve_plugin)(chain_args.rt_ctx, plugin) };
+        unsafe { (host.resolve_contract)(chain_args.rt_ctx, plugin) };
     // Dispatch through the interface if non-null and fn_id is in range.
     let inner_result: AbiError = if iface_ptr.is_null() {
         AbiError {
@@ -127,7 +127,9 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     } else {
         // SAFETY: iface_ptr is 'static and non-null.
         let iface: &PluginInterface = unsafe { &*iface_ptr };
-        if chain_args.target_fn_id >= iface.function_count {
+        // SAFETY: Access union field based on dispatch_type == Native
+        let function_count = unsafe { iface.dispatch.native.function_count };
+        if chain_args.target_fn_id >= function_count {
             AbiError {
                 code: AbiErrorCode::FunctionNotAvailable,
                 message: string_view_null(),
@@ -152,6 +154,28 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     unsafe { (out as *mut AbiError).write(inner_result) };
     abi_error_ok()
 }
+
+// ─── Instance lifecycle (stub for test plugin) ────────────────────────────────
+
+/// Stub create_instance for test plugin - returns null instance.
+///
+/// # Safety
+/// Test plugins don't need real instances; dispatch uses global state.
+unsafe extern "C" fn create_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for test plugin - no cleanup needed.
+///
+/// # Safety
+/// Test plugins don't own instance data.
+unsafe extern "C" fn destroy_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {}
 
 // ─── Static VTable ────────────────────────────────────────────────────────────
 
@@ -178,13 +202,14 @@ static ERROR_TEST_FNS: [FnPtr; 3] = [
 ];
 
 static ERROR_TEST_INTERFACE: PluginInterface = PluginInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: ERROR_TEST_CONTRACT_ID,
-    contract_version: 1_u32 << 16,
-    function_count: 3,
+    contract_id: GuestContractId::from_u64(ERROR_TEST_CONTRACT_ID),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
+    create_instance: create_instance_stub,
+    destroy_instance: destroy_instance_stub,
     dispatch: PluginDispatch {
         native: NativeDispatch {
+            function_count: 3,
             functions: ERROR_TEST_FNS.as_ptr() as *const *const (),
         },
     },
@@ -199,9 +224,7 @@ static ERROR_TEST_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
         ptr: b"error.test".as_ptr(),
         len: 10,
     },
-    version_major: 1,
-    version_minor: 0,
-    version_patch: 0,
+    version: Version { major: 1, minor: 0, patch: 0 },
 };
 
 // ─── ABI Exports ─────────────────────────────────────────────────────────────
@@ -240,10 +263,10 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
     let host: &HostVTable = unsafe { &*host_vtable };
 
-    // SAFETY: register_plugin is a valid function pointer set by the host.
+    // SAFETY: register_contract is a valid function pointer set by the host.
     // ERROR_TEST_DESCRIPTOR and ERROR_TEST_INTERFACE are 'static.
     unsafe {
-        (host.register_plugin)(
+        (host.register_contract)(
             rt_ctx,
             &ERROR_TEST_DESCRIPTOR as *const PluginDescriptor,
             &ERROR_TEST_INTERFACE as *const PluginInterface,
