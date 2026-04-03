@@ -148,9 +148,12 @@ fn dotnet_loader_load_nonexistent_dll_errors() {
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
     match result {
-        Err(RuntimeError::Loader(LoaderError::AssemblyNotFound { .. })) => {}
-        Err(RuntimeError::Loader(LoaderError::ClrInitFailed { .. })) => {}
-        other => panic!("expected AssemblyNotFound or ClrInitFailed for dummy.dll, got: {other:?}"),
+        // .NET loader returns InitFailed for assembly not found or CLR init failures
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert_eq!(bundle, "dummy");
+            assert!(!error.is_empty(), "error message should describe the failure");
+        }
+        other => panic!("expected InitFailed for dummy.dll, got: {other:?}"),
     }
 }
 
@@ -177,10 +180,12 @@ fn python_loader_loads_nonexistent_file_errors() {
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
     match result {
-        // Python loader is fully implemented — loading a non-existent file returns
-        // PythonModuleImportFailed (path does not exist or is not accessible).
-        Err(RuntimeError::Loader(LoaderError::PythonModuleImportFailed { .. })) => {}
-        other => panic!("expected PythonModuleImportFailed for dummy.py, got: {other:?}"),
+        // Python loader returns InitFailed for import errors (file not found or not accessible).
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert_eq!(bundle, "dummy");
+            assert!(!error.is_empty(), "error message should describe the failure");
+        }
+        other => panic!("expected InitFailed for dummy.py, got: {other:?}"),
     }
 }
 
@@ -207,8 +212,12 @@ fn lua_loader_returns_error_for_missing_file() {
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &rt);
     match result {
-        Err(RuntimeError::Loader(LoaderError::LuaScriptLoadFailed { .. })) => {}
-        other => panic!("expected LuaScriptLoadFailed for missing file, got: {other:?}"),
+        // Lua loader returns InitFailed for script load failures (file not found).
+        Err(RuntimeError::Loader(LoaderError::InitFailed { bundle, error })) => {
+            assert_eq!(bundle, "dummy");
+            assert!(!error.is_empty(), "error message should describe the failure");
+        }
+        other => panic!("expected InitFailed for missing file, got: {other:?}"),
     }
 }
 
