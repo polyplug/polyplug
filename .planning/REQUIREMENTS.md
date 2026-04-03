@@ -11,7 +11,7 @@
 - [x] **ERR-02**: Remove `LuaVmInitFailed`, `LuaScriptLoadFailed`, `LuaInitFunctionMissing`, `LuaInitRaisedError` from core `LoaderError` — move to `polyplug_lua`
 - [x] **ERR-03**: Remove `RolldownNotFound`, `JsRuntimePanic`, `JsRuntimeInitFailed`, `ModuleResolutionFailed`, `JsExecutionFailed` from core `LoaderError` — move to `polyplug_js`
 - [x] **ERR-04**: Remove `HostfxrNotFound`, `ClrInitFailed`, `AssemblyNotFound`, `RuntimeVersionMismatch`, `InvalidFrameworkVersion` from core `LoaderError` — move to `polyplug_dotnet`
-- [ ] **ERR-05**: Ensure each loader crate exports its own error type (e.g., `PythonLoaderError`, `LuaLoaderError`)
+- [x] **ERR-05**: Ensure each loader crate exports its own error type (e.g., `PythonLoaderError`, `LuaLoaderError`)
 - [ ] **ERR-06**: Update loader `load()` and `reload()` implementations to use crate-local error types, converting to `RuntimeError::Loader(LoaderError::InitFailed)` for cross-crate boundary
 
 ### Compatibility
@@ -39,7 +39,7 @@ Deferred to future release.
 | ERR-02 | Phase 1 | Complete |
 | ERR-03 | Phase 1 | Complete |
 | ERR-04 | Phase 1 | Complete |
-| ERR-05 | Phase 1 | Pending |
+| ERR-05 | Phase 1 | Complete |
 | ERR-06 | Phase 2 | Pending |
 | COMP-01 | Phase 3 | Pending |
 | COMP-02 | Phase 3 | Pending |

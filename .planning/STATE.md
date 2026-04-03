@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-03T04:56:00.887Z"
+last_updated: "2026-04-03T05:06:41.407Z"
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 80
+  completed_plans: 5
+  percent: 100
 ---
 
 # STATE: polyplug Error Decoupling
@@ -37,7 +37,7 @@ Plan: 4 of 5
 **Phase:** 1 - Define Loader-Local Error Types
 **Plan:** 01-03 (JsLoaderError) — COMPLETE
 **Status:** Executing Phase 01, Plans 01-03 complete
-**Progress:** [████████░░] 80%
+**Progress:** [██████████] 100%
 
 ### Current Plan Context
 
@@ -70,6 +70,7 @@ Plan: 4 of 5
 | Phase 01 P02 | 4 | 2 tasks | 2 files |
 | Phase 01 P03 | 3 | 2 tasks | 2 files |
 | Phase 01 P04 | 2 | 2 tasks | 2 files |
+| Phase 01-define-loader-local-error-types P05 | 6min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,8 @@ Plan: 4 of 5
 - [Phase 01]: JS-specific variants kept identical to core LoaderError for traceability
 - [Phase 01]: LuaLoaderError follows NativeLoaderError pattern exactly; variant names identical to core LoaderError for traceability
 - [Phase 01]: DotnetLoaderError follows NativeLoaderError pattern for consistency
+- [Phase 01]: InitSymbolMissing retained in core - used by both Python and .NET loaders (not loader-specific)
+- [Phase 01]: InitFailed retained as generic catch-all - loaders convert local errors to this variant
 
 ### Active TODOs
 
