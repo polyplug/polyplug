@@ -31,18 +31,21 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 4. All ID types renamed: PluginContractId -> GuestContractId throughout codebase
 5. All public ABI structs are #[repr(C)] and compile successfully
 6. Workspace compiles (cargo build --workspace)
-**Plans:** 9 plans (4 main + 5 gap closure)
+**Plans:** 12 plans (4 main + 8 gap closure)
 
 Plans:
 - [x] 01-01-PLAN.md — Rename PluginContractId to GuestContractId in polyplug_utils
 - [x] 01-02-PLAN.md — Rename/extend core ABI types: PluginInterface->GuestContractInterface, HostVTable->RuntimeAbi, add instance handles
 - [x] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
-- [ ] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
-- [ ] 01-05-PLAN.md — Gap closure: Export AbiErrorCode and helper functions from polyplug_abi root
+- [x] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
+- [x] 01-05-PLAN.md — Gap closure: Export AbiErrorCode and helper functions from polyplug_abi root
 - [ ] 01-06-PLAN.md — Gap closure: Fix deprecated PluginContractId usage in compatibility files
-- [ ] 01-07-PLAN.md — Gap closure: Fix ffi.rs bundle_id type mismatch, verify polyplug compiles
-- [ ] 01-08-PLAN.md — Gap closure: Remove ABI_* constant imports from SDK guest library
-- [ ] 01-09-PLAN.md — Gap closure: Fix fixture AbiError.code usage, verify workspace compiles
+- [x] 01-07-PLAN.md — Gap closure: Fix ffi.rs bundle_id type mismatch, verify polyplug compiles
+- [x] 01-08-PLAN.md — Gap closure: Remove ABI_* constant imports from SDK guest library
+- [x] 01-09-PLAN.md — Gap closure: Fix fixture AbiError.code usage, verify workspace compiles
+- [ ] 01-10-PLAN.md — Gap closure: Fix plugin_interface.rs PluginContractId usage
+- [ ] 01-11-PLAN.md — Gap closure: Fix compatibility/mod.rs test PluginContractId usage
+- [ ] 01-12-PLAN.md — Gap closure: Add serde traits to GuestContractId and BundleId
 
 ### Phase 2: Registry
 **Goal:** Simplified registry stores GuestContractInterface directly without wrappers
@@ -121,7 +124,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. ABI Types | 0/9 | Executing (gap closure) | - |
+| 1. ABI Types | 0/12 | Executing (gap closure) | - |
 | 2. Registry | 0/0 | Not started | - |
 | 3. Instance Model | 0/0 | Not started | - |
 | 4. Hot-Reload | 0/0 | Not started | - |
@@ -158,3 +161,4 @@ Phase 7 (Typed Handles)
 *Phase 1 plans added: 2026-04-03*
 *Gap closure plans added: 2026-04-03*
 *Plans split per checker feedback: 2026-04-03*
+*Additional gap closure plans added: 2026-04-04*
