@@ -21,14 +21,12 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - ✓ Python/Lua/JS/.NET loaders already properly decoupled — each owns its VM state
 - ✓ Loader-local error types defined (Phase 01) — `PythonLoaderError`, `LuaLoaderError`, `JsLoaderError`, `DotnetLoaderError`
 - ✓ Core `LoaderError` stripped of loader-specific variants — only generic Loader variants remain
+- ✓ All loaders use `LoaderError::InitFailed` directly (Phase 02) — language-specific error types removed
+- ✓ Hot-reload returns `RuntimeError::HotReloadDisabled` consistently across all loaders
 
 ### Active
 
-- [ ] Update loader implementations to use crate-local error types (Phase 02)
-  - Python loader: replace core error variants with `PythonLoaderError`
-  - Lua loader: replace core error variants with `LuaLoaderError`
-  - JS loader: replace core error variants with `JsLoaderError`
-  - .NET loader: replace core error variants with `DotnetLoaderError`
+- [ ] Verify compatibility and cross-phase integration (Phase 03)
 
 ### Out of Scope
 
@@ -37,7 +35,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 ## Context
 
-**Active Refactoring:** Phase 01 (define-loader-local-error-types) complete. Each loader crate now has its own error type. Phase 02 (update-loader-implementations) will migrate the loader code to use these crate-local types.
+**Active Work:** Phase 03 (verify-compatibility) — ensure cross-phase integration and build health.
 
 **Completed Phases:**
 1. ✅ Update `BundleLoader` trait (add reload method)
@@ -48,8 +46,9 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 6. ✅ Use newtype IDs (`BundleId`, `PluginContractId`)
 7. ✅ Define loader-local error types — each loader has its own error enum
 8. ✅ Strip loader-specific variants from core `LoaderError`
+9. ✅ Update loader implementations — unified `InitFailed` pattern, removed language-specific error types
 
-**Remaining Work:** Update loader implementations to use crate-local error types (Phase 02).
+**Remaining Work:** Verify compatibility and cross-phase integration.
 
 ## Constraints
 
@@ -67,4 +66,4 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 | Fail-fast on stale pointers | If host caches raw pointers after reload, SIGSEGV is a host bug | ✓ Documented in safety contract |
 
 ---
-*Last updated: 2026-04-03 after Phase 01 completion (loader-local error types defined)*
+*Last updated: 2026-04-03 after Phase 02 completion (loader error unification)*
