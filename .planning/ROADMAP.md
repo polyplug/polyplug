@@ -31,14 +31,14 @@ This roadmap addresses error type decoupling, moving loader-specific error varia
 4. `polyplug_js` crate exports `JsLoaderError` enum with migrated variants
 5. `polyplug_dotnet` crate exports `DotnetLoaderError` enum with migrated variants
 
-**Plans:** 5 plans
+**Plans:** 5 plans (all complete)
 
 Plans:
-- [ ] 01-PLAN.md — Define PythonLoaderError in polyplug_python crate (ERR-01)
-- [ ] 02-PLAN.md — Define LuaLoaderError in polyplug_lua crate (ERR-02)
-- [ ] 03-PLAN.md — Define JsLoaderError in polyplug_js crate (ERR-03)
-- [ ] 04-PLAN.md — Define DotnetLoaderError in polyplug_dotnet crate (ERR-04)
-- [ ] 05-PLAN.md — Strip loader-specific variants from core LoaderError (ERR-01-05 completion)
+- [x] 01-PLAN.md — Define PythonLoaderError in polyplug_python crate (ERR-01) ✓
+- [x] 02-PLAN.md — Define LuaLoaderError in polyplug_lua crate (ERR-02) ✓
+- [x] 03-PLAN.md — Define JsLoaderError in polyplug_js crate (ERR-03) ✓
+- [x] 04-PLAN.md — Define DotnetLoaderError in polyplug_dotnet crate (ERR-04) ✓
+- [x] 05-PLAN.md — Strip loader-specific variants from core LoaderError (ERR-01-05 completion) ✓
 
 ---
 
