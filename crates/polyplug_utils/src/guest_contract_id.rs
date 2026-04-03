@@ -20,6 +20,13 @@ impl GuestContractId {
     pub fn new(name: &str, major_version: u32) -> Self {
         Self(contract_id("guest_contract:", name, major_version))
     }
+
+    /// Create a GuestContractId from a raw u64.
+    ///
+    /// This is used when receiving contract IDs from the ABI boundary.
+    pub fn from_u64(id: u64) -> Self {
+        Self(id)
+    }
 }
 
 impl GuestContractId {

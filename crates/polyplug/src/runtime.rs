@@ -199,6 +199,11 @@ impl Runtime {
         self.host_runtime
     }
 
+    /// Get the warning callback.
+    pub fn warning_cb(&self) -> Option<&WarningCb> {
+        self.warning_cb.as_ref()
+    }
+
     /// Get the RuntimeAbi for use in plugin registrars.
     #[inline(always)]
     pub fn host_vtable(&self) -> &'static RuntimeAbi {
@@ -509,12 +514,32 @@ pub(crate) fn validate_bundle_compatibility(
     Ok(())
 }
 
-fn parse_manifest_version(v: &str, bundle_name: &str) -> Result<Version, RuntimeError> {
+fn parse_manifest_version(v: &str, _bundle_name: &str) -> Result<Version, RuntimeError> {
     if v.is_empty() {
-        Ok(Version { major: 0, minor: 0 })
+        Ok(Version { major: 0, minor: 0, patch: 0 })
     } else {
-        Version::parse(v, bundle_name).map_err(RuntimeError::Loader)
+        // Parse version string "major.minor.patch"
+        let parts: Vec<&str> = v.split('.').collect();
+        let major = parts.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let patch = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        Ok(Version { major, minor, patch })
     }
+}
+
+/// Helper to create a null PluginHandle.
+fn plugin_handle_null() -> PluginHandle {
+    PluginHandle::null()
+}
+
+/// Helper to convert a StringView to an owned String.
+fn string_view_to_string_owned(sv: &polyplug_abi::types::StringView) -> String {
+    if sv.ptr.is_null() || sv.len == 0 {
+        return String::new();
+    }
+    // SAFETY: ptr and len are valid for this StringView
+    let slice = unsafe { core::slice::from_raw_parts(sv.ptr, sv.len) };
+    String::from_utf8_lossy(slice).into_owned()
 }
 
 // ─── HostVTable C ABI callbacks ───────────────────────────────────────────────
@@ -540,9 +565,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
     // during the plugin init call.
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
     let bundle_id: u64 = ctx.bundle_id;
 
@@ -618,7 +641,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     // during the plugin init call.
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
     // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
     let caller_bundle_id: u64 = ctx.bundle_id;
 
@@ -652,7 +675,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     // during the plugin init call.
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
     // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
 
     if out_cap == 0usize {
@@ -678,7 +701,7 @@ pub(crate) unsafe extern "C" fn host_resolve_contract(
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
     // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
 
     match registry.resolve(handle) {
@@ -711,7 +734,7 @@ pub(crate) unsafe extern "C" fn host_call_method(
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
 
     // TODO: Implement cross-dispatch logic. For now, return an error.
     // This will be fully implemented in Phase 3 (Instance Model).
@@ -730,18 +753,21 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     rt_ctx: *mut core::ffi::c_void,
     contract_id: u64,
     min_version: u32,
-) -> *const polyplug_abi::HostContractInterface {
+) -> polyplug_abi::HostContractInstance {
     if rt_ctx.is_null() {
-        return core::ptr::null();
+        return polyplug_abi::HostContractInstance { data: core::ptr::null_mut() };
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    let runtime: &Runtime = unsafe { &*ctx.runtime };
+    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
 
     match runtime.get_host_contract(contract_id, min_version) {
-        Some(vtable) => vtable as *const HostContractInterface,
-        None => core::ptr::null(),
+        Some(_vtable) => {
+            // TODO: Return actual instance - for now return null instance
+            polyplug_abi::HostContractInstance { data: core::ptr::null_mut() }
+        }
+        None => polyplug_abi::HostContractInstance { data: core::ptr::null_mut() },
     }
 }
 

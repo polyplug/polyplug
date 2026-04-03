@@ -21,6 +21,13 @@ impl BundleId {
     pub fn new(name: &str) -> Self {
         Self(fnv1a_64(name.as_bytes()))
     }
+
+    /// Create a BundleId from a raw u64.
+    ///
+    /// This is used when receiving bundle IDs from the ABI boundary.
+    pub fn from_u64(id: u64) -> Self {
+        Self(id)
+    }
 }
 
 impl BundleId {

@@ -261,7 +261,7 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match data.contract_index.get(&GuestContractId::from_u64(contract_id)) {
             Some(v) => v,
             None => {
                 return Err(RegistryError::PluginNotFound {
@@ -279,7 +279,7 @@ impl PluginRegistry {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
                 // SAFETY: VTableSlot.0 points to 'static GuestContractInterface, valid for Registry lifetime.
                 // The pointer is written once at registration and never mutated.
-                let version: u32 = unsafe { (*guard.0).contract_version };
+                let version: u32 = unsafe { (*guard.0).contract_version.major };
                 if version >= min_version {
                     return Ok(PluginHandle {
                         index: slot_idx,
@@ -307,7 +307,7 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let &slot_idx: &u32 = match data.bundle_index.get(&bundle_id) {
+        let &slot_idx: &u32 = match data.bundle_index.get(&BundleId::from_u64(bundle_id)) {
             Some(i) => i,
             None => {
                 return Err(RegistryError::PluginNotFound {
@@ -354,7 +354,7 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match data.contract_index.get(&GuestContractId::from_u64(contract_id)) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -374,7 +374,7 @@ impl PluginRegistry {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
                 // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
                 // Read-only access after registration.
-                let version: u32 = unsafe { (*guard.0).contract_version };
+                let version: u32 = unsafe { (*guard.0).contract_version.major };
                 if version >= min_version {
                     out[write_count] = PluginHandle {
                         index: slot_idx,
@@ -407,7 +407,7 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match data.contract_index.get(&GuestContractId::from_u64(contract_id)) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -427,7 +427,7 @@ impl PluginRegistry {
                 let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
                 // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
                 // Read-only access after registration.
-                let version: u32 = unsafe { (*guard.0).contract_version };
+                let version: u32 = unsafe { (*guard.0).contract_version.major };
                 if version >= min_version {
                     // Pack handle directly: (generation << 32) | index
                     out[write_count] =

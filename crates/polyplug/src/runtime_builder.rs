@@ -171,7 +171,7 @@ impl RuntimeBuilder {
             crate::runtime::validate_bundle_compatibility(
                 &discovered,
                 self.compatibility,
-                runtime.warning_cb.as_ref(),
+                runtime.warning_cb(),
             )?;
 
             // Phase 3: Get topological load order (providers first)

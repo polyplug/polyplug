@@ -152,7 +152,7 @@ impl Runtime {
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Fire Preparing callback
-        if let Some(ref cb) = self.on_reload_cb() {
+        if let Some(cb) = self.on_reload_cb() {
             cb(ReloadPhase::Preparing {
                 bundle_id,
                 bundle_name: manifest.name.clone(),
@@ -167,7 +167,7 @@ impl Runtime {
             Ok(()) => {
                 // Fire Reloaded callback
                 // IMPORTANT: Host must release cached raw pointers NOW!
-                if let Some(ref cb) = self.on_reload_cb() {
+                if let Some(cb) = self.on_reload_cb() {
                     cb(ReloadPhase::Reloaded {
                         bundle_id,
                         bundle_name: manifest.name.clone(),
@@ -177,7 +177,7 @@ impl Runtime {
             }
             Err(e) => {
                 // Fire Failed callback
-                if let Some(ref cb) = self.on_reload_cb() {
+                if let Some(cb) = self.on_reload_cb() {
                     cb(ReloadPhase::Failed {
                         bundle_id,
                         bundle_name: manifest.name.clone(),
