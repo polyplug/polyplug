@@ -74,20 +74,24 @@ impl BundleLoader for PythonLoader {
         };
 
         if !bundle_path.exists() {
-            return Err(RuntimeError::Loader(
-                LoaderError::PythonModuleImportFailed {
-                    path: bundle_path.to_string_lossy().into_owned(),
-                    reason: "file does not exist".to_owned(),
-                },
-            ));
+            return Err(RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "failed to import Python module at {}: file does not exist",
+                    bundle_path.to_string_lossy()
+                ),
+            }));
         }
 
         ensure_python_initialized(&self.config)?;
 
         let abs_path: std::path::PathBuf = bundle_path.canonicalize().map_err(|_| {
-            RuntimeError::Loader(LoaderError::PythonModuleImportFailed {
-                path: bundle_path.to_string_lossy().into_owned(),
-                reason: "path does not exist or is not accessible".to_owned(),
+            RuntimeError::Loader(LoaderError::InitFailed {
+                bundle: manifest.name.clone(),
+                error: format!(
+                    "failed to canonicalize Python module path {}: path does not exist or is not accessible",
+                    bundle_path.to_string_lossy()
+                ),
             })
         })?;
 
@@ -117,24 +121,24 @@ impl BundleLoader for PythonLoader {
             // Step 3a: Prepend bundle directory (and site-packages) to sys.path.
             let sys_mod: pyo3::Bound<'_, PyModule> =
                 PyModule::import(py, "sys").map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::PythonInitRaisedException {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        message: e.to_string(),
+                        error: format!("Python sys import failed: {}", e),
                     })
                 })?;
             let sys_path: pyo3::Bound<'_, pyo3::PyAny> =
                 sys_mod.getattr("path").map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::PythonInitRaisedException {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        message: e.to_string(),
+                        error: format!("Python sys.path get failed: {}", e),
                     })
                 })?;
             sys_path
                 .call_method1("insert", (0usize, bundle_dir_str.as_str()))
                 .map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::PythonInitRaisedException {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        message: e.to_string(),
+                        error: format!("sys.path insert failed: {}", e),
                     })
                 })?;
             let site_pkgs: std::path::PathBuf = bundle_dir.join("site-packages");
@@ -143,61 +147,78 @@ impl BundleLoader for PythonLoader {
                 sys_path
                     .call_method1("insert", (0usize, sp.as_str()))
                     .map_err(|e: pyo3::PyErr| {
-                        RuntimeError::Loader(LoaderError::PythonInitRaisedException {
+                        RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: bundle_name.clone(),
-                            message: e.to_string(),
+                            error: format!("site-packages path insert failed: {}", e),
                         })
                     })?;
             }
             // Step 3b: Import via importlib (no further sys.path mutation).
             let importlib_util: pyo3::Bound<'_, PyModule> = PyModule::import(py, "importlib.util")
                 .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::PythonModuleImportFailed {
-                        path: abs_path.to_string_lossy().into_owned(),
-                        reason: e.to_string(),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "importlib.util import failed: {}",
+                            e
+                        ),
                     })
                 })?;
 
             let spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
                 .getattr("spec_from_file_location")
                 .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::PythonInitFailed {
-                        reason: format!("spec_from_file_location not found: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!("spec_from_file_location not found: {}", e),
                     })
                 })?
                 .call1((&bundle_name, abs_path.to_string_lossy().as_ref()))
                 .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::PythonModuleImportFailed {
-                        path: abs_path.to_string_lossy().into_owned(),
-                        reason: e.to_string(),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "spec_from_file_location call failed for {}: {}",
+                            abs_path.to_string_lossy(),
+                            e
+                        ),
                     })
                 })?;
 
             let module_from_spec: pyo3::Bound<'_, pyo3::PyAny> = importlib_util
                 .getattr("module_from_spec")
                 .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::PythonInitFailed {
-                        reason: format!("module_from_spec not found: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!("module_from_spec not found: {}", e),
                     })
                 })?
                 .call1((&spec,))
                 .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::PythonModuleImportFailed {
-                        path: abs_path.to_string_lossy().into_owned(),
-                        reason: e.to_string(),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "module_from_spec call failed for {}: {}",
+                            abs_path.to_string_lossy(),
+                            e
+                        ),
                     })
                 })?;
 
             // Step 3b: Execute the module.
             spec.getattr("loader")
                 .and_then(|loader: pyo3::Bound<'_, pyo3::PyAny>| loader.getattr("exec_module"))
-                .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny>| {
+                .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny| {
                     exec_module.call1((&module_from_spec,))
                 })
                 .map_err(|e| {
-                    RuntimeError::Loader(LoaderError::PythonModuleImportFailed {
-                        path: abs_path.to_string_lossy().into_owned(),
-                        reason: format!("exec_module failed: {e}"),
+                    RuntimeError::Loader(LoaderError::InitFailed {
+                        bundle: bundle_name.clone(),
+                        error: format!(
+                            "exec_module failed for {}: {}",
+                            abs_path.to_string_lossy(),
+                            e
+                        ),
                     })
                 })?;
 
@@ -228,9 +249,9 @@ impl BundleLoader for PythonLoader {
             init_fn
                 .call((rt_ctx_i64, host_vtable_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| {
-                    RuntimeError::Loader(LoaderError::PythonInitRaisedException {
+                    RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
-                        message: e.to_string(),
+                        error: format!("polyplug_init call failed: {}", e),
                     })
                 })?;
 
