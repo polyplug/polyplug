@@ -11,6 +11,8 @@ pub mod runtime;
 pub mod runtime_builder;
 mod runtime_config;
 
-pub use reload::ReloadEvent;
-pub use reload::ReloadPhase;
-pub use runtime_config::RuntimeConfig;
+// Import from polyplug_abi (moved in Phase 01-03)
+pub use polyplug_abi::runtime::{RuntimeConfig, Compatibility};
+
+// Keep ReloadPhase and ReloadEvent exports (internal Rust types)
+pub use reload::{ReloadPhase, ReloadEvent};
