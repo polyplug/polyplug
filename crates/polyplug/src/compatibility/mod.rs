@@ -17,7 +17,7 @@ mod tests {
     use std::path::PathBuf;
 
     use polyplug_abi::types::Version;
-    use polyplug_utils::{BundleId, PluginContractId};
+    use polyplug_utils::{BundleId, GuestContractId};
 
     use crate::compatibility::bundle_node::BundleNode;
     use crate::compatibility::capability_graph::CapabilityGraph;
@@ -125,8 +125,8 @@ mod tests {
 
     #[test]
     fn from_manifests_chain_order() {
-        let cid_x = PluginContractId::new("contract.X", 1);
-        let cid_y = PluginContractId::new("contract.Y", 1);
+        let cid_x = GuestContractId::new("contract.X", 1);
+        let cid_y = GuestContractId::new("contract.Y", 1);
 
         let dep_b: RawManifestDependency = RawManifestDependency {
             kind: "contract".to_owned(),
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn from_manifests_bybundle_missing_fails() {
-        let cid_x = PluginContractId::new("contract.X", 1);
+        let cid_x = GuestContractId::new("contract.X", 1);
 
         let dep_b: RawManifestDependency = RawManifestDependency {
             kind: "bundle".to_owned(),
