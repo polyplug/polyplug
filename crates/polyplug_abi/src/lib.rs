@@ -8,11 +8,16 @@ pub mod ffi;
 pub mod guest;
 pub mod host;
 pub mod plugin;
+pub mod runtime;
 mod runtime_language;
 pub mod tracking;
 pub mod types;
 
 pub use runtime_language::RuntimeLanguage;
+
+// ─── Runtime exports ──────────────────────────────────────────────────────────
+
+pub use runtime::{Compatibility, RuntimeConfig, ReloadPhaseData, ReloadPhaseType};
 
 // ─── New exports from guest module ───────────────────────────────────────────
 
