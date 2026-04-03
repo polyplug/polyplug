@@ -16,9 +16,11 @@
 pub mod bridge;
 pub mod config;
 pub(crate) mod context;
+pub mod error;
 pub mod ffi;
 pub use bridge::PythonHostBridge;
 pub use config::PythonConfig;
+pub use error::PythonLoaderError;
 
 use std::path::Path;
 
@@ -236,5 +238,13 @@ impl BundleLoader for PythonLoader {
 
             Ok(())
         })
+    }
+
+    fn reload(
+        &self,
+        _manifest: &ManifestData,
+        _runtime: &Runtime,
+    ) -> Result<(), polyplug::error::RuntimeError> {
+        Err(polyplug::error::RuntimeError::HotReloadDisabled)
     }
 }
