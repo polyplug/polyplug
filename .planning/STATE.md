@@ -65,6 +65,7 @@ progress:
 | 2026-04-03 | call_method for cross-dispatch | Plugin-plugin across different dispatch types |
 | 2026-04-03 | GuestContractInstance/HostContractInstance opaque handles | Type-safe instance handles, not bare pointers |
 | 2026-04-03 | Manifest parsing stays in core | Move TOML dependency later, not blocking this milestone |
+| 2026-04-03 | GuestContractId hash prefix: "guest_contract:" | Consistent naming with Guest/Host terminology (breaking change) |
 
 ### Active TODOs
 

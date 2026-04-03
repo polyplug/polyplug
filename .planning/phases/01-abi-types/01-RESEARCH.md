@@ -370,27 +370,18 @@ pub struct VmDispatch {
 
 **Missing dependencies with fallback:** None - this phase is pure code/config changes.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **GuestContractId hash prefix**
-   - What we know: PluginContractId uses `"plugin_contract:"` prefix
-   - What's unclear: Should GuestContractId use `"guest_contract:"` or keep `"plugin_contract:"`?
-   - Recommendation: Keep `"plugin_contract:"` prefix to avoid breaking existing contract ID values. The rename is semantic, not ABI-breaking.
+1. **GuestContractId hash prefix** — RESOLVED: Use `"guest_contract:"` prefix for naming consistency.
+   - Original: PluginContractId uses `"plugin_contract:"` prefix
+   - Decision: Change to `"guest_contract:"` for consistent Guest/Host terminology
+   - Impact: BREAKING CHANGE - existing contract IDs will have different hash values
 
-2. **ReloadPhase FFI representation**
-   - What we know: Current enum has String fields, cannot cross FFI
-   - What's unclear: Should we create a separate FFI-safe struct or redesign the enum?
-   - Recommendation: Create `ReloadPhaseData` struct with `StringView` fields, keep `ReloadPhase` enum for Rust internal use.
+2. **ReloadPhase FFI representation** — RESOLVED: Create `ReloadPhaseData` struct with `StringView` fields, keep `ReloadPhase` enum for Rust internal use.
 
-3. **RuntimeCreateOptions type**
-   - What we know: Mentioned in requirements (ABI-07) but not defined in codebase
-   - What's unclear: Is this a new type or just the builder pattern options?
-   - Recommendation: Likely the builder options struct - verify with context.
+3. **RuntimeCreateOptions type** — RESOLVED: Type does not exist in current codebase. ABI-07 deferred.
 
-4. **HostContractVTable placement**
-   - What we know: Documented in docs/HOST_CONTRACTS_API.md but not in code
-   - What's unclear: Should these types be in `polyplug_abi/src/host/` or separate module?
-   - Recommendation: Create in `polyplug_abi/src/host/host_contract_vtable.rs` alongside host_vtable.rs.
+4. **HostContractVTable placement** — RESOLVED: Create in `polyplug_abi/src/host/host_contract_vtable.rs` alongside host_vtable.rs.
 
 ## Phase Requirements Map
 
