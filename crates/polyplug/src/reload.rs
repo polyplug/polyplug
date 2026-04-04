@@ -2,10 +2,24 @@
 //!
 //! Provides:
 //! - `ReloadPhase` enum for notification callbacks
-//! - Callback-based notification for host to destroy instances
+//! - Warning check for potential instance leaks after Preparing callback
+//! - Explicit interface swap after init succeeds
 //!
-//! Each loader implements its own `reload()` method using these notifications.
+//! Hot-reload flow (callback-based model):
+//! 1. Fire `ReloadPhase::Preparing` — host destroys all instances here
+//! 2. Check Arc::strong_count — emit warning if refs remain (informational only)
+//! 3. Call loader.reload() — load new library, init (registers new interfaces)
+//! 4. Swap interfaces — for each slot, find new interface and swap atomically
+//! 5. Fire `ReloadPhase::Reloaded` — host can create new instances
+//!
+//! If init fails: Fire `ReloadPhase::Failed`, no interface swap.
+//!
+//! Safety contract: Host MUST destroy all instances in Preparing callback.
+//! Runtime emits warning if instances may remain but proceeds with reload.
 
+use std::sync::Arc;
+
+use polyplug_abi::guest::GuestContractInterface;
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::{RuntimeError};
@@ -17,14 +31,21 @@ use crate::runtime::Runtime;
 /// Phase of a hot-reload operation for notification callbacks.
 #[derive(Debug, Clone)]
 pub enum ReloadPhase {
-    /// Bundle is being prepared for reload (before vtable swap).
+    /// Bundle is being prepared for reload (before interface swap).
+    ///
+    /// **Host MUST destroy all instances in this callback.**
+    /// After callback returns, runtime proceeds with reload regardless.
+    /// If instances remain, runtime emits warning (undefined behavior risk).
     Preparing {
         bundle_id: BundleId,
         bundle_name: String,
         retry_count: u32,
     },
     /// Bundle has been successfully reloaded.
-    /// Host MUST release all cached raw pointers NOW.
+    ///
+    /// Interface swap completed. Host can now create new instances
+    /// using updated interfaces. Previous instances were destroyed
+    /// in Preparing callback.
     Reloaded {
         bundle_id: BundleId,
         bundle_name: String,
@@ -89,6 +110,9 @@ impl Runtime {
 
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
+        // Store slot indices before reload (for warning check and interface swap)
+        let slot_indices: Vec<u32> = self.registry.find_slots_by_bundle(bundle_id);
+
         // Fire Preparing callback
         if let Some(cb) = self.on_reload_cb() {
             cb(ReloadPhase::Preparing {
@@ -98,13 +122,56 @@ impl Runtime {
             });
         }
 
-        // Call loader's reload()
+        // ─── Warning Check: Informational only, not blocking ─────────────────────────────
+        // Check Arc::strong_count after Preparing callback returned.
+        // If > 1, host may not have destroyed all instances - emit UB warning.
+        for slot_idx in &slot_indices {
+            if let Some(arc) = self.registry.get_interface_arc(*slot_idx) {
+                if Arc::strong_count(&arc) > 1 {
+                    self.emit_warning(&format!(
+                        "Potential UB: Arc refs still exist for bundle '{}' after Preparing callback. \
+                         Host may not have destroyed all instances. Proceeding with reload anyway.",
+                        manifest.name
+                    ));
+                    // Only emit once per bundle, not per slot
+                    break;
+                }
+            }
+        }
+
+        // Call loader's reload() - this does load+init, registering new interfaces
         let result: Result<(), crate::error::RuntimeError> = loader.reload(&manifest, self);
 
         match result {
             Ok(()) => {
+                // ─── Swap interfaces after init succeeds (HR-05) ───────────────────────────────
+                // New interfaces were registered during init inside loader.reload()
+                // For each slot, find the NEW interface by contract_id and swap
+                for slot_idx in &slot_indices {
+                    // Get contract_id for this slot (stable across reload)
+                    let contract_id: GuestContractId = self.registry
+                        .get_slot_contract_id(*slot_idx)
+                        .ok_or_else(|| RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
+                            index: *slot_idx
+                        }))?;
+
+                    // Find NEW interface handle (registered during init)
+                    // find_by_contract returns handle pointing to NEW registration
+                    let new_handle: polyplug_abi::plugin::PluginHandle = self.registry
+                        .find_by_contract(contract_id, 0)?;
+
+                    // Get Arc to NEW interface
+                    let new_interface: Arc<GuestContractInterface> = self.registry
+                        .get_interface_arc(new_handle.index)
+                        .ok_or_else(|| RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
+                            index: new_handle.index
+                        }))?;
+
+                    // Atomic swap - old slot now points to new interface
+                    self.registry.swap_interface(*slot_idx, new_interface)?;
+                }
+
                 // Fire Reloaded callback
-                // IMPORTANT: Host must release cached raw pointers NOW!
                 if let Some(cb) = self.on_reload_cb() {
                     cb(ReloadPhase::Reloaded {
                         bundle_id,
@@ -114,7 +181,7 @@ impl Runtime {
                 Ok(())
             }
             Err(e) => {
-                // Fire Failed callback
+                // Fire Failed callback - NO interface swap on failure
                 if let Some(cb) = self.on_reload_cb() {
                     cb(ReloadPhase::Failed {
                         bundle_id,
