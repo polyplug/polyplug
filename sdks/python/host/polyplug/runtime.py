@@ -431,47 +431,6 @@ def _create_backend(lib_path: str) -> Backend:
     return CTypesBackend(lib_path)
 
 
-class PluginGuard:
-    """Guard for a resolved plugin handle.
-
-    Holds a ref-counted ResolveHandle that keeps the vtable alive.
-    Must call reset() or let __del__ release the handle.
-    """
-
-    def __init__(self, backend: Backend, resolve_handle: int) -> None:
-        self._backend: Backend = backend
-        self._handle: int = resolve_handle
-
-    @property
-    def vtable(self) -> int:
-        """Return the vtable pointer from the ResolveHandle.
-
-        The first field of ResolveHandle is the vtable pointer.
-        """
-        if self._handle == 0:
-            return 0
-        import ctypes
-
-        # ResolveHandle's first field is the vtable pointer (as PluginInterface*)
-        return (
-            ctypes.cast(self._handle, ctypes.POINTER(ctypes.c_void_p)).contents.value
-            or 0
-        )
-
-    def is_null(self) -> bool:
-        """Return True if this guard is null."""
-        return self._handle == 0
-
-    def reset(self) -> None:
-        """Release the handle."""
-        if self._handle != 0:
-            self._backend.release_plugin(self._handle)
-            self._handle = 0
-
-    def __del__(self) -> None:
-        self.reset()
-
-
 def _last_error(backend: Backend) -> str:
     msg_len: int = backend.error_message_len()
     if msg_len == 0:
@@ -685,12 +644,44 @@ class Runtime:
                     return [int(out[i]) for i in range(count)]
             cap = cap * 2
 
-    def resolve_plugin(self, packed_handle: int) -> PluginGuard:
+    def resolve_plugin(self, packed_handle: int) -> int:
+        """Resolve a packed handle to a raw resolve_handle.
+
+        Returns the raw resolve_handle (int) that can be used to access
+        the plugin interface. The caller is responsible for calling
+        release_plugin(handle) when done, especially before hot-reload.
+
+        NOTE: In the instance-based model, callers should:
+        1. Get the interface via resolve_plugin (returns raw handle)
+        2. Use create_instance/destroy_instance for stateful access
+        3. Call release_plugin when done with the handle
+
+        Args:
+            packed_handle: The packed handle from find_by_contract.
+
+        Returns:
+            Raw resolve_handle (int) for the plugin.
+
+        Raises:
+            RuntimeError: If packed_handle is null or resolution fails.
+        """
         if packed_handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
         runtime_ptr: int = self._ensure_runtime()
         resolve_handle: int = self._backend.resolve_plugin(runtime_ptr, packed_handle)
-        return PluginGuard(self._backend, resolve_handle)
+        return resolve_handle
+
+    def release_plugin(self, resolve_handle: int) -> None:
+        """Release a resolve_handle obtained from resolve_plugin.
+
+        Must be called when the caller is done with the handle,
+        especially before hot-reload to avoid stale references.
+
+        Args:
+            resolve_handle: The raw handle from resolve_plugin.
+        """
+        if resolve_handle != 0:
+            self._backend.release_plugin(resolve_handle)
 
     def get_extension(self, extension_id: int) -> None:
         _ = extension_id
