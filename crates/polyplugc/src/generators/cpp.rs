@@ -359,7 +359,7 @@ fn generate_cpp_guest_plugin_vtable(
     out.push_str("}\n\n");
 
     out.push_str(&format!(
-        "static PluginInterface {}_VTABLE = {{\n",
+        "static GuestContractInterface {}_VTABLE = {{\n",
         plugin_upper
     ));
     out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
@@ -442,7 +442,7 @@ fn generate_cpp_guest_contract_vtable(
     out.push_str("}\n\n");
 
     // VTable static
-    out.push_str(&format!("static PluginInterface {}_VTABLE = {{\n", upper));
+    out.push_str(&format!("static GuestContractInterface {}_VTABLE = {{\n", upper));
     out.push_str(&format!("    {}_CONTRACT_ID,\n", upper));
     out.push_str(&format!(
         "    {}U,  // contract_version: (minor << 16) | patch\n",
@@ -670,7 +670,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(void* rt_ctx, const HostVTable* host, const PluginContext* ctx) {\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(void* rt_ctx, const RuntimeAbi* host, const PluginContext* ctx) {\n");
     out.push_str("    if (!rt_ctx || !host || !ctx) {\n");
     out.push_str(
         "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
@@ -679,7 +679,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         "        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
     );
     out.push_str("    }\n\n");
-    out.push_str("    // Store host vtable for later access via polyplug::get_host_vtable()\n");
+    out.push_str("    // Store host vtable for later access via polyplug::get_host_interface()\n");
     out.push_str("    polyplug::store_host_vtable(host);\n\n");
 
     if let Some(bundle) = &ir.bundle {
@@ -722,7 +722,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             out.push_str("    };\n");
 
             out.push_str(&format!(
-                "    AbiError err_{upper} = host->register_plugin(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+                "    AbiError err_{upper} = host->register_contract(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
                 upper = plugin_upper
             ));
             out.push_str(&format!(
@@ -781,7 +781,7 @@ fn generate_init_hpp_register_contract(
     out.push_str("    };\n");
 
     out.push_str(&format!(
-        "    AbiError err_{upper} = host->register_plugin(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+        "    AbiError err_{upper} = host->register_contract(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
         upper = upper
     ));
     out.push_str(&format!(
@@ -1144,7 +1144,7 @@ fn generate_cpp_host_function(
         None | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Void))
     );
 
-    out.push_str("        const PluginInterface* vtable = guard_.vtable();\n");
+    out.push_str("        const PluginInterface* vtable = guard_.interface();\n");
     out.push_str("        if (!vtable) {\n");
     out.push_str("            static constexpr const char* err_msg = \"vtable is null\";\n");
     out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});\n");
@@ -1441,10 +1441,10 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
 
     // Factory method - from_host
     out.push_str(
-        "    /// Factory method - creates caller from HostVTable or nullopt if not found.\n",
+        "    /// Factory method - creates caller from RuntimeAbi or nullopt if not found.\n",
     );
     out.push_str(&format!(
-        "    static std::optional<{}> from_host(const HostVTable* host, uint32_t min_version = 0) noexcept {{\n",
+        "    static std::optional<{}> from_host(const RuntimeAbi* host, uint32_t min_version = 0) noexcept {{\n",
         class_name
     ));
     out.push_str("        if (host == nullptr) {\n");
@@ -2339,8 +2339,8 @@ mod tests {
         );
 
         assert!(
-            out.contains("guard_.vtable()"),
-            "missing guard_.vtable() call: {out}"
+            out.contains("guard_.interface()"),
+            "missing guard_.interface() call: {out}"
         );
     }
 
@@ -2408,6 +2408,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![
                 ResolvedFunction {
                     name: "log".to_owned(),

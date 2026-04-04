@@ -296,7 +296,7 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, AbiErrorCode::FunctionNotAvailable, NULL_HANDLE, PluginInterface, StringView\n\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, AbiErrorCode::FunctionNotAvailable, NULL_HANDLE, GuestContractInterface, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
@@ -350,7 +350,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, PluginInterface, StringView\n\n");
+    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, GuestContractInterface, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
@@ -399,7 +399,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n");
+    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView\n");
     out.push_str("from polyplug_guest import store_host_vtable\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
@@ -462,13 +462,13 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("        return\n");
     out.push_str("    store_host_vtable(host_ptr)\n");
     out.push_str("    ctx: PluginContext = PluginContext.from_address(ctx_ptr)\n");
-    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))\n");
+    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
             let plugin_upper: String = plugin.name.to_uppercase().replace('.', "_");
             out.push_str(&format!(
-                "    err_{plugin_upper}: AbiError = host.contents.register_plugin(\n"
+                "    err_{plugin_upper}: AbiError = host.contents.register_contract(\n"
             ));
             out.push_str(&format!("        rt_ctx, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_VTABLE)\n"));
             out.push_str("    )\n");
@@ -479,7 +479,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
         for contract in &ir.contracts {
             let upper: String = contract_name_to_upper_snake(&contract.name);
             out.push_str(&format!(
-                "    err_{upper}: AbiError = host.contents.register_plugin(\n"
+                "    err_{upper}: AbiError = host.contents.register_contract(\n"
             ));
             out.push_str(&format!(
                 "        rt_ctx, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"
@@ -499,7 +499,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -649,7 +649,7 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str("        vtable_ptr: int = self._guard.vtable\n");
     out.push_str("        if vtable_ptr == 0:\n");
     out.push_str("            raise RuntimeError(\"invalid caller: guard is null\")\n");
-    out.push_str("        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)\n");
+    out.push_str("        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)\n");
     out.push_str(&format!("        if {fn_id} >= vtable.function_count:\n"));
     out.push_str("            raise RuntimeError(\"function not available in vtable\")\n");
     out.push_str("        functions_ptr: int = vtable.dispatch.native.functions\n");
@@ -944,7 +944,7 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
     ));
 
     out.push_str(&format!(
-        "{upper}_VTABLE: PluginInterface = PluginInterface(\n"
+        "{upper}_VTABLE: GuestContractInterface = GuestContractInterface(\n"
     ));
     out.push_str(&format!(
         "    contract_id=0x{:016X},\n",
@@ -1078,7 +1078,7 @@ fn generate_guest_plugin_vtable(
     ));
 
     out.push_str(&format!(
-        "{plugin_upper}_VTABLE: PluginInterface = PluginInterface(\n"
+        "{plugin_upper}_VTABLE: GuestContractInterface = GuestContractInterface(\n"
     ));
     out.push_str(&format!(
         "    contract_id=0x{:016X},\n",
@@ -1572,7 +1572,7 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
     out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
     out.push_str("        if host_ptr == 0:\n");
     out.push_str("            return None\n");
-    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))\n");
+    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))\n");
     out.push_str(&format!(
         "        vtable: int = host.contents.get_host_contract(0, 0x{:016X}, min_version)\n",
         contract.contract_id
@@ -1789,7 +1789,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_guest.abi import ABI_OK, AbiError, Buffer, DispatchType, HostContractVTable, HostVTable, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import ABI_OK, AbiError, Buffer, DispatchType, HostContractVTable, RuntimeAbi, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
@@ -2538,6 +2538,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2581,6 +2582,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "read".to_owned(),
                 function_id: 0,
@@ -2627,6 +2629,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2656,6 +2659,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2759,6 +2763,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2809,6 +2814,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "read".to_owned(),
                 function_id: 0,
@@ -2855,6 +2861,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2884,6 +2891,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,

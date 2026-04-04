@@ -353,7 +353,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
 
     out.push_str("--- Register all plugin vtables with the host.\n");
     out.push_str("--- @param rt_ctx userdata Runtime context pointer from host.\n");
-    out.push_str("--- @param host_ptr userdata HostVTable pointer from host.\n");
+    out.push_str("--- @param host_ptr userdata RuntimeAbi pointer from host.\n");
     out.push_str("--- @param ctx_ptr userdata PluginContext pointer from host.\n");
     out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
     out.push_str("function polyplug_init(rt_ctx, host_ptr, ctx_ptr)\n");
@@ -368,7 +368,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
     out.push_str("    end\n");
     out.push_str("    polyplug_guest.store_host_vtable(host_ptr)\n");
     out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
-    out.push_str("    local host = ffi.cast(\"HostVTable*\", host_ptr)\n\n");
+    out.push_str("    local host = ffi.cast(\"RuntimeAbi*\", host_ptr)\n\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -382,7 +382,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
             let _contract_name_full = format!("{}@{}", contract_name, version_major);
 
             out.push_str(&format!(
-                "    local err_{plugin_upper} = host.register_plugin(rt_ctx, {plugin_upper}_DESCRIPTOR, {plugin_upper}_VTABLE)\n"
+                "    local err_{plugin_upper} = host.register_contract(rt_ctx, {plugin_upper}_DESCRIPTOR, {plugin_upper}_VTABLE)\n"
             ));
             out.push_str(&format!("    if err_{plugin_upper}.code ~= ABI_OK then\n"));
             out.push_str(&format!("        return err_{plugin_upper}.code\n"));
@@ -518,7 +518,7 @@ fn generate_host_caller_method(
     emit_lua_host_args_setup(out, func, contract_prefix);
     emit_lua_host_out_setup(out, &func.returns);
 
-    out.push_str("        local interface = ffi.cast(\"PluginInterface*\", vtable)\n");
+    out.push_str("        local interface = ffi.cast(\"GuestContractInterface*\", vtable)\n");
     out.push_str(&format!(
         "        if {fn_id} >= interface.function_count then\n"
     ));
@@ -599,7 +599,7 @@ fn generate_guest_plugin_vtable(
     }
 
     out.push_str(&format!(
-        "local {plugin_var}_VTABLE = ffi.new(\"PluginInterface\")\n"
+        "local {plugin_var}_VTABLE = ffi.new(\"GuestContractInterface\")\n"
     ));
     out.push_str(&format!(
         "{plugin_var}_VTABLE.contract_id = 0x{:016X}\n",
@@ -1239,7 +1239,7 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    if host_ptr == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str("    local host = ffi.cast(\"HostVTable*\", host_ptr)\n");
+    out.push_str("    local host = ffi.cast(\"RuntimeAbi*\", host_ptr)\n");
     out.push_str(&format!(
         "    local vtable_ptr = host.get_host_contract(nil, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
@@ -1968,6 +1968,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2069,6 +2070,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2169,6 +2171,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2275,6 +2278,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
