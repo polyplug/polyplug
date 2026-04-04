@@ -96,9 +96,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Remove wait_for_quiescence from reload.rs, QuiescenceTimeout from RuntimeError, update NativeLoader
-- [ ] 04-02-PLAN.md — Add Arc::strong_count warning check after Preparing callback, update documentation
-- [ ] 04-03-PLAN.md — Update hot-reload tests and documentation for callback-based model
+- [x] 04-01-PLAN.md — Remove wait_for_quiescence from reload.rs, QuiescenceTimeout from RuntimeError, update NativeLoader
+- [x] 04-02-PLAN.md — Add Arc::strong_count warning check after Preparing callback, update documentation
+- [x] 04-03-PLAN.md — Update hot-reload tests and documentation for callback-based model
 
 ### Phase 5: SDK Updates
 **Goal:** All five SDKs use types from polyplug_abi without duplicates
