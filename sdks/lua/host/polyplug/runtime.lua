@@ -270,10 +270,22 @@ function M.Runtime:register_host_contract(vtable)
 end
 
 function M.Runtime:resolve_plugin(packed_handle)
+    -- Instance-based model: returns raw resolve_handle (cdata) for host to use directly.
+    -- Host should:
+    --   1. Get resolve_handle from resolve_plugin
+    --   2. Access GuestContractInterface via FFI (ResolveHandle first field)
+    --   3. Call create_instance on interface
+    --   4. Make dispatch calls with instance
+    --   5. Call destroy_instance before hot-reload
     if packed_handle == M.NULL_HANDLE then
         return nil, "null handle"
     end
-    return M.Guard.new(self, packed_handle)
+    local lib = self._lib
+    local resolve_handle = lib.polyplug_runtime_resolve_plugin(self._ptr, packed_handle)
+    if resolve_handle == nil then
+        return nil, M.last_error(lib)
+    end
+    return resolve_handle
 end
 
 function M.Runtime:destroy()
@@ -281,99 +293,6 @@ function M.Runtime:destroy()
         self._lib.polyplug_runtime_destroy(self._ptr)
         self._destroyed = true
         self._ptr = nil
-    end
-end
-
-M.Guard = {}
-M.Guard.__index = M.Guard
-
-function M.Guard.new(runtime, packed_handle)
-    if runtime == nil then
-        error("polyplug: runtime is nil")
-    end
-    if packed_handle == nil then
-        error("polyplug: packed_handle is nil")
-    end
-    local lib = runtime._lib
-    local resolve_handle = lib.polyplug_runtime_resolve_plugin(runtime._ptr, packed_handle)
-    if resolve_handle == nil then
-        return nil, M.last_error(lib)
-    end
-    local self = {
-        _runtime = runtime,
-        _handle = resolve_handle,
-    }
-    return setmetatable(self, M.Guard)
-end
-
-function M.Guard:vtable()
-    if self._handle == nil then
-        return nil
-    end
-    -- ResolveHandle's first field is the vtable pointer (PluginInterface*)
-    return ffi.cast("const PluginInterface* const*", self._handle)[0]
-end
-
-function M.Guard:is_valid()
-    return self._handle ~= nil
-end
-
-function M.Guard:reset()
-    if self._handle ~= nil then
-        self._runtime._lib.polyplug_runtime_release_plugin(self._handle)
-        self._handle = nil
-    end
-end
-
-function M.Guard:__gc()
-    self:reset()
-end
-
-local DispatchFnType = ffi.typeof("AbiError (*)(const void*, void*)")
-local func_cache = {}
-
-function M.Guard:call(func_idx, input)
-    local vtable_ptr = self:vtable()
-    if vtable_ptr == nil then
-        error("polyplug: guard is not valid")
-    end
-
-    local interface = ffi.cast("const PluginInterface*", vtable_ptr)
-
-    if func_idx >= interface.function_count then
-        error("function index " .. func_idx .. " out of bounds")
-    end
-
-    local dispatch_type = interface.dispatch_type
-    local func_ptr
-
-    if dispatch_type == 0 then
-        local funcs = ffi.cast("const void* const*", interface.dispatch.native.functions)
-        func_ptr = funcs[func_idx]
-    else
-        error("VM dispatch not yet supported in Lua host")
-    end
-
-    local func = func_cache[func_ptr]
-    if func == nil then
-        func = ffi.cast(DispatchFnType, func_ptr)
-        func_cache[func_ptr] = func
-    end
-
-    local input_data = ffi.new("uint8_t[?]", #input)
-    ffi.copy(input_data, input, #input)
-    local input_sv = ffi.new("StringView", { ptr = input_data, len = #input })
-
-    local output_sv = ffi.new("StringView", { ptr = nil, len = 0 })
-
-    local result = func(ffi.cast("const void*", input_sv), ffi.cast("void*", output_sv))
-
-    if result.code == 0 and output_sv.ptr ~= nil and output_sv.len > 0 then
-        local output_str = ffi.string(output_sv.ptr, output_sv.len)
-        self._runtime._lib.polyplug_host_free(output_sv.ptr, output_sv.len, 1)
-        return output_str
-    else
-        error("plugin returned error code=" .. result.code)
     end
 end
 
