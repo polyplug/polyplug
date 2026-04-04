@@ -74,7 +74,14 @@ Plans:
 3. HostContractInterface supports singleton field; get_host_contract returns same instance for singletons
 4. Codegen generates instance wrappers for guest contracts and host contract implementations
 5. Cross-dispatch call_method works for plugin-plugin calls across dispatch types
-**Plans:** TBD
+**Plans:** 5 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Parser singleton field support and GuestContractInterface naming verification
+- [ ] 03-02-PLAN.md — Guest vtable create/destroy_instance stubs and dispatch signature updates
+- [ ] 03-03-PLAN.md — Runtime get_host_contract and call_method implementation
+- [ ] 03-04-PLAN.md — Host instance wrapper codegen (Rust generator)
+- [ ] 03-05-PLAN.md — Host contract factory codegen (all generators)
 
 ### Phase 4: Hot-Reload
 **Goal:** Hot-reload uses callback-based model where host destroys instances before swap
@@ -131,7 +138,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. ABI Types | 12/12 | Complete | 2026-04-04 |
 | 2. Registry | 0/3 | Not started | - |
-| 3. Instance Model | 0/0 | Not started | - |
+| 3. Instance Model | 0/5 | Not started | - |
 | 4. Hot-Reload | 0/0 | Not started | - |
 | 5. SDK Updates | 0/0 | Not started | - |
 | 6. Cleanup | 0/0 | Not started | - |
@@ -168,3 +175,4 @@ Phase 7 (Typed Handles)
 *Plans split per checker feedback: 2026-04-03*
 *Additional gap closure plans added: 2026-04-04*
 *Phase 2 plans added: 2026-04-04*
+*Phase 3 plans added: 2026-04-04*
