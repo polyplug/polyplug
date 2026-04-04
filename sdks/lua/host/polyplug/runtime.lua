@@ -33,10 +33,13 @@ ffi.cdef([[
     );
 
     typedef struct {
-        uint8_t hot_reload_enabled;
-        uint32_t hot_reload_max_retries;
-        uint64_t hot_reload_retry_interval_ms;
-        uint8_t hot_reload_abort_on_max_retries;
+        uint8_t hot_reload_enabled;        // offset 0
+        uint8_t _pad1[3];                  // padding for alignment
+        uint32_t hot_reload_max_retries;   // offset 4
+        uint64_t hot_reload_retry_interval_ms; // offset 8
+        uint8_t hot_reload_abort_on_max_retries; // offset 16
+        uint8_t _pad2[3];                  // padding for alignment
+        uint32_t compatibility;            // offset 20 (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
     } RuntimeConfigC;
 
     typedef struct {
@@ -94,6 +97,11 @@ M.ABI_FUNCTION_NOT_AVAIL = abi.ABI_FUNCTION_NOT_AVAIL
 M.contract_id = abi.contract_id
 M.bundle_id = abi.bundle_id
 M.extension_id = abi.extension_id
+
+-- Compatibility modes matching polyplug_abi::Compatibility #[repr(u32)]
+M.COMPATIBILITY_STRICT = 0
+M.COMPATIBILITY_RELAXED = 1
+M.COMPATIBILITY_YOLO = 2
 
 --- Compute the host contract ID for "host_contract:name@major_version" using FNV-1a 64-bit.
 -- @param name string         The host contract name (must start with "host.").
@@ -158,9 +166,12 @@ function M.Runtime.new()
         if M._pending_config then
             config_c = ffi.new("RuntimeConfigC", {
                 hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
+                _pad1 = {0, 0, 0},
                 hot_reload_max_retries = M._pending_config.hot_reload_max_retries,
                 hot_reload_retry_interval_ms = M._pending_config.hot_reload_retry_interval_ms,
                 hot_reload_abort_on_max_retries = M._pending_config.hot_reload_abort_on_max_retries and 1 or 0,
+                _pad2 = {0, 0, 0},
+                compatibility = M._pending_config.compatibility or M.COMPATIBILITY_STRICT,
             })
             options.config = config_c
         end
