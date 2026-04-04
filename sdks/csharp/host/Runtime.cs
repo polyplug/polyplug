@@ -234,21 +234,30 @@ public sealed class Runtime
         }
     }
 
-    public PluginGuard ResolvePlugin(ulong packedHandle)
+    /// <summary>
+    /// Resolve a plugin handle to get the raw resolve handle.
+    ///
+    /// In the instance-based model (Phase 3), the host:
+    /// 1. Gets resolve handle via ResolvePlugin (this method)
+    /// 2. Calls create_instance on the GuestContractInterface
+    /// 3. Makes dispatch calls with the instance
+    /// 4. Calls destroy_instance before hot-reload (via ReloadPhase callback)
+    ///
+    /// The returned nint is a raw resolve handle. The caller must NOT
+    /// cache this beyond hot-reload boundaries.
+    /// </summary>
+    /// <param name="packedHandle">Packed contract handle from FindByContract.</param>
+    /// <returns>Raw resolve handle (nint.Zero if not found).</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public nint ResolvePlugin(ulong packedHandle)
     {
         EnsureHandle();
         if (packedHandle == ulong.MaxValue)
         {
-            return new PluginGuard(nint.Zero);
+            return nint.Zero;
         }
 
-        nint resolveHandle = NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
-        if (resolveHandle == nint.Zero)
-        {
-            return new PluginGuard(nint.Zero);
-        }
-
-        return new PluginGuard(resolveHandle);
+        return NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)
