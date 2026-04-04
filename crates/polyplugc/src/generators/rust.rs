@@ -1169,7 +1169,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str("    // SAFETY: desc and vtable are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
-                "        (host.register_plugin)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const GuestContractInterface)\n"
+                "        (host.register_contract)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{upper}.code != ABI_OK {{\n"));
@@ -2925,6 +2925,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![
                 ResolvedFunction {
                     name: "log".to_owned(),
@@ -2984,6 +2985,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -3025,6 +3027,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -3184,6 +3187,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -3222,6 +3226,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -3287,6 +3292,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -3340,6 +3346,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -3405,6 +3412,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
