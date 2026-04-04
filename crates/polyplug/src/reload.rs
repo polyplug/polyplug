@@ -1,22 +1,16 @@
-//! Reload — generic hot-reload framework for all loaders.
+//! Reload — callback-based hot-reload framework for all loaders.
 //!
 //! Provides:
 //! - `ReloadPhase` enum for notification callbacks
-//! - `wait_for_quiescence()` utility for waiting until no in-flight calls
+//! - Callback-based notification for host to destroy instances
 //!
-//! Each loader implements its own `reload()` method using these utilities.
-
-use core::hint::spin_loop;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+//! Each loader implements its own `reload()` method using these notifications.
 
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::{RuntimeError};
 use crate::loader::ManifestData;
 use crate::runtime::Runtime;
-
-const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(5);
 
 // ─── Reload Phase Notifications ──────────────────────────────────────────────
 
@@ -50,62 +44,6 @@ pub struct ReloadEvent {
     pub bundle_path: String,
     pub old_version: String,
     pub new_version: String,
-}
-
-// ─── Quiescence Wait Utility ─────────────────────────────────────────────────
-
-/// Wait for quiescence - no in-flight calls using vtables from this bundle.
-///
-/// Uses `Arc::strong_count` to detect when all `PluginGuard` handles are dropped.
-/// When count == 1, only the registry holds the vtable (no active calls).
-///
-/// # Arguments
-/// - `registry`: The plugin registry
-/// - `bundle_id`: The bundle being reloaded
-/// - `timeout`: Maximum time to wait
-///
-/// # Returns
-/// - `Ok(())` if quiescence achieved
-/// - `Err(QuiescenceTimeout)` if timeout exceeded
-///
-/// # Important
-/// This only tracks `Arc<VTableSlot>` references (PluginGuard).
-/// It does NOT track raw function pointers extracted by callers!
-/// Callers must release those BEFORE this is called, via `on_reload_cb(Reloaded)`.
-pub fn wait_for_quiescence(
-    registry: &crate::registry::PluginRegistry,
-    bundle_id: BundleId,
-    timeout: Duration,
-) -> Result<(), RuntimeError> {
-    let slot_indices: Vec<u32> = registry.find_slots_by_bundle(bundle_id);
-
-    let start: Instant = Instant::now();
-    loop {
-        let mut all_quiescent: bool = true;
-
-        for &slot_idx in &slot_indices {
-            if let Some(arc) = registry.get_interface_arc(slot_idx) {
-                // Count == 1 means only registry holds it (no in-flight calls)
-                if Arc::strong_count(&arc) > 1 {
-                    all_quiescent = false;
-                    break;
-                }
-            }
-        }
-
-        if all_quiescent {
-            return Ok(());
-        }
-
-        if start.elapsed() > timeout {
-            return Err(RuntimeError::QuiescenceTimeout {
-                bundle: format!("bundle_id={}", bundle_id.id()),
-            });
-        }
-
-        std::thread::sleep(Duration::from_millis(1));
-        spin_loop();
-    }
 }
 
 // ─── Runtime Reload Method ───────────────────────────────────────────────────
@@ -207,7 +145,6 @@ impl Runtime {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn reload_phase_preparing_construction() {

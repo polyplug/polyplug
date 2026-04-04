@@ -6,7 +6,6 @@ use std::sync::Mutex;
 
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug::reload::wait_for_quiescence;
 use polyplug::runtime::HostContext;
 use polyplug::Runtime;
 use polyplug_abi::RuntimeAbi;
@@ -285,14 +284,7 @@ impl BundleLoader for NativeLoader {
             }));
         }
 
-        // ─── Step 8: Wait for quiescence (no in-flight calls using old vtables) ───────────
-        wait_for_quiescence(
-            runtime.registry(),
-            bundle_id,
-            std::time::Duration::from_secs(5),
-        )?;
-
-        // ─── Step 9: Remove and DROP old library ─────────────────────────────────────────
+        // ─── Step 8: Remove and DROP old library ─────────────────────────────────────────
         // SAFETY CONTRACT: Host must not have cached raw function pointers!
         // If they did, this will cause SIGSEGV - that's a HOST BUG.
         // The `on_reload_cb(ReloadPhase::Reloaded)` already fired, giving host a chance to clean up.
@@ -300,7 +292,7 @@ impl BundleLoader for NativeLoader {
             drop(old_library); // dlclose() - unmaps code pages
         }
 
-        // ─── Step 10: Store new library ───────────────────────────────────────────────────
+        // ─── Step 9: Store new library ───────────────────────────────────────────────────
         self.libraries
             .lock()
             .unwrap()

@@ -42,9 +42,6 @@ pub enum RuntimeError {
     #[error("reload failed for bundle `{bundle}`: {reason}")]
     ReloadFailed { bundle: String, reason: String },
 
-    #[error("quiescence timeout waiting for in-flight calls to complete for bundle `{bundle}`")]
-    QuiescenceTimeout { bundle: String },
-
     #[error("invalid UTF-8 in plugin-provided data: context={context}")]
     InvalidUtf8 { context: String },
 
@@ -258,16 +255,6 @@ mod tests {
         assert!(s.contains("reload failed"), "got: {s}");
         assert!(s.contains("my_bundle"), "got: {s}");
         assert!(s.contains("library locked"), "got: {s}");
-    }
-
-    #[test]
-    fn polyplug_error_quiescence_timeout_display() {
-        let err: RuntimeError = RuntimeError::QuiescenceTimeout {
-            bundle: "slow_bundle".to_owned(),
-        };
-        let s: String = err.to_string();
-        assert!(s.contains("quiescence timeout"), "got: {s}");
-        assert!(s.contains("slow_bundle"), "got: {s}");
     }
 
     #[test]
