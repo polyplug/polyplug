@@ -106,7 +106,7 @@ fn pack_handle(h: PluginHandle) -> u64 {
     if h.is_null() {
         u64::MAX
     } else {
-        (h.generation as u64) << 32 | h.index as u64
+        h.index as u64
     }
 }
 
@@ -114,10 +114,7 @@ fn unpack_handle(packed: u64) -> PluginHandle {
     if packed == u64::MAX {
         PluginHandle::null()
     } else {
-        PluginHandle {
-            index: (packed & 0xFFFF_FFFF) as u32,
-            generation: (packed >> 32) as u32,
-        }
+        PluginHandle { index: packed as u32 }
     }
 }
 

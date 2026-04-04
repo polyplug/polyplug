@@ -138,12 +138,8 @@ pub enum RegistryError {
     #[error("duplicate provider for contract `{contract}`: `{existing}` already registered")]
     DuplicateProvider { contract: String, existing: String },
 
-    #[error("stale plugin handle: index={index}, generation={expected} (found={found})")]
-    StaleHandle {
-        index: u32,
-        expected: u32,
-        found: u32,
-    },
+    #[error("invalid plugin handle: index={index} is out of bounds")]
+    InvalidHandle { index: u32 },
 
     #[error("no plugin found for contract_id=0x{contract_id:016X} with min_version={min_version}")]
     PluginNotFound { contract_id: u64, min_version: u32 },
@@ -443,17 +439,11 @@ mod tests {
     }
 
     #[test]
-    fn registry_error_stale_handle_display() {
-        let err: RegistryError = RegistryError::StaleHandle {
-            index: 7,
-            expected: 42,
-            found: 99,
-        };
+    fn registry_error_invalid_handle_display() {
+        let err: RegistryError = RegistryError::InvalidHandle { index: 7 };
         let s: String = err.to_string();
-        assert!(s.contains("stale"), "got: {s}");
+        assert!(s.contains("invalid"), "got: {s}");
         assert!(s.contains('7'), "got: {s}");
-        assert!(s.contains("42"), "got: {s}");
-        assert!(s.contains("99"), "got: {s}");
     }
 
     #[test]

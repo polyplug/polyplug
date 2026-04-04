@@ -1,15 +1,14 @@
-//! Registry — VTable storage and plugin handle management.
+//! Registry — interface storage and plugin handle management.
 //!
-//! Implements a generational index registry: each slot holds a generation counter.
-//! PluginHandle validation compares handle.generation against slot.generation to
-//! detect use-after-unload (stale handle detection).
+//! Simple index-based registry: each slot holds an interface pointer.
+//! PluginHandle validation checks for out-of-bounds indices only.
+//! Hosts must destroy instances before hot-reload via callback.
 //!
 //! Multi-impl support: different bundles may register different implementations of
 //! the same contract. contract_index maps contract_id -> Vec<slot_index> to support
 //! find_all_by_contract(). DuplicateProvider is only raised when the SAME bundle_id
 //! tries to register the SAME contract_id twice.
 
-use core::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -31,13 +30,7 @@ pub(crate) struct RegistryEntry {
 }
 
 /// A single slot in the registry's storage array.
-//
-//  Implements the generational index pattern.
-//  generation is incremented each time the slot is vacated (plugin unloaded).
 pub(crate) struct RegistrySlot {
-    /// Current generation counter. Compared against PluginHandle::generation.
-    /// Uses AtomicU32 for lock-free reads during handle validation.
-    pub generation: AtomicU32,
     /// Slot contents — None if vacant (after unload).
     pub entry: Option<RegistryEntry>,
     /// Interface pointer — direct Arc storage without wrapper.
@@ -150,7 +143,6 @@ impl PluginRegistry {
             .unwrap_or_else(|| {
                 let new_idx: u32 = data.slots.len() as u32;
                 data.slots.push(RegistrySlot {
-                    generation: AtomicU32::new(0_u32),
                     entry: None,
                     interface: None,
                 });
@@ -158,7 +150,6 @@ impl PluginRegistry {
             });
 
         let slot: &mut RegistrySlot = &mut data.slots[slot_idx as usize];
-        let generation: u32 = slot.generation.load(Ordering::Acquire);
         slot.entry = Some(RegistryEntry {
             descriptor,
             contract_name,
@@ -177,10 +168,7 @@ impl PluginRegistry {
         // Update bundle_index: record first slot for this bundle_id
         data.bundle_index.entry(bundle_id).or_insert(slot_idx);
 
-        Ok(PluginHandle {
-            index: slot_idx,
-            generation,
-        })
+        Ok(PluginHandle { index: slot_idx })
     }
 
     /// Declare dependency contract_ids for a bundle.
@@ -250,10 +238,7 @@ impl PluginRegistry {
                 // The pointer is written once at registration and never mutated.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    return Ok(PluginHandle {
-                        index: slot_idx,
-                        generation: slot.generation.load(Ordering::Acquire),
-                    });
+                    return Ok(PluginHandle { index: slot_idx });
                 }
             }
         }
@@ -296,10 +281,7 @@ impl PluginRegistry {
                 && interface.contract_id == contract_id
                 && interface.contract_version.major >= min_version
             {
-                return Ok(PluginHandle {
-                    index: slot_idx,
-                    generation: slot.generation.load(Ordering::Acquire),
-                });
+                return Ok(PluginHandle { index: slot_idx });
             }
         }
         Err(RegistryError::PluginNotFound {
@@ -342,10 +324,7 @@ impl PluginRegistry {
                 // Read-only access after registration.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    out[write_count] = PluginHandle {
-                        index: slot_idx,
-                        generation: slot.generation.load(Ordering::Acquire),
-                    };
+                    out[write_count] = PluginHandle { index: slot_idx };
                     write_count += 1usize;
                 }
             }
@@ -358,7 +337,7 @@ impl PluginRegistry {
     ///
     /// This is an optimized version of `find_all_by_contract` that avoids
     /// intermediate allocation by packing handles directly during iteration.
-    /// Each handle is packed as: `(generation as u64) << 32 | index as u64`.
+    /// Each handle is packed as: `index as u64`.
     ///
     /// Returns the number of packed handles written to `out`.
     pub fn find_all_by_contract_packed(
@@ -394,9 +373,8 @@ impl PluginRegistry {
                 // Read-only access after registration.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    // Pack handle directly: (generation << 32) | index
-                    out[write_count] =
-                        (slot.generation.load(Ordering::Acquire) as u64) << 32 | slot_idx as u64;
+                    // Pack handle directly: just the index
+                    out[write_count] = slot_idx as u64;
                     write_count += 1usize;
                 }
             }
@@ -415,9 +393,8 @@ impl PluginRegistry {
 
     /// Validate a PluginHandle and return its interface pointer directly.
     ///
-    /// Returns Err(StaleHandle) if:
+    /// Returns Err(InvalidHandle) if:
     /// - handle.index is out of bounds
-    /// - handle.generation doesn't match slot.generation
     /// - the slot has no interface
     pub fn resolve(&self, handle: PluginHandle) -> Result<*const GuestContractInterface, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
@@ -428,30 +405,13 @@ impl PluginRegistry {
 
         let slot_idx: usize = handle.index as usize;
         if slot_idx >= data.slots.len() {
-            return Err(RegistryError::StaleHandle {
-                index: handle.index,
-                expected: handle.generation,
-                found: 0,
-            });
+            return Err(RegistryError::InvalidHandle { index: handle.index });
         }
 
         let slot: &RegistrySlot = &data.slots[slot_idx];
-        let slot_generation: u32 = slot.generation.load(Ordering::Acquire);
-        if slot_generation != handle.generation {
-            return Err(RegistryError::StaleHandle {
-                index: handle.index,
-                expected: handle.generation,
-                found: slot_generation,
-            });
-        }
-
         match slot.interface {
             Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
-            None => Err(RegistryError::StaleHandle {
-                index: handle.index,
-                expected: handle.generation,
-                found: slot_generation,
-            }),
+            None => Err(RegistryError::InvalidHandle { index: handle.index }),
         }
     }
 
@@ -459,10 +419,9 @@ impl PluginRegistry {
     ///
     /// This is a direct swap under write lock. The callback-based hot-reload model
     /// (Phase 4) ensures hosts destroy instances before this is called.
-    /// Bumps `slot.generation` so stale `PluginHandle`s from before reload are detected.
     ///
     /// # Errors
-    /// Returns `Err(RegistryError::StaleHandle)` if `slot_index` is out of bounds
+    /// Returns `Err(RegistryError::InvalidHandle)` if `slot_index` is out of bounds
     /// or the slot has no interface.
     pub fn swap_interface(
         &self,
@@ -476,23 +435,13 @@ impl PluginRegistry {
             });
         let slot_idx: usize = slot_index as usize;
         if slot_idx >= data.slots.len() {
-            return Err(RegistryError::StaleHandle {
-                index: slot_index,
-                expected: 0_u32,
-                found: 0_u32,
-            });
+            return Err(RegistryError::InvalidHandle { index: slot_index });
         }
         let slot: &mut RegistrySlot = &mut data.slots[slot_idx];
         if slot.interface.is_none() {
-            return Err(RegistryError::StaleHandle {
-                index: slot_index,
-                expected: 0_u32,
-                found: slot.generation.load(Ordering::Acquire),
-            });
+            return Err(RegistryError::InvalidHandle { index: slot_index });
         }
         slot.interface = Some(new_interface);
-        // Bump generation for stale handle detection (removed in Plan 03)
-        slot.generation.fetch_add(1_u32, Ordering::AcqRel);
         Ok(())
     }
 
