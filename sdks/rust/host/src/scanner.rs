@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 
 /// Scan a single directory for plugin bundles.
 ///
@@ -55,7 +55,7 @@ pub fn scan_dir(dir: &Path) -> Vec<(PathBuf, ManifestData)> {
         };
 
         if metadata.is_dir() {
-            let manifest: ManifestData = match crate::loader::parse_manifest(&entry_path) {
+            let manifest: ManifestData = match polyplug::loader::parse_manifest(&entry_path) {
                 Ok(m) => m,
                 Err(e) => {
                     eprintln!(
@@ -109,7 +109,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<(PathBuf, ManifestData)> {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use crate::loader::manifest::ManifestData;
+    use polyplug::loader::ManifestData;
 
     fn write_test_bundle(dir: &Path, name: &str, id: u64) {
         let bundle_dir: PathBuf = dir.join(name);
