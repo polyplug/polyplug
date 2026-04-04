@@ -468,8 +468,8 @@ def _read_c_string(ptr: int, length: int) -> str:
     return ctypes.string_at(ptr, length).decode("utf-8", errors="replace")
 
 
-class ReloadPhaseCStruct(ctypes.Structure):
-    """C-compatible struct for ReloadPhase - mirrors ffi::ReloadPhaseC."""
+class ReloadPhaseFfi(ctypes.Structure):
+    """FFI-safe struct for ReloadPhase - mirrors ffi::ReloadPhaseFfi (not a 'C suffix' type)."""
 
     _fields_ = [
         ("phase_type", ctypes.c_uint32),

@@ -87,7 +87,7 @@ public sealed class Runtime
         }
     }
 
-    private static void OnReloadNative(NativeMethods.ReloadPhaseC phaseC)
+    private static void OnReloadNative(NativeMethods.ReloadPhaseFfi phaseFfi)
     {
         Action<ReloadPhase>? cb = s_reloadCallback;
         if (cb is null)
@@ -95,17 +95,17 @@ public sealed class Runtime
             return;
         }
 
-        ReloadPhase phase = ConvertReloadPhase(phaseC);
+        ReloadPhase phase = ConvertReloadPhase(phaseFfi);
         cb(phase);
     }
 
-    private static ReloadPhase ConvertReloadPhase(NativeMethods.ReloadPhaseC phaseC)
+    private static ReloadPhase ConvertReloadPhase(NativeMethods.ReloadPhaseFfi phaseFfi)
     {
-        ReloadPhaseType type = (ReloadPhaseType)phaseC.PhaseType;
-        string bundleName = StringViewToString(phaseC.BundleName);
-        string reason = StringViewToString(phaseC.Reason);
+        ReloadPhaseType type = (ReloadPhaseType)phaseFfi.PhaseType;
+        string bundleName = StringViewToString(phaseFfi.BundleName);
+        string reason = StringViewToString(phaseFfi.Reason);
 
-        return new ReloadPhase(type, phaseC.BundleId, bundleName, phaseC.RetryCount, reason);
+        return new ReloadPhase(type, phaseFfi.BundleId, bundleName, phaseFfi.RetryCount, reason);
     }
 
     private static string StringViewToString(NativeMethods.StringViewC sv)
@@ -122,7 +122,7 @@ public sealed class Runtime
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void ReloadCallbackNative(NativeMethods.ReloadPhaseC phase);
+    private delegate void ReloadCallbackNative(NativeMethods.ReloadPhaseFfi phase);
 
     ~Runtime()
     {

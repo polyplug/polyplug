@@ -29,10 +29,10 @@ internal static partial class NativeMethods
     }
 
     /// <summary>
-    /// C-compatible representation of ReloadPhase.
+    /// FFI-safe representation of ReloadPhase (not a 'C suffix' type, but an FFI variant).
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
-    internal struct ReloadPhaseC
+    internal struct ReloadPhaseFfi
     {
         /// <summary>
         /// The phase type (Preparing=0, Reloaded=1, or Failed=2).

@@ -22,7 +22,7 @@ pub struct OpaqueRuntime(pub Runtime);
 
 // ─── C-compatible types for hot-reload notification ───────────────────────────
 
-/// Type tag for `ReloadPhaseC` variants.
+/// Type tag for `ReloadPhaseFfi` variants.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReloadPhaseType {
@@ -34,7 +34,7 @@ pub enum ReloadPhaseType {
     Failed = 2,
 }
 
-/// C-compatible representation of `ReloadPhase`.
+/// FFI-safe representation of `ReloadPhase` (not a 'C suffix' type, but an FFI variant).
 ///
 /// This is a tagged union style struct. The `phase_type` field indicates
 /// which variant is active, and the corresponding fields are populated.
@@ -47,7 +47,7 @@ pub enum ReloadPhaseType {
 /// free the memory.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct ReloadPhaseC {
+pub struct ReloadPhaseFfi {
     /// The phase type (Preparing, Reloaded, or Failed).
     pub phase_type: u32,
     /// Bundle ID (valid for all variants).
@@ -60,15 +60,15 @@ pub struct ReloadPhaseC {
     pub reason: StringView,
 }
 
-impl ReloadPhaseC {
-    /// Convert a Rust `ReloadPhase` to the C-compatible representation.
-    fn from_reload_phase(phase: &ReloadPhase) -> ReloadPhaseC {
+impl ReloadPhaseFfi {
+    /// Convert a Rust `ReloadPhase` to the FFI-safe representation.
+    fn from_reload_phase(phase: &ReloadPhase) -> ReloadPhaseFfi {
         match phase {
             ReloadPhase::Preparing {
                 bundle_id,
                 bundle_name,
                 retry_count,
-            } => ReloadPhaseC {
+            } => ReloadPhaseFfi {
                 phase_type: ReloadPhaseType::Preparing as u32,
                 bundle_id: bundle_id.id(),
                 bundle_name: string_view_from_str(bundle_name.as_str()),
@@ -78,7 +78,7 @@ impl ReloadPhaseC {
             ReloadPhase::Reloaded {
                 bundle_id,
                 bundle_name,
-            } => ReloadPhaseC {
+            } => ReloadPhaseFfi {
                 phase_type: ReloadPhaseType::Reloaded as u32,
                 bundle_id: bundle_id.id(),
                 bundle_name: string_view_from_str(bundle_name.as_str()),
@@ -89,7 +89,7 @@ impl ReloadPhaseC {
                 bundle_id,
                 bundle_name,
                 reason,
-            } => ReloadPhaseC {
+            } => ReloadPhaseFfi {
                 phase_type: ReloadPhaseType::Failed as u32,
                 bundle_id: bundle_id.id(),
                 bundle_name: string_view_from_str(bundle_name.as_str()),
@@ -170,7 +170,7 @@ pub struct RuntimeCreateOptions {
     /// Pointer to RuntimeConfigC, or null for default config.
     pub config: *const RuntimeConfigC,
     /// Reload callback function pointer, or null for no callback.
-    pub on_reload: Option<extern "C" fn(ReloadPhaseC)>,
+    pub on_reload: Option<extern "C" fn(ReloadPhaseFfi)>,
 }
 
 /// Creates a new runtime instance with the specified options.
@@ -200,8 +200,8 @@ pub unsafe extern "C" fn polyplug_runtime_create_with_options(
 
             if let Some(cb) = opts.on_reload {
                 builder = builder.on_reload(move |phase: ReloadPhase| {
-                    let phase_c: ReloadPhaseC = ReloadPhaseC::from_reload_phase(&phase);
-                    cb(phase_c);
+                    let phase_ffi: ReloadPhaseFfi = ReloadPhaseFfi::from_reload_phase(&phase);
+                    cb(phase_ffi);
                 });
             }
         }
