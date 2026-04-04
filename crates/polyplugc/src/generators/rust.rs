@@ -132,8 +132,8 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::PluginHandle;\n");
-        callers_out.push_str("use polyplug::registry::PluginGuard;\n");
-        callers_out.push_str("use polyplug::runtime::Runtime;\n");
+        callers_out.push_str("use polyplug_abi::GuestContractInstance;\n");
+        callers_out.push_str("use polyplug::ffi::polyplug_runtime_resolve_plugin;\n");
         callers_out.push_str("use super::types::*;\n\n");
         callers_out.push_str("/// Host-side error type for contract calls.\n");
         callers_out.push_str("#[derive(Debug)]\n");
@@ -1263,30 +1263,85 @@ fn generate_host_contract_caller(
         "/// Host caller for contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
+    out.push_str("///\n");
+    out.push_str("/// RAII wrapper that manages instance lifecycle:\n");
+    out.push_str("/// - `new()`: calls `create_instance` on the resolved interface\n");
+    out.push_str("/// - `drop()`: calls `destroy_instance` to clean up\n");
+    out.push_str("/// - dispatch: passes `instance` to all method calls\n");
     out.push_str(&format!("pub struct {struct_name} {{\n"));
-    out.push_str("    guard: PluginGuard,\n");
+    out.push_str("    /// Resolved interface pointer from the registry.\n");
+    out.push_str("    interface: *const PluginInterface,\n");
+    out.push_str("    /// Instance handle created by `create_instance`.\n");
+    out.push_str("    instance: GuestContractInstance,\n");
+    out.push_str("    /// Runtime context pointer (needed for destroy_instance).\n");
+    out.push_str("    rt_ctx: *mut core::ffi::c_void,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {struct_name} {{\n"));
-    out.push_str("    /// Factory method - creates instance or None if not found.\n");
-    out.push_str(
-        "    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {\n",
-    );
-    out.push_str(
-        "        let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;\n",
-    );
-    out.push_str(&format!("        Some({struct_name} {{ guard }})\n"));
+    out.push_str("    /// Create a new instance wrapper for this contract.\n");
+    out.push_str("    /// Calls `create_instance` on the resolved interface.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// # Arguments\n");
+    out.push_str("    /// - `handle`: Contract handle from `find_by_contract`\n");
+    out.push_str("    /// - `rt_ctx`: Runtime context pointer (opaque)\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// # Returns\n");
+    out.push_str("    /// - `Some(Self)` if interface found and instance created\n");
+    out.push_str("    /// - `None` if interface not found or `create_instance` failed\n");
+    out.push_str("    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {\n");
+    out.push_str("        // Resolve the interface from the handle via FFI\n");
+    out.push_str("        let interface: *const PluginInterface = unsafe {\n");
+    out.push_str("            polyplug_runtime_resolve_plugin(rt_ctx, handle.pack())\n");
+    out.push_str("        };\n");
+    out.push_str("        if interface.is_null() {\n");
+    out.push_str("            return None;\n");
+    out.push_str("        }\n");
+    out.push_str("        // Create instance via factory function\n");
+    out.push_str("        let instance: GuestContractInstance = unsafe {\n");
+    out.push_str("            ((*interface).create_instance)(rt_ctx, core::ptr::null())\n");
+    out.push_str("        };\n");
+    out.push_str("        if instance.data.is_null() {\n");
+    out.push_str("            return None;\n");
+    out.push_str("        }\n");
+    out.push_str(&format!("        Some({struct_name} {{ interface, instance, rt_ctx }})\n"));
     out.push_str("    }\n\n");
-    out.push_str("    /// Check if instance is valid (always true for Rust - guard holds Arc).\n");
-    out.push_str("    pub fn is_valid(&self) -> bool { true }\n\n");
-    out.push_str("    /// Reset instance (no-op for Rust - guard holds Arc).\n");
-    out.push_str("    pub fn reset(&mut self) { }\n\n");
+    out.push_str("    /// Check if instance is valid (non-null data).\n");
+    out.push_str("    pub fn is_valid(&self) -> bool {\n");
+    out.push_str("        !self.instance.data.is_null()\n");
+    out.push_str("    }\n\n");
+    out.push_str("    /// Destroy current instance and create a new one.\n");
+    out.push_str("    /// Useful for recovering from plugin errors.\n");
+    out.push_str("    pub fn reset(&mut self) {\n");
+    out.push_str("        if !self.instance.data.is_null() {\n");
+    out.push_str("            unsafe {\n");
+    out.push_str("                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);\n");
+    out.push_str("            }\n");
+    out.push_str("        }\n");
+    out.push_str("        self.instance = unsafe {\n");
+    out.push_str("            ((*self.interface).create_instance)(self.rt_ctx, core::ptr::null())\n");
+    out.push_str("        };\n");
+    out.push_str("    }\n\n");
 
     for func in &contract.functions {
         generate_host_fn_caller(out, func, contract, &struct_name)?;
     }
 
     out.push_str("}\n\n");
+
+    // Generate Drop impl
+    out.push_str(&format!("impl Drop for {struct_name} {{\n"));
+    out.push_str("    fn drop(&mut self) {\n");
+    out.push_str("        // Destroy instance via factory\n");
+    out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
+    out.push_str("        // The interface pointer is stored for the lifetime of this wrapper.\n");
+    out.push_str("        if !self.instance.data.is_null() {\n");
+    out.push_str("            unsafe {\n");
+    out.push_str("                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);\n");
+    out.push_str("            }\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
     Ok(())
 }
 
@@ -1344,12 +1399,12 @@ fn generate_host_fn_caller(
     } else {
         out.push_str("core::ptr::null_mut();\n");
     }
-    out.push_str("        let vtable_ptr: *const PluginInterface = self.guard.vtable();\n");
-    out.push_str("        // SAFETY: vtable_ptr is valid for the duration of the call; args_ptr/out_ptr match the ABI contract.\n");
+    out.push_str("        // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.\n");
+    out.push_str("        let vtable: &PluginInterface = unsafe { &*self.interface };\n");
+    out.push_str("        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n");
     out.push_str("        let err: AbiError = unsafe {\n");
-    out.push_str("            let vtable: &PluginInterface = &*vtable_ptr;\n");
     out.push_str(&format!(
-        "            if {fn_id}_u32 >= vtable.function_count {{\n"
+        "            if {fn_id}_u32 >= vtable.dispatch.native.function_count {{\n"
     ));
     out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable as u32, message: polyplug_abi::string_view_from_static(b\"function not available in vtable\") }\n");
     out.push_str("            } else {\n");
@@ -1361,14 +1416,20 @@ fn generate_host_fn_caller(
     out.push_str("                        // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
     out.push_str("                        // - Function pointers have the same size and alignment as data pointers on all supported platforms\n");
     out.push_str("                        // - The vtable guarantees that the function at this index is a native dispatch function\n");
-    out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError\n");
-    out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(*const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
-    out.push_str("                        dispatch_fn(args_ptr, out_ptr)\n");
+    out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut ()) -> AbiError\n");
+    out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
+    out.push_str("                        dispatch_fn(self.instance, args_ptr, out_ptr)\n");
     out.push_str("                    }\n");
     out.push_str("                    DispatchType::VirtualMachine => {\n");
     out.push_str(&format!(
-        "                        (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, {fn_id}_u32, args_ptr, out_ptr)\n"
+        "                        (vtable.dispatch.vm.call)(\n"
     ));
+    out.push_str("                            vtable.dispatch.vm.loader_data,\n");
+    out.push_str("                            self.instance,  // instance parameter\n");
+    out.push_str(&format!("                            {fn_id}_u32,\n"));
+    out.push_str("                            args_ptr,\n");
+    out.push_str("                            out_ptr,\n");
+    out.push_str("                        )\n");
     out.push_str("                    }\n");
     out.push_str("                }\n");
     out.push_str("            }\n");

@@ -19,6 +19,18 @@ impl PluginHandle {
     pub const fn is_null(&self) -> bool {
         self.index == u32::MAX
     }
+
+    /// Pack the handle into a u64 for FFI calls.
+    ///
+    /// Used when passing the handle to FFI functions like
+    /// `polyplug_runtime_resolve_plugin`.
+    pub const fn pack(&self) -> u64 {
+        if self.is_null() {
+            u64::MAX
+        } else {
+            self.index as u64
+        }
+    }
 }
 
 #[cfg(test)]
