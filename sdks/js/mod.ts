@@ -4,7 +4,18 @@
  */
 
 export * from "./abi/polyplug_abi.ts";
-export { Runtime, openPolyplug, runtimeNew, onReload, setConfig, NULL_HANDLE, fnv1a64 } from "./host/mod.js";
+export {
+    Runtime,
+    openPolyplug,
+    runtimeNew,
+    onReload,
+    setConfig,
+    NULL_HANDLE,
+    fnv1a64,
+    COMPATIBILITY_STRICT,
+    COMPATIBILITY_RELAXED,
+    COMPATIBILITY_YOLO,
+} from "./host/mod.js";
 export { ReloadPhase } from "./host/polyplug/reload_phase.js";
 export {
     getPlatformIdentifier,
