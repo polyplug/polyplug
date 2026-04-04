@@ -98,14 +98,15 @@ PluginGuard. Instance wrappers don't hold Arc references to registry.
 │   ├─► Check Arc::strong_count (warning only, not blocking)      │
 │   │     └─► If > 1: emit_warning("instances may still exist")   │
 │   │                                                              │
-│   ├─► Swap interfaces for bundle (registry.swap_interface)      │
-│   │     └─► Atomic swap under RwLock write guard                │
-│   │                                                              │
 │   ├─► loader.reload_backend(manifest, runtime)                  │
 │   │     ├─► Load new library                                     │
-│   │     ├─► Call init on new library                             │
+│   │     ├─► Call init on new library (registers new interfaces) │
 │   │     ├─► Drop old library                                     │
 │   │     └─► Store new library                                    │
+│   │                                                              │
+│   ├─► Swap interfaces for bundle (registry.swap_interface)      │
+│   │     └─► For each slot: get new interface from init, swap    │
+│   │     └─► Atomic swap under RwLock write guard                │
 │   │                                                              │
 │   ├─► Fire Reloaded callback                                    │
 │   │     └─► HOST CAN CREATE NEW INSTANCES NOW                   │
@@ -113,8 +114,8 @@ PluginGuard. Instance wrappers don't hold Arc references to registry.
 │   └─► Return Ok(())                                             │
 └─────────────────────────────────────────────────────────────────┘
 
-KEY CHANGE: Interface swap happens AFTER Preparing callback returns,
-not inside loader.reload(). Host's responsibility to destroy instances.
+KEY CHANGE: Interface swap happens AFTER init completes successfully,
+not inside loader.reload(). Runtime calls swap_interface() for each slot.
 ```
 
 ### Interface Swap Pattern
@@ -123,18 +124,33 @@ not inside loader.reload(). Host's responsibility to destroy instances.
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Interface Swap Implementation               │
 ├─────────────────────────────────────────────────────────────────┤
-│ // In Runtime.reload_bundle() after callback returns:           │
+│ // In Runtime.reload_bundle() after loader.reload_backend():    │
 │                                                                  │
-│ let bundle_id: BundleId = BundleId::new(&manifest.name);        │
-│ let slot_indices: Vec<u32> = registry.find_slots_by_bundle(bundle_id);│
+│ // Step 1: Get slot indices for this bundle                     │
+│ let slot_indices: Vec<u32> =                                    │
+│     self.registry.find_slots_by_bundle(bundle_id);              │
 │                                                                  │
+│ // Step 2: For each slot, swap to the NEW interface             │
+│ // The NEW interface was registered during init in step above   │
+│ // Use find_by_contract to locate the newly registered interface│
 │ for slot_idx in slot_indices {                                  │
-│     let new_interface: Arc<GuestContractInterface> =            │
-│         // ... get from newly loaded library                    │
-│     registry.swap_interface(slot_idx, new_interface)?;          │
+│     // Get the contract_id this slot serves                     │
+│     let contract_id = self.registry                             │
+│         .get_slot_contract_id(slot_idx)?;                       │
+│                                                                  │
+│     // Find NEW interface by contract_id (registered during init)│
+│     // Note: find_by_contract returns a handle with slot index  │
+│     let new_interface = self.registry                           │
+│         .get_interface_arc(                                     │
+│             self.registry.find_by_contract(contract_id, 0)?     │
+│                 .index                                          │
+│         )?;                                                     │
+│                                                                  │
+│     // Atomic swap                                               │
+│     self.registry.swap_interface(slot_idx, new_interface)?;     │
 │ }                                                                │
 │                                                                  │
-│ // swap_interface is already implemented (Phase 2):             │
+│ // swap_interface is already implemented:                       │
 │ pub fn swap_interface(&self, slot_index: u32,                   │
 │                       new_interface: Arc<GuestContractInterface>)│
 │                       -> Result<(), RegistryError>               │
@@ -147,7 +163,7 @@ not inside loader.reload(). Host's responsibility to destroy instances.
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Instance Leak Warning                        │
 ├─────────────────────────────────────────────────────────────────┤
-│ // After Preparing callback returns, before swap:               │
+│ // After Preparing callback returns, before loader.reload:      │
 │                                                                  │
 │ for slot_idx in slot_indices {                                  │
 │     if let Some(arc) = registry.get_interface_arc(slot_idx) {   │
@@ -159,11 +175,12 @@ not inside loader.reload(). Host's responsibility to destroy instances.
 │                  bundle {} after Preparing callback.            │
 │                  Host may not have destroyed all instances."    │
 │             );                                                   │
+│             break; // Only warn once per bundle                  │
 │         }                                                        │
 │     }                                                            │
 │ }                                                                │
 │                                                                  │
-│ // PROCEED WITH SWAP ANYWAY                                      │
+│ // PROCEED WITH RELOAD ANYWAY                                    │
 │ // The host signed up for this responsibility                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -201,7 +218,7 @@ not inside loader.reload(). Host's responsibility to destroy instances.
 
 **Why it happens:** Current flow fires callback then immediately calls loader.reload() which does swap inside.
 
-**How to avoid:** Move interface swap OUT of loader.reload(). Runtime should swap AFTER callback returns.
+**How to avoid:** Move interface swap OUT of loader.reload(). Runtime should swap AFTER callback returns and AFTER init completes successfully.
 
 **Warning signs:** Host sees stale instance pointers, crashes on dispatch after reload.
 
@@ -231,7 +248,7 @@ not inside loader.reload(). Host's responsibility to destroy instances.
 
 **Why it happens:** Init must register interfaces BEFORE swap can get new interface pointers.
 
-**How to avoid:** Init still happens inside loader.reload_backend(). Interfaces registered via host_vtable.register_plugin during init. Swap happens after, using registered interfaces.
+**How to avoid:** Init still happens inside loader.reload_backend(). Interfaces registered via host_vtable.register_plugin during init. Swap happens after, using registered interfaces via find_by_contract.
 
 **Warning signs:** Swap fails with "InvalidHandle" or null interface.
 
@@ -244,6 +261,16 @@ not inside loader.reload(). Host's responsibility to destroy instances.
 **How to avoid:** Delete/update integration_quiescence.rs, stress_quiescence_race.rs if they exist. Update other tests.
 
 **Warning signs:** Test failures referencing quiescence.
+
+### Pitfall 6: Swap Uses OLD Interface Instead of NEW
+
+**What goes wrong:** Swap copies the old interface instead of the newly registered one.
+
+**Why it happens:** After init registers new interfaces, need to find them via find_by_contract, not use the slot's current interface.
+
+**How to avoid:** Use find_by_contract(contract_id, 0) to find the NEW interface handle, then get_interface_arc on that handle's index.
+
+**Warning signs:** After reload, calls still use old code (old library not unmapped), crashes.
 
 ## Code Examples
 
@@ -319,10 +346,12 @@ fn reload(&self, manifest: &ManifestData, runtime: &Runtime) -> Result<(), Runti
 }
 ```
 
-### Target Runtime.reload_bundle Flow
+### Target Runtime.reload_bundle Flow (HR-05 Implementation)
 
 ```rust
-// Target implementation for reload.rs
+// Target implementation for reload.rs - Runtime.reload_bundle()
+// After Plan 01 removes wait_for_quiescence, this implements the new flow
+
 pub fn reload_bundle(&self, path: &std::path::Path) -> Result<(), RuntimeError> {
     if !self.config().hot_reload_enabled {
         return Err(RuntimeError::HotReloadDisabled);
@@ -344,36 +373,67 @@ pub fn reload_bundle(&self, path: &std::path::Path) -> Result<(), RuntimeError> 
     }
 
     // ─── Step 2: Warning check (informational only) ──────────────────────────────────────
+    // Get slots BEFORE loader.reload_backend() (before new registration)
     let slot_indices: Vec<u32> = self.registry.find_slots_by_bundle(bundle_id);
     for slot_idx in &slot_indices {
         if let Some(arc) = self.registry.get_interface_arc(*slot_idx) {
             if Arc::strong_count(&arc) > 1 {
                 self.emit_warning(&format!(
-                    "Potential UB: Arc refs still exist for bundle {} after Preparing callback",
+                    "Potential UB: Arc refs still exist for bundle '{}' after Preparing callback. \
+                     Host may not have destroyed all instances. Proceeding with reload anyway.",
                     manifest.name
                 ));
+                break; // Only emit once per bundle
             }
         }
     }
 
     // ─── Step 3: Load new library and init (registers new interfaces) ──────────────────────
     let loader: &dyn BundleLoader = self.loaders.get(&manifest.runtime)...;
-    loader.reload_backend(&manifest, self)?;  // New method name
+    let result: Result<(), RuntimeError> = loader.reload(&manifest, self);
 
-    // ─── Step 4: Swap interfaces (atomic under RwLock) ──────────────────────────────────────
+    // ─── Step 4: Handle init failure ──────────────────────────────────────────────────────
+    if let Err(e) = result {
+        // Fire Failed callback - DO NOT SWAP if init failed
+        if let Some(cb) = self.on_reload_cb() {
+            cb(ReloadPhase::Failed {
+                bundle_id,
+                bundle_name: manifest.name.clone(),
+                reason: e.to_string(),
+            });
+        }
+        return Err(e);
+    }
+
+    // ─── Step 5: Swap interfaces (atomic under RwLock) ──────────────────────────────────────
     // New interfaces were registered during init in step 3
-    // Get them from registry by contract_id
+    // For each slot, find NEW interface by contract_id and swap
     for slot_idx in &slot_indices {
         // Get contract_id for this slot
-        let contract_id = self.registry.get_slot_contract_id(*slot_idx)?;
-        // Find NEW interface (registered during init)
-        let new_handle = self.registry.find_by_contract(contract_id, 0)?;
-        let new_interface = self.registry.get_interface_arc(new_handle.index)?;
-        // Swap
+        let contract_id: GuestContractId = self.registry
+            .get_slot_contract_id(*slot_idx)
+            .ok_or_else(|| RuntimeError::Registry(RegistryError::InvalidHandle {
+                index: *slot_idx
+            }))?;
+
+        // Find NEW interface (registered during init) by contract_id
+        // find_by_contract returns handle with slot index of NEW registration
+        let new_handle: PluginHandle = self.registry
+            .find_by_contract(contract_id, 0)
+            .map_err(|e| RuntimeError::Registry(e))?;
+
+        // Get Arc to NEW interface
+        let new_interface: Arc<GuestContractInterface> = self.registry
+            .get_interface_arc(new_handle.index)
+            .ok_or_else(|| RuntimeError::Registry(RegistryError::InvalidHandle {
+                index: new_handle.index
+            }))?;
+
+        // Atomic swap
         self.registry.swap_interface(*slot_idx, new_interface)?;
     }
 
-    // ─── Step 5: Fire Reloaded callback ──────────────────────────────────────────────────────
+    // ─── Step 6: Fire Reloaded callback ──────────────────────────────────────────────────────
     if let Some(cb) = self.on_reload_cb() {
         cb(ReloadPhase::Reloaded {
             bundle_id,
@@ -400,11 +460,15 @@ pub fn swap_interface(
 /// Already implemented - keep for warning check
 pub fn find_slots_by_bundle(&self, bundle_id: BundleId) -> Vec<u32>
 
-/// Already implemented - keep for warning check
+/// Already implemented - keep for warning check and swap logic
 pub(crate) fn get_interface_arc(&self, slot_index: u32) -> Option<Arc<GuestContractInterface>>
 
-/// Already implemented - keep for finding contract_id
+/// Already implemented - keep for finding contract_id during swap
 pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<GuestContractId>
+
+/// Already implemented - keep for finding new interface after init
+pub fn find_by_contract(&self, contract_id: GuestContractId, min_version: u32)
+    -> Result<PluginHandle, RegistryError>
 ```
 
 ## State of the Art
@@ -452,25 +516,34 @@ Phase 4 depends on Phase 3 instance model completion:
 
 ## Open Questions
 
-1. **How does swap find the NEW interface after init?**
+1. **How does swap find the NEW interface after init? (RESOLVED)**
    - What we know: Init registers interfaces via host_vtable.register_plugin
-   - What's unclear: How to get the NEW interface pointer for swap
-   - Recommendation: Use registry.find_by_contract to get new handle, then get_interface_arc
+   - What was unclear: How to get the NEW interface pointer for swap
+   - Resolution: Use `find_by_contract(contract_id, 0)` to locate the newly registered interface. This returns a `PluginHandle` whose `index` field points to the NEW registration slot. Then call `get_interface_arc(handle.index)` to get the Arc for swap.
+   - Implementation: In `Runtime.reload_bundle()`, after `loader.reload()` succeeds, for each old slot: get its `contract_id`, find new handle, get new interface Arc, call `swap_interface()`.
 
-2. **Does the slot contract_id change across reload?**
+2. **Does the slot contract_id change across reload? (RESOLVED)**
    - What we know: Same contract, possibly new version
-   - What's unclear: Whether contract_id hash is stable across reload
-   - Recommendation: contract_id should be stable (same contract name), version may change
+   - What was unclear: Whether contract_id hash is stable across reload
+   - Resolution: `contract_id` (GuestContractId) is derived from the contract name string hash, which is stable across reloads. The version field in the interface may change, but the contract_id hash remains the same. `find_by_contract(contract_id, 0)` with min_version=0 will find any version.
+   - Implementation: Use the old slot's `contract_id` to find the new registration - same hash, works correctly.
 
-3. **What if init fails during reload?**
+3. **What if init fails during reload? (RESOLVED)**
    - What we know: Current flow fires Failed callback
-   - What's unclear: Should interfaces be swapped before or after init
-   - Recommendation: Load+init first, then swap. If init fails, don't swap, fire Failed.
+   - What was unclear: Should interfaces be swapped before or after init
+   - Resolution: DO NOT SWAP if init fails. The flow is:
+     1. Fire Preparing callback
+     2. Warning check (optional)
+     3. Call loader.reload() which does load+init
+     4. If init FAILS: Fire Failed callback, return error, NO SWAP
+     5. If init SUCCEEDS: Swap interfaces, fire Reloaded callback
+   - Implementation: In `Runtime.reload_bundle()`, the swap logic is after `loader.reload()` returns `Ok(())`. If `Err(e)`, fire Failed callback and return error without touching interfaces.
 
-4. **Should warning callback fire for each slot or once per bundle?**
+4. **Should warning callback fire for each slot or once per bundle? (RESOLVED)**
    - What we know: Multiple slots per bundle possible
-   - What's unclear: Granularity of warning
-   - Recommendation: One warning per bundle, listing all affected slots
+   - What was unclear: Granularity of warning
+   - Resolution: One warning per bundle. Use `break` after first slot with strong_count > 1 to emit single message.
+   - Implementation: Current task design uses `break` after first detection, correct behavior.
 
 ## Environment Availability
 
