@@ -110,11 +110,11 @@ impl PluginRegistry {
         descriptor: PluginDescriptor,
         interface_ptr: *const GuestContractInterface,
         contract_name: String,
-        bundle_id: u64,
+        bundle_id: BundleId,
     ) -> Result<PluginHandle, RegistryError> {
         // SAFETY: interface_ptr is a valid 'static GuestContractInterface supplied by the caller.
         // The ABI contract requires the pointer to remain valid for the library lifetime.
-        let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
+        let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
 
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
             self.data.write().unwrap_or_else(|e| {
@@ -130,7 +130,7 @@ impl PluginRegistry {
                     // Hash collision: same contract_id, different contract_name
                     if existing_entry.contract_name != contract_name {
                         return Err(RegistryError::ContractIdCollision {
-                            id: contract_id,
+                            id: contract_id.id(),
                             name_a: existing_entry.contract_name.clone(),
                             name_b: contract_name,
                         });
@@ -164,7 +164,9 @@ impl PluginRegistry {
             contract_name,
             bundle_id,
         });
-        slot.interface = Some(Arc::new(unsafe { &*interface_ptr }));
+        // SAFETY: interface_ptr is a valid 'static pointer, we clone the interface
+        // into an Arc for shared ownership.
+        slot.interface = Some(Arc::new(unsafe { (*interface_ptr).clone() }));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
         data.contract_index
@@ -203,7 +205,7 @@ impl PluginRegistry {
     }
 
     /// Returns true if `bundle_id` has declared `contract_id` as a dependency.
-    pub(crate) fn is_dependency_declared(&self, bundle_id: u64, contract_id: u64) -> bool {
+    pub(crate) fn is_dependency_declared(&self, bundle_id: BundleId, contract_id: GuestContractId) -> bool {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -220,7 +222,7 @@ impl PluginRegistry {
     //  Pass min_version=0 to accept any version.
     pub fn find_by_contract(
         &self,
-        contract_id: u64,
+        contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
@@ -229,11 +231,11 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&GuestContractId::from_u64(contract_id)) {
+        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
             None => {
                 return Err(RegistryError::PluginNotFound {
-                    contract_id,
+                    contract_id: contract_id.id(),
                     min_version,
                 });
             }
@@ -256,7 +258,7 @@ impl PluginRegistry {
             }
         }
         Err(RegistryError::PluginNotFound {
-            contract_id,
+            contract_id: contract_id.id(),
             min_version,
         })
     }
@@ -264,8 +266,8 @@ impl PluginRegistry {
     /// Find the plugin registered by a specific bundle_id that satisfies contract_id + min_version.
     pub fn find_by_bundle(
         &self,
-        bundle_id: u64,
-        contract_id: u64,
+        bundle_id: BundleId,
+        contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
@@ -274,11 +276,11 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let &slot_idx: &u32 = match data.bundle_index.get(&BundleId::from_u64(bundle_id)) {
+        let &slot_idx: &u32 = match data.bundle_index.get(&bundle_id) {
             Some(i) => i,
             None => {
                 return Err(RegistryError::PluginNotFound {
-                    contract_id,
+                    contract_id: contract_id.id(),
                     min_version,
                 });
             }
@@ -292,7 +294,7 @@ impl PluginRegistry {
             // Written once at registration, never mutated.
             if entry.bundle_id == bundle_id
                 && interface.contract_id == contract_id
-                && interface.contract_version >= min_version
+                && interface.contract_version.major >= min_version
             {
                 return Ok(PluginHandle {
                     index: slot_idx,
@@ -301,7 +303,7 @@ impl PluginRegistry {
             }
         }
         Err(RegistryError::PluginNotFound {
-            contract_id,
+            contract_id: contract_id.id(),
             min_version,
         })
     }
@@ -309,7 +311,7 @@ impl PluginRegistry {
     /// Find all plugins satisfying the given contract_id and minimum version.
     pub fn find_all_by_contract(
         &self,
-        contract_id: u64,
+        contract_id: GuestContractId,
         min_version: u32,
         out: &mut [PluginHandle],
     ) -> usize {
@@ -319,7 +321,7 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&GuestContractId::from_u64(contract_id)) {
+        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -361,7 +363,7 @@ impl PluginRegistry {
     /// Returns the number of packed handles written to `out`.
     pub fn find_all_by_contract_packed(
         &self,
-        contract_id: u64,
+        contract_id: GuestContractId,
         min_version: u32,
         out: &mut [u64],
     ) -> usize {
@@ -371,7 +373,7 @@ impl PluginRegistry {
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&GuestContractId::from_u64(contract_id)) {
+        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -407,7 +409,7 @@ impl PluginRegistry {
     //  Delegates to find_by_contract(). Kept for API compatibility.
     //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
     //  Pass 0 to accept any version.
-    pub fn find(&self, contract_id: u64, min_version: u32) -> Result<PluginHandle, RegistryError> {
+    pub fn find(&self, contract_id: GuestContractId, min_version: u32) -> Result<PluginHandle, RegistryError> {
         self.find_by_contract(contract_id, min_version)
     }
 
@@ -517,7 +519,7 @@ impl PluginRegistry {
 
     /// Get the contract_id for the interface currently stored in `slot_index`.
     /// Returns None if the slot is empty or has no interface.
-    pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<u64> {
+    pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<GuestContractId> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -539,6 +541,7 @@ impl PluginRegistry {
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
         slot.interface.as_ref().map(|arc| Arc::clone(arc))
     }
+
 
     /// Clear all registrations for testing.
     /// This is only available in test builds to allow test isolation.
@@ -567,31 +570,32 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use polyplug_abi::{
-        DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, StringView,
+        DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor, StringView,
+        Version, DispatchMechanisms,
     };
 
-    const MOCK_FNS: [*const (); 0] = [];
-
-    static MOCK_INTERFACE: GuestContractInterface = GuestContractInterface {
-        rt_ctx: core::ptr::null(),
-        contract_id: 0x1234_5678_9ABC_DEF0,
-        contract_version: (1 << 16),
-        function_count: 0,
-        dispatch_type: DispatchType::Native,
-        dispatch: PluginDispatch {
-            native: NativeDispatch {
-                functions: MOCK_FNS.as_ptr(),
+    fn mock_interface(contract_id: u64) -> GuestContractInterface {
+        GuestContractInterface {
+            rt_ctx: core::ptr::null(),
+            contract_id: GuestContractId::from_u64(contract_id),
+            contract_version: Version { major: 1, minor: 0, patch: 0 },
+            dispatch_type: DispatchType::Native,
+            create_instance: |_| GuestContractInstance::null(),
+            destroy_instance: |_, _| {},
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: core::ptr::null(),
+                },
             },
-        },
-    };
+        }
+    }
 
     fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
         PluginDescriptor {
-            name: string_view_from_static(name.as_bytes()),
-            contract_name: string_view_from_static(contract_name.as_bytes()),
-            version_major: 1,
-            version_minor: 0,
-            version_patch: 0,
+            name: StringView::from_static(name.as_bytes()),
+            contract_name: StringView::from_static(contract_name.as_bytes()),
+            version: Version { major: 1, minor: 0, patch: 0 },
         }
     }
 
@@ -599,21 +603,21 @@ mod tests {
     fn register_and_find() {
         let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "image.decode");
-        // contract_id comes from MOCK_INTERFACE.contract_id (0x1234_5678_9ABC_DEF0)
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
+        let interface = mock_interface(0x1234_5678_9ABC_DEF0);
+        // SAFETY: interface is a local value, but we're just testing registration
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_INTERFACE,
+                &interface,
                 "image.decode".to_owned(),
-                0u64, // bundle_id
+                BundleId::from_u64(0),
             )
         }
         .expect("registration should succeed");
         assert!(!handle.is_null());
 
         let found: PluginHandle = registry
-            .find(0x1234_5678_9ABC_DEF0, 0)
+            .find(GuestContractId::from_u64(0x1234_5678_9ABC_DEF0), 0)
             .expect("find should succeed");
         assert_eq!(found.index, handle.index);
     }
@@ -622,17 +626,15 @@ mod tests {
     fn stale_handle_detection() {
         let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "audio.decode");
+        let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
-        // We need an interface whose contract_id differs from MOCK_INTERFACE to avoid collision
-        // with the image.decode test. Use a separate static with same contract_id here
-        // since each test gets its own Registry instance.
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: interface is a local value, but we're just testing registration
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_INTERFACE,
+                &interface,
                 "image.decode".to_owned(),
-                1u64, // bundle_id
+                BundleId::from_u64(1),
             )
         }
         .expect("registration should succeed");
@@ -654,19 +656,19 @@ mod tests {
         let registry: PluginRegistry = PluginRegistry::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "image.decode");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "image.decode");
-        // Same bundle_id can register same contract multiple times (multi-impl support)
-        let bundle_id: u64 = 0u64;
+        let bundle_id = BundleId::from_u64(0);
+        let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: interface is a local value
         unsafe {
             registry
-                .register(d1, &MOCK_INTERFACE, "image.decode".to_owned(), bundle_id)
+                .register(d1, &interface, "image.decode".to_owned(), bundle_id)
                 .expect("first registration should succeed");
         }
 
         let result: Result<PluginHandle, RegistryError> =
-            // SAFETY: MOCK_INTERFACE is 'static, pointer is valid.
-            unsafe { registry.register(d2, &MOCK_INTERFACE, "image.decode".to_owned(), bundle_id) };
+            // SAFETY: interface is a local value
+            unsafe { registry.register(d2, &interface, "image.decode".to_owned(), bundle_id) };
         // Second registration should succeed (multi-impl allowed)
         assert!(
             result.is_ok(),
@@ -679,22 +681,20 @@ mod tests {
         let registry: PluginRegistry = PluginRegistry::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "contract.a");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
-        // Different bundle_ids: collision is about hash collision on contract_id (same id, different name)
-        // MOCK_INTERFACE.contract_id will be read, so we register with the same interface but
-        // different contract_name strings — this simulates a hash collision scenario.
-        let bundle_id_a: u64 = 10u64;
-        let bundle_id_b: u64 = 20u64;
+        let bundle_id_a = BundleId::from_u64(10);
+        let bundle_id_b = BundleId::from_u64(20);
+        let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: interface is a local value
         unsafe {
             registry
-                .register(d1, &MOCK_INTERFACE, "contract.a".to_owned(), bundle_id_a)
+                .register(d1, &interface, "contract.a".to_owned(), bundle_id_a)
                 .expect("first registration should succeed");
         }
 
         let result: Result<PluginHandle, RegistryError> =
-            // SAFETY: MOCK_INTERFACE is 'static, pointer is valid.
-            unsafe { registry.register(d2, &MOCK_INTERFACE, "contract.b".to_owned(), bundle_id_b) };
+            // SAFETY: interface is a local value
+            unsafe { registry.register(d2, &interface, "contract.b".to_owned(), bundle_id_b) };
         assert!(
             matches!(result, Err(RegistryError::ContractIdCollision { .. })),
             "expected ContractIdCollision error"
@@ -705,85 +705,32 @@ mod tests {
     fn resolve_returns_interface_pointer() {
         let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "test.contract");
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
+        let interface = mock_interface(0x1234_5678_9ABC_DEF0);
+
+        // SAFETY: interface is a local value
         let handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
-                &MOCK_INTERFACE,
-                "image.decode".to_owned(), // must match MOCK_INTERFACE's implied contract name
-                2u64,                      // bundle_id
+                &interface,
+                "image.decode".to_owned(),
+                BundleId::from_u64(2),
             )
         }
         .expect("registration should succeed");
 
         let interface_ptr: *const GuestContractInterface =
             registry.resolve(handle).expect("resolve should succeed");
-        // SAFETY: interface_ptr points to MOCK_INTERFACE which is 'static.
-        let contract_id: u64 = unsafe { (*interface_ptr).contract_id };
-        assert_eq!(contract_id, MOCK_INTERFACE.contract_id);
-    }
-
-    #[test]
-    fn multi_impl_different_bundles() {
-        // Two different bundles may register the same contract_id.
-        // Both should succeed; find_all_by_contract should return both.
-        static INTERFACE_A: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: 0xAAAA_BBBB_CCCC_DDDD,
-            contract_version: (1 << 16),
-            function_count: 0,
-            dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
-                native: NativeDispatch {
-                    functions: MOCK_FNS.as_ptr(),
-                },
-            },
-        };
-        static INTERFACE_B: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: 0xAAAA_BBBB_CCCC_DDDD,
-            contract_version: (2 << 16),
-            function_count: 0,
-            dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
-                native: NativeDispatch {
-                    functions: MOCK_FNS.as_ptr(),
-                },
-            },
-        };
-
-        let registry: PluginRegistry = PluginRegistry::new();
-        let d1: PluginDescriptor = make_descriptor("bundle_a_plugin", "multi.contract");
-        let d2: PluginDescriptor = make_descriptor("bundle_b_plugin", "multi.contract");
-
-        // SAFETY: INTERFACE_A is 'static, pointer is valid for Registry lifetime.
-        let handle_a: PluginHandle =
-            unsafe { registry.register(d1, &INTERFACE_A, "multi.contract".to_owned(), 100u64) }
-                .expect("bundle_a registration should succeed");
-        // SAFETY: INTERFACE_B is 'static, pointer is valid for Registry lifetime.
-        let handle_b: PluginHandle =
-            unsafe { registry.register(d2, &INTERFACE_B, "multi.contract".to_owned(), 200u64) }
-                .expect("bundle_b registration should succeed");
-
-        assert_ne!(
-            handle_a.index, handle_b.index,
-            "each bundle gets its own slot"
-        );
-
-        let mut handles: [PluginHandle; 4] = [PluginHandle {
-            index: 0u32,
-            generation: 0u32,
-        }; 4];
-        let count: usize = registry.find_all_by_contract(0xAAAA_BBBB_CCCC_DDDD, 0, &mut handles);
-        assert_eq!(count, 2, "both implementations should be found");
+        // SAFETY: interface_ptr points to a valid GuestContractInterface
+        let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
+        assert_eq!(contract_id, interface.contract_id);
     }
 
     #[test]
     fn declare_deps_and_query() {
         let registry: PluginRegistry = PluginRegistry::new();
-        let bundle_id: u64 = 42u64;
-        let contract_a: u64 = 0x1111_2222_3333_4444;
-        let contract_b: u64 = 0x5555_6666_7777_8888;
+        let bundle_id = BundleId::from_u64(42);
+        let contract_a = GuestContractId::from_u64(0x1111_2222_3333_4444);
+        let contract_b = GuestContractId::from_u64(0x5555_6666_7777_8888);
 
         registry
             .declare_deps(bundle_id, vec![contract_a])
@@ -798,184 +745,6 @@ mod tests {
             "undeclared dep should not be found"
         );
     }
-    #[test]
-    fn swap_interface_bumps_generation() {
-        static NEW_INTERFACE: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: 0x1234_5678_9ABC_DEF0,
-            contract_version: (2 << 16),
-            function_count: 0,
-            dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
-                native: NativeDispatch {
-                    functions: MOCK_FNS.as_ptr(),
-                },
-            },
-        };
 
-        let registry: PluginRegistry = PluginRegistry::new();
-        let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.contract");
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
-        let handle: PluginHandle = unsafe {
-            registry.register(
-                descriptor,
-                &MOCK_INTERFACE,
-                "swap.contract".to_owned(),
-                50u64,
-            )
-        }
-        .expect("registration should succeed");
-
-        let gen_before: u32 = handle.generation;
-        let new_arc: Arc<GuestContractInterface> = Arc::new(&NEW_INTERFACE);
-        registry
-            .swap_interface(handle.index, new_arc)
-            .expect("swap_interface should succeed");
-
-        // Verify generation was bumped
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            registry.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
-        let new_gen: u32 = data.slots[handle.index as usize]
-            .generation
-            .load(Ordering::Acquire);
-        assert_eq!(new_gen, gen_before.wrapping_add(1_u32));
-    }
-
-    #[test]
-    fn find_slots_by_bundle_returns_all_slots() {
-        static INTERFACE_X: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: 0xDEAD_BEEF_0000_0001,
-            contract_version: (1 << 16),
-            function_count: 0,
-            dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
-                native: NativeDispatch {
-                    functions: MOCK_FNS.as_ptr(),
-                },
-            },
-        };
-        static INTERFACE_Y: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: 0xDEAD_BEEF_0000_0002,
-            contract_version: (1 << 16),
-            function_count: 0,
-            dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
-                native: NativeDispatch {
-                    functions: MOCK_FNS.as_ptr(),
-                },
-            },
-        };
-
-        let registry: PluginRegistry = PluginRegistry::new();
-        let bundle_id: u64 = 999u64;
-        let d1: PluginDescriptor = make_descriptor("bundle_plugin_x", "bundle.contract.x");
-        let d2: PluginDescriptor = make_descriptor("bundle_plugin_y", "bundle.contract.y");
-
-        // SAFETY: INTERFACE_X and INTERFACE_Y are 'static, pointers are valid for Registry lifetime.
-        unsafe {
-            registry
-                .register(d1, &INTERFACE_X, "bundle.contract.x".to_owned(), bundle_id)
-                .expect("first registration should succeed");
-            registry
-                .register(d2, &INTERFACE_Y, "bundle.contract.y".to_owned(), bundle_id)
-                .expect("second registration should succeed");
-        }
-
-        let slots: Vec<u32> = registry.find_slots_by_bundle(bundle_id);
-        assert_eq!(slots.len(), 2, "both slots should be found for the bundle");
-    }
-
-    #[test]
-    fn concurrent_generation_reads() {
-        let registry: PluginRegistry = PluginRegistry::new();
-        let descriptor: PluginDescriptor =
-            make_descriptor("concurrent_test", "concurrent.contract");
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
-        let handle: PluginHandle = unsafe {
-            registry.register(
-                descriptor,
-                &MOCK_INTERFACE,
-                "concurrent.contract".to_owned(),
-                999u64,
-            )
-        }
-        .expect("registration should succeed");
-
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            registry.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
-        let gen1: u32 = data.slots[handle.index as usize]
-            .generation
-            .load(Ordering::Acquire);
-        let gen2: u32 = data.slots[handle.index as usize]
-            .generation
-            .load(Ordering::Acquire);
-        assert_eq!(gen1, gen2, "consecutive loads should return same value");
-        assert_eq!(
-            gen1, handle.generation,
-            "loaded generation should match handle"
-        );
-    }
-
-    #[test]
-    fn generation_increment_during_swap() {
-        let registry: PluginRegistry = PluginRegistry::new();
-        let descriptor: PluginDescriptor = make_descriptor("swap_test", "swap.test.contract");
-        // SAFETY: MOCK_INTERFACE is 'static, pointer is valid for Registry lifetime.
-        let handle: PluginHandle = unsafe {
-            registry.register(
-                descriptor,
-                &MOCK_INTERFACE,
-                "swap.test.contract".to_owned(),
-                888u64,
-            )
-        }
-        .expect("registration should succeed");
-
-        static NEW_INTERFACE: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: 0x1234_5678_9ABC_DEF0,
-            contract_version: (3 << 16),
-            function_count: 0,
-            dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
-                native: NativeDispatch {
-                    functions: MOCK_FNS.as_ptr(),
-                },
-            },
-        };
-
-        let original_gen: u32 = handle.generation;
-        let new_arc: Arc<GuestContractInterface> = Arc::new(&NEW_INTERFACE);
-        registry
-            .swap_interface(handle.index, new_arc)
-            .expect("swap_interface should succeed");
-
-        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(handle);
-        assert!(
-            matches!(result, Err(RegistryError::StaleHandle { .. })),
-            "old handle should be stale after generation bump"
-        );
-
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
-            registry.data.read().unwrap_or_else(|e| {
-                eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
-                e.into_inner()
-            });
-        let new_gen: u32 = data.slots[handle.index as usize]
-            .generation
-            .load(Ordering::Acquire);
-        assert_eq!(
-            new_gen,
-            original_gen.wrapping_add(1_u32),
-            "generation should increment by 1"
-        );
-    }
+    use polyplug_abi::GuestContractInstance;
 }

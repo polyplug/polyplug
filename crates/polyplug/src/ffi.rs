@@ -3,13 +3,12 @@
 //! All functions use `catch_unwind` to prevent Rust panics from unwinding across
 //! the C ABI boundary. Errors are stored per-runtime in the Runtime's last_error field.
 
-use std::sync::Arc;
-
 use polyplug_abi::{GuestContractInterface, PluginHandle, types::StringView};
 
 use crate::loader::BundleLoader;
 use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
+use crate::RuntimeConfig;
 
 /// Helper to create a StringView from a Rust string slice.
 fn string_view_from_str(s: &str) -> StringView {
@@ -198,7 +197,7 @@ pub unsafe extern "C" fn polyplug_runtime_create_with_options(
             if !opts.config.is_null() {
                 // SAFETY: opts.config is non-null and points to a valid RuntimeConfigC per ABI contract.
                 let config_c: RuntimeConfigC = unsafe { *opts.config };
-                let runtime_config: RuntimeConfigC = config_c.into_runtime_config();
+                let runtime_config: RuntimeConfig = config_c.into_runtime_config();
                 builder = builder.config(runtime_config);
             }
 
@@ -560,7 +559,7 @@ pub unsafe extern "C" fn polyplug_runtime_register_host_contract(
         // SAFETY: vtable is a valid *const HostContractInterface per ABI contract.
         // The caller guarantees the vtable remains valid for the runtime's lifetime.
         let vtable_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*vtable };
-        match runtime.register_host_contract(vtable_ref.header.contract_id, vtable_ref) {
+        match runtime.register_host_contract(vtable_ref.contract_id.id(), vtable_ref) {
             Ok(()) => 0u32,
             Err(crate::error::HostContractError::DuplicateContract { .. }) => 2u32,
             Err(e) => {

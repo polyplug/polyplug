@@ -3,28 +3,26 @@
 //! Edge case tests for Registry.
 //!
 //! Tests for:
-//! - resolve_guard with valid/stale handles
+//! - resolve with valid/stale handles
 //! - concurrent access thread safety
 //! - find_by_contract with multiple implementations
-//! - swap_vtable during active resolve_guard
+//! - swap_interface during active resolve
 
 use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::plugin_registry::PluginGuard;
 use polyplug::plugin_registry::PluginRegistry;
-use polyplug::plugin_registry::VTableSlot;
 use polyplug_abi::{
-    DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
-    StringView,
+    DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor, PluginDispatch,
+    PluginHandle, StringView,
 };
 
 const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 macro_rules! make_interface {
     ($contract_id:expr, $version:expr) => {
-        PluginInterface {
+        GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: $contract_id,
             contract_version: $version,
@@ -40,14 +38,14 @@ macro_rules! make_interface {
 }
 
 // =============================================================================
-// Test 1: resolve_guard with valid handle after multiple registrations
+// Test 1: resolve with valid handle after multiple registrations
 // =============================================================================
 
 #[test]
-fn resolve_guard_valid_handle_after_multiple_registrations() {
-    static VTABLE_A: PluginInterface = make_interface!(0xEEEE_0000_0000_0001_u64, 1_u32 << 16);
-    static VTABLE_B: PluginInterface = make_interface!(0xEEEE_0000_0000_0002_u64, 2_u32 << 16);
-    static VTABLE_C: PluginInterface = make_interface!(0xEEEE_0000_0000_0003_u64, 3_u32 << 16);
+fn resolve_valid_handle_after_multiple_registrations() {
+    static VTABLE_A: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0001_u64, 1_u32 << 16);
+    static VTABLE_B: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0002_u64, 2_u32 << 16);
+    static VTABLE_C: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0003_u64, 3_u32 << 16);
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -76,10 +74,8 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
             .expect("registration C should succeed")
     };
 
-    let guard_a: PluginGuard = registry
-        .resolve_guard(handle_a)
-        .expect("resolve_guard for handle_a should succeed");
-    let vtable_ptr_a: *const PluginInterface = guard_a.vtable();
+    let vtable_ptr_a: *const GuestContractInterface =
+        registry.resolve(handle_a).expect("resolve for handle_a should succeed");
     // SAFETY: vtable_ptr_a points to VTABLE_A which is 'static.
     let contract_id_a: u64 = unsafe { (*vtable_ptr_a).contract_id };
     assert_eq!(
@@ -87,10 +83,8 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
         "handle_a should return VTABLE_A"
     );
 
-    let guard_b: PluginGuard = registry
-        .resolve_guard(handle_b)
-        .expect("resolve_guard for handle_b should succeed");
-    let vtable_ptr_b: *const PluginInterface = guard_b.vtable();
+    let vtable_ptr_b: *const GuestContractInterface =
+        registry.resolve(handle_b).expect("resolve for handle_b should succeed");
     // SAFETY: vtable_ptr_b points to VTABLE_B which is 'static.
     let contract_id_b: u64 = unsafe { (*vtable_ptr_b).contract_id };
     assert_eq!(
@@ -98,10 +92,8 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
         "handle_b should return VTABLE_B"
     );
 
-    let guard_c: PluginGuard = registry
-        .resolve_guard(handle_c)
-        .expect("resolve_guard for handle_c should succeed");
-    let vtable_ptr_c: *const PluginInterface = guard_c.vtable();
+    let vtable_ptr_c: *const GuestContractInterface =
+        registry.resolve(handle_c).expect("resolve for handle_c should succeed");
     // SAFETY: vtable_ptr_c points to VTABLE_C which is 'static.
     let contract_id_c: u64 = unsafe { (*vtable_ptr_c).contract_id };
     assert_eq!(
@@ -111,12 +103,12 @@ fn resolve_guard_valid_handle_after_multiple_registrations() {
 }
 
 // =============================================================================
-// Test 2: resolve_guard with handle pointing to vacant slot
+// Test 2: resolve with handle pointing to vacant slot
 // =============================================================================
 
 #[test]
-fn resolve_guard_vacant_slot_returns_stale_handle() {
-    static VTABLE: PluginInterface = make_interface!(0xEEEE_0000_0000_0010_u64, 1_u32 << 16);
+fn resolve_vacant_slot_returns_stale_handle() {
+    static VTABLE: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0010_u64, 1_u32 << 16);
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -133,7 +125,8 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: 9999_u32,
         generation: 0_u32,
     };
-    let result: Result<PluginGuard, RegistryError> = registry.resolve_guard(out_of_bounds_handle);
+    let result: Result<*const GuestContractInterface, RegistryError> =
+        registry.resolve(out_of_bounds_handle);
     assert!(
         matches!(result, Err(RegistryError::StaleHandle { .. })),
         "out of bounds handle should return StaleHandle error"
@@ -144,7 +137,8 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: handle.index,
         generation: handle.generation.wrapping_add(1_u32),
     };
-    let result_stale: Result<PluginGuard, RegistryError> = registry.resolve_guard(stale_handle);
+    let result_stale: Result<*const GuestContractInterface, RegistryError> =
+        registry.resolve(stale_handle);
     assert!(
         matches!(result_stale, Err(RegistryError::StaleHandle { .. })),
         "wrong generation handle should return StaleHandle error"
@@ -155,8 +149,8 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
         index: 1_u32,
         generation: 0_u32,
     };
-    let result_unused: Result<PluginGuard, RegistryError> =
-        registry.resolve_guard(unused_slot_handle);
+    let result_unused: Result<*const GuestContractInterface, RegistryError> =
+        registry.resolve(unused_slot_handle);
     assert!(
         matches!(result_unused, Err(RegistryError::StaleHandle { .. })),
         "unused slot handle should return StaleHandle error"
@@ -164,7 +158,7 @@ fn resolve_guard_vacant_slot_returns_stale_handle() {
 }
 
 // =============================================================================
-// Test 3: resolve_guard concurrent access (thread safety)
+// Test 3: resolve concurrent access (thread safety)
 // =============================================================================
 
 const CONCURRENT_THREADS: usize = 8_usize;
@@ -203,7 +197,7 @@ const CONCURRENT_PLUGIN_NAMES: [&str; CONCURRENT_THREADS] = [
     "concurrent_plugin_7",
 ];
 
-static CONCURRENT_VTABLES: [PluginInterface; CONCURRENT_THREADS] = [
+static CONCURRENT_VTABLES: [GuestContractInterface; CONCURRENT_THREADS] = [
     make_interface!(CONCURRENT_CONTRACT_IDS[0], 1_u32 << 16),
     make_interface!(CONCURRENT_CONTRACT_IDS[1], 1_u32 << 16),
     make_interface!(CONCURRENT_CONTRACT_IDS[2], 1_u32 << 16),
@@ -215,7 +209,7 @@ static CONCURRENT_VTABLES: [PluginInterface; CONCURRENT_THREADS] = [
 ];
 
 #[test]
-fn resolve_guard_concurrent_access_thread_safety() {
+fn resolve_concurrent_access_thread_safety() {
     let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(CONCURRENT_THREADS));
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> =
@@ -249,11 +243,10 @@ fn resolve_guard_concurrent_access_thread_safety() {
             barrier_clone.wait();
 
             for _round in 0_usize..CONCURRENT_ROUNDS {
-                let guard: PluginGuard = registry_clone
-                    .resolve_guard(handle)
-                    .expect("resolve_guard should succeed in concurrent context");
-                let vtable_ptr: *const PluginInterface = guard.vtable();
-                // SAFETY: vtable_ptr points to a 'static PluginInterface.
+                let vtable_ptr: *const GuestContractInterface = registry_clone
+                    .resolve(handle)
+                    .expect("resolve should succeed in concurrent context");
+                // SAFETY: vtable_ptr points to a 'static GuestContractInterface.
                 let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
                 assert_eq!(
                     contract_id, expected_contract_id,
@@ -278,9 +271,9 @@ fn resolve_guard_concurrent_access_thread_safety() {
 fn find_by_contract_multiple_implementations_returns_first() {
     const MULTI_CONTRACT_ID: u64 = 0xEEEE_2000_0000_0001_u64;
 
-    static VTABLE_IMPL_A: PluginInterface = make_interface!(MULTI_CONTRACT_ID, 1_u32 << 16);
-    static VTABLE_IMPL_B: PluginInterface = make_interface!(MULTI_CONTRACT_ID, 2_u32 << 16);
-    static VTABLE_IMPL_C: PluginInterface = make_interface!(MULTI_CONTRACT_ID, 3_u32 << 16);
+    static VTABLE_IMPL_A: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, 1_u32 << 16);
+    static VTABLE_IMPL_B: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, 2_u32 << 16);
+    static VTABLE_IMPL_C: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, 3_u32 << 16);
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -350,10 +343,8 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "generation should match first implementation"
     );
 
-    let guard: PluginGuard = registry
-        .resolve_guard(found)
-        .expect("resolve_guard should succeed");
-    let vtable_ptr: *const PluginInterface = guard.vtable();
+    let vtable_ptr: *const GuestContractInterface =
+        registry.resolve(found).expect("resolve should succeed");
     // SAFETY: vtable_ptr points to VTABLE_IMPL_A which is 'static.
     let version: u32 = unsafe { (*vtable_ptr).contract_version };
     assert_eq!(
@@ -373,17 +364,17 @@ fn find_by_contract_multiple_implementations_returns_first() {
 }
 
 // =============================================================================
-// Test 5: swap_vtable during active resolve_guard
+// Test 5: swap_interface during active resolve
 // =============================================================================
 
 #[test]
-fn swap_vtable_during_active_resolve_guard() {
+fn swap_interface_during_active_resolve() {
     const SWAP_TEST_CONTRACT_ID: u64 = 0xEEEE_3000_0000_0001_u64;
     const VERSION_V1: u32 = 1_u32 << 16;
     const VERSION_V2: u32 = 2_u32 << 16;
 
-    static VTABLE_V1: PluginInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
-    static VTABLE_V2: PluginInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
+    static VTABLE_V1: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
+    static VTABLE_V2: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -400,37 +391,28 @@ fn swap_vtable_during_active_resolve_guard() {
             .expect("initial registration should succeed")
     };
 
-    let guard_before_swap: PluginGuard = registry
-        .resolve_guard(handle_v1)
-        .expect("resolve_guard before swap should succeed");
-    let vtable_ptr_before: *const PluginInterface = guard_before_swap.vtable();
+    let vtable_ptr_before: *const GuestContractInterface =
+        registry.resolve(handle_v1).expect("resolve before swap should succeed");
     // SAFETY: vtable_ptr_before points to VTABLE_V1 which is 'static.
     let version_before: u32 = unsafe { (*vtable_ptr_before).contract_version };
     assert_eq!(
         version_before, VERSION_V1,
-        "guard before swap should have V1"
+        "vtable before swap should have V1"
     );
 
-    let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&VTABLE_V2));
-    let old_arc: Arc<VTableSlot> = registry
-        .swap_vtable(handle_v1.index, new_arc)
-        .expect("swap_vtable should succeed");
+    // Perform the swap - direct swap_interface takes Arc<GuestContractInterface>
+    let new_arc: Arc<GuestContractInterface> = Arc::new(&VTABLE_V2);
+    registry
+        .swap_interface(handle_v1.index, new_arc)
+        .expect("swap_interface should succeed");
 
-    // SAFETY: old_arc.0 points to VTABLE_V1 which is 'static.
-    let old_version: u32 = unsafe { (*old_arc.0).contract_version };
-    assert_eq!(old_version, VERSION_V1, "old_arc should point to V1");
+    // The old handle should now be stale (generation mismatch).
+    let result_after_swap: Result<*const GuestContractInterface, RegistryError> =
+        registry.resolve(handle_v1);
 
-    // SAFETY: vtable_ptr_before still points to VTABLE_V1 (guard holds Arc to it).
-    let version_after_swap_from_old_guard: u32 = unsafe { (*vtable_ptr_before).contract_version };
-    assert_eq!(
-        version_after_swap_from_old_guard, VERSION_V1,
-        "old guard should still point to V1 after swap"
-    );
-
-    let result_after_swap: Result<PluginGuard, RegistryError> = registry.resolve_guard(handle_v1);
     assert!(
         matches!(result_after_swap, Err(RegistryError::StaleHandle { .. })),
-        "old handle should be stale after swap_vtable bumps generation"
+        "old handle should be stale after swap_interface bumps generation"
     );
 
     let new_handle: PluginHandle = registry
@@ -443,13 +425,11 @@ fn swap_vtable_during_active_resolve_guard() {
         "new handle should have incremented generation"
     );
 
-    let guard_after_swap: PluginGuard = registry
-        .resolve_guard(new_handle)
-        .expect("resolve_guard with new handle should succeed");
-    let vtable_ptr_after: *const PluginInterface = guard_after_swap.vtable();
+    let vtable_ptr_after: *const GuestContractInterface =
+        registry.resolve(new_handle).expect("resolve with new handle should succeed");
     // SAFETY: vtable_ptr_after points to VTABLE_V2 which is 'static.
     let version_after: u32 = unsafe { (*vtable_ptr_after).contract_version };
-    assert_eq!(version_after, VERSION_V2, "new guard should point to V2");
+    assert_eq!(version_after, VERSION_V2, "new resolve should point to V2");
 }
 
 // =============================================================================

@@ -12,7 +12,7 @@ pub enum ParseVersionError {
 
 /// A three-component semantic version (major.minor.patch).
 #[repr(C)]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version {
     /// Major version.
     pub major: u32,

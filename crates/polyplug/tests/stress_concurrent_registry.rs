@@ -6,15 +6,12 @@ use core::sync::atomic::Ordering;
 use core::time::Duration;
 use std::sync::Arc;
 use std::sync::Barrier;
-use std::time::Instant;
 
 use polyplug::error::RegistryError;
-use polyplug::plugin_registry::PluginGuard;
 use polyplug::plugin_registry::PluginRegistry;
-use polyplug::plugin_registry::VTableSlot;
 use polyplug_abi::{
-    DispatchType, NativeDispatch, PluginDescriptor, PluginDispatch, PluginHandle, PluginInterface,
-    StringView,
+    DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor, PluginDispatch,
+    PluginHandle, StringView,
 };
 
 const THREADS: usize = 8_usize;
@@ -23,7 +20,6 @@ const RESOLVE_ROUNDS: usize = 32_usize;
 const SWAP_ROUNDS: usize = 24_usize;
 const VERSION_V1: u32 = 1_u32 << 16;
 const VERSION_V2: u32 = 2_u32 << 16;
-const QUIESCENCE_TIMEOUT: Duration = Duration::from_secs(2_u64);
 
 const CONTRACT_IDS: [u64; THREADS] = [
     0x7171_0000_0000_1000_u64,
@@ -62,7 +58,7 @@ const MOCK_FUNCTIONS: [*const (); 0] = [];
 
 macro_rules! make_interface {
     ($contract_id:expr, $version:expr) => {
-        PluginInterface {
+        GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: $contract_id,
             contract_version: $version,
@@ -77,7 +73,7 @@ macro_rules! make_interface {
     };
 }
 
-static VTABLES_V1: [PluginInterface; THREADS] = [
+static VTABLES_V1: [GuestContractInterface; THREADS] = [
     make_interface!(CONTRACT_IDS[0], VERSION_V1),
     make_interface!(CONTRACT_IDS[1], VERSION_V1),
     make_interface!(CONTRACT_IDS[2], VERSION_V1),
@@ -90,9 +86,9 @@ static VTABLES_V1: [PluginInterface; THREADS] = [
 
 const SWAP_CONTRACT_ID: u64 = 0x7171_0000_0000_2000_u64;
 
-static VTABLE_SWAP_V1: PluginInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V1);
+static VTABLE_SWAP_V1: GuestContractInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V1);
 
-static VTABLE_SWAP_V2: PluginInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V2);
+static VTABLE_SWAP_V2: GuestContractInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V2);
 
 fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
     PluginDescriptor {
@@ -101,20 +97,6 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
-    }
-}
-
-fn wait_for_quiescence(old_arc: &Arc<VTableSlot>, timeout: Duration) -> bool {
-    let start: Instant = Instant::now();
-    loop {
-        let strong_count: usize = Arc::strong_count(old_arc);
-        if strong_count == 1_usize {
-            return true;
-        }
-        if start.elapsed() > timeout {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(1_u64));
     }
 }
 
@@ -130,7 +112,7 @@ fn stress_concurrent_register_find_resolve() {
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             let descriptor: PluginDescriptor =
                 make_descriptor(PLUGIN_NAMES[idx], CONTRACT_NAMES[idx]);
-            let vtable: &'static PluginInterface = &VTABLES_V1[idx];
+            let vtable: &'static GuestContractInterface = &VTABLES_V1[idx];
             barrier_clone.wait();
             // SAFETY: vtable is a static reference valid for the test lifetime.
             let handle: PluginHandle = unsafe {
@@ -148,19 +130,18 @@ fn stress_concurrent_register_find_resolve() {
                 let found: PluginHandle = reg_clone
                     .find_by_contract(CONTRACT_IDS[idx], VERSION_V1)
                     .expect("find_by_contract must succeed");
-                let guard: PluginGuard = reg_clone
-                    .resolve_guard(found)
-                    .expect("resolve_guard must succeed");
-                let vtable_ptr: *const PluginInterface = guard.vtable();
-                // SAFETY: vtable_ptr is from the registry and valid for the guard lifetime.
+                let vtable_ptr: *const GuestContractInterface =
+                    reg_clone.resolve(found).expect("resolve must succeed");
+                // SAFETY: vtable_ptr is from the registry and valid.
                 let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
-                // SAFETY: vtable_ptr is from the registry and valid for the guard lifetime.
+                // SAFETY: vtable_ptr is from the registry and valid.
                 let version: u32 = unsafe { (*vtable_ptr).contract_version };
                 assert_eq!(contract_id, CONTRACT_IDS[idx]);
                 assert_eq!(version, VERSION_V1);
             }
 
-            let resolved: Result<*const PluginInterface, RegistryError> = reg_clone.resolve(handle);
+            let resolved: Result<*const GuestContractInterface, RegistryError> =
+                reg_clone.resolve(handle);
             assert!(
                 resolved.is_ok(),
                 "resolve must succeed for registered handle"
@@ -177,11 +158,9 @@ fn stress_concurrent_register_find_resolve() {
         let found: PluginHandle = registry
             .find_by_contract(expected_cid, VERSION_V1)
             .expect("main-thread find must succeed");
-        let guard: PluginGuard = registry
-            .resolve_guard(found)
-            .expect("main-thread resolve_guard must succeed");
-        let vtable_ptr: *const PluginInterface = guard.vtable();
-        // SAFETY: vtable_ptr is valid while guard is alive.
+        let vtable_ptr: *const GuestContractInterface =
+            registry.resolve(found).expect("main-thread resolve must succeed");
+        // SAFETY: vtable_ptr is valid.
         let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
         assert_eq!(contract_id, CONTRACT_IDS[idx]);
     }
@@ -220,11 +199,10 @@ fn stress_concurrent_swaps_with_resolvers() {
                 let handle_result: Result<PluginHandle, RegistryError> =
                     reg_clone.find_by_contract(SWAP_CONTRACT_ID, 0_u32);
                 if let Ok(found) = handle_result {
-                    let guard_result: Result<PluginGuard, RegistryError> =
-                        reg_clone.resolve_guard(found);
-                    if let Ok(guard) = guard_result {
-                        let vtable_ptr: *const PluginInterface = guard.vtable();
-                        // SAFETY: vtable_ptr is valid for the guard lifetime.
+                    let resolve_result: Result<*const GuestContractInterface, RegistryError> =
+                        reg_clone.resolve(found);
+                    if let Ok(vtable_ptr) = resolve_result {
+                        // SAFETY: vtable_ptr is valid.
                         let version: u32 = unsafe { (*vtable_ptr).contract_version };
                         assert!(
                             version == VERSION_V1 || version == VERSION_V2,
@@ -241,17 +219,16 @@ fn stress_concurrent_swaps_with_resolvers() {
     ready.wait();
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static PluginInterface = if round % 2_usize == 0_usize {
+        let new_vtable: &'static GuestContractInterface = if round % 2_usize == 0_usize {
             &VTABLE_SWAP_V2
         } else {
             &VTABLE_SWAP_V1
         };
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(new_vtable));
-        let old_arc: Arc<VTableSlot> = registry
-            .swap_vtable(handle.index, new_arc)
-            .expect("swap_vtable must succeed");
-        let quiesced: bool = wait_for_quiescence(&old_arc, QUIESCENCE_TIMEOUT);
-        assert!(quiesced, "round {round}: old arc must quiesce");
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable);
+        registry
+            .swap_interface(handle.index, new_arc)
+            .expect("swap_interface must succeed");
+        // No quiescence wait needed - direct swap model
     }
 
     stop.store(true, Ordering::Relaxed);

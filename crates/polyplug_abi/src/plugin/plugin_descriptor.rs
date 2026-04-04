@@ -7,7 +7,7 @@ use crate::types::{StringView, Version};
 /// `contract_name` StringViews are borrowed from the plugin's static memory.
 /// The receiver must not free or outlive the plugin's library.
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PluginDescriptor {
     /// Human-readable plugin name.
     pub name: StringView,

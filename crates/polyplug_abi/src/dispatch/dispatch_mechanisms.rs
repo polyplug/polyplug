@@ -14,6 +14,15 @@ pub union DispatchMechanisms {
     pub vm: VmDispatch,
 }
 
+impl Clone for DispatchMechanisms {
+    fn clone(&self) -> Self {
+        // SAFETY: Both variants are Copy, so we can safely copy the union.
+        Self { native: unsafe { self.native } }
+    }
+}
+
+impl Copy for DispatchMechanisms {}
+
 #[cfg(test)]
 mod tests {
     use core::mem::{align_of, size_of};

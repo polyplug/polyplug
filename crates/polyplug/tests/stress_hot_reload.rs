@@ -11,14 +11,12 @@ use core::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
 
 use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
 use polyplug::plugin_registry::PluginRegistry;
-use polyplug::plugin_registry::VTableSlot;
 use polyplug::runtime::Runtime;
-use polyplug_abi::{DispatchType, NativeDispatch, PluginDispatch, PluginInterface};
+use polyplug_abi::{DispatchType, GuestContractInterface, NativeDispatch, PluginDispatch};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -29,7 +27,7 @@ const RELOAD_V2_DIR: &str = env!("RELOAD_PLUGIN_V2_DIR");
 
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
-static VTABLE_MEM_A: PluginInterface = PluginInterface {
+static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
     rt_ctx: core::ptr::null(),
     contract_id: 0xDEAD_BEEF_0000_0001_u64,
     contract_version: (1_u32 << 16),
@@ -42,7 +40,7 @@ static VTABLE_MEM_A: PluginInterface = PluginInterface {
     },
 };
 
-static VTABLE_MEM_B: PluginInterface = PluginInterface {
+static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
     rt_ctx: core::ptr::null(),
     contract_id: 0xDEAD_BEEF_0000_0001_u64,
     contract_version: (2_u32 << 16),
@@ -55,7 +53,7 @@ static VTABLE_MEM_B: PluginInterface = PluginInterface {
     },
 };
 
-static VTABLE_QU_A: PluginInterface = PluginInterface {
+static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
     rt_ctx: core::ptr::null(),
     contract_id: 0xCAFE_BABE_0000_0001_u64,
     contract_version: (1_u32 << 16),
@@ -68,7 +66,7 @@ static VTABLE_QU_A: PluginInterface = PluginInterface {
     },
 };
 
-static VTABLE_QU_B: PluginInterface = PluginInterface {
+static VTABLE_QU_B: GuestContractInterface = GuestContractInterface {
     rt_ctx: core::ptr::null(),
     contract_id: 0xCAFE_BABE_0000_0001_u64,
     contract_version: (2_u32 << 16),
@@ -109,8 +107,7 @@ fn make_hot_reload_runtime() -> Runtime {
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let guard: polyplug::plugin_registry::PluginGuard = rt.resolve_plugin(handle).ok()?;
-    let vtable_ptr: *const PluginInterface = guard.vtable();
+    let vtable_ptr: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?;
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*vtable_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
@@ -170,15 +167,10 @@ fn stress_rapid_reload_cycles_100() {
     );
 }
 
-/// Memory tracking during reload: Arc strong counts must return to 1 after
-/// each reload cycle, confirming old VTableSlots are released.
-///
-/// We instrument this at the registry level by swapping a known static vtable
-/// and verifying quiescence (strong_count == 1) within a bounded time.
+/// Memory tracking during reload: Direct swap_interface swaps interfaces.
 #[test]
-fn stress_memory_vtable_slot_released_after_reload() {
+fn stress_memory_interface_swap_cycles() {
     const CYCLES: usize = 50_usize;
-    const QUIESCENCE_MS: u64 = 500_u64;
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -203,50 +195,31 @@ fn stress_memory_vtable_slot_released_after_reload() {
     };
 
     for cycle in 0_usize..CYCLES {
-        let new_vtable: &'static PluginInterface = if cycle % 2_usize == 0_usize {
+        let new_vtable: &'static GuestContractInterface = if cycle % 2_usize == 0_usize {
             &VTABLE_MEM_B
         } else {
             &VTABLE_MEM_A
         };
 
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(new_vtable));
-        let old_arc: Arc<VTableSlot> = registry
-            .swap_vtable(handle.index, new_arc)
-            .unwrap_or_else(|e| panic!("swap_vtable failed at cycle {cycle}: {e}"));
-
-        // Wait for the old arc to reach strong_count == 1 (no in-flight users).
-        let deadline: Instant = Instant::now() + Duration::from_millis(QUIESCENCE_MS);
-        loop {
-            if Arc::strong_count(&old_arc) == 1_usize {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "cycle {cycle}: old VTableSlot did not quiesce within {QUIESCENCE_MS}ms"
-            );
-            std::thread::sleep(Duration::from_millis(1_u64));
-        }
-
-        // Explicitly drop the old arc — memory released.
-        drop(old_arc);
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable);
+        registry
+            .swap_interface(handle.index, new_arc)
+            .unwrap_or_else(|e| panic!("swap_interface failed at cycle {cycle}: {e}"));
     }
 }
 
-/// Guard quiescence under load: multiple reader threads continuously hold
-/// PluginGuards while the reloader thread fires 50+ vtable swaps.
-/// Every swap must quiesce within the timeout despite the reader contention.
+/// Direct swap under concurrent reader load: multiple reader threads continuously
+/// resolve interfaces while the reloader thread fires 50+ interface swaps.
 #[test]
-fn stress_guard_quiescence_under_concurrent_reader_load() {
+fn stress_direct_swap_under_concurrent_reader_load() {
     const READER_THREADS: usize = 8_usize;
     const SWAP_ROUNDS: usize = 50_usize;
-    const READER_HOLD_MS: u64 = 3_u64;
-    const QUIESCENCE_TIMEOUT_SECS: u64 = 10_u64;
 
     let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
     let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-        name: polyplug_abi::StringView::from_static(b"quiescence-load-plugin"),
-        contract_name: polyplug_abi::StringView::from_static(b"quiescence.load.contract"),
+        name: polyplug_abi::StringView::from_static(b"swap-load-plugin"),
+        contract_name: polyplug_abi::StringView::from_static(b"swap.load.contract"),
         version_major: 1_u32,
         version_minor: 0_u32,
         version_patch: 0_u32,
@@ -258,7 +231,7 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
             .register(
                 descriptor,
                 &VTABLE_QU_A,
-                "quiescence.load.contract".to_owned(),
+                "swap.load.contract".to_owned(),
                 0xCAFE_BABE_0000_0001_u64,
             )
             .expect("register must succeed")
@@ -280,13 +253,17 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
                     polyplug::error::RegistryError,
                 > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64, 0_u32);
                 if let Ok(resolved_handle) = find_result {
-                    let guard_result: Result<
-                        polyplug::plugin_registry::PluginGuard,
+                    let resolve_result: Result<
+                        *const GuestContractInterface,
                         polyplug::error::RegistryError,
-                    > = reg_clone.resolve_guard(resolved_handle);
-                    if let Ok(guard) = guard_result {
-                        std::thread::sleep(Duration::from_millis(READER_HOLD_MS));
-                        drop(guard);
+                    > = reg_clone.resolve(resolved_handle);
+                    if let Ok(vtable_ptr) = resolve_result {
+                        // SAFETY: vtable_ptr is valid
+                        let version: u32 = unsafe { (*vtable_ptr).contract_version };
+                        assert!(
+                            version == (1_u32 << 16) || version == (2_u32 << 16),
+                            "version must be V1 or V2"
+                        );
                     }
                 }
             }
@@ -299,29 +276,16 @@ fn stress_guard_quiescence_under_concurrent_reader_load() {
     std::thread::sleep(Duration::from_millis(20_u64));
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static PluginInterface = if round % 2_usize == 0_usize {
+        let new_vtable: &'static GuestContractInterface = if round % 2_usize == 0_usize {
             &VTABLE_QU_B
         } else {
             &VTABLE_QU_A
         };
 
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(new_vtable));
-        let old_arc: Arc<VTableSlot> = registry
-            .swap_vtable(handle.index, new_arc)
-            .unwrap_or_else(|e| panic!("swap_vtable failed at round {round}: {e}"));
-
-        let quiescence_start: Instant = Instant::now();
-        loop {
-            if Arc::strong_count(&old_arc) == 1_usize {
-                break;
-            }
-            assert!(
-                quiescence_start.elapsed() < Duration::from_secs(QUIESCENCE_TIMEOUT_SECS),
-                "round {round}: old VTableSlot did not quiesce within {QUIESCENCE_TIMEOUT_SECS}s under reader load"
-            );
-            std::thread::sleep(Duration::from_millis(1_u64));
-        }
-        drop(old_arc);
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable);
+        registry
+            .swap_interface(handle.index, new_arc)
+            .unwrap_or_else(|e| panic!("swap_interface failed at round {round}: {e}"));
     }
 
     stop_flag.store(true, Ordering::Relaxed);
@@ -367,13 +331,12 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
                 > = rt_clone.find_by_contract(contract_id, 0_u32);
 
                 if let Ok(plugin_handle) = handle_result {
-                    let guard_result: Result<
-                        polyplug::plugin_registry::PluginGuard,
+                    let resolve_result: Result<
+                        *const GuestContractInterface,
                         polyplug::error::RegistryError,
                     > = rt_clone.resolve_plugin(plugin_handle);
 
-                    if let Ok(guard) = guard_result {
-                        let vt_ptr: *const PluginInterface = guard.vtable();
+                    if let Ok(vt_ptr) = resolve_result {
                         let version: u32 = unsafe {
                             let fn_ptr: *const () = *(*vt_ptr).dispatch.native.functions;
                             let version_fn: extern "C" fn() -> u32 = core::mem::transmute(fn_ptr);

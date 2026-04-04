@@ -1,7 +1,7 @@
 use crate::contract_id;
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, Default)]
 pub struct GuestContractId(u64);
 
 impl GuestContractId {

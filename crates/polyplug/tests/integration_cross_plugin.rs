@@ -3,7 +3,7 @@
 //! Integration tests: cross-plugin lookup, multi-impl registry, stale handle detection,
 //! and dependency enforcement via the new Epic 9.7 ABI.
 //!
-//! Tests a–d: pure Registry API (find_by_contract, find_by_bundle, find_all, resolve_guard).
+//! Tests a–d: pure Registry API (find_by_contract, find_by_bundle, find_all, resolve).
 //! Tests e–g: dependency enforcement — see `crates/polyplug/src/runtime/mod.rs`
 //!            unit tests (`cross_plugin_dep_tests` submodule) because `INIT_BUNDLE_ID`
 //!            is `pub(crate)` and cannot be accessed from an external crate.
@@ -163,10 +163,9 @@ mod tests {
             .expect("find_by_bundle(bundle-b) should succeed");
 
         // Resolve and verify the vtable pointer belongs to bundle-b.
-        let guard = registry
-            .resolve_guard(found)
-            .expect("resolve_guard must succeed for a freshly registered handle");
-        let resolved_ptr: *const PluginInterface = guard.vtable();
+        let resolved_ptr: *const PluginInterface = registry
+            .resolve(found)
+            .expect("resolve must succeed for a freshly registered handle");
 
         assert_eq!(
             resolved_ptr, vtable_b as *const PluginInterface,
@@ -176,7 +175,7 @@ mod tests {
 
     // ── Test d ───────────────────────────────────────────────────────────────
 
-    /// A handle with a wrong generation is rejected by resolve_guard with StaleHandle.
+    /// A handle with a wrong generation is rejected by resolve with StaleHandle.
     #[test]
     fn stale_handle_rejected() {
         let registry: PluginRegistry = PluginRegistry::new();
@@ -201,7 +200,7 @@ mod tests {
             generation: 99,
         };
 
-        let result = registry.resolve_guard(stale);
+        let result = registry.resolve(stale);
         assert!(
             matches!(result, Err(RegistryError::StaleHandle { .. })),
             "stale handle must return Err(StaleHandle)"

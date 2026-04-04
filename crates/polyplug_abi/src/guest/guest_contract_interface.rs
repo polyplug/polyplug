@@ -22,6 +22,7 @@ use crate::{
 /// - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
 /// - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct GuestContractInterface {
     /// FNV-1a hash of "guest_contract:name@major_version".
     pub contract_id: GuestContractId,

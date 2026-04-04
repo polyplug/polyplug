@@ -10,7 +10,7 @@ use core::hint::spin_loop;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use polyplug_utils::BundleId;
+use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::{RuntimeError};
 use crate::loader::ManifestData;
@@ -84,7 +84,7 @@ pub fn wait_for_quiescence(
         let mut all_quiescent: bool = true;
 
         for &slot_idx in &slot_indices {
-            if let Some(arc) = registry.get_vtable_arc(slot_idx) {
+            if let Some(arc) = registry.get_interface_arc(slot_idx) {
                 // Count == 1 means only registry holds it (no in-flight calls)
                 if Arc::strong_count(&arc) > 1 {
                     all_quiescent = false;
@@ -197,7 +197,7 @@ impl Runtime {
         contract_id: u64,
         min_version: u32,
     ) -> Result<polyplug_abi::plugin::PluginHandle, crate::error::RegistryError> {
-        self.registry().find_by_contract(contract_id, min_version)
+        self.registry().find_by_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 }
 

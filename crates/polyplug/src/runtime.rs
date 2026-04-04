@@ -22,7 +22,8 @@ use std::sync::RwLock;
 
 use polyplug_abi::{GuestContractInterface, HostContractInterface, PluginDescriptor, PluginHandle, RuntimeAbi, RuntimeLanguage};
 use polyplug_abi::host::host_context::HostContext;
-use polyplug_abi::types::{AbiError, AbiErrorCode, StringView, Version};
+use polyplug_abi::types::Version;
+use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::compatibility::Compatibility;
 use crate::error::HostContractError;
@@ -56,11 +57,11 @@ pub struct LoadOptions {
 
 /// The runtime instance.
 pub struct Runtime {
-    registry: Arc<PluginRegistry>,
+    pub(crate) registry: Arc<PluginRegistry>,
     /// Loaded bundles, never dropped.
-    _bundles: Vec<LoadedBundle>,
+    pub(crate) _bundles: Vec<LoadedBundle>,
     /// The static RuntimeAbi given to plugins. Must be 'static.
-    host_vtable: &'static RuntimeAbi,
+    pub(crate) host_vtable: &'static RuntimeAbi,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
     pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
@@ -68,15 +69,15 @@ pub struct Runtime {
     pub(crate) bundle_manifests: Mutex<HashMap<String, ManifestData>>,
     /// Optional callback fired after vtable swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCb>,
-    config: RuntimeConfig,
+    pub(crate) config: RuntimeConfig,
     /// Optional warning callback. If None, warnings go to stderr.
-    warning_cb: Option<WarningCb>,
+    pub(crate) warning_cb: Option<WarningCb>,
     /// Last error message for FFI error reporting.
-    last_error: Mutex<String>,
+    pub(crate) last_error: Mutex<String>,
     /// Registered host contracts, keyed by contract_id.
-    host_contracts: RwLock<HashMap<u64, &'static HostContractInterface>>,
+    pub(crate) host_contracts: RwLock<HashMap<u64, &'static HostContractInterface>>,
     /// Host runtime type identifier.
-    host_runtime: RuntimeLanguage,
+    pub(crate) host_runtime: RuntimeLanguage,
 }
 
 impl Runtime {
@@ -92,7 +93,7 @@ impl Runtime {
         contract_id: u64,
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
-        self.registry.find_by_contract(contract_id, min_version)
+        self.registry.find_by_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 
     /// Find a specific bundle's provider of a contract.
@@ -104,7 +105,7 @@ impl Runtime {
         min_version: u32,
     ) -> Result<PluginHandle, RegistryError> {
         self.registry
-            .find_by_bundle(bundle_id, contract_id, min_version)
+            .find_by_bundle(BundleId::from_u64(bundle_id), GuestContractId::from_u64(contract_id), min_version)
     }
 
     /// Find all providers of a contract.
@@ -116,7 +117,7 @@ impl Runtime {
         out: &mut [PluginHandle],
     ) -> usize {
         self.registry
-            .find_all_by_contract(contract_id, min_version, out)
+            .find_all_by_contract(GuestContractId::from_u64(contract_id), min_version, out)
     }
 
     /// Find all providers of a contract, packing handles directly into a u64 buffer.
@@ -128,7 +129,7 @@ impl Runtime {
         out: &mut [u64],
     ) -> usize {
         self.registry
-            .find_all_by_contract_packed(contract_id, min_version, out)
+            .find_all_by_contract_packed(GuestContractId::from_u64(contract_id), min_version, out)
     }
 
     /// Resolve a plugin handle to its interface pointer directly.
@@ -419,7 +420,7 @@ pub(crate) fn validate_bundle_compatibility(
         }
     }
 
-    for (_path, manifest) in manifests {
+    for (path, manifest) in manifests {
         // Check version compatibility for each dependency
         let resolved: Vec<ManifestDependency> =
             manifest.resolved_dependencies();
@@ -448,7 +449,10 @@ pub(crate) fn validate_bundle_compatibility(
 
             let required: Version = match Version::from_str(dep_min_version_str) {
                 Ok(v) => v,
-                Err(e) => return Err(RuntimeError::Loader(e)),
+                Err(e) => return Err(RuntimeError::Loader(LoaderError::ManifestParse {
+                    path: path.display().to_string(),
+                    reason: format!("invalid version '{}': {:?}", dep_min_version_str, e),
+                })),
             };
 
             let provided: Version = parse_manifest_version(&provider.version, &provider.name)?;
@@ -584,7 +588,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     let contract_name: String = unsafe { string_view_to_string_owned(&desc.contract_name) };
 
     // SAFETY: vtable is a valid 'static GuestContractInterface from the plugin binary
-    match unsafe { registry.register(desc, vtable, contract_name, bundle_id) } {
+    match unsafe { registry.register(desc, vtable, contract_name, BundleId::from_u64(bundle_id)) } {
         Ok(_handle) => polyplug_abi::types::AbiError::ok(),
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
@@ -644,10 +648,10 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     let registry: &PluginRegistry = &runtime.registry;
     let caller_bundle_id: u64 = ctx.bundle_id;
 
-    if caller_bundle_id != 0 && !registry.is_dependency_declared(caller_bundle_id, contract_id) {
+    if caller_bundle_id != 0 && !registry.is_dependency_declared(BundleId::from_u64(caller_bundle_id), GuestContractId::from_u64(contract_id)) {
         return plugin_handle_null();
     }
-    match registry.find_by_contract(contract_id, min_version) {
+    match registry.find_by_contract(GuestContractId::from_u64(contract_id), min_version) {
         Ok(h) => h,
         Err(_) => plugin_handle_null(),
     }
@@ -682,7 +686,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     }
     // SAFETY: out is valid for out_cap PluginHandle elements per ABI contract
     let out_slice: &mut [PluginHandle] = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
-    registry.find_all_by_contract(contract_id, min_version, out_slice)
+    registry.find_all_by_contract(GuestContractId::from_u64(contract_id), min_version, out_slice)
 }
 
 /// RuntimeAbi.resolve_contract callback — returns interface pointer for a handle.

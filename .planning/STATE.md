@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: executing
-last_updated: "2026-04-03T17:46:44.160Z"
+status: planning
+last_updated: "2026-04-04T10:30:38.303Z"
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 15
+  completed_plans: 15
   percent: 100
 ---
 
@@ -34,9 +34,9 @@ progress:
 
 Phase: 01 (abi-types) — EXECUTING
 Plan: 4 of 4
-**Phase:** 01-abi-types
-**Plan:** 01-03 Complete
-**Status:** Executing Phase 01, Plan 04 next
+**Phase:** 2
+**Plan:** Not started
+**Status:** Ready to plan
 **Progress:** [██████████] 100%
 
 ## Performance Metrics
@@ -93,7 +93,7 @@ Plan: 4 of 4
 
 ### Blockers
 
-None.
+- Phase 01 ABI changes not integrated into polyplug crate: GuestContractId/BundleId type mismatches, missing Clone impl, RuntimeConfigC vs RuntimeConfig, HostContractInterface structure changed
 
 ### Roadmap Evolution
 

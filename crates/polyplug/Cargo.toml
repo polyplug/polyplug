@@ -14,7 +14,6 @@ crate-type = ["cdylib", "rlib"]
 polyplug_utils = { workspace = true }
 polyplug_abi = { workspace = true }
 
-arc-swap = { workspace = true }
 thiserror = { workspace = true }
 petgraph = { workspace = true }
 serde = { workspace = true }
