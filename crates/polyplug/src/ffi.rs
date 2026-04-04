@@ -8,7 +8,6 @@ use std::sync::Arc;
 use polyplug_abi::{GuestContractInterface, PluginHandle, types::StringView};
 
 use crate::loader::BundleLoader;
-use crate::registry::VTableSlot;
 use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
 
@@ -21,12 +20,6 @@ fn string_view_from_str(s: &str) -> StringView {
 }
 
 pub struct OpaqueRuntime(pub Runtime);
-
-#[repr(C)]
-pub struct ResolveHandle {
-    pub vtable: *const GuestContractInterface,
-    _arc: Arc<VTableSlot>,
-}
 
 // ─── C-compatible types for hot-reload notification ───────────────────────────
 
@@ -408,24 +401,21 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
     .unwrap_or(0usize)
 }
 
-/// Resolve a plugin handle and return an opaque vtable handle.
-///
-/// The returned pointer's first field is the vtable pointer (`*const GuestContractInterface`),
-/// so callers can cast and dereference it directly to access the vtable.
+/// Resolve a plugin handle and return its interface pointer directly.
 ///
 /// # Safety
 /// - `rt` must be a valid pointer returned by `polyplug_runtime_create`.
-/// - Caller MUST call `polyplug_runtime_release_plugin` when done.
-/// - The returned pointer is valid until `polyplug_runtime_release_plugin` is called.
+/// - The returned pointer is valid for the lifetime of the plugin registration.
+/// - No release call needed — the interface is borrowed, not owned.
 ///
 /// # Returns
-/// - Non-null pointer on success (cast to `*const GuestContractInterface` to use)
+/// - Non-null pointer on success
 /// - Null on error (check `polyplug_runtime_last_error` for details)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
-) -> *const ResolveHandle {
+) -> *const GuestContractInterface {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if rt.is_null() {
             return core::ptr::null();
@@ -437,13 +427,8 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         let handle: PluginHandle = unpack_handle(packed_handle);
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
-        match runtime.0.registry().resolve_guard(handle) {
-            Ok(guard) => {
-                let vtable: *const GuestContractInterface = guard.vtable();
-                let arc: Arc<VTableSlot> = Arc::clone(&guard.slot);
-                let handle: Box<ResolveHandle> = Box::new(ResolveHandle { vtable, _arc: arc });
-                Box::into_raw(handle)
-            }
+        match runtime.0.registry().resolve(handle) {
+            Ok(interface_ptr) => interface_ptr,
             Err(e) => {
                 runtime.0.set_last_error(e.to_string());
                 core::ptr::null()
@@ -451,22 +436,6 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         }
     }))
     .unwrap_or(core::ptr::null())
-}
-
-/// Release a plugin handle obtained from `polyplug_runtime_resolve_plugin`.
-///
-/// # Safety
-/// - `handle` must be a non-null pointer returned by `polyplug_runtime_resolve_plugin`.
-/// - `handle` must not be released twice (no double-free).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_release_plugin(handle: *const ResolveHandle) {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !handle.is_null() {
-            // SAFETY: handle was allocated by polyplug_runtime_resolve_plugin via Box::new.
-            let _: Box<ResolveHandle> = unsafe { Box::from_raw(handle as *mut ResolveHandle) };
-        }
-    }))
-    .unwrap_or(())
 }
 
 /// # Safety

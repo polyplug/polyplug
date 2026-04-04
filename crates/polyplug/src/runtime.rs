@@ -34,7 +34,6 @@ use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
 use crate::registry::PluginRegistry;
-use crate::registry::PluginGuard;
 use crate::runtime_builder::RuntimeBuilder;
 use crate::RuntimeConfig;
 
@@ -132,13 +131,13 @@ impl Runtime {
             .find_all_by_contract_packed(contract_id, min_version, out)
     }
 
-    /// Resolve a plugin handle to a vtable guard.
+    /// Resolve a plugin handle to its interface pointer directly.
     #[inline(always)]
     pub fn resolve_plugin(
         &self,
         handle: PluginHandle,
-    ) -> Result<PluginGuard, RegistryError> {
-        self.registry.resolve_guard(handle)
+    ) -> Result<*const GuestContractInterface, RegistryError> {
+        self.registry.resolve(handle)
     }
 
     /// Register a host contract vtable.

@@ -15,43 +15,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use arc_swap::ArcSwap;
 use polyplug_abi::{GuestContractInterface, PluginDescriptor, PluginHandle};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
-
-/// Wrapper for a guest contract interface pointer.
-///
-/// This newtype exists to provide type safety and clarity around
-/// the stored interface pointer. The inner value is a raw pointer
-/// to a `'static` GuestContractInterface.
-pub struct VTableSlot(pub *const GuestContractInterface);
-
-/// RAII guard for accessing a plugin's vtable.
-///
-/// This guard holds an `Arc<VTableSlot>`, keeping the interface alive
-/// for the duration of the access. The guard provides access to the
-/// raw interface pointer for dispatch.
-pub struct PluginGuard {
-    pub(crate) slot: Arc<VTableSlot>,
-}
-
-impl PluginGuard {
-    /// Create a new PluginGuard from an Arc<VTableSlot>.
-    pub fn new(slot: Arc<VTableSlot>) -> Self {
-        Self { slot }
-    }
-
-    /// Get the raw interface pointer.
-    ///
-    /// # Safety
-    /// The returned pointer is valid for the lifetime of this guard.
-    /// The caller must not cache the pointer beyond the guard's lifetime.
-    pub fn vtable(&self) -> *const GuestContractInterface {
-        self.slot.0
-    }
-}
 
 /// Live plugin registration data.
 pub(crate) struct RegistryEntry {
@@ -73,8 +40,9 @@ pub(crate) struct RegistrySlot {
     pub generation: AtomicU32,
     /// Slot contents — None if vacant (after unload).
     pub entry: Option<RegistryEntry>,
-    /// ArcSwap vtable — allows lock-free hot-swapping of implementations.
-    pub vtable: Option<ArcSwap<VTableSlot>>,
+    /// Interface pointer — direct Arc storage without wrapper.
+    /// The callback-based hot-reload model ensures hosts destroy instances before swap.
+    pub interface: Option<Arc<GuestContractInterface>>,
 }
 
 /// Internal data protected by a single RwLock.
@@ -184,7 +152,7 @@ impl PluginRegistry {
                 data.slots.push(RegistrySlot {
                     generation: AtomicU32::new(0_u32),
                     entry: None,
-                    vtable: None,
+                    interface: None,
                 });
                 new_idx
             });
@@ -196,7 +164,7 @@ impl PluginRegistry {
             contract_name,
             bundle_id,
         });
-        slot.vtable = Some(ArcSwap::new(Arc::new(VTableSlot(interface_ptr))));
+        slot.interface = Some(Arc::new(unsafe { &*interface_ptr }));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
         data.contract_index
@@ -274,12 +242,11 @@ impl PluginRegistry {
         for &slot_idx in indices.iter() {
             let slot: &RegistrySlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
-                && let Some(ref arc_vtable) = slot.vtable
+                && let Some(ref interface) = slot.interface
             {
-                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 points to 'static GuestContractInterface, valid for Registry lifetime.
+                // SAFETY: interface points to 'static GuestContractInterface, valid for Registry lifetime.
                 // The pointer is written once at registration and never mutated.
-                let version: u32 = unsafe { (*guard.0).contract_version.major };
+                let version: u32 = interface.contract_version.major;
                 if version >= min_version {
                     return Ok(PluginHandle {
                         index: slot_idx,
@@ -319,15 +286,13 @@ impl PluginRegistry {
 
         let slot: &RegistrySlot = &data.slots[slot_idx as usize];
         if let Some(ref entry) = slot.entry
-            && let Some(ref arc_vtable) = slot.vtable
+            && let Some(ref interface) = slot.interface
         {
-            let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-            // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
+            // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
             // Written once at registration, never mutated.
-            let vtable_ref: &GuestContractInterface = unsafe { &*guard.0 };
             if entry.bundle_id == bundle_id
-                && vtable_ref.contract_id == contract_id
-                && vtable_ref.contract_version >= min_version
+                && interface.contract_id == contract_id
+                && interface.contract_version >= min_version
             {
                 return Ok(PluginHandle {
                     index: slot_idx,
@@ -369,12 +334,11 @@ impl PluginRegistry {
             }
             let slot: &RegistrySlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
-                && let Some(ref arc_vtable) = slot.vtable
+                && let Some(ref interface) = slot.interface
             {
-                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
+                // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
                 // Read-only access after registration.
-                let version: u32 = unsafe { (*guard.0).contract_version.major };
+                let version: u32 = interface.contract_version.major;
                 if version >= min_version {
                     out[write_count] = PluginHandle {
                         index: slot_idx,
@@ -422,12 +386,11 @@ impl PluginRegistry {
             }
             let slot: &RegistrySlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
-                && let Some(ref arc_vtable) = slot.vtable
+                && let Some(ref interface) = slot.interface
             {
-                let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_vtable.load();
-                // SAFETY: VTableSlot.0 is 'static GuestContractInterface valid for Registry lifetime.
+                // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
                 // Read-only access after registration.
-                let version: u32 = unsafe { (*guard.0).contract_version.major };
+                let version: u32 = interface.contract_version.major;
                 if version >= min_version {
                     // Pack handle directly: (generation << 32) | index
                     out[write_count] =
@@ -439,11 +402,22 @@ impl PluginRegistry {
         write_count
     }
 
-    /// Validate a PluginHandle and return an Arc-backed vtable guard.
+    /// Find a plugin by contract_id and minimum version.
     //
-    //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
-    //  Returns Err(StaleHandle) if the slot is vacant or has no vtable.
-    pub fn resolve_guard(&self, handle: PluginHandle) -> Result<PluginGuard, RegistryError> {
+    //  Delegates to find_by_contract(). Kept for API compatibility.
+    //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
+    //  Pass 0 to accept any version.
+    pub fn find(&self, contract_id: u64, min_version: u32) -> Result<PluginHandle, RegistryError> {
+        self.find_by_contract(contract_id, min_version)
+    }
+
+    /// Validate a PluginHandle and return its interface pointer directly.
+    ///
+    /// Returns Err(StaleHandle) if:
+    /// - handle.index is out of bounds
+    /// - handle.generation doesn't match slot.generation
+    /// - the slot has no interface
+    pub fn resolve(&self, handle: PluginHandle) -> Result<*const GuestContractInterface, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -469,11 +443,8 @@ impl PluginRegistry {
             });
         }
 
-        match slot.vtable {
-            Some(ref arc_vtable) => {
-                let arc: Arc<VTableSlot> = arc_vtable.load_full();
-                Ok(PluginGuard::new(arc))
-            }
+        match slot.interface {
+            Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
             None => Err(RegistryError::StaleHandle {
                 index: handle.index,
                 expected: handle.generation,
@@ -482,38 +453,20 @@ impl PluginRegistry {
         }
     }
 
-    /// Find a plugin by contract_id and minimum version.
-    //
-    //  Delegates to find_by_contract(). Kept for API compatibility.
-    //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
-    //  Pass 0 to accept any version.
-    pub fn find(&self, contract_id: u64, min_version: u32) -> Result<PluginHandle, RegistryError> {
-        self.find_by_contract(contract_id, min_version)
-    }
-
-    /// Validate a PluginHandle and return its interface pointer.
-    //
-    //  Delegates to resolve_guard(). Kept for API compatibility.
-    //  Returns Err(StaleHandle) if the handle's generation doesn't match the slot.
-    pub fn resolve(&self, handle: PluginHandle) -> Result<*const GuestContractInterface, RegistryError> {
-        let guard: PluginGuard = self.resolve_guard(handle)?;
-        Ok(guard.vtable())
-    }
-
-    /// Atomically swap the vtable in slot `slot_index` with `new_vtable`.
+    /// Atomically swap the interface in slot `slot_index` with `new_interface`.
     ///
-    /// Returns the old `Arc<VTableSlot>` — the caller holds it alive during quiescence
-    /// then drops it after `Arc::strong_count` reaches 1 (all in-flight calls done).
+    /// This is a direct swap under write lock. The callback-based hot-reload model
+    /// (Phase 4) ensures hosts destroy instances before this is called.
     /// Bumps `slot.generation` so stale `PluginHandle`s from before reload are detected.
     ///
     /// # Errors
     /// Returns `Err(RegistryError::StaleHandle)` if `slot_index` is out of bounds
-    /// or the slot has no vtable.
-    pub fn swap_vtable(
+    /// or the slot has no interface.
+    pub fn swap_interface(
         &self,
         slot_index: u32,
-        new_vtable: Arc<VTableSlot>,
-    ) -> Result<Arc<VTableSlot>, RegistryError> {
+        new_interface: Arc<GuestContractInterface>,
+    ) -> Result<(), RegistryError> {
         let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -528,19 +481,17 @@ impl PluginRegistry {
             });
         }
         let slot: &mut RegistrySlot = &mut data.slots[slot_idx];
-        match slot.vtable {
-            Some(ref arc_swap) => {
-                let old_arc: Arc<VTableSlot> = arc_swap.swap(new_vtable);
-                // Bump generation so stale PluginHandles from before reload are detected.
-                slot.generation.fetch_add(1_u32, Ordering::AcqRel);
-                Ok(old_arc)
-            }
-            None => Err(RegistryError::StaleHandle {
+        if slot.interface.is_none() {
+            return Err(RegistryError::StaleHandle {
                 index: slot_index,
                 expected: 0_u32,
                 found: slot.generation.load(Ordering::Acquire),
-            }),
+            });
         }
+        slot.interface = Some(new_interface);
+        // Bump generation for stale handle detection (removed in Plan 03)
+        slot.generation.fetch_add(1_u32, Ordering::AcqRel);
+        Ok(())
     }
 
     /// Find all slot indices that were registered by `bundle_id`.
@@ -564,8 +515,8 @@ impl PluginRegistry {
         result
     }
 
-    /// Get the contract_id for the vtable currently stored in `slot_index`.
-    /// Returns None if the slot is empty or has no vtable.
+    /// Get the contract_id for the interface currently stored in `slot_index`.
+    /// Returns None if the slot is empty or has no interface.
     pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<u64> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
@@ -573,23 +524,20 @@ impl PluginRegistry {
                 e.into_inner()
             });
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
-        let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
-        let guard: arc_swap::Guard<Arc<VTableSlot>> = arc_swap.load();
-        // SAFETY: VTableSlot.0 is a valid 'static GuestContractInterface written at registration.
-        Some(unsafe { (*guard.0).contract_id })
+        let interface: &Arc<GuestContractInterface> = slot.interface.as_ref()?;
+        Some(interface.contract_id)
     }
 
-    /// Get a clone of the Arc<VTableSlot> for `slot_index` to check strong_count.
-    /// Returns None if the slot is empty or has no vtable.
-    pub(crate) fn get_vtable_arc(&self, slot_index: u32) -> Option<Arc<VTableSlot>> {
+    /// Get a clone of the Arc<GuestContractInterface> for `slot_index` to check strong_count.
+    /// Returns None if the slot is empty or has no interface.
+    pub(crate) fn get_interface_arc(&self, slot_index: u32) -> Option<Arc<GuestContractInterface>> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
         let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
-        let arc_swap: &arc_swap::ArcSwap<VTableSlot> = slot.vtable.as_ref()?;
-        Some(arc_swap.load_full())
+        slot.interface.as_ref().map(|arc| Arc::clone(arc))
     }
 
     /// Clear all registrations for testing.
@@ -851,7 +799,7 @@ mod tests {
         );
     }
     #[test]
-    fn swap_vtable_returns_old_arc_and_bumps_generation() {
+    fn swap_interface_bumps_generation() {
         static NEW_INTERFACE: GuestContractInterface = GuestContractInterface {
             rt_ctx: core::ptr::null(),
             contract_id: 0x1234_5678_9ABC_DEF0,
@@ -879,15 +827,10 @@ mod tests {
         .expect("registration should succeed");
 
         let gen_before: u32 = handle.generation;
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_INTERFACE));
-        let old_arc: Arc<VTableSlot> = registry
-            .swap_vtable(handle.index, new_arc)
-            .expect("swap_vtable should succeed");
-
-        // old_arc should point to the original MOCK_INTERFACE
-        // SAFETY: old_arc.0 is MOCK_INTERFACE which is 'static.
-        let old_contract_id: u64 = unsafe { (*old_arc.0).contract_id };
-        assert_eq!(old_contract_id, MOCK_INTERFACE.contract_id);
+        let new_arc: Arc<GuestContractInterface> = Arc::new(&NEW_INTERFACE);
+        registry
+            .swap_interface(handle.index, new_arc)
+            .expect("swap_interface should succeed");
 
         // Verify generation was bumped
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
@@ -1010,10 +953,10 @@ mod tests {
         };
 
         let original_gen: u32 = handle.generation;
-        let new_arc: Arc<VTableSlot> = Arc::new(VTableSlot(&NEW_INTERFACE));
-        let _: Arc<VTableSlot> = registry
-            .swap_vtable(handle.index, new_arc)
-            .expect("swap_vtable should succeed");
+        let new_arc: Arc<GuestContractInterface> = Arc::new(&NEW_INTERFACE);
+        registry
+            .swap_interface(handle.index, new_arc)
+            .expect("swap_interface should succeed");
 
         let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(handle);
         assert!(
