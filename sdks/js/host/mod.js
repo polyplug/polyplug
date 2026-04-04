@@ -4,7 +4,6 @@
  */
 
 export * from "./polyplug/mod.js";
-export { RuntimeConfig } from "./polyplug/runtime_config.js";
 export { ReloadPhase } from "./polyplug/reload_phase.js";
 export {
     getPlatformIdentifier,

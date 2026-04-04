@@ -4,8 +4,7 @@
  */
 
 export * from "./abi/polyplug_abi.ts";
-export { Runtime, Guard, openPolyplug, runtimeNew, onReload, setConfig, NULL_HANDLE, fnv1a64 } from "./host/mod.js";
-export { RuntimeConfig } from "./host/polyplug/runtime_config.js";
+export { Runtime, openPolyplug, runtimeNew, onReload, setConfig, NULL_HANDLE, fnv1a64 } from "./host/mod.js";
 export { ReloadPhase } from "./host/polyplug/reload_phase.js";
 export {
     getPlatformIdentifier,
