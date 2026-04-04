@@ -39,13 +39,13 @@ Plans:
 - [x] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
 - [x] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
 - [x] 01-05-PLAN.md — Gap closure: Export AbiErrorCode and helper functions from polyplug_abi root
-- [ ] 01-06-PLAN.md — Gap closure: Fix deprecated PluginContractId usage in compatibility files
+- [x] 01-06-PLAN.md — Gap closure: Fix deprecated PluginContractId usage in compatibility files
 - [x] 01-07-PLAN.md — Gap closure: Fix ffi.rs bundle_id type mismatch, verify polyplug compiles
 - [x] 01-08-PLAN.md — Gap closure: Remove ABI_* constant imports from SDK guest library
 - [x] 01-09-PLAN.md — Gap closure: Fix fixture AbiError.code usage, verify workspace compiles
-- [ ] 01-10-PLAN.md — Gap closure: Fix plugin_interface.rs PluginContractId usage
-- [ ] 01-11-PLAN.md — Gap closure: Fix compatibility/mod.rs test PluginContractId usage
-- [ ] 01-12-PLAN.md — Gap closure: Add serde traits to GuestContractId and BundleId
+- [x] 01-10-PLAN.md — Gap closure: Fix plugin_interface.rs PluginContractId usage
+- [x] 01-11-PLAN.md — Gap closure: Fix compatibility/mod.rs test PluginContractId usage
+- [x] 01-12-PLAN.md — Gap closure: Add serde traits to GuestContractId and BundleId
 
 ### Phase 2: Registry
 **Goal:** Simplified registry stores GuestContractInterface directly without wrappers
@@ -57,7 +57,12 @@ Plans:
 3. ContractHandle has only index field (no generation counter)
 4. find_contract returns ContractHandle without generation validation
 5. Registry compiles and all existing tests pass
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Remove VTableSlot wrapper and PluginGuard, store interface directly
+- [ ] 02-02-PLAN.md — Remove ArcSwap pattern, update tests, remove quiescence tests
+- [ ] 02-03-PLAN.md — Remove generation counter from PluginHandle, simplify error handling
 
 ### Phase 3: Instance Model
 **Goal:** Host creates and owns plugin instances via factory pattern with generated RAII wrappers
@@ -124,8 +129,8 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. ABI Types | 0/12 | Executing (gap closure) | - |
-| 2. Registry | 0/0 | Not started | - |
+| 1. ABI Types | 12/12 | Complete | 2026-04-04 |
+| 2. Registry | 0/3 | Not started | - |
 | 3. Instance Model | 0/0 | Not started | - |
 | 4. Hot-Reload | 0/0 | Not started | - |
 | 5. SDK Updates | 0/0 | Not started | - |
@@ -162,3 +167,4 @@ Phase 7 (Typed Handles)
 *Gap closure plans added: 2026-04-03*
 *Plans split per checker feedback: 2026-04-03*
 *Additional gap closure plans added: 2026-04-04*
+*Phase 2 plans added: 2026-04-04*
