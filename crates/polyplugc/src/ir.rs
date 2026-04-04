@@ -7,7 +7,7 @@ use polyplug_codegen::PolyplugcError;
 
 // Re-export hash functions from polyplug_utils with legacy names for backward compatibility
 pub use polyplug_utils::bundle_id as compute_bundle_id;
-pub use polyplug_utils::contract_id as compute_contract_id;
+pub use polyplug_utils::guest_contract_id as compute_contract_id;
 pub use polyplug_utils::host_contract_id as compute_host_contract_id;
 
 // ─── Version ─────────────────────────────────────────────────────────────
@@ -291,6 +291,9 @@ pub struct ResolvedHostContract {
     pub contract_id: u64,
     #[allow(dead_code)]
     pub version: Version,
+    /// Whether this contract provides a singleton instance.
+    /// If true, `get_host_contract` returns the same instance for all callers.
+    pub singleton: bool,
     pub functions: Vec<ResolvedFunction>,
 }
 

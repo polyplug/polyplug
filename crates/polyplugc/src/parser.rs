@@ -71,6 +71,8 @@ pub(crate) struct RawHostContract {
     pub name: String,
     pub version: String,
     #[serde(default)]
+    pub singleton: bool,
+    #[serde(default)]
     pub functions: Vec<RawFunction>,
 }
 
@@ -536,6 +538,7 @@ fn lower_api(raw: RawApiSchema) -> Result<ValidatedIr, PolyplugcError> {
             name: raw_host_contract.name.clone(),
             contract_id,
             version,
+            singleton: raw_host_contract.singleton,
             functions,
         });
     }

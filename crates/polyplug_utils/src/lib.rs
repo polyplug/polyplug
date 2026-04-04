@@ -4,12 +4,35 @@
 //! with zero external dependencies (only std).
 
 pub mod bundle_id;
-mod guest_contract_id;
-mod host_contract_id;
+pub mod guest_contract_id;
+pub mod host_contract_id;
 
 pub use bundle_id::BundleId;
 pub use guest_contract_id::GuestContractId;
 pub use host_contract_id::HostContractId;
+
+// ─── Public ID Computation Functions ─────────────────────────────────────────
+
+/// Compute a bundle ID from its name using FNV-1a 64-bit hash.
+///
+/// Convenience function that wraps `BundleId::new(name).id()`.
+pub fn bundle_id(name: &str) -> u64 {
+    BundleId::new(name).id()
+}
+
+/// Compute a guest contract ID from name and major version.
+///
+/// Convenience function that wraps `GuestContractId::new(name, major_version).id()`.
+pub fn guest_contract_id(name: &str, major_version: u32) -> u64 {
+    GuestContractId::new(name, major_version).id()
+}
+
+/// Compute a host contract ID from name and major version.
+///
+/// Convenience function that wraps `HostContractId::new(name, major_version).id()`.
+pub fn host_contract_id(name: &str, major_version: u32) -> u64 {
+    HostContractId::new(name, major_version).id()
+}
 
 /// Deprecated type alias for GuestContractId.
 /// Use GuestContractId directly for new code.
