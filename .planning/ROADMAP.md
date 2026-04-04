@@ -122,8 +122,8 @@ Plans:
 - [x] 05-04-PLAN.md — Lua SDK: remove runtime_config.lua, update ffi.cdef RuntimeConfigC, remove Guard
 - [x] 05-05-PLAN.md — JS SDK: remove runtime_config.js, update config buffer, remove Guard class
 - [x] 05-06-PLAN.md — Codegen: verify instance wrappers generated for all languages
-- [ ] 05-07-PLAN.md — Gap closure: Update C++ SDK (remove PluginGuard, add RuntimeConfig 24 bytes)
-- [ ] 05-08-PLAN.md — Gap closure: Rename RuntimeConfigC to RuntimeConfig in all SDKs
+- [x] 05-07-PLAN.md — Gap closure: Update C++ SDK (remove PluginGuard, add RuntimeConfig 24 bytes)
+- [x] 05-08-PLAN.md — Gap closure: Rename RuntimeConfigC to RuntimeConfig in all SDKs
 
 ### Phase 6: Cleanup
 **Goal:** Consistent Guest/Host naming throughout with no vtable terminology
