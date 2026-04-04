@@ -323,10 +323,26 @@ fn render_plugin_vtable_quickjs(
     out.push_str(&format!("\nexport const {plugin_var}_VTABLE = {{\n"));
     out.push_str(&format!("    contractLo: 0x{:08X},\n", contract_lo));
     out.push_str(&format!("    contractHi: 0x{:08X},\n", contract_hi));
+    out.push_str("    dispatchType: DispatchType.VirtualMachine,\n");
+    // Instance lifecycle stubs
+    out.push_str(&format!(
+        "    // Default create_instance stub for {} - returns null instance.\n",
+        plugin_name
+    ));
+    out.push_str("    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {\n");
+    out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str("        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.\n");
+    out.push_str("    },\n");
+    out.push_str(&format!(
+        "    // Default destroy_instance stub for {} - no-op.\n",
+        plugin_name
+    ));
+    out.push_str("    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {\n");
+    out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str("    },\n");
     out.push_str(&format!("    fnCount: {function_count},\n"));
     out.push_str("    functions: null as unknown as number[],\n");
     out.push_str(&format!("    contractName: \"{contract_name_full}\",\n"));
-    out.push_str("    dispatchType: DispatchType.VirtualMachine\n");
     out.push_str("};\n");
 
     out.push_str(&format!("\nexport const {plugin_var}_DESCRIPTOR = {{\n"));
@@ -363,10 +379,13 @@ fn render_plugin_vtable_quickjs(
         // Generate the ABI wrapper function
         // Note: QuickJS uses lo/hi u32 pairs for 64-bit pointers
         // We use Number for arithmetic since QuickJS supports it
+        // Instance parameter is first (as dataLo, dataHi pair), then args, then out
         out.push_str("\nfunction ");
         out.push_str(&wrapper_name);
-        out.push_str("(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {\n");
+        out.push_str("(instanceDataLo, instanceDataHi, args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {\n");
         // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
+        out.push_str("    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).\n");
+        out.push_str("    // For stateful plugins, users override createInstance and use instanceData.\n");
         out.push_str("    // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.\n");
         out.push_str("    // The host guarantees these pointers are properly aligned and sized before calling.\n");
         out.push_str("    var polyplug = globalThis.polyplug;\n");

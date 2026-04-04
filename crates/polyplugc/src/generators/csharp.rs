@@ -324,9 +324,11 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                     "    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n",
                 );
                 out.push_str(&format!(
-                    "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
+                    "    private static AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
                     abi_method
                 ));
+                out.push_str("        // Instance is ignored for stateless plugins (instance is null).\n");
+                out.push_str("        // For stateful plugins, users override create_instance and use instance.Data.\n");
                 out.push_str("        try {\n");
                 if has_params {
                     out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
@@ -362,6 +364,25 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 "    private static readonly IntPtr[] {upper}_FNS;\n"
             ));
 
+            // Instance lifecycle stubs
+            out.push_str(&format!(
+                "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n"
+            ));
+            out.push_str(&format!(
+                "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n"
+            ));
+            out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
+            out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
+            out.push_str("    }\n\n");
+            out.push_str(&format!(
+                "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n"
+            ));
+            out.push_str(&format!(
+                "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n"
+            ));
+            out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
+            out.push_str("    }\n\n");
+
             // VTable field and static constructor (GCHandle pinning)
             out.push_str(&format!(
                 "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
@@ -377,7 +398,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 let fn_name: String = func.name.replace('-', "_");
                 let abi_method: String = format!("{lower}_{fn_name}_abi");
                 out.push_str(&format!(
-                    "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+                    "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&{abi_method},\n"
                 ));
             }
             out.push_str("            };\n");
@@ -388,21 +409,26 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "        {upper}_VTABLE = new PluginInterface {{\n"
             ));
-            out.push_str("            RtCtx = IntPtr.Zero,\n");
             out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
             out.push_str(&format!(
                 "            ContractVersion = {minor}u << 16 | {patch}u,\n"
             ));
-            out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
             // Default to native dispatch when no bundle info is available
-            let dispatch_type: &str = if true {
+            let dispatch_type_str: &str = if true {
                 "DispatchType.Native"
             } else {
                 "DispatchType.VirtualMachine"
             };
-            out.push_str(&format!("            DispatchType = {dispatch_type},\n"));
+            out.push_str(&format!("            DispatchType = {dispatch_type_str},\n"));
+            out.push_str(&format!(
+                "            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n"
+            ));
+            out.push_str(&format!(
+                "            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n"
+            ));
             out.push_str("            Dispatch = new PluginDispatch {\n");
             out.push_str("                Native = new NativeDispatch {\n");
+            out.push_str(&format!("                    FunctionCount = {fn_count}u,\n"));
             out.push_str(&format!(
                 "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n"
             ));
@@ -471,9 +497,11 @@ fn generate_cs_guest_plugin_vtables(
         let has_params: bool = !func.params.is_empty();
         out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]\n");
         out.push_str(&format!(
-            "    private static AbiError {}(IntPtr argsPtr, IntPtr outPtr) {{\n",
+            "    private static AbiError {}(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {{\n",
             abi_method
         ));
+        out.push_str("        // Instance is ignored for stateless plugins (instance is null).\n");
+        out.push_str("        // For stateful plugins, users override create_instance and use instance.Data.\n");
         out.push_str("        try {\n");
         if has_params {
             out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
@@ -516,6 +544,27 @@ fn generate_cs_guest_plugin_vtables(
         "    public static PluginInterface {upper}_VTABLE;\n\n",
         upper = plugin_upper
     ));
+    // Instance lifecycle stubs
+    out.push_str(&format!(
+        "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n",
+    ));
+    out.push_str(&format!(
+        "    private static GuestContractInstance {upper}_CreateInstanceStub(IntPtr rtCtx, IntPtr args) {{\n",
+        upper = plugin_upper
+    ));
+    out.push_str("        // Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str("        return new GuestContractInstance { Data = IntPtr.Zero };\n");
+    out.push_str("    }\n\n");
+    out.push_str(&format!(
+        "    [UnmanagedCallersOnly(CallConvs = new[] {{ typeof(CallConvCdecl) }})]\n",
+    ));
+    out.push_str(&format!(
+        "    private static void {upper}_DestroyInstanceStub(IntPtr rtCtx, GuestContractInstance instance) {{\n",
+        upper = plugin_upper
+    ));
+    out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str("    }\n\n");
+
     // Static constructor instead of Init method
     out.push_str(&format!(
         "    static {class_name}Vtables() {{\n",
@@ -530,7 +579,7 @@ fn generate_cs_guest_plugin_vtables(
         let fn_name: String = func.name.replace('-', "_");
         let abi_method: String = format!("{lower}_{fn_name}_abi", lower = plugin_lower);
         out.push_str(&format!(
-            "                (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, IntPtr, AbiError>)&{abi_method},\n"
+            "                (IntPtr)(delegate* unmanaged[Cdecl]<GuestContractInstance, IntPtr, IntPtr, AbiError>)&{abi_method},\n"
         ));
     }
     out.push_str("            };\n");
@@ -543,7 +592,6 @@ fn generate_cs_guest_plugin_vtables(
         "        {upper}_VTABLE = new PluginInterface {{\n",
         upper = plugin_upper
     ));
-    out.push_str("            RtCtx = IntPtr.Zero,\n");
     out.push_str(&format!(
         "            ContractId = {upper}_CONTRACT_ID,\n",
         upper = plugin_upper
@@ -551,15 +599,23 @@ fn generate_cs_guest_plugin_vtables(
     out.push_str(&format!(
         "            ContractVersion = {minor}u << 16 | {patch}u,\n"
     ));
-    out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
-    let dispatch_type: &str = if is_native {
+    let dispatch_type_str: &str = if is_native {
         "DispatchType.Native"
     } else {
         "DispatchType.VirtualMachine"
     };
-    out.push_str(&format!("            DispatchType = {dispatch_type},\n"));
+    out.push_str(&format!("            DispatchType = {dispatch_type_str},\n"));
+    out.push_str(&format!(
+        "            CreateInstance = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, GuestContractInstance>)&{upper}_CreateInstanceStub,\n",
+        upper = plugin_upper
+    ));
+    out.push_str(&format!(
+        "            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n",
+        upper = plugin_upper
+    ));
     out.push_str("            Dispatch = new PluginDispatch {\n");
     out.push_str("                Native = new NativeDispatch {\n");
+    out.push_str(&format!("                    FunctionCount = {fn_count}u,\n"));
     out.push_str(&format!(
         "                    Functions = _{upper}_pin_handle.AddrOfPinnedObject(),\n",
         upper = plugin_upper

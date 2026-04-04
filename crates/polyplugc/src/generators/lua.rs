@@ -609,13 +609,38 @@ fn generate_guest_plugin_vtable(
         "{plugin_var}_VTABLE.contract_version = {}\n",
         contract.version.minor_patch_encoded()
     ));
+    let dispatch_type_str: &str = if true {
+        "polyplug_guest.DispatchType.VirtualMachine"
+    } else {
+        "polyplug_guest.DispatchType.Native"
+    };
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.function_count = {function_count}\n"
+        "{plugin_var}_VTABLE.dispatch_type = {dispatch_type_str}\n"
+    ));
+    // Create/destroy instance stubs
+    out.push_str(&format!(
+        "-- Default create_instance stub for {plugin_name} - returns null instance.\n"
     ));
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine\n"
+        "function {plugin_var}_create_instance_stub(rt_ctx, args)\n"
     ));
-    out.push_str(&format!("{plugin_var}_VTABLE.functions = nil\n\n"));
+    out.push_str("    -- Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str("    return ffi.new(\"GuestContractInstance\", nil)\n");
+    out.push_str("end\n");
+    out.push_str(&format!(
+        "{plugin_var}_VTABLE.create_instance = {plugin_var}_create_instance_stub\n"
+    ));
+    out.push_str(&format!(
+        "-- Default destroy_instance stub for {plugin_name} - no-op.\n"
+    ));
+    out.push_str(&format!(
+        "function {plugin_var}_destroy_instance_stub(rt_ctx, instance)\n"
+    ));
+    out.push_str("    -- Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str("end\n");
+    out.push_str(&format!(
+        "{plugin_var}_VTABLE.destroy_instance = {plugin_var}_destroy_instance_stub\n\n"
+    ));
 
     out.push_str(&format!(
         "local {plugin_var}_DESCRIPTOR = ffi.new(\"PluginDescriptor\")\n"
@@ -661,7 +686,8 @@ fn generate_guest_plugin_vtable(
             "    functions[{idx}] = ffi.cast(\"uintptr_t\", {fn_name}_fn)\n"
         ));
     }
-    out.push_str(&format!("    {plugin_var}_VTABLE.functions = functions\n"));
+    out.push_str(&format!("    {plugin_var}_VTABLE.dispatch.native.function_count = {function_count}\n"));
+    out.push_str(&format!("    {plugin_var}_VTABLE.dispatch.native.functions = functions\n"));
     out.push_str("end\n");
 
     Ok(())

@@ -886,8 +886,10 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
+            "def {abi_name}(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
+        out.push_str("    # Instance is ignored for stateless plugins (instance.data is null).\n");
+        out.push_str("    # For stateful plugins, users override create_instance and use instance.data.\n");
         out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
         out.push_str("    if impl is None:\n");
         out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
@@ -915,7 +917,32 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
             "    ctypes.cast({upper}_{abi_name}_CFUNC, ctypes.c_void_p),\n"
         ));
     }
-    out.push_str(")\n");
+    out.push_str(")\n\n");
+
+    // Instance lifecycle stubs
+    out.push_str(&format!(
+        "# Default create_instance stub for {} - returns null instance.\n",
+        contract.name
+    ));
+    out.push_str("def _guest_contract_instance_null() -> _GuestContractInstance:\n");
+    out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
+    out.push_str(&format!(
+        "def {upper}_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
+    ));
+    out.push_str("    # Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str("    return _guest_contract_instance_null()\n\n");
+    out.push_str(&format!(
+        "def {upper}_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
+    ));
+    out.push_str("    # Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str("    pass\n\n");
+    out.push_str(&format!(
+        "{upper}_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE({upper}_create_instance_stub)\n"
+    ));
+    out.push_str(&format!(
+        "{upper}_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE({upper}_destroy_instance_stub)\n\n"
+    ));
+
     out.push_str(&format!(
         "{upper}_VTABLE: PluginInterface = PluginInterface(\n"
     ));
@@ -924,11 +951,19 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
         contract.contract_id
     ));
     out.push_str(&format!("    contract_version={contract_version},\n"));
-    out.push_str(&format!("    function_count={fn_count},\n"));
-    out.push_str(&format!(
-        "    functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"
-    ));
     out.push_str(&format!("    dispatch_type={dispatch_type},\n"));
+    out.push_str(&format!(
+        "    create_instance=ctypes.cast({upper}_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),\n"
+    ));
+    out.push_str(&format!(
+        "    destroy_instance=ctypes.cast({upper}_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),\n"
+    ));
+    out.push_str("    dispatch=_PluginDispatch(\n");
+    out.push_str("        native=_NativeDispatch(\n");
+    out.push_str(&format!("            function_count={fn_count},\n"));
+    out.push_str(&format!("            functions=ctypes.cast({upper}_FNS, ctypes.c_void_p),\n"));
+    out.push_str("        )\n");
+    out.push_str("    ),\n");
     out.push_str(")\n\n");
 }
 
@@ -983,8 +1018,10 @@ fn generate_guest_plugin_vtable(
         let has_return: bool = has_return_value(&func.returns);
         let has_params: bool = !func.params.is_empty();
         out.push_str(&format!(
-            "def {abi_name}(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
+            "def {abi_name}(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:\n"
         ));
+        out.push_str("    # Instance is ignored for stateless plugins (instance.data is null).\n");
+        out.push_str("    # For stateful plugins, users override create_instance and use instance.data.\n");
         out.push_str(&format!(
             "    impl: {plugin_upper}{trait_name} | None = _{plugin_lower}_IMPL\n"
         ));
@@ -1016,7 +1053,30 @@ fn generate_guest_plugin_vtable(
             "    ctypes.cast({plugin_upper}_{abi_name}_CFUNC, ctypes.c_void_p),\n"
         ));
     }
-    out.push_str(")\n");
+    out.push_str(")\n\n");
+
+    // Instance lifecycle stubs
+    out.push_str(&format!(
+        "# Default create_instance stub for {} - returns null instance.\n",
+        plugin_name
+    ));
+    out.push_str(&format!(
+        "def {plugin_upper}_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
+    ));
+    out.push_str("    # Default stub returns null instance - users override for stateful plugins.\n");
+    out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
+    out.push_str(&format!(
+        "def {plugin_upper}_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
+    ));
+    out.push_str("    # Default stub is no-op - users override for cleanup before hot-reload.\n");
+    out.push_str("    pass\n\n");
+    out.push_str(&format!(
+        "{plugin_upper}_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE({plugin_upper}_create_instance_stub)\n"
+    ));
+    out.push_str(&format!(
+        "{plugin_upper}_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE({plugin_upper}_destroy_instance_stub)\n\n"
+    ));
+
     out.push_str(&format!(
         "{plugin_upper}_VTABLE: PluginInterface = PluginInterface(\n"
     ));
@@ -1025,11 +1085,19 @@ fn generate_guest_plugin_vtable(
         contract.contract_id
     ));
     out.push_str(&format!("    contract_version={contract_version},\n"));
-    out.push_str(&format!("    function_count={fn_count},\n"));
-    out.push_str(&format!(
-        "    functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"
-    ));
     out.push_str(&format!("    dispatch_type={dispatch_type},\n"));
+    out.push_str(&format!(
+        "    create_instance=ctypes.cast({plugin_upper}_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),\n"
+    ));
+    out.push_str(&format!(
+        "    destroy_instance=ctypes.cast({plugin_upper}_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),\n"
+    ));
+    out.push_str("    dispatch=_PluginDispatch(\n");
+    out.push_str("        native=_NativeDispatch(\n");
+    out.push_str(&format!("            function_count={fn_count},\n"));
+    out.push_str(&format!("            functions=ctypes.cast({plugin_upper}_FNS, ctypes.c_void_p),\n"));
+    out.push_str("        )\n");
+    out.push_str("    ),\n");
     out.push_str(")\n\n");
 }
 

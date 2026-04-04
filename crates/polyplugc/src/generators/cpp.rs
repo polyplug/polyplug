@@ -334,22 +334,46 @@ fn generate_cpp_guest_plugin_vtable(
     }
     out.push_str("};\n\n");
 
+    // Instance lifecycle stubs
+    out.push_str(&format!(
+        "// Default create_instance stub for {} - returns null instance.\n",
+        plugin_name
+    ));
+    out.push_str(&format!(
+        "static GuestContractInstance {0}_create_instance_stub(void* rt_ctx, const void* args) noexcept {{\n",
+        plugin_upper
+    ));
+    out.push_str("    (void)rt_ctx; (void)args;  // Unused in default stub.\n");
+    out.push_str("    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n");
+    out.push_str("}\n\n");
+    out.push_str(&format!(
+        "// Default destroy_instance stub for {} - no-op.\n",
+        plugin_name
+    ));
+    out.push_str(&format!(
+        "static void {0}_destroy_instance_stub(void* rt_ctx, GuestContractInstance instance) noexcept {{\n",
+        plugin_upper
+    ));
+    out.push_str("    (void)rt_ctx; (void)instance;  // Unused in default stub.\n");
+    out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
+    out.push_str("}\n\n");
+
     out.push_str(&format!(
         "static PluginInterface {}_VTABLE = {{\n",
         plugin_upper
     ));
-    out.push_str("    nullptr,  // rt_ctx (set by host during registration)\n");
     out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
-    out.push_str(&format!("    {}U,\n", contract_version));
-    out.push_str(&format!("    {}U,\n", fn_count));
-    let dispatch_type: &str = if is_native {
+    out.push_str(&format!("    {}U,  // contract_version: (minor << 16) | patch\n", contract_version));
+    let dispatch_type_str: &str = if is_native {
         "DispatchType::Native"
     } else {
         "DispatchType::VirtualMachine"
     };
-    out.push_str(&format!("    {},\n", dispatch_type));
+    out.push_str(&format!("    {},\n", dispatch_type_str));
+    out.push_str(&format!("    {}_create_instance_stub,\n", plugin_upper));
+    out.push_str(&format!("    {}_destroy_instance_stub,\n", plugin_upper));
     out.push_str(&format!(
-        "    PluginDispatch{{ .native = NativeDispatch{{ {}_FNS }} }}\n",
+        "    PluginDispatch{{ .native = NativeDispatch{{ {fn_count}U, {}_FNS }} }}\n",
         plugin_upper
     ));
     out.push_str("};\n\n");
@@ -393,24 +417,48 @@ fn generate_cpp_guest_contract_vtable(
     }
     out.push_str("};\n\n");
 
+    // Instance lifecycle stubs
+    out.push_str(&format!(
+        "// Default create_instance stub for {} - returns null instance.\n",
+        contract.name
+    ));
+    out.push_str(&format!(
+        "static GuestContractInstance {0}_create_instance_stub(void* rt_ctx, const void* args) noexcept {{\n",
+        upper
+    ));
+    out.push_str("    (void)rt_ctx; (void)args;  // Unused in default stub.\n");
+    out.push_str("    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n");
+    out.push_str("}\n\n");
+    out.push_str(&format!(
+        "// Default destroy_instance stub for {} - no-op.\n",
+        contract.name
+    ));
+    out.push_str(&format!(
+        "static void {0}_destroy_instance_stub(void* rt_ctx, GuestContractInstance instance) noexcept {{\n",
+        upper
+    ));
+    out.push_str("    (void)rt_ctx; (void)instance;  // Unused in default stub.\n");
+    out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
+    out.push_str("}\n\n");
+
     // VTable static
     out.push_str(&format!("static PluginInterface {}_VTABLE = {{\n", upper));
-    out.push_str("    nullptr,  // rt_ctx (set by host during registration)\n");
     out.push_str(&format!("    {}_CONTRACT_ID,\n", upper));
     out.push_str(&format!(
         "    {}U,  // contract_version: (minor << 16) | patch\n",
         contract_version
     ));
-    out.push_str(&format!("    {}U,  // function_count\n", fn_count));
-    let dispatch_type: &str = if is_native {
+    let dispatch_type_str: &str = if is_native {
         "DispatchType::Native"
     } else {
         "DispatchType::VirtualMachine"
     };
-    out.push_str(&format!("    {},\n", dispatch_type));
+    out.push_str(&format!("    {},\n", dispatch_type_str));
+    out.push_str(&format!("    {}_create_instance_stub,\n", upper));
+    out.push_str(&format!("    {}_destroy_instance_stub,\n", upper));
     out.push_str(&format!(
-        "    PluginDispatch{{ .native = NativeDispatch{{ {}_FNS }} }}\n",
-        upper
+        "    PluginDispatch{{ .native = NativeDispatch{{ {}U, {}_FNS }} }}\n",
+        fn_count, upper
     ));
     out.push_str("};\n\n");
 
@@ -434,9 +482,12 @@ fn generate_cpp_guest_abi_wrapper(
         func.name, fn_id
     ));
     out.push_str(&format!(
-        "inline AbiError {0}_{1}_abi(const void* args, void* out) noexcept {{\n",
+        "inline AbiError {0}_{1}_abi(GuestContractInstance instance, const void* args, void* out) noexcept {{\n",
         contract_lower, func.name
     ));
+    out.push_str("    // Instance is ignored for stateless plugins (instance.data is nullptr).\n");
+    out.push_str("    // For stateful plugins, users override create_instance and use instance.data.\n");
+    out.push_str("    (void)instance;  // Suppress unused warning for stateless plugins.\n");
     out.push_str("    try {\n");
 
     if has_params {
