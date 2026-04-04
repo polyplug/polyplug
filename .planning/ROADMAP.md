@@ -11,12 +11,13 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 ## Phases
 
-- [ ] **Phase 1: ABI Types** - Foundation types moved to polyplug_abi with renamed interfaces
+- [x] **Phase 1: ABI Types** - Foundation types moved to polyplug_abi with renamed interfaces
 - [ ] **Phase 2: Registry** - Simplified registry with direct interface storage
 - [ ] **Phase 3: Instance Model** - Factory-based instance lifecycle with codegen support
-- [ ] **Phase 4: Hot-Reload** - Callback-based reload with instance safety contract
+- [x] **Phase 4: Hot-Reload** - Callback-based reload with instance safety contract
 - [ ] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
 - [ ] **Phase 6: Cleanup** - Naming consistency and documentation updates
+- [ ] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
 
 ## Phase Details
 
@@ -112,15 +113,17 @@ Plans:
 5. JS SDK uses TypeScript interfaces from polyplug_abi
 6. PluginGuard removed from all SDKs (replaced by instance wrappers)
 7. All SDKs generate instance-based wrappers via codegen
-**Plans:** 6 plans
+**Plans:** 8 plans (6 main + 2 gap closure)
 
 Plans:
-- [ ] 05-01-PLAN.md — Rust SDK: verify imports from polyplug_abi, no duplicate types
-- [ ] 05-02-PLAN.md — Python SDK: remove runtime_config.py, update RuntimeConfigC, remove PluginGuard
-- [ ] 05-03-PLAN.md — C# SDK: remove HostRuntimeConfig.cs, update RuntimeConfigC, remove PluginGuard.cs
-- [ ] 05-04-PLAN.md — Lua SDK: remove runtime_config.lua, update ffi.cdef RuntimeConfigC, remove Guard
-- [ ] 05-05-PLAN.md — JS SDK: remove runtime_config.js, update config buffer, remove Guard class
-- [ ] 05-06-PLAN.md — Codegen: verify instance wrappers generated for all languages
+- [x] 05-01-PLAN.md — Rust SDK: verify imports from polyplug_abi, no duplicate types
+- [x] 05-02-PLAN.md — Python SDK: remove runtime_config.py, update RuntimeConfigC, remove PluginGuard
+- [x] 05-03-PLAN.md — C# SDK: remove HostRuntimeConfig.cs, update RuntimeConfigC, remove PluginGuard.cs
+- [x] 05-04-PLAN.md — Lua SDK: remove runtime_config.lua, update ffi.cdef RuntimeConfigC, remove Guard
+- [x] 05-05-PLAN.md — JS SDK: remove runtime_config.js, update config buffer, remove Guard class
+- [x] 05-06-PLAN.md — Codegen: verify instance wrappers generated for all languages
+- [ ] 05-07-PLAN.md — Gap closure: Update C++ SDK (remove PluginGuard, add RuntimeConfig 24 bytes)
+- [ ] 05-08-PLAN.md — Gap closure: Rename RuntimeConfigC to RuntimeConfig in all SDKs
 
 ### Phase 6: Cleanup
 **Goal:** Consistent Guest/Host naming throughout with no vtable terminology
@@ -131,15 +134,13 @@ Plans:
 2. No *C suffix types in FFI (all types from polyplug_abi are canonical)
 3. Documentation uses Guest Contract / Host Contract terminology consistently
 4. All tests pass with new instance model and naming
-**Plans:** 6 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — Rust SDK: verify imports from polyplug_abi, no duplicate types
-- [ ] 05-02-PLAN.md — Python SDK: remove runtime_config.py, update RuntimeConfigC, remove PluginGuard
-- [ ] 05-03-PLAN.md — C# SDK: remove HostRuntimeConfig.cs, update RuntimeConfigC, remove PluginGuard.cs
-- [ ] 05-04-PLAN.md — Lua SDK: remove runtime_config.lua, update ffi.cdef RuntimeConfigC, remove Guard
-- [ ] 05-05-PLAN.md — JS SDK: remove runtime_config.js, update config buffer, remove Guard class
-- [ ] 05-06-PLAN.md — Codegen: verify instance wrappers generated for all languages
+- [ ] 06-01-PLAN.md — Remove all "vtable" naming from codebase
+- [ ] 06-02-PLAN.md — Verify no *C suffix types in FFI (covered by 05-08)
+- [ ] 06-03-PLAN.md — Update documentation to use Guest/Host terminology
+- [ ] 06-04-PLAN.md — Update tests to use new instance model and naming
 
 ### Phase 7: Typed Handles
 **Goal:** Replace all `*mut c_void` and `*const c_void` with meaningful typed handles
@@ -151,15 +152,13 @@ Plans:
 3. All RuntimeAbi functions use `RuntimeContext` instead of bare pointer
 4. All opaque handles are `#[repr(C)]` structs with single `data` field
 5. No bare `c_void` pointers in public ABI (except in opaque handle internals)
-**Plans:** 6 plans
+**Plans:** 4 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — Rust SDK: verify imports from polyplug_abi, no duplicate types
-- [ ] 05-02-PLAN.md — Python SDK: remove runtime_config.py, update RuntimeConfigC, remove PluginGuard
-- [ ] 05-03-PLAN.md — C# SDK: remove HostRuntimeConfig.cs, update RuntimeConfigC, remove PluginGuard.cs
-- [ ] 05-04-PLAN.md — Lua SDK: remove runtime_config.lua, update ffi.cdef RuntimeConfigC, remove Guard
-- [ ] 05-05-PLAN.md — JS SDK: remove runtime_config.js, update config buffer, remove Guard class
-- [ ] 05-06-PLAN.md — Codegen: verify instance wrappers generated for all languages
+- [ ] 07-01-PLAN.md — Create RuntimeContext and VmLoaderData typed handle structs
+- [ ] 07-02-PLAN.md — Update RuntimeAbi functions to use RuntimeContext
+- [ ] 07-03-PLAN.md — Update PluginContext to use typed handles
+- [ ] 07-04-PLAN.md — Verify all opaque handles are #[repr(C)] with single data field
 
 ## Progress
 
@@ -169,9 +168,9 @@ Plans:
 | 2. Registry | 0/3 | Not started | - |
 | 3. Instance Model | 0/5 | Not started | - |
 | 4. Hot-Reload | 3/3 | Complete | 2026-04-04 |
-| 5. SDK Updates | 0/6 | Not started | - |
-| 6. Cleanup | 0/0 | Not started | - |
-| 7. Typed Handles | 0/0 | Not started | - |
+| 5. SDK Updates | 6/8 | Gap closure | - |
+| 6. Cleanup | 0/4 | Not started | - |
+| 7. Typed Handles | 0/4 | Not started | - |
 
 ## Dependencies
 
@@ -182,7 +181,7 @@ Phase 1 (ABI Types)
 Phase 2 (Registry)
     |
     v
-Phase 3 (InstanceModel)
+Phase 3 (Instance Model)
     |
     v
 Phase 4 (Hot-Reload)
@@ -205,4 +204,5 @@ Phase 7 (Typed Handles)
 *Additional gap closure plans added: 2026-04-04*
 *Phase 2 plans added: 2026-04-04*
 *Phase 3 plans added: 2026-04-04*
-*Phase 4 plans added: 2026-04-04**Phase 5 plans added: 2026-04-04*
+*Phase 4 plans added: 2026-04-04*
+*Phase 5 gap closure plans added: 2026-04-04*
