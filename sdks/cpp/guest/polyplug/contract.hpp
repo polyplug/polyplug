@@ -2,10 +2,10 @@
 // Base class for guest-side contract implementations.
 //
 // Plugin authors derive from polyplug::Contract to implement a contract.
-// The derived class must provide a static vtable() that returns a pointer
-// to a statically-allocated PluginInterface.
+// The derived class must provide a static interface() that returns a pointer
+// to a statically-allocated GuestContractInterface.
 //
-// The PluginInterface must remain alive for the entire lifetime of the runtime —
+// The GuestContractInterface must remain alive for the entire lifetime of the runtime —
 // i.e. it should be a static variable.
 
 #pragma once
@@ -29,20 +29,20 @@ namespace polyplug {
 /// Example:
 ///   class ImageDecoder final : public polyplug::Contract {
 ///   public:
-///       const PluginInterface* vtable() const noexcept override {
-///           return &kVTable;
+///       const GuestContractInterface* interface() const noexcept override {
+///           return &kInterface;
 ///       }
 ///   private:
-///       static const PluginInterface kVTable;
+///       static const GuestContractInterface kInterface;
 ///   };
 class Contract {
 public:
     virtual ~Contract() = default;
 
-    /// Returns a pointer to the statically-allocated PluginInterface for this
+    /// Returns a pointer to the statically-allocated GuestContractInterface for this
     /// contract. The returned pointer MUST be valid for the lifetime of the
-    /// runtime — never return a pointer to a stack-allocated VTable.
-    virtual const PluginInterface* vtable() const noexcept = 0;
+    /// runtime — never return a pointer to a stack-allocated interface.
+    virtual const GuestContractInterface* interface() const noexcept = 0;
 };
 
 }  // namespace polyplug
