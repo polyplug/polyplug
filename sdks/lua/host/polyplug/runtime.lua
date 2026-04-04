@@ -4,7 +4,6 @@
 local ffi = require('ffi')
 local abi = require('polyplug_abi')
 local reload_phase = require('polyplug.reload_phase')
-local runtime_config = require('polyplug.runtime_config')
 
 ffi.cdef([[
     typedef struct OpaqueRuntime OpaqueRuntime;
