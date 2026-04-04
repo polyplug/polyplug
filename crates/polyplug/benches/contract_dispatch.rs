@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used)]
 
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
-// Run with: cargo bench -p polyplug --bench vtable_dispatch
+// Run with: cargo bench -p polyplug --bench contract_dispatch
 
 use core::cell::RefCell;
 use core::hint::black_box;
@@ -12,15 +12,16 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::plugin_registry::PluginRegistry;
-use polyplug_abi::ABI_OK;
+use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Buffer;
 use polyplug_abi::DispatchType;
-use polyplug_abi::HostVTable;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -46,11 +47,11 @@ struct FillArgs {
     fill_byte: u8,
 }
 
-// ─── Thread-local registry and captured vtable state ─────────────────────────
+// ─── Thread-local registry and captured interface state ────────────────────────
 
 thread_local! {
-    static BENCH_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
-    static LAST_VTABLE: core::cell::Cell<*const PluginInterface> = const { core::cell::Cell::new(core::ptr::null()) };
+    static BENCH_REGISTRY: RefCell<Option<PluginRegistry>> = RefCell::new(Some(PluginRegistry::new()));
+    static LAST_INTERFACE: core::cell::Cell<*const GuestContractInterface> = const { core::cell::Cell::new(core::ptr::null()) };
     static LAST_CONTRACT_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
     static RT_CTX: core::cell::Cell<*mut core::ffi::c_void> = const { core::cell::Cell::new(core::ptr::null_mut()) };
 }
@@ -58,23 +59,23 @@ thread_local! {
 /// Registration callback used by all benchmarks.
 ///
 /// # Safety
-/// `descriptor` and `vtable` must be valid pointers for the call duration.
+/// `descriptor` and `interface` must be valid pointers for the call duration.
 unsafe extern "C" fn bench_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
+    if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: 1,
+            code: AbiErrorCode::Generic,
             message: StringView::null(),
         };
     }
 
-    // SAFETY: descriptor and vtable are valid for this call per ABI contract.
+    // SAFETY: descriptor and interface are valid for this call per ABI contract.
     let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call per ABI contract.
-    let vt: &PluginInterface = unsafe { &*vtable };
+    // SAFETY: interface is valid for this call per ABI contract.
+    let iface: &GuestContractInterface = unsafe { &*interface };
 
     // SAFETY: desc.contract_name is set from a &'static str in the benchmark fixture.
     // The bytes are valid UTF-8 by construction.
@@ -84,32 +85,46 @@ unsafe extern "C" fn bench_register_callback(
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    let result: Result<PluginHandle, _> = BENCH_REGISTRY.with(|cell| {
-        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+    let result: Result<PluginHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+        // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
+        let registry = cell.borrow().as_ref().expect("registry not initialized");
         unsafe {
-            cell.borrow()
-                .register(*desc, vtable, contract_name.to_owned(), vt.contract_id)
+            registry.register(*desc, interface, contract_name.to_owned(), iface.contract_id)
         }
     });
 
     match result {
         Ok(_) => {
-            // Capture the vtable pointer and contract_id for easy retrieval.
-            LAST_VTABLE.with(|cell| cell.set(vtable));
-            LAST_CONTRACT_ID.with(|cell| cell.set(vt.contract_id));
-            AbiError {
-                code: ABI_OK,
-                message: StringView::null(),
-            }
+            // Capture the interface pointer and contract_id for easy retrieval.
+            LAST_INTERFACE.with(|cell| cell.set(interface));
+            LAST_CONTRACT_ID.with(|cell| cell.set(iface.contract_id.id()));
+            AbiError::ok()
         }
         Err(_) => AbiError {
-            code: 1,
+            code: AbiErrorCode::Generic,
             message: StringView::null(),
         },
     }
 }
 
-// ─── Stub HostVTable functions for cross-plugin dispatch ──────────────────────
+// ─── Instance lifecycle stubs for benchmarks ──────────────────────────────────
+
+/// Stub create_instance for benchmarks - returns null instance.
+unsafe extern "C" fn bench_create_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for benchmarks - no cleanup needed.
+unsafe extern "C" fn bench_destroy_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {
+}
+
+// ─── Stub RuntimeAbi functions for cross-plugin dispatch ──────────────────────
 
 /// Finds a plugin by contract_id in the thread-local BENCH_REGISTRY.
 ///
@@ -120,25 +135,13 @@ unsafe extern "C" fn bench_find_by_contract(
     contract_id: u64,
     min_version: u32,
 ) -> PluginHandle {
-    BENCH_REGISTRY.with(|cell| {
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
         cell.borrow()
+            .as_ref()
+            .expect("registry not initialized")
             .find(contract_id, min_version)
             .unwrap_or_else(|_| PluginHandle::null())
     })
-}
-
-/// find_by_bundle stub — delegates to find_by_contract (bundle-scoped lookup not used in benches).
-///
-/// # Safety
-/// Always safe to call; delegates to bench_find_by_contract.
-unsafe extern "C" fn bench_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    contract_id: u64,
-    min_version: u32,
-) -> PluginHandle {
-    // SAFETY: bench_find_by_contract is a safe wrapper around BENCH_REGISTRY.
-    unsafe { bench_find_by_contract(core::ptr::null_mut(), contract_id, min_version) }
 }
 
 /// find_all_by_contract stub — returns 0 (not used in benches).
@@ -155,24 +158,44 @@ unsafe extern "C" fn bench_find_all_by_contract(
     0
 }
 
-/// Resolves a plugin handle to a vtable pointer via the thread-local BENCH_REGISTRY.
+/// Resolves a plugin handle to an interface pointer via the thread-local BENCH_REGISTRY.
 ///
 /// # Safety
 /// The returned pointer is valid and 'static — the library is kept alive via mem::forget.
-unsafe extern "C" fn bench_resolve_plugin(
+unsafe extern "C" fn bench_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     handle: PluginHandle,
-) -> *const PluginInterface {
-    BENCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).unwrap_or(core::ptr::null()))
+) -> *const GuestContractInterface {
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+        cell.borrow()
+            .as_ref()
+            .expect("registry not initialized")
+            .resolve(handle)
+            .unwrap_or(core::ptr::null())
+    })
 }
 
-/// Returns a null host contract pointer.
+/// call_method stub — returns error (not used in benches).
+unsafe extern "C" fn bench_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
+}
+
+/// Returns a null host contract instance.
 unsafe extern "C" fn bench_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 /// Alloc wrapper that ignores rt_ctx (uses global allocator).
@@ -204,19 +227,19 @@ unsafe extern "C" fn bench_free(
 // ─── Setup helpers ────────────────────────────────────────────────────────────
 
 /// Load a plugin cdylib and call `polyplug_init`, registering into BENCH_REGISTRY.
-/// After this call, LAST_VTABLE holds the vtable pointer of the plugin just loaded.
+/// After this call, LAST_INTERFACE holds the interface pointer of the plugin just loaded.
 fn load_and_init_plugin(path: &str) -> libloading::Library {
     // SAFETY: path is a valid compiled cdylib built by build.rs.
     let library: libloading::Library =
         unsafe { libloading::Library::new(path).expect("failed to load plugin") };
 
     // SAFETY: polyplug_init matches the expected ABI:
-    // unsafe extern "C" fn(rt_ctx: *mut c_void, host: *const HostVTable, ctx: *const PluginContext) -> AbiError
+    // unsafe extern "C" fn(rt_ctx: *mut c_void, host: *const RuntimeAbi, ctx: *const PluginContext) -> AbiError
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const polyplug_abi::PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -225,60 +248,53 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
             .expect("polyplug_init not found")
     };
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: bench_register_callback,
+    let host_abi: RuntimeAbi = RuntimeAbi {
+        register_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
         find_by_contract: bench_find_by_contract,
-        find_by_bundle: bench_find_by_bundle,
         find_all_by_contract: bench_find_all_by_contract,
-        resolve_plugin: bench_resolve_plugin,
+        resolve_contract: bench_resolve_contract,
+        call_method: bench_call_method,
         get_host_contract: bench_get_host_contract,
     };
 
     let plugin_ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
 
-    // SAFETY: init_fn is a valid function; host_vtable and plugin_ctx live for the call duration.
+    // SAFETY: init_fn is a valid function; host_abi and plugin_ctx live for the call duration.
     let result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_abi as *const RuntimeAbi,
             &plugin_ctx as *const polyplug_abi::PluginContext,
         )
     };
 
-    assert_eq!(result.code, ABI_OK, "polyplug_init failed for {}", path);
+    assert!(result.is_ok(), "polyplug_init failed for {}", path);
     library
 }
 
-/// Retrieve the dispatch function for `fn_id` from the last registered vtable (LAST_VTABLE).
-fn get_vtable_fn(fn_id: usize) -> unsafe extern "C" fn(*const (), *mut ()) -> AbiError {
-    let vtable_ptr: *const PluginInterface = LAST_VTABLE.with(|cell| cell.get());
+/// Retrieve the dispatch function for `fn_id` from the last registered interface (LAST_INTERFACE).
+fn get_interface_fn(fn_id: usize) -> unsafe extern "C" fn(*const (), *mut ()) -> AbiError {
+    let interface_ptr: *const GuestContractInterface = LAST_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable not captured — was load_and_init_plugin called?"
+        !interface_ptr.is_null(),
+        "interface not captured — was load_and_init_plugin called?"
     );
-    // SAFETY: vtable_ptr was captured from the polyplug_init callback.
+    // SAFETY: interface_ptr was captured from the polyplug_init callback.
     // The library is kept alive via mem::forget in each benchmark function.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     assert!(
-        vtable.dispatch_type == DispatchType::Native,
+        interface.dispatch_type == DispatchType::Native,
         "expected Native dispatch type, got {:?}",
-        vtable.dispatch_type
+        interface.dispatch_type
     );
-    assert!(
-        fn_id < vtable.function_count as usize,
-        "fn_id {} out of range (function_count={})",
-        fn_id,
-        vtable.function_count
-    );
-    // SAFETY: dispatch.native.functions is a static array; fn_id is within bounds (checked above).
+    // SAFETY: dispatch.native.functions is a static array; fn_id is within bounds.
     // We verified dispatch_type == Native above, so accessing .native is safe.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(fn_id) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(fn_id) };
     // SAFETY: transmuting to the generic dispatch signature.
     // Arg/out types are enforced by each benchmark's setup code.
     unsafe { core::mem::transmute(fn_ptr) }
@@ -286,16 +302,16 @@ fn get_vtable_fn(fn_id: usize) -> unsafe extern "C" fn(*const (), *mut ()) -> Ab
 
 // ─── Benchmark 1 — noop dispatch ─────────────────────────────────────────────
 
-/// Measures the cost of a single vtable function call with trivial (zero) args.
+/// Measures the cost of a single contract interface function call with trivial (zero) args.
 /// Isolates the raw dispatch overhead with no meaningful computation.
 fn bench_dispatch_noop(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+        *cell.borrow_mut() = Some(PluginRegistry::new());
     });
 
     let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_vtable_fn(0);
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_interface_fn(0);
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
         c.benchmark_group("dispatch");
@@ -325,17 +341,17 @@ fn bench_dispatch_noop(c: &mut Criterion) {
 
 // ─── Benchmark 2 — buffer arg dispatch ───────────────────────────────────────
 
-/// Measures vtable dispatch with a Buffer argument (pre-allocated 4096-byte buffer).
+/// Measures contract interface dispatch with a Buffer argument (pre-allocated 4096-byte buffer).
 /// The buffer is allocated ONCE before the loop — only dispatch overhead is measured.
 fn bench_dispatch_buffer_arg(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+        *cell.borrow_mut() = Some(PluginRegistry::new());
     });
 
     let _library: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
     // fn 0 = memory_fill_preallocated_buffer(args: FillArgs) -> u32
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_vtable_fn(0);
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_interface_fn(0);
 
     // Allocate 4096 bytes ONCE outside the benchmark loop.
     let buf_ptr: *mut u8 = polyplug_host_alloc(4096, 1);
@@ -381,17 +397,17 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
 
 // ─── Benchmark 3 — struct arg and return ─────────────────────────────────────
 
-/// Measures vtable dispatch with non-trivial AddArgs (a=42, b=57) and a u32 result.
+/// Measures contract interface dispatch with non-trivial AddArgs (a=42, b=57) and a u32 result.
 /// Same dispatch path as bench 1 but with meaningful input values to prevent
 /// dead-code elimination of the computation inside the plugin.
 fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+        *cell.borrow_mut() = Some(PluginRegistry::new());
     });
 
     let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_vtable_fn(0);
+    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = get_interface_fn(0);
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
         c.benchmark_group("dispatch");
@@ -428,12 +444,12 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
 // ─── Benchmark 4 — cross-plugin dispatch ─────────────────────────────────────
 
 /// Measures the full cross-plugin dispatch path:
-///   find_by_contract (Registry lookup) + resolve_plugin (vtable pointer) + direct dispatch.
+///   find_by_contract (Registry lookup) + resolve_contract (interface pointer) + direct dispatch.
 /// Uses memory_plugin fn 2 (echo_string_view) as the target — no allocation.
 fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+        *cell.borrow_mut() = Some(PluginRegistry::new());
     });
 
     // Load memory_plugin into BENCH_REGISTRY so find_by_contract can locate it.
@@ -446,15 +462,15 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         "memory_plugin contract_id was not captured"
     );
 
-    // Build a HostVTable backed by the thread-local BENCH_REGISTRY.
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: bench_register_callback,
+    // Build a RuntimeAbi backed by the thread-local BENCH_REGISTRY.
+    let host_abi: RuntimeAbi = RuntimeAbi {
+        register_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
         find_by_contract: bench_find_by_contract,
-        find_by_bundle: bench_find_by_bundle,
         find_all_by_contract: bench_find_all_by_contract,
-        resolve_plugin: bench_resolve_plugin,
+        resolve_contract: bench_resolve_contract,
+        call_method: bench_call_method,
         get_host_contract: bench_get_host_contract,
     };
 
@@ -473,31 +489,31 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         b.iter(|| {
             // SAFETY: bench_find_by_contract is a valid extern C fn backed by BENCH_REGISTRY.
             let handle: PluginHandle = unsafe {
-                black_box((host_vtable.find_by_contract)(
+                black_box((host_abi.find_by_contract)(
                     core::ptr::null_mut(),
                     memory_contract_id,
                     0,
                 ))
             };
 
-            // SAFETY: bench_resolve_plugin returns a 'static PluginInterface pointer.
-            let vtable_ptr: *const PluginInterface =
-                unsafe { black_box((host_vtable.resolve_plugin)(core::ptr::null_mut(), handle)) };
+            // SAFETY: bench_resolve_contract returns a 'static GuestContractInterface pointer.
+            let interface_ptr: *const GuestContractInterface =
+                unsafe { black_box((host_abi.resolve_contract)(core::ptr::null_mut(), handle)) };
 
-            // SAFETY: vtable_ptr is non-null (plugin is registered), fn 2 is in range.
+            // SAFETY: interface_ptr is non-null (plugin is registered), fn 2 is in range.
             // fn 2 = memory_echo_string_view(args: *const StringView, out: *mut StringView).
             // sv is a valid StringView; sv_out is a valid StringView location.
-            let result: AbiError = if vtable_ptr.is_null() {
+            let result: AbiError = if interface_ptr.is_null() {
                 AbiError {
-                    code: 4_u32,
+                    code: AbiErrorCode::NotFound,
                     message: StringView::null(),
                 }
             } else {
-                // SAFETY: vtable_ptr is non-null (checked above) and 'static.
-                let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+                // SAFETY: interface_ptr is non-null (checked above) and 'static.
+                let interface: &GuestContractInterface = unsafe { &*interface_ptr };
                 // SAFETY: dispatch.native.functions is a valid static array; index 2 is within function_count.
                 // We assume dispatch_type == Native for benchmark plugins.
-                let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
+                let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
                 // SAFETY: fn_ptr is a valid extern C fn for the given function id.
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     unsafe { core::mem::transmute(fn_ptr) };

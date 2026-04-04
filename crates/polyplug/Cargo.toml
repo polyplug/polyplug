@@ -29,9 +29,10 @@ workspace = true
 criterion = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
+libloading = { workspace = true }
 
 [[bench]]
-name = "vtable_dispatch"
+name = "contract_dispatch"
 harness = false
 
 [[bench]]
