@@ -1,5 +1,14 @@
 # Host Contracts API Reference
 
+## Terminology Note
+
+This document uses terminology renamed in v1.1:
+- **RuntimeAbi**: Previously called "HostVTable" - the runtime's ABI provided to guests
+- **HostContractInterface**: Previously called "HostContractVTable" - a contract the host implements
+- **Interface**: Previously called "vtable"
+
+Old names may appear in historical context or migration notes only.
+
 ## Overview
 
 This document provides the complete API reference for host contracts, including C ABI structures, generated code patterns, and usage in all supported languages.
@@ -27,12 +36,12 @@ pub enum DispatchType {
 
 ---
 
-### HostContractVTableHeader
+### HostContractInterfaceHeader
 
 ```rust
 #[repr(C)]
-pub struct HostContractVTableHeader {
-    pub vtable_version: u32,      // Offset: 0
+pub struct HostContractInterfaceHeader {
+    pub interface_version: u32,      // Offset: 0
     pub contract_id: u64,         // Offset: 8
     pub contract_major: u32,      // Offset: 16
     pub contract_minor: u32,      // Offset: 20
@@ -50,7 +59,7 @@ pub struct HostContractVTableHeader {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `vtable_version` | `u32` | Structure version. Current: 1 |
+| `interface_version` | `u32` | Structure version. Current: 1 |
 | `contract_id` | `u64` | FNV-1a hash of `"host_contract:{name}@{major}"` |
 | `contract_major` | `u32` | Major version (breaking changes) |
 | `contract_minor` | `u32` | Minor version (backwards-compatible) |
@@ -164,12 +173,12 @@ match header.dispatch_type {
 
 ---
 
-### HostContractVTable
+### HostContractInterface
 
 ```rust
 #[repr(C)]
-pub struct HostContractVTable {
-    pub header: HostContractVTableHeader,  // Offset: 0
+pub struct HostContractInterface {
+    pub header: HostContractInterfaceHeader,  // Offset: 0
     pub dispatch: HostContractDispatch,    // Offset: 48
 }
 ```
@@ -180,16 +189,16 @@ pub struct HostContractVTable {
 
 ---
 
-## HostVTable Changes
+## RuntimeAbi Changes
 
-The `HostVTable` structure includes a new callback for host contract discovery:
+The `RuntimeAbi` structure includes a callback for host contract discovery:
 
 ```rust
 #[repr(C)]
-pub struct HostVTable {
+pub struct RuntimeAbi {
     // ... existing fields ...
     
-    /// Get a host contract vtable by contract ID.
+    /// Get a host contract interface by contract ID.
     /// 
     /// # Arguments
     /// * `rt_ctx` - Runtime context pointer
@@ -197,31 +206,31 @@ pub struct HostVTable {
     /// * `min_minor_version` - Minimum minor version required
     /// 
     /// # Returns
-    /// Pointer to HostContractVTable, or NULL if not found/incompatible
+    /// Pointer to HostContractInterface, or NULL if not found/incompatible
     pub get_host_contract: unsafe extern "C" fn(
         rt_ctx: *mut c_void,
         contract_id: u64,
         min_minor_version: u32,
-    ) -> *const HostContractVTable,
+    ) -> *const HostContractInterface,
 }
 ```
 
 **Usage from Guest**:
 ```rust
-let vtable_ptr = unsafe {
-    (host_vtable.get_host_contract)(
-        host_vtable.rt_ctx,
+let interface_ptr = unsafe {
+    (runtime_abi.get_host_contract)(
+        runtime_abi.rt_ctx,
         HOSTLOGGER_CONTRACT_ID,
         0,  // min_minor_version
     )
 };
 
-if vtable_ptr.is_null() {
+if interface_ptr.is_null() {
     // Host doesn't implement this contract
     return None;
 }
 
-let vtable = unsafe { &*vtable_ptr };
+let interface = unsafe { &*interface_ptr };
 ```
 
 ---
@@ -236,8 +245,8 @@ For each host contract, the generator produces:
 host/
 ├── host_contracts.rs    # Trait definitions
 ├── registration.rs      # Registration helpers
-├── vtables.rs          # VTable construction
-└── mod.rs              # Module exports
+├── interfaces.rs        # Interface construction
+└── mod.rs               # Module exports
 ```
 
 #### Trait Definition (Rust)
@@ -252,9 +261,9 @@ pub trait HostLogger: Send + Sync {
 #### Registration Function (Rust)
 
 ```rust
-pub fn create_logger_vtable(
+pub fn create_logger_interface(
     impl_: Box<dyn HostLogger>
-) -> &'static HostContractVTable {
+) -> &'static HostContractInterface {
     // Leak implementation for 'static lifetime
     let impl_ptr = Box::into_raw(impl_);
     
@@ -263,10 +272,10 @@ pub fn create_logger_vtable(
         log_dispatch,
     ];
     
-    // Build vtable
-    let vtable = HostContractVTable {
-        header: HostContractVTableHeader {
-            vtable_version: 1,
+    // Build interface
+    let interface = HostContractInterface {
+        header: HostContractInterfaceHeader {
+            interface_version: 1,
             contract_id: HOSTLOGGER_CONTRACT_ID,
             contract_major: 1,
             contract_minor: 0,
@@ -282,7 +291,7 @@ pub fn create_logger_vtable(
         },
     };
     
-    Box::leak(Box::new(vtable))
+    Box::leak(Box::new(interface))
 }
 ```
 
@@ -330,7 +339,7 @@ guest/
 ```rust
 /// Contract caller for host.logger@1
 pub struct HostLoggerCaller {
-    vtable: &'static HostContractVTable,
+    interface: &'static HostContractInterface,
 }
 
 impl HostLoggerCaller {
@@ -338,34 +347,34 @@ impl HostLoggerCaller {
     pub const REQUIRED_MAJOR: u32 = 1;
     pub const MIN_MINOR: u32 = 0;
     
-    /// Factory method - creates instance from HostVTable
+    /// Factory method - creates instance from RuntimeAbi
     pub unsafe fn from_host(
-        host: &HostVTable,
+        runtime_abi: &RuntimeAbi,
         min_minor: u32,
     ) -> Option<Self> {
-        let vtable_ptr = (host.get_host_contract)(
-            host.rt_ctx,
+        let interface_ptr = (runtime_abi.get_host_contract)(
+            runtime_abi.rt_ctx,
             Self::CONTRACT_ID,
             min_minor,
         );
         
-        if vtable_ptr.is_null() {
+        if interface_ptr.is_null() {
             return None;
         }
         
-        let vtable = &*vtable_ptr;
+        let interface = &*interface_ptr;
         
         // Verify major version
-        if vtable.header.contract_major != Self::REQUIRED_MAJOR {
+        if interface.header.contract_major != Self::REQUIRED_MAJOR {
             return None;
         }
         
-        Some(Self { vtable })
+        Some(Self { interface })
     }
     
     /// Check if the contract is valid
     pub fn is_valid(&self) -> bool {
-        !self.vtable as *const _ as usize == 0
+        !self.interface as *const _ as usize == 0
     }
     
     /// Call the log function
@@ -386,7 +395,7 @@ impl HostLoggerCaller {
     }
     
     unsafe fn get_function(&self, fn_id: u32) -> HostContractFn {
-        let funcs = self.vtable.dispatch.native.functions;
+        let funcs = self.interface.dispatch.native.functions;
         let func_ptr = *funcs.add(fn_id as usize);
         core::mem::transmute(func_ptr)
     }
@@ -409,7 +418,7 @@ impl HostLoggerCaller {
 
 ```rust
 // Check for contract availability
-match HostLoggerCaller::from_host(host_vtable, 0) {
+match HostLoggerCaller::from_host(runtime_abi, 0) {
     Some(logger) if logger.is_valid() => {
         // Contract available
         match logger.log("message") {
@@ -434,7 +443,7 @@ match HostLoggerCaller::from_host(host_vtable, 0) {
 
 ```rust
 use polyplug::runtime::Runtime;
-use generated::host::host_contracts::{HostLogger, create_logger_vtable};
+use generated::host::host_contracts::{HostLogger, create_logger_interface};
 
 // Implement trait
 struct MyLogger;
@@ -447,18 +456,18 @@ impl HostLogger for MyLogger {
 // Register
 let runtime = Runtime::builder().build()?;
 let logger = Box::new(MyLogger);
-let vtable = create_logger_vtable(logger);
-runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)?;
+let interface = create_logger_interface(logger);
+runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, interface)?;
 ```
 
 #### Guest Usage
 
 ```rust
 use generated::host_contract_callers::HostLoggerCaller;
-use polyplug_guest::ffi::get_host_vtable;
+use polyplug_guest::ffi::get_runtime_abi;
 
 unsafe {
-    let logger = HostLoggerCaller::from_host(get_host_vtable(), 0);
+    let logger = HostLoggerCaller::from_host(get_runtime_abi(), 0);
     if let Some(logger) = logger {
         if logger.is_valid() {
             logger.log("Hello")?;
@@ -490,7 +499,7 @@ HostContractRegistration.register_host_logger(runtime, logger)
 ```python
 from generated.host_callers import HostLoggerCaller
 
-logger = HostLoggerCaller.from_host(host_vtable)
+logger = HostLoggerCaller.from_host(runtime_abi)
 if logger:
     logger.log("Hello")
 ```
@@ -520,7 +529,7 @@ registration.register_host_logger(runtime, logger)
 ```lua
 local callers = require("generated.host_callers")
 
-local logger = callers.HostLoggerCaller.from_host(host_vtable)
+local logger = callers.HostLoggerCaller.from_host(runtime_abi)
 if logger then
   logger:log("Hello")
 end
@@ -551,7 +560,7 @@ HostContractRegistration.registerHostLogger(runtime, logger);
 ```typescript
 import { HostLoggerCaller } from "./generated/host_callers.ts";
 
-const logger = HostLoggerCaller.fromHost(hostVTable);
+const logger = HostLoggerCaller.fromHost(runtimeAbi);
 if (logger) {
   logger.log("Hello");
 }
@@ -586,7 +595,7 @@ polyplug::host::HostContractRegistration::register_host_logger(
 ```cpp
 #include "generated/host_callers.hpp"
 
-auto logger = HostLoggerCaller::from_host(host_vtable);
+auto logger = HostLoggerCaller::from_host(runtime_abi);
 if (logger) {
     logger->log(StringView("Hello"));
 }
@@ -619,7 +628,7 @@ HostContractRegistration.RegisterHostLogger(runtime, logger);
 ```csharp
 using Generated.HostCallers;
 
-var logger = HostLoggerCaller.FromHost(hostVTable);
+var logger = HostLoggerCaller.FromHost(runtimeAbi);
 if (logger != null) {
     logger.Log(1, new StringView("Hello"));
 }
@@ -650,18 +659,18 @@ fn log(&self, message: StringView) {
 }
 ```
 
-### VTable Lifetime
+### Interface Lifetime
 
-The `HostContractVTable` must be `'static`:
+The `HostContractInterface` must be `'static`:
 
 ```rust
-// CORRECT: 'static vtable
-static VTABLE: HostContractVTable = HostContractVTable { ... };
+// CORRECT: 'static interface
+static INTERFACE: HostContractInterface = HostContractInterface { ... };
 
-// FORBIDDEN: Stack-allocated vtable
+// FORBIDDEN: Stack-allocated interface
 fn register() {
-    let vtable = HostContractVTable { ... };  // Will dangle
-    runtime.register(vtable);
+    let interface = HostContractInterface { ... };  // Will dangle
+    runtime.register(interface);
 }
 ```
 
@@ -674,11 +683,11 @@ fn register() {
 | Type | Send | Sync | Justification |
 |------|------|------|---------------|
 | `DispatchType` | Yes | Yes | Simple C enum (Copy) |
-| `HostContractVTableHeader` | Yes | Yes | Plain data (Copy) |
+| `HostContractInterfaceHeader` | Yes | Yes | Plain data (Copy) |
 | `NativeHostContractDispatch` | Yes | Yes | Pointer to static data |
 | `VmHostContractDispatch` | Yes | Yes | Function pointer + raw pointer |
 | `HostContractDispatch` | Yes | Yes | Union of Send+Sync types |
-| `HostContractVTable` | Yes | Yes | Composite of Send+Sync types |
+| `HostContractInterface` | Yes | Yes | Composite of Send+Sync types |
 
 ### VM-Specific Threading
 
@@ -705,8 +714,8 @@ fn register() {
 
 | Host Version | Plugin Requests | Compatible? | Action |
 |--------------|-----------------|-------------|--------|
-| 1.0 | >= 1.0 | Yes | Return vtable |
-| 1.1 | >= 1.0 | Yes | Return vtable |
+| 1.0 | >= 1.0 | Yes | Return interface |
+| 1.1 | >= 1.0 | Yes | Return interface |
 | 1.0 | >= 1.1 | No | Return NULL |
 | 2.0 | >= 1.0 | No | Return NULL (major mismatch) |
 
@@ -717,16 +726,16 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     rt_ctx: *mut c_void,
     contract_id: u64,
     min_minor_version: u32,
-) -> *const HostContractVTable {
+) -> *const HostContractInterface {
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     let runtime: &Runtime = unsafe { &*ctx.runtime };
     
     match runtime.host_contracts.read() {
         Ok(contracts) => {
             match contracts.get(&contract_id) {
-                Some(vtable) => {
-                    if vtable.header.contract_minor >= min_minor_version {
-                        vtable as *const HostContractVTable
+                Some(interface) => {
+                    if interface.header.contract_minor >= min_minor_version {
+                        interface as *const HostContractInterface
                     } else {
                         core::ptr::null()
                     }
@@ -767,6 +776,6 @@ This ensures unique IDs and prevents collisions.
 
 - `HOST_CONTRACTS.md` - Tutorial and usage guide
 - `ABI_ARCHITECTURE.md` - Core ABI design
-- `.sisyphus/designs/host-contract-vtable.md` - VTable design document
+- `.sisyphus/designs/host-contract-interface.md` - Interface design document
 - `.sisyphus/designs/host-runtime-bridge.md` - VM bridge architecture
 - `examples/host_contracts/logger/` - Complete working example

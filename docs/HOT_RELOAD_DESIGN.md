@@ -4,46 +4,50 @@
 
 This document describes the hot-reload notification system for polyplug. The design achieves:
 - **Zero overhead** on the hot path (no per-call checks)
-- **Automatic instance tracking** via Arc reference counting
-- **Clean API** — app developers see contract objects, not vtables/guards
+- **Callback-based coordination** — host destroys instances before reload
+- **Clean API** — app developers see contract objects, not interfaces/guards
 - **Actionable notifications** — host knows exactly what to do
+
+## Terminology Note
+
+This document uses terminology renamed in v1.1:
+- **GuestContractInterface**: Previously called "PluginInterface" or "vtable"
+- **RuntimeAbi**: Previously called "HostVTable"
+- **Interface**: Previously called "vtable"
+
+The `VTableSlot` wrapper struct was removed in the instance model refactor. Interfaces are now stored directly in the registry.
 
 ---
 
 ## Core Concepts
 
-### 1. Arc-Based Reference Tracking
+### 1. Callback-Based Coordination
 
-Each caller wrapper holds an internal `PluginGuard` which contains an `Arc<VTableSlot>`. The Arc reference count tracks how many wrappers reference the vtable.
+The runtime notifies the host before and after interface swap, plus failure case. The host is responsible for tracking and destroying all guest contract instances it has created.
 
-```
-Arc::strong_count == 1  →  No wrappers exist (only registry holds Arc)
-Arc::strong_count > 1   →  Wrappers exist (each wrapper holds an Arc reference)
-```
-
-**Critical clarification:** Plugins use `OnceLock<Box<dyn Trait>>` for singleton implementations. The "instances" are actually **caller wrappers** on the host side, not plugin instances. Multiple wrappers can reference the same singleton vtable.
+**Critical clarification:** Plugins use `OnceLock<Box<dyn Trait>>` for singleton implementations. The "instances" are actually **caller wrappers** on the host side, not plugin instances. Multiple wrappers can reference the same singleton interface.
 
 ### 2. Hidden Implementation
 
-The generated caller wrappers hide `PluginGuard` and `PluginInterface` from the application developer. They only see:
+The generated caller wrappers hide `PluginGuard` and `GuestContractInterface` from the application developer. They only see:
 
 ```cpp
 auto decoder = PipelineDecoder::create(rt, contract_id);  // Creates wrapper
 auto result = decoder.decode(input);  // Calls singleton plugin implementation
-decoder.reset();  // Or let it go out of scope (drops Arc reference)
+decoder.reset();  // Or let it go out of scope
 ```
 
 ### 3. Three-Phase Notification
 
-The runtime notifies the host before and after vtable swap, plus failure case:
+The runtime notifies the host before and after interface swap, plus failure case:
 
-- **Preparing**: "I want to reload this bundle. Destroy your caller wrappers (drop Arc references)."
-- **Reloaded**: "Reload complete. You can create new caller wrappers (pointing to new vtable)."
-- **Failed**: "Reload aborted - wrappers not destroyed. Old vtable kept."
+- **Preparing**: "I want to reload this bundle. Destroy your caller wrappers (drop all instances)."
+- **Reloaded**: "Reload complete. You can create new caller wrappers (pointing to new interface)."
+- **Failed**: "Reload aborted - instances not destroyed. Old interface kept."
 
 ### 4. Retry Mechanism
 
-If caller wrappers are still held (Arc::strong_count > 1) after the initial `Preparing` notification:
+If caller wrappers are still held after the initial `Preparing` notification:
 
 1. Runtime waits for `hot_reload_retry_interval` (default: 1 second)
 2. Fires `Preparing` again with incremented `retry_count`
@@ -55,9 +59,9 @@ This gives the host multiple chances to drop wrapper references before the reloa
 
 ### 5. Stuck Detection and Abort
 
-If the host doesn't drop all wrapper references (Arc::strong_count still > 1) after max retries, the runtime:
+If the host doesn't drop all wrapper references after max retries, the runtime:
 1. Sends `Failed` notification to host with reason string
-2. Keeps old vtable (no swap occurred)
+2. Keeps old interface (no swap occurred)
 3. Logs warning via `on_warning` callback
 4. Returns error from `reload_bundle()`
 
@@ -76,18 +80,18 @@ Set `abort_on_max_retries=false` to retry indefinitely (useful for development).
 /// Phase of a hot-reload operation for notification callbacks.
 #[derive(Debug, Clone)]
 pub enum ReloadPhase {
-    /// BEFORE vtable swap - host must destroy instances
+    /// BEFORE interface swap - host must destroy instances
     Preparing {
         bundle_id: u64,
         bundle_name: String,
         retry_count: u32,  // 0 = first attempt, 1+ = retry
     },
-    /// AFTER vtable swap - host can create new instances
+    /// AFTER interface swap - host can create new instances
     Reloaded {
         bundle_id: u64,
         bundle_name: String,
     },
-    /// Reload ABORTED - old vtable kept, no swap occurred
+    /// Reload ABORTED - old interface kept, no swap occurred
     Failed {
         bundle_id: u64,
         bundle_name: String,
@@ -130,7 +134,7 @@ Hot-reload is **opt-in by design**, not because it's unsafe, but because it requ
 1. **Callback Registration**: The host must register an `on_reload` callback
 2. **Instance Tracking**: The host must track instances per bundle and destroy them on `Preparing`
 3. **Error Handling**: The host must handle `Failed` notifications
-4. **Per-Call Overhead**: Guards re-resolve vtable on each call (~10-50ns)
+4. **Per-Call Overhead**: Guards re-resolve interface on each call (~10-50ns)
 
 If an application doesn't need hot-reload, it shouldn't pay these costs.
 
@@ -198,8 +202,7 @@ For language-specific API details and examples, see the SDK documentation:
 │                                                                      │
 │  INITIAL STATE                                                      │
 │  ─────────────                                                      │
-│  Arc::strong_count = 3                                              │
-│  (registry + decoder_instance + encoder_instance)                   │
+│  Host holds instances for bundle (decoder, encoder, etc.)           │
 │                                                                      │
 │  RELOAD TRIGGERED                                                   │
 │  ─────────────────                                                  │
@@ -209,14 +212,14 @@ For language-specific API details and examples, see the SDK documentation:
 │     ▼                                                                │
 │  2. Host: instances[bundle_id].clear()                              │
 │     │                                                                │
-│     ├─ decoder_instance destroyed → guard drops                     │
-│     ├─ encoder_instance destroyed → guard drops                     │
+│     ├─ decoder_instance destroyed                                   │
+│     ├─ encoder_instance destroyed                                   │
 │     │                                                                │
 │     ▼                                                                │
-│  3. Arc::strong_count = 1 (only registry holds it)                  │
+│  3. All instances destroyed - safe to swap                          │
 │     │                                                                │
 │     ▼                                                                │
-│  4. Runtime: swap_vtable(new_vtable)  ← ATOMIC                      │
+│  4. Runtime: swap_interface(new_interface)  ← ATOMIC               │
 │     │                                                                │
 │     ▼                                                                │
 │  5. Runtime: on_reload(Reloaded { bundle_id })                      │
@@ -226,7 +229,7 @@ For language-specific API details and examples, see the SDK documentation:
 │                                                                      │
 │  ─────────────────────────────────────────────────────────────────  │
 │                                                                      │
-│  IF STUCK (Arc count > 1 after 1 second):                           │
+│  IF STUCK (instances not destroyed after 1 second):                 │
 │                                                                      │
 │  2b. Runtime: on_reload(Preparing { bundle_id, retry: 1 })          │
 │      Host: "I missed something!" → Force cleanup                    │
@@ -250,7 +253,7 @@ For language-specific API details and examples, see the SDK documentation:
 │  4. Runtime: on_reload(Failed { bundle_id, reason })                │
 │     │                                                                │
 │     ▼                                                                │
-│  5. Runtime: Return error, keep old vtable                          │
+│  5. Runtime: Return error, keep old interface                       │
 │     │                                                                │
 │     ▼                                                                │
 │  6. Host: Log error, alert user, or investigate leak                │
@@ -276,10 +279,10 @@ For language-specific API details and examples, see the SDK documentation:
 
 ## Key Design Decisions
 
-### 1. Why Hide Guard and VTable?
+### 1. Why Hide Guard and Interface?
 
 - **Simplicity**: App developers see clean contract objects
-- **Safety**: Can't accidentally misuse vtable/guard
+- **Safety**: Can't accidentally misuse interface/guard
 - **Encapsulation**: Implementation details stay hidden
 - **RAII**: Automatic cleanup when instance goes out of scope
 

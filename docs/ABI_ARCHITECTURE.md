@@ -1,5 +1,15 @@
 # Polyplug ABI Architecture
 
+## Terminology Note
+
+This document uses the following terminology (renamed in v1.1):
+- **GuestContractInterface**: Previously called "PluginInterface" or "vtable"
+- **RuntimeAbi**: Previously called "HostVTable"
+- **Host Contract**: A contract provided by the host to plugins
+- **Guest Contract**: A contract implemented by plugins
+
+Old names may appear in historical context or migration notes only.
+
 ## Overview
 
 Polyplug uses a dual-ABI system where both the **host** (runtime) and **guest** (plugins) export C functions across the FFI boundary.
@@ -22,7 +32,7 @@ AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx);
 ```
 **Called by:** Host immediately after dlopen
 **Parameters:**
-- `registrar`: Bridge for plugin to register its vtables
+- `registrar`: Bridge for plugin to register its interfaces
 - `ctx`: Context containing bundle_path and future extensibility
 **Purpose:** Plugin constructor - registers contracts with the runtime
 
@@ -93,7 +103,7 @@ size_t polyplug_runtime_find_all_by_contract(
 
 ### Plugin Resolution
 ```c
-// Resolve handle to vtable
+// Resolve handle to interface
 OpaquePluginGuard* polyplug_runtime_resolve_plugin(
     OpaqueRuntime* rt,
     uint64_t packed_handle
@@ -102,8 +112,8 @@ OpaquePluginGuard* polyplug_runtime_resolve_plugin(
 // Release guard
 void polyplug_runtime_plugin_release(OpaquePluginGuard* guard);
 
-// Get vtable pointer
-const void* polyplug_runtime_plugin_vtable(OpaquePluginGuard* guard);
+// Get interface pointer
+const void* polyplug_runtime_plugin_interface(OpaquePluginGuard* guard);
 ```
 
 ### Error Handling
@@ -142,18 +152,18 @@ polyplug_runtime_load_bundle()
     ▼
 Call: polyplug_init(registrar, ctx)
     │
-    ├── Plugin builds vtables
+    ├── Plugin builds interfaces
     ├── Plugin calls registrar->register_plugin()
-    └── Vtables stored in registry
+    └── Interfaces stored in registry
     │
     ▼
 polyplug_runtime_find_by_contract() ──► Get handle
     │
     ▼
-polyplug_runtime_resolve_plugin() ──► Get vtable
+polyplug_runtime_resolve_plugin() ──► Get interface
     │
     ▼
-Call plugin functions via vtable
+Call plugin functions via interface
     │
     ▼
 polyplug_runtime_destroy()
@@ -170,6 +180,6 @@ The core ABI is frozen per §7 of AGENTS.md:
 ## Future Extensions
 
 New functionality should use:
-1. Extension vtables via `HostVTable.get_extension()`
+1. Extension interfaces via `RuntimeAbi.get_extension()`
 2. New fields in `PluginContext` (backward compatible)
 3. New host ABI functions (doesn't break plugins)

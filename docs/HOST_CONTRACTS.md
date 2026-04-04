@@ -1,5 +1,14 @@
 # Host Contracts Tutorial
 
+## Terminology Note
+
+This document uses terminology renamed in v1.1:
+- **RuntimeAbi**: Previously called "HostVTable" - the runtime's ABI provided to guests
+- **HostContractInterface**: Previously called "HostContractVTable" - a contract the host implements for guests
+- **Interface**: Previously called "vtable"
+
+Old names may appear in historical context or migration notes only.
+
 ## Overview
 
 Host contracts enable **bidirectional communication** between the host application and plugins. While plugin contracts define functions that the host can call on plugins, host contracts define functions that plugins can call back to the host.
@@ -21,6 +30,14 @@ Host Application                    Plugin Bundle
        │  return result                   │
        │<─────────────────────────────────│
 ```
+
+## Terminology Clarification
+
+- **RuntimeAbi**: The runtime's ABI provided to guests (host's functions like `alloc`, `find_by_contract`, etc.). This is passed to plugins during `polyplug_init`.
+- **HostContractInterface**: A contract the host implements for guests to call (e.g., logging, metrics). This is registered via `register_host_contract`.
+- **GuestContractInterface**: A contract plugins implement for the host to call.
+
+The naming separation clarifies the Host/Guest relationship: the host provides the RuntimeAbi, while both host and guest can provide contract interfaces.
 
 ## How Host Contracts Differ from Plugin Contracts
 
@@ -111,14 +128,12 @@ Before loading plugins, register the host contract implementation:
 
 ```rust
 use polyplug::runtime::Runtime;
-use generated::host::host_contracts::create_logger_vtable;
-
-let runtime = Runtime::builder().build()?;
+use generated::host::host_contracts::create_logger_interface;
 
 // Create and register host contract
 let logger_impl = Box::new(ConsoleLogger);
-let logger_vtable = create_logger_vtable(logger_impl);
-runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, logger_vtable)?;
+let logger_interface = create_logger_interface(logger_impl);
+runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, logger_interface)?;
 
 // Now load plugins - they can call the host's log function
 runtime.load_bundle(&plugin_path)?;
@@ -141,7 +156,7 @@ impl ExampleWorkerPlugin for WorkerPlugin {
         // Get the host contract caller
         let logger = unsafe {
             HostLoggerCaller::from_host(
-                polyplug_guest::ffi::get_host_vtable(),
+                polyplug_guest::ffi::get_runtime_abi(),
                 1
             )
         };
@@ -183,8 +198,8 @@ impl HostLogger for ConsoleLogger {
 
 // 3. Register with runtime
 let logger_impl = Box::new(ConsoleLogger);
-let vtable = create_logger_vtable(logger_impl);
-runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)?;
+let interface = create_logger_interface(logger_impl);
+runtime.register_host_contract(HOSTLOGGER_CONTRACT_ID, interface)?;
 ```
 
 ### Python (VM Host)
@@ -286,7 +301,7 @@ HostContractRegistration.RegisterHostLogger(runtime, logger);
 ### Rust
 
 ```rust
-let logger = HostLoggerCaller::from_host(get_host_vtable(), 1);
+let logger = HostLoggerCaller::from_host(get_runtime_abi(), 1);
 if let Some(logger) = logger {
     if logger.is_valid() {
         logger.log("Hello from plugin!")?;
@@ -297,7 +312,7 @@ if let Some(logger) = logger {
 ### Python
 
 ```python
-logger = HostLoggerCaller.from_host(host_vtable)
+logger = HostLoggerCaller.from_host(runtime_abi)
 if logger:
     logger.log("Hello from plugin!")
 ```
@@ -305,7 +320,7 @@ if logger:
 ### Lua
 
 ```lua
-local logger = M.HostLoggerCaller.from_host(host_vtable)
+local logger = M.HostLoggerCaller.from_host(runtime_abi)
 if logger then
   logger:log("Hello from plugin!")
 end
@@ -314,7 +329,7 @@ end
 ### JavaScript
 
 ```typescript
-const logger = HostLoggerCaller.fromHost(hostVTable);
+const logger = HostLoggerCaller.fromHost(runtimeAbi);
 if (logger) {
   logger.log("Hello from plugin!");
 }
@@ -323,7 +338,7 @@ if (logger) {
 ### C++
 
 ```cpp
-auto logger = HostLoggerCaller::from_host(host_vtable);
+auto logger = HostLoggerCaller::from_host(runtime_abi);
 if (logger) {
     logger->log(StringView("Hello from plugin!"));
 }
@@ -332,7 +347,7 @@ if (logger) {
 ### C#
 
 ```csharp
-var logger = HostLoggerCaller.FromHost(hostVTable);
+var logger = HostLoggerCaller.FromHost(runtimeAbi);
 if (logger != null) {
     logger.Log(1, new StringView("Hello from plugin!"));
 }
@@ -356,13 +371,13 @@ This ensures that `host.logger` and a hypothetical `plugin.logger` have differen
 Host contracts support version negotiation. When a plugin requests a host contract:
 
 1. Plugin specifies minimum minor version it requires
-2. Host returns the vtable if its minor version >= requested
+2. Host returns the interface if its minor version >= requested
 3. Plugin checks major version matches exactly
 4. If incompatible, plugin receives `null` and must handle gracefully
 
 ```rust
 // Plugin side - request with minimum minor version
-let logger = HostLoggerCaller::from_host(vtable, min_minor: 2);
+let logger = HostLoggerCaller::from_host(runtime_abi, min_minor: 2);
 
 // If host implements 1.3 and plugin needs >= 1.2, success
 // If host implements 1.1 and plugin needs >= 1.2, returns None

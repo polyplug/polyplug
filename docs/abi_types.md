@@ -1,5 +1,12 @@
 # DataRecord ABI Type Reference
 
+## Terminology Note
+
+This document uses terminology renamed in v1.1:
+- **RuntimeAbi**: Previously called "HostVTable"
+- **GuestContractInterface**: Previously called "PluginInterface"
+- **Interface**: Previously called "vtable"
+
 ## Overview
 
 This document is the **canonical reference** for the `DataRecord` type used across all
@@ -214,9 +221,9 @@ Reserved error codes (0–255 runtime, 256+ plugin-defined):
 
 ---
 
-## HostVTable Note
+## RuntimeAbi Note
 
-`HostVTable` is **not** part of `DataRecord`. It is passed once at plugin init via
+`RuntimeAbi` is **not** part of `DataRecord`. It is passed once at plugin init via
 `polyplug_init(registrar: *mut PluginRegistrar)` and must be stored in a static.
 It provides `alloc`, `free`, `find_by_contract`, and other host services.
 

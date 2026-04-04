@@ -2,12 +2,20 @@
 
 This document covers performance characteristics and optimization strategies for all polyplug host libraries.
 
+## Terminology Note
+
+This document uses terminology renamed in v1.1:
+- **Interface**: Previously called "vtable"
+- **Contract dispatch**: Previously called "vtable dispatch"
+- **GuestContractInterface**: Previously called "PluginInterface"
+- **RuntimeAbi**: Previously called "HostVTable"
+
 ## Overview
 
 polyplug is designed for **zero-overhead hot path calls**. The architecture ensures:
 
-1. **One guard load** - Resolve handle to vtable once
-2. **One pointer dereference** - Access cached vtable
+1. **One guard load** - Resolve handle to interface once
+2. **One pointer dereference** - Access cached interface
 3. **One indirect call** - Dispatch to plugin function
 
 ```
@@ -17,12 +25,12 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 │                                                                  │
 │   1. Runtime.resolve_plugin(handle)                              │
 │      └─> Validates generation counter                           │
-│      └─> Returns Guard with vtable pointer                      │
+│      └─> Returns Guard with interface pointer                   │
 │                                                                  │
-│   2. Guard.vtable()                                              │
+│   2. Guard.interface()                                           │
 │      └─> Returns cached pointer (no FFI)                        │
 │                                                                  │
-│   3. vtable.functions[fn_id](args, out)                         │
+│   3. interface.functions[fn_id](args, out)                      │
 │      └─> Direct indirect call                                   │
 │                                                                  │
 │   Total overhead: ~10-50ns (native) to ~400ns (Python ctypes)   │
@@ -61,48 +69,48 @@ polyplug is designed for **zero-overhead hot path calls**. The architecture ensu
 ### C++ (Optimal)
 
 **Already zero-overhead:**
-- `PluginGuard` caches vtable at construction
+- `PluginGuard` caches interface at construction
 - Direct pointer access, no FFI on hot path
 - Move semantics for efficient transfer
 
 ```cpp
 // Hot path - zero FFI overhead
 auto guard = rt.resolve_plugin(handle);
-const auto* vtable = guard.vtable();  // Cached pointer
-vtable->process(data);  // Direct indirect call
+const auto* interface = guard.interface();  // Cached pointer
+interface->process(data);  // Direct indirect call
 ```
 
-**Hot-reload safety:** Guard stores handle, re-resolves vtable on each call.
+**Hot-reload safety:** Guard stores handle, re-resolves interface on each call.
 
 ### Lua (Near-Optimal)
 
 **LuaJIT FFI is extremely fast (~2x native C):**
-- Module-level type caching (`VTableType`, `DispatchFnType`)
+- Module-level type caching (`InterfaceType`, `DispatchFnType`)
 - Function pointer cache (`func_cache`)
 - JIT-compiled calls
 
 ```lua
 -- Hot path
 local guard = rt:resolve_plugin(handle)
-local result = guard:call(0, input)  -- Re-resolves vtable for hot-reload safety
+local result = guard:call(0, input)  -- Re-resolves interface for hot-reload safety
 ```
 
-**Hot-reload safety:** Guard stores `runtime + handle`, re-resolves vtable each call.
+**Hot-reload safety:** Guard stores `runtime + handle`, re-resolves interface each call.
 
 ### JavaScript / Deno (Good)
 
 **V8 FFI is fast:**
 - Module-level caches (`_funcCache`, `_DISPATCH_FN_TYPE`)
-- `BigUint64Array` for fast vtable reads
+- `BigUint64Array` for fast interface reads
 - `UnsafeFnPointer` for direct calls
 
 ```javascript
 // Hot path
 const guard = rt.resolvePlugin(handle);
-const result = guard.call(0, input);  // Re-resolves vtable for hot-reload safety
+const result = guard.call(0, input);  // Re-resolves interface for hot-reload safety
 ```
 
-**Hot-reload safety:** Guard stores `runtime + handle`, re-resolves vtable each call.
+**Hot-reload safety:** Guard stores `runtime + handle`, re-resolves interface each call.
 
 ### Python (Acceptable)
 
@@ -124,10 +132,10 @@ from polyplug import Runtime
 
 rt = Runtime()
 guard = rt.resolve_plugin(handle)
-vtable = guard.vtable  # Cached pointer
+interface = guard.interface  # Cached pointer
 ```
 
-**Hot-reload safety:** Guard stores handle, re-resolves vtable each call.
+**Hot-reload safety:** Guard stores handle, re-resolves interface each call.
 
 ---
 
@@ -163,41 +171,41 @@ All host libraries implement the same hot-reload safety pattern:
 │                    HOT-RELOAD SAFE GUARD                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│   Guard stores: runtime + handle (NOT cached vtable)            │
+│   Guard stores: runtime + handle (NOT cached interface)         │
 │                                                                  │
-│   On each vtable() call:                                         │
-│   1. Guard.vtable() → resolve_plugin(runtime, handle)           │
+│   On each interface() call:                                      │
+│   1. Guard.interface() -> resolve_plugin(runtime, handle)       │
 │   2. Runtime validates generation counter                        │
-│   3. If stale (hot-reload happened) → returns null/error        │
-│   4. If valid → returns current vtable pointer                   │
+│   3. If stale (hot-reload happened) -> returns null/error       │
+│   4. If valid -> returns current interface pointer               │
 │                                                                  │
 │   This ensures:                                                  │
 │   - Hot-reload invalidates old handles                           │
-│   - No dangling vtable pointers                                  │
+│   - No dangling interface pointers                               │
 │   - Safe concurrent access                                       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Why not cache vtable?**
+**Why not cache interface?**
 
 When hot-reload happens, the Rust runtime:
-1. Swaps the vtable Arc in the slot
+1. Swaps the interface Arc in the slot
 2. Returns the old Arc
-3. If no Rust guard holds it, the old vtable is **freed**
+3. If no Rust guard holds it, the old interface is **freed**
 
-Any cached raw pointer becomes a **dangling pointer** → use-after-free crash.
+Any cached raw pointer becomes a **dangling pointer** -> use-after-free crash.
 
 **Overhead:**
 
 | Operation | Cost | Impact |
 |-----------|------|--------|
-| Cached vtable | ~0-5 ns | ❌ Crash on hot-reload |
-| Re-resolve vtable | ~10-50 ns | ✅ Safe |
+| Cached interface | ~0-5 ns | Crash on hot-reload |
+| Re-resolve interface | ~10-50 ns | Safe |
 
-For typical plugin calls (>1μs), the 10-50ns overhead is <5%.
+For typical plugin calls (>1us), the 10-50ns overhead is <5%.
 
-**Future consideration:** A "red-green" state mechanism where the runtime pauses all plugin calls during hot-reload, allowing cached vtables to be safely invalidated. This would eliminate the per-call overhead while maintaining safety.
+**Future consideration:** A "red-green" state mechanism where the runtime pauses all plugin calls during hot-reload, allowing cached interfaces to be safely invalidated. This would eliminate the per-call overhead while maintaining safety.
 
 ---
 
@@ -253,12 +261,12 @@ handles = rt.find_all_by_contract(contract_id, 1)
 # Bad: Resolve on every call
 for data in dataset:
     guard = rt.resolve_plugin(handle)
-    result = call_plugin(guard.vtable, data)
+    result = call_plugin(guard.interface, data)
 
 # Good: Resolve once, call many times
 guard = rt.resolve_plugin(handle)
 for data in dataset:
-    result = call_plugin(guard.vtable, data)
+    result = call_plugin(guard.interface, data)
 ```
 
 ### 3. Choose the Right Language
@@ -286,7 +294,7 @@ QuickJS guest plugins use a cached Context architecture for minimal dispatch ove
 │   Bundle Load (one-time):                                        │
 │   1. Create QuickJS Runtime (per-bundle, owned by JsLoaderData) │
 │   2. Create Context for this bundle                             │
-│   3. Evaluate bundle JS, extract vtable                         │
+│   3. Evaluate bundle JS, extract interface                       │
 │   4. Store Runtime + Context + Persistent<Function> in LoaderData│
 │                                                                  │
 │   Dispatch Call (hot path):                                      │
@@ -348,7 +356,7 @@ Each bundle gets its own QuickJS Runtime stored in `JsLoaderData`. This ensures:
 ## Loader Dispatch Benchmarks
 
 > **All numbers below are from actual benchmark runs on the current codebase.**
-> Run `cargo bench -p polyplug --bench vtable_dispatch`, `cargo bench -p polyplug_js`, etc. to reproduce.
+> Run `cargo bench -p polyplug --bench contract_dispatch`, `cargo bench -p polyplug_js`, etc. to reproduce.
 
 ### Native (Rust/C++/NativeAOT Guest Plugins)
 

@@ -1,10 +1,18 @@
-# PluginInterface Design Rationale
+# GuestContractInterface Design Rationale
 
-> **Historical Document** — This document describes the design rationale for the `PluginInterface` architecture. The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug/src/abi/` and `sdks/*/abi/`.
+> **Historical Document** — This document describes the design rationale for the `GuestContractInterface` architecture (previously called `PluginInterface`). The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
+
+## Terminology Note
+
+This document uses terminology renamed in v1.1:
+- **GuestContractInterface**: Previously called "PluginInterface" or "vtable"
+- **RuntimeAbi**: Previously called "HostVTable"
+- **Guest Contract**: A contract implemented by plugins
+- **Host Contract**: A contract provided by the host to plugins
 
 ## Overview
 
-This document explains the design decisions behind the `PluginInterface` architecture, which replaces the previous `PluginInterface` design. The key goals are:
+This document explains the design decisions behind the `GuestContractInterface` architecture, which replaces the previous `PluginInterface` design. The key goals are:
 
 1. **Zero overhead for native plugins** - Direct function call, no indirection
 2. **Minimal overhead for VM plugins** - One dispatch call, no global state
@@ -13,14 +21,14 @@ This document explains the design decisions behind the `PluginInterface` archite
 
 ---
 
-## The Problem with PluginInterface
+## The Problem with the Old PluginInterface
 
 ### Previous Architecture
 
 ```rust
 // OLD: PluginInterface forced all loaders into the same pattern
 #[repr(C)]
-pub struct PluginInterface {
+pub struct OldPluginInterface {
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
@@ -61,19 +69,19 @@ VM loaders used **static trampolines** + **global registries**:
 
 ---
 
-## The Solution: PluginInterface
+## The Solution: GuestContractInterface
 
 ### New Architecture
 
 ```rust
 #[repr(C)]
-pub struct PluginInterface {
+pub struct GuestContractInterface {
     pub rt_ctx: *const HostContext,      // Per-plugin runtime context
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
     pub dispatch_type: DispatchType,     // Native or VM?
-    pub dispatch: PluginDispatch,        // Union of dispatch mechanisms
+    pub dispatch: DispatchMechanisms,    // Union of dispatch mechanisms
 }
 
 #[repr(C)]
@@ -83,7 +91,7 @@ pub enum DispatchType {
 }
 
 #[repr(C)]
-pub union PluginDispatch {
+pub union DispatchMechanisms {
     native: NativeDispatch,
     vm: VmDispatch,
 }
@@ -109,18 +117,18 @@ pub struct VmDispatch {
 
 ```rust
 pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
-    let vtable = self.guard.vtable();
+    let interface = self.guard.interface();
     
-    if vtable.dispatch_type == DispatchType::Native {
+    if interface.dispatch_type == DispatchType::Native {
         // Native: Direct call, zero overhead
-        let fn_ptr = *vtable.dispatch.native.functions.add(0);
+        let fn_ptr = *interface.dispatch.native.functions.add(0);
         let f: unsafe extern "C" fn(*const (), *mut ()) -> AbiError = 
             core::mem::transmute(fn_ptr);
         f(args_ptr, out_ptr)
     } else {
         // VM: One dispatch call, no global lookup
-        (vtable.dispatch.vm.call)(
-            vtable.dispatch.vm.loader_data,
+        (interface.dispatch.vm.call)(
+            interface.dispatch.vm.loader_data,
             0,  // fn_id
             args_ptr,
             out_ptr
@@ -150,8 +158,8 @@ pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
 │                                                                              │
 │  Total: ~6-18 cycles (~2-5 ns on modern CPU)                                │
 │                                                                              │
-│  This is THE SAME as the old PluginInterface architecture.                     │
-│  Zero additional overhead.                                                  │
+│  This is THE SAME as the old native interface architecture.                  │
+│  Zero additional overhead.                                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -206,25 +214,25 @@ Modern CPUs have sophisticated branch predictors. For a given `PluginInterface`:
 
 **Option A: Two separate structs**
 ```rust
-struct NativePluginInterface { ... }
-struct VmPluginInterface { ... }
+struct NativeGuestContractInterface { ... }
+struct VmGuestContractInterface { ... }
 ```
 Problem: Host code needs to know which type at compile time. But host code is generated once and must work with any plugin type.
 
 **Option B: Union (chosen)**
 ```rust
-union PluginDispatch {
+union DispatchMechanisms {
     native: NativeDispatch,
     vm: VmDispatch,
 }
 ```
 Solution: Single type, runtime dispatch based on `dispatch_type`. Generated code handles both cases.
 
-### Why loader_data Instead of Storing Functions in PluginInterface?
+### Why loader_data Instead of Storing Functions in GuestContractInterface?
 
-**Option A: Store functions in PluginInterface**
+**Option A: Store functions in GuestContractInterface**
 ```rust
-struct PluginInterface {
+struct GuestContractInterface {
     functions: *const *const (),  // Works for native, useless for VM
 }
 ```
@@ -346,7 +354,7 @@ unsafe extern "C" fn deno_dispatch(
 
 ## Summary
 
-| Aspect | Old (PluginInterface) | New (PluginInterface) |
+| Aspect | Old (PluginInterface) | New (GuestContractInterface) |
 |--------|-------------------|----------------------|
 | Native overhead | ~5 ns | ~5 ns (zero change) |
 | VM overhead | ~100-200 ns | ~60-120 ns (40% faster) |
@@ -355,9 +363,9 @@ unsafe extern "C" fn deno_dispatch(
 | Trampolines | 64 static per plugin | 1 dispatch per loader |
 | Loader flexibility | Forced into functions array | Complete control |
 
-**The PluginInterface design achieves:**
-1. ✅ Zero overhead for native (critical path)
-2. ✅ Minimal overhead for VM (one call, no lookup)
-3. ✅ No global state (per-plugin isolation)
-4. ✅ Loader flexibility (each loader controls dispatch)
-5. ✅ Simple, auditable code (no JIT, no libffi)
+**The GuestContractInterface design achieves:**
+1. Zero overhead for native (critical path)
+2. Minimal overhead for VM (one call, no lookup)
+3. No global state (per-plugin isolation)
+4. Loader flexibility (each loader controls dispatch)
+5. Simple, auditable code (no JIT, no libffi)
