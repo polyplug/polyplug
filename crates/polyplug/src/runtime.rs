@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use polyplug_abi::{GuestContractInterface, HostContractInterface, PluginDescriptor, PluginHandle, RuntimeAbi, RuntimeLanguage};
+use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, PluginDescriptor, PluginHandle, RuntimeAbi, RuntimeLanguage};
 use polyplug_abi::host::host_context::HostContext;
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
@@ -76,6 +76,9 @@ pub struct Runtime {
     pub(crate) last_error: Mutex<String>,
     /// Registered host contracts, keyed by contract_id.
     pub(crate) host_contracts: RwLock<HashMap<u64, &'static HostContractInterface>>,
+    /// Cache for singleton host contract instances.
+    /// Key: HostContractId hash value.
+    pub(crate) singleton_instances: RwLock<HashMap<u64, HostContractInstance>>,
     /// Host runtime type identifier.
     pub(crate) host_runtime: RuntimeLanguage,
 }
@@ -715,40 +718,66 @@ pub(crate) unsafe extern "C" fn host_resolve_contract(
 
 /// RuntimeAbi.call_method callback — cross-dispatch method call for guest contracts.
 ///
+/// This function enables plugins to call methods on other guest contract instances
+/// across different dispatch types (Native vs VM).
+///
+/// # Implementation Status
+/// **PLACEHOLDER** - Full implementation requires instance-to-contract mapping.
+///
+/// For full implementation, the runtime needs to track which contract each instance
+/// belongs to. Options:
+/// - Option A: instance.data contains a struct with `{ contract_id, state_ptr }`
+/// - Option B: Runtime tracks instance -> contract_id mapping separately
+///
+/// Once the contract is known:
+/// - Native dispatch: `dispatch.native.functions[method_id](instance, args, out)`
+/// - VM dispatch: `dispatch.vm.call(loader_data, instance, method_id, args, out)`
+///
 /// # Safety
 /// - rt_ctx must be a valid pointer to a HostContext.
-/// - interface must be a valid pointer to a GuestContractInterface.
-/// - instance must be a valid GuestContractInstance.
+/// - instance must be a valid GuestContractInstance (non-null data pointer).
 /// - args must point to valid ABI-packed arguments for the method.
 /// - out must point to a valid output buffer sized for the return type.
 pub(crate) unsafe extern "C" fn host_call_method(
     rt_ctx: *mut core::ffi::c_void,
     instance: polyplug_abi::GuestContractInstance,
-    method_id: u32,
-    args: *const (),
-    out: *mut (),
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
 ) -> polyplug_abi::types::AbiError {
+    use polyplug_abi::types::{AbiError, AbiErrorCode, StringView};
+
     if rt_ctx.is_null() {
-        return polyplug_abi::types::AbiError {
-            code: polyplug_abi::types::AbiErrorCode::Generic,
-            message: polyplug_abi::types::StringView::null(),
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null rt_ctx in call_method"),
         };
     }
+    if instance.data.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null instance in call_method"),
+        };
+    }
+
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime
     let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
 
-    // TODO: Implement cross-dispatch logic. For now, return an error.
-    // This will be fully implemented in Phase 3 (Instance Model).
-    runtime.set_last_error("call_method not yet implemented");
-    polyplug_abi::types::AbiError {
-        code: polyplug_abi::types::AbiErrorCode::Generic,
-        message: polyplug_abi::types::StringView::null(),
+    // PLACEHOLDER: Full implementation requires instance -> contract mapping.
+    // For now, return an error indicating this is not yet implemented.
+    runtime.set_last_error("call_method requires instance-contract mapping (not yet implemented)");
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::from_static(b"call_method placeholder - needs instance-contract mapping"),
     }
 }
 
-/// RuntimeAbi.get_host_contract callback — returns the interface for a host contract.
+/// RuntimeAbi.get_host_contract callback — returns an instance for a host contract.
+///
+/// For singleton contracts: returns cached instance (creates on first call).
+/// For multi-instance contracts: creates new instance each call.
 ///
 /// # Safety
 /// rt_ctx must be a valid pointer to a HostContext.
@@ -756,21 +785,73 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     rt_ctx: *mut core::ffi::c_void,
     contract_id: u64,
     min_version: u32,
-) -> polyplug_abi::HostContractInstance {
+) -> HostContractInstance {
     if rt_ctx.is_null() {
-        return polyplug_abi::HostContractInstance { data: core::ptr::null_mut() };
+        return HostContractInstance::null();
     }
     // SAFETY: rt_ctx is a valid *mut HostContext passed by the host
     let ctx: &HostContext = unsafe { &*(rt_ctx as *const HostContext) };
     // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
     let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
 
-    match runtime.get_host_contract(contract_id, min_version) {
-        Some(_vtable) => {
-            // TODO: Return actual instance - for now return null instance
-            polyplug_abi::HostContractInstance { data: core::ptr::null_mut() }
+    // Find the host contract interface
+    let host_contracts_guard = runtime.host_contracts.read().unwrap_or_else(|e| {
+        eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+        e.into_inner()
+    });
+
+    // Find interface matching contract_id and version
+    let interface: Option<&HostContractInterface> = host_contracts_guard.values()
+        .find(|iface| {
+            iface.contract_id.id() == contract_id &&
+            iface.contract_version.major >= (min_version >> 16)
+        })
+        .map(|v| *v);
+
+    match interface {
+        Some(interface) => {
+            if interface.singleton {
+                // Singleton: check cache first
+                let singleton_guard = runtime.singleton_instances.read().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
+                if let Some(&instance) = singleton_guard.get(&contract_id) {
+                    return instance;
+                }
+                drop(singleton_guard);
+                drop(host_contracts_guard);
+
+                // Create singleton and cache it
+                let mut singleton_guard = runtime.singleton_instances.write().unwrap_or_else(|e| {
+                    eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                    e.into_inner()
+                });
+                // Double-check pattern: another thread may have created while we waited
+                if let Some(&instance) = singleton_guard.get(&contract_id) {
+                    return instance;
+                }
+                // SAFETY: interface.create_instance is a valid function pointer
+                let instance: HostContractInstance = unsafe {
+                    (interface.create_instance)(rt_ctx, core::ptr::null())
+                };
+                singleton_guard.insert(contract_id, instance);
+                instance
+            } else {
+                // Multi-instance: create new instance each call
+                // SAFETY: interface.create_instance is a valid function pointer
+                unsafe {
+                    (interface.create_instance)(rt_ctx, core::ptr::null())
+                }
+            }
         }
-        None => polyplug_abi::HostContractInstance { data: core::ptr::null_mut() },
+        None => {
+            runtime.set_last_error(&format!(
+                "host contract not found: id={}, min_version={}",
+                contract_id, min_version
+            ));
+            HostContractInstance::null()
+        }
     }
 }
 

@@ -158,6 +158,7 @@ impl RuntimeBuilder {
             warning_cb: self.warning_cb,
             last_error: std::sync::Mutex::new(String::new()),
             host_contracts: std::sync::RwLock::new(HashMap::new()),
+            singleton_instances: std::sync::RwLock::new(HashMap::new()),
             host_runtime: self.host_runtime.into(),
         };
 
