@@ -59,18 +59,25 @@ public sealed class Runtime
     /// Set runtime configuration for subsequently created runtimes.
     /// Must be called BEFORE creating a Runtime instance.
     /// </summary>
-    public static void SetConfig(HostRuntimeConfig config)
+    /// <param name="hotReloadEnabled">Enable hot-reload (default false).</param>
+    /// <param name="hotReloadMaxRetries">Max retry attempts (default 3).</param>
+    /// <param name="hotReloadRetryIntervalMs">Retry interval in ms (default 3000).</param>
+    /// <param name="hotReloadAbortOnMaxRetries">Abort on max retries (default true).</param>
+    /// <param name="compatibility">Compatibility mode (default Strict).</param>
+    public static void SetConfig(
+        bool hotReloadEnabled = false,
+        uint hotReloadMaxRetries = 3,
+        ulong hotReloadRetryIntervalMs = 3000,
+        bool hotReloadAbortOnMaxRetries = true,
+        uint compatibility = NativeMethods.CompatibilityMode.Strict)
     {
-        if (config is null)
-        {
-            throw new ArgumentNullException(nameof(config));
-        }
-
         NativeMethods.RuntimeConfigC configC = new NativeMethods.RuntimeConfigC
         {
-            HotReloadMaxRetries = config.HotReloadMaxRetries,
-            HotReloadRetryIntervalMs = config.HotReloadRetryIntervalMs,
-            HotReloadAbortOnMaxRetries = config.HotReloadAbortOnMaxRetries ? (byte)1 : (byte)0,
+            HotReloadEnabled = hotReloadEnabled ? (byte)1 : (byte)0,
+            HotReloadMaxRetries = hotReloadMaxRetries,
+            HotReloadRetryIntervalMs = hotReloadRetryIntervalMs,
+            HotReloadAbortOnMaxRetries = hotReloadAbortOnMaxRetries ? (byte)1 : (byte)0,
+            Compatibility = compatibility,
         };
 
         uint result = NativeMethods.PolyplugRuntimeSetConfig(ref configC);
