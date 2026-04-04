@@ -6,16 +6,15 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_abi::HostContractVTable;
-use polyplug_abi::HostContractVTableHeader;
-use polyplug_abi::HostContractDispatch;
-use polyplug_abi::NativeHostContractDispatch;
-use polyplug_abi::VmHostContractDispatch;
+use polyplug_abi::HostContractInterface;
+use polyplug_abi::HostContractInstance;
+use polyplug_abi::DispatchMechanisms;
+use polyplug_abi::NativeDispatch;
+use polyplug_abi::VmDispatch;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
 use polyplug_abi::AbiError;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::Version;
 use core::ffi::c_void;
 use super::host_contracts::*;
 use super::types::*;
@@ -28,7 +27,7 @@ use super::types::*;
 /// # Memory
 /// The returned vtable is leaked and lives for the lifetime of the program.
 /// The implementation Box is also leaked (its pointer is stored in the vtable).
-pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'static HostContractVTable {
+pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'static HostContractInterface {
     let fat_ptr: *const dyn HostLogger = Box::into_raw(implementation);
     let wrapper: Box<*const dyn HostLogger> = Box::new(fat_ptr);
     let impl_ptr: *const *const dyn HostLogger = Box::into_raw(wrapper);
@@ -49,12 +48,12 @@ pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'stati
             };
             impl_ref.log(message);
             let _ = out;
-            AbiError::ok()
+            abi_error_ok()
         })) {
             Ok(err) => err,
             Err(_) => AbiError {
-                code: ABI_ERROR_PANIC,
-                message: StringView::from_static(b"panic in host.logger::log"),
+                code: AbiErrorCode::Panic as u32,
+                message: string_view_from_static(b"panic in host.logger::log"),
             },
         }
     }
@@ -76,12 +75,12 @@ pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'stati
             };
             impl_ref.log_with_level(level, message);
             let _ = out;
-            AbiError::ok()
+            abi_error_ok()
         })) {
             Ok(err) => err,
             Err(_) => AbiError {
-                code: ABI_ERROR_PANIC,
-                message: StringView::from_static(b"panic in host.logger::log_with_level"),
+                code: AbiErrorCode::Panic as u32,
+                message: string_view_from_static(b"panic in host.logger::log_with_level"),
             },
         }
     }
@@ -91,18 +90,35 @@ pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>) -> &'stati
         host_logger_log_with_level_thunk,
     ];
 
-    let vtable: HostContractVTable = HostContractVTable {
-        header: HostContractVTableHeader {
-            vtable_version: 1,
-            contract_id: 0xF53EB5F2845853BB,
-            contract_major: 1,
-            contract_minor: 0,
-            function_count: 2,
-            dispatch_type: DispatchType::Native,
-        },
-        dispatch: HostContractDispatch {
-            native: NativeHostContractDispatch {
-                impl_ptr: impl_ptr as *const c_void,
+    /// Create instance stub for `host.logger` host contract.
+    /// For host contracts, the instance is the implementation object.
+    /// This stub returns the impl_ptr as the instance data.
+    unsafe extern "C" fn host_logger_create_instance_stub(
+        _rt_ctx: *mut c_void,
+        _args: *const (),
+    ) -> HostContractInstance {
+        HostContractInstance { data: impl_ptr as *mut c_void }
+    }
+
+    /// Destroy instance stub for `host.logger` host contract.
+    /// For singleton contracts, this is a no-op.
+    /// For multi-instance contracts, the host must provide a custom destructor.
+    unsafe extern "C" fn host_logger_destroy_instance_stub(
+        _rt_ctx: *mut c_void,
+        _instance: HostContractInstance,
+    ) {
+        // Multi-instance: host should provide custom destroy_instance
+    }
+
+    let vtable: HostContractInterface = HostContractInterface {
+        contract_id: 0xF53EB5F2845853BB_u64,
+        contract_version: Version { major: 1, minor: 0, patch: 0 },
+        singleton: false,
+        dispatch_type: DispatchType::Native,
+        create_instance: host_logger_create_instance_stub,
+        destroy_instance: host_logger_destroy_instance_stub,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
                 functions: FUNCTIONS.as_ptr() as *const *const (),
             },
         },
@@ -129,20 +145,35 @@ pub fn create_host_logger_vtable_vm(
         args: *const (),
         out: *mut (),
     ) -> AbiError,
-) -> &'static HostContractVTable {
-    let vtable: HostContractVTable = HostContractVTable {
-        header: HostContractVTableHeader {
-            vtable_version: 1,
-            contract_id: 0xF53EB5F2845853BB,
-            contract_major: 1,
-            contract_minor: 0,
-            function_count: 2,
-            dispatch_type: DispatchType::VirtualMachine,
-        },
-        dispatch: HostContractDispatch {
-            vm: VmHostContractDispatch {
+) -> &'static HostContractInterface {
+    /// Create instance stub for `host.logger` host contract (VM dispatch).
+    /// Returns bridge_data as instance for VM-based implementations.
+    unsafe extern "C" fn host_logger_vm_create_instance_stub(
+        _rt_ctx: *mut c_void,
+        _args: *const (),
+    ) -> HostContractInstance {
+        HostContractInstance { data: bridge_data }
+    }
+
+    /// Destroy instance stub for `host.logger` host contract (VM dispatch).
+    unsafe extern "C" fn host_logger_vm_destroy_instance_stub(
+        _rt_ctx: *mut c_void,
+        _instance: HostContractInstance,
+    ) {
+        // Multi-instance: host should provide custom destroy_instance
+    }
+
+    let vtable: HostContractInterface = HostContractInterface {
+        contract_id: 0xF53EB5F2845853BB_u64,
+        contract_version: Version { major: 1, minor: 0, patch: 0 },
+        singleton: false,
+        dispatch_type: DispatchType::VirtualMachine,
+        create_instance: host_logger_vm_create_instance_stub,
+        destroy_instance: host_logger_vm_destroy_instance_stub,
+        dispatch: DispatchMechanisms {
+            vm: VmDispatch {
                 call: dispatch_fn,
-                bridge_data,
+                loader_data: bridge_data,
             },
         },
     };

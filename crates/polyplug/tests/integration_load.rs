@@ -4,15 +4,15 @@
 //!
 //! This test crate is the crate root for the `integration_load` test binary.
 
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::AbiErrorCode;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::GuestContractId;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -27,19 +27,19 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 unsafe extern "C" fn capture_register(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    vtable: *const GuestContractInterface,
 ) -> AbiError {
     if descriptor.is_null() || vtable.is_null() {
         return AbiError {
-            code: 1,
+            code: polyplug_abi::AbiErrorCode::Generic,
             message: polyplug_abi::StringView::null(),
         };
     }
     // SAFETY: vtable is valid for the call duration. We store the contract_id for
     // later verification. The vtable itself lives in the plugin's static memory.
-    let contract_id: u64 = unsafe { (*vtable).contract_id };
-    // SAFETY: vtable is valid for this call (ABI contract); reading a plain u32 field.
-    let function_count: u32 = unsafe { (*vtable).function_count };
+    let contract_id: u64 = unsafe { (*vtable).contract_id.id() };
+    // SAFETY: vtable is valid for this call (ABI contract); reading the function_count.
+    let function_count: u32 = unsafe { (*vtable).dispatch.native.function_count };
 
     // Store results in thread-local for the test to read back.
     CAPTURED_CONTRACT_ID.with(|cell| {
@@ -50,7 +50,7 @@ unsafe extern "C" fn capture_register(
     });
 
     AbiError {
-        code: ABI_OK,
+        code: AbiErrorCode::Ok,
         message: polyplug_abi::StringView::null(),
     }
 }
@@ -84,16 +84,6 @@ unsafe extern "C" fn noop_find_by_contract(
     PluginHandle::null()
 }
 
-/// No-op find_by_bundle callback.
-unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
-}
-
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
@@ -105,12 +95,26 @@ unsafe extern "C" fn noop_find_all_by_contract(
     0
 }
 
-/// No-op resolve_plugin callback.
-unsafe extern "C" fn noop_resolve_plugin(
+/// No-op resolve_contract callback.
+unsafe extern "C" fn noop_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
+}
+
+/// No-op call_method callback.
+unsafe extern "C" fn noop_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: polyplug_abi::GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: polyplug_abi::AbiErrorCode::Generic,
+        message: polyplug_abi::StringView::null(),
+    }
 }
 
 /// No-op get_host_contract callback.
@@ -118,8 +122,8 @@ unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 std::thread_local! {
@@ -163,12 +167,12 @@ fn test_init_registers_vtable() {
     };
 
     // Resolve polyplug_init symbol.
-    // SAFETY: polyplug_init is a C function with the HostVTable ABI.
+    // SAFETY: polyplug_init is a C function with the RuntimeAbi ABI.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -177,15 +181,15 @@ fn test_init_registers_vtable() {
             .expect("polyplug_init symbol not found")
     };
 
-    // Build a HostVTable that captures registration data.
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: capture_register,
+    // Build a RuntimeAbi that captures registration data.
+    let runtime_abi: RuntimeAbi = RuntimeAbi {
+        register_contract: capture_register,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
-        find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
-        resolve_plugin: noop_resolve_plugin,
+        resolve_contract: noop_resolve_contract,
+        call_method: noop_call_method,
         get_host_contract: noop_get_host_contract,
     };
 
@@ -194,20 +198,19 @@ fn test_init_registers_vtable() {
     CAPTURED_FUNCTION_COUNT.with(|cell| *cell.borrow_mut() = None);
 
     let ctx: PluginContext = PluginContext {
-        bundle_path: StringView::null(),
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
+        bundle_path: StringView::null(),
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
     let result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &runtime_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
 
-    assert_eq!(result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert!(result.code == AbiErrorCode::Ok, "polyplug_init must return Ok");
 
     // Verify the vtable was registered with correct data.
     let captured_id: u64 = CAPTURED_CONTRACT_ID
@@ -219,7 +222,7 @@ fn test_init_registers_vtable() {
         .expect("function_count was not captured");
 
     // FNV-1a("test.add@1") = 0xCC4232FAB0410D2B (verified at compile time)
-    let expected_contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let expected_contract_id: u64 = GuestContractId::new("test.add", 1).id();
     assert_eq!(
         captured_id, expected_contract_id,
         "contract_id must match FNV-1a(\"test.add@1\")"

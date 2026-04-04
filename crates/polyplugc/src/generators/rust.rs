@@ -128,7 +128,7 @@ impl CodeGenerator for RustGenerator {
 
         callers_out.push_str("use polyplug_abi::AbiErrorCode;\n");
         callers_out.push_str("use polyplug_abi::AbiError;\n");
-        callers_out.push_str("use polyplug_abi::PluginInterface;\n");
+        callers_out.push_str("use polyplug_abi::GuestContractInterface;\n");
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::PluginHandle;\n");
@@ -543,11 +543,11 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     // Shared imports
     out.push_str("use std::sync::OnceLock;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
-    out.push_str("use polyplug_guest::PluginInterface;\n");
+    out.push_str("use polyplug_guest::GuestContractInterface;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
     out.push_str("use polyplug_guest::DispatchType;\n");
     out.push_str("use polyplug_guest::NativeDispatch;\n");
-    out.push_str("use polyplug_guest::PluginDispatch;\n");
+    out.push_str("use polyplug_guest::DispatchMechanisms;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::PluginError;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
@@ -714,11 +714,11 @@ fn generate_guest_contract_vtable(
     out.push_str("    // No-op - stateless plugins don't need cleanup\n");
     out.push_str("}\n\n");
 
-    // Static PluginInterface (GuestContractInterface)
+    // Static GuestContractInterface
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
-        "pub(crate) static {upper}_VTABLE: PluginInterface = PluginInterface {{\n"
+        "pub(crate) static {upper}_VTABLE: GuestContractInterface = GuestContractInterface {{\n"
     ));
     out.push_str(&format!("    contract_id: {upper}_CONTRACT_ID,\n"));
     out.push_str(&format!(
@@ -732,7 +732,7 @@ fn generate_guest_contract_vtable(
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
     out.push_str(&format!("    create_instance: {upper}_create_instance_stub,\n"));
     out.push_str(&format!("    destroy_instance: {upper}_destroy_instance_stub,\n"));
-    out.push_str("    dispatch: PluginDispatch {\n");
+    out.push_str("    dispatch: DispatchMechanisms {\n");
     out.push_str("        native: NativeDispatch {\n");
     out.push_str(&format!(
         "            function_count: {fn_count}_u32,\n"
@@ -846,7 +846,7 @@ fn generate_guest_plugin_vtable(
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
-        "pub static {plugin_upper}_VTABLE: PluginInterface = PluginInterface {{\n"
+        "pub static {plugin_upper}_VTABLE: GuestContractInterface = GuestContractInterface {{\n"
     ));
     out.push_str(&format!("    contract_id: {plugin_upper}_CONTRACT_ID,\n"));
     out.push_str(&format!(
@@ -860,7 +860,7 @@ fn generate_guest_plugin_vtable(
     out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
     out.push_str(&format!("    create_instance: {plugin_upper}_create_instance_stub,\n"));
     out.push_str(&format!("    destroy_instance: {plugin_upper}_destroy_instance_stub,\n"));
-    out.push_str("    dispatch: PluginDispatch {\n");
+    out.push_str("    dispatch: DispatchMechanisms {\n");
     out.push_str("        native: NativeDispatch {\n");
     out.push_str(&format!(
         "            function_count: {fn_count}_u32,\n"
@@ -1025,8 +1025,8 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::string_view_from_static;\n");
     out.push_str("use polyplug_guest::abi_error_ok;\n");
     out.push_str("use polyplug_guest::PluginDescriptor;\n");
-    out.push_str("use polyplug_guest::HostVTable;\n");
-    out.push_str("use polyplug_guest::PluginInterface;\n");
+    out.push_str("use polyplug_guest::RuntimeAbi;\n");
+    out.push_str("use polyplug_guest::GuestContractInterface;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::PluginContext;\n");
     out.push_str("use polyplug_guest::store_host_vtable;\n");
@@ -1062,7 +1062,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("#[unsafe(no_mangle)]\n");
     out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
     out.push_str("    rt_ctx: *mut c_void,\n");
-    out.push_str("    host: *const HostVTable,\n");
+    out.push_str("    host: *const RuntimeAbi,\n");
     out.push_str("    ctx: *const PluginContext,\n");
     out.push_str(") -> AbiError {\n");
     out.push_str("    if rt_ctx.is_null() {\n");
@@ -1086,11 +1086,11 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
         "    let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated\n",
     );
     out.push_str("    // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("    let host: &HostVTable = unsafe { &*host };\n");
+    out.push_str("    let host: &RuntimeAbi = unsafe { &*host };\n");
     out.push_str(
         "    // SAFETY: Called once during plugin init, before any host contract access.\n",
     );
-    out.push_str("    unsafe { store_host_vtable(host as *const HostVTable); }\n\n");
+    out.push_str("    unsafe { store_host_vtable(host as *const RuntimeAbi); }\n\n");
     // Call user initialization hook if it exists
     out.push_str("    // Call user initialization to register plugin implementations\n");
     out.push_str("    unsafe extern \"C\" {\n");
@@ -1135,7 +1135,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
             out.push_str(&format!(
-                "        (host.register_plugin)(rt_ctx, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const PluginInterface)\n"
+                "        (host.register_contract)(rt_ctx, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != ABI_OK {{\n"));
@@ -1169,7 +1169,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str("    // SAFETY: desc and vtable are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
-                "        (host.register_plugin)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const PluginInterface)\n"
+                "        (host.register_plugin)(rt_ctx, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{upper}.code != ABI_OK {{\n"));
@@ -1270,7 +1270,7 @@ fn generate_host_contract_caller(
     out.push_str("/// - dispatch: passes `instance` to all method calls\n");
     out.push_str(&format!("pub struct {struct_name} {{\n"));
     out.push_str("    /// Resolved interface pointer from the registry.\n");
-    out.push_str("    interface: *const PluginInterface,\n");
+    out.push_str("    interface: *const GuestContractInterface,\n");
     out.push_str("    /// Instance handle created by `create_instance`.\n");
     out.push_str("    instance: GuestContractInstance,\n");
     out.push_str("    /// Runtime context pointer (needed for destroy_instance).\n");
@@ -1290,7 +1290,7 @@ fn generate_host_contract_caller(
     out.push_str("    /// - `None` if interface not found or `create_instance` failed\n");
     out.push_str("    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {\n");
     out.push_str("        // Resolve the interface from the handle via FFI\n");
-    out.push_str("        let interface: *const PluginInterface = unsafe {\n");
+    out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
     out.push_str("            polyplug_runtime_resolve_plugin(rt_ctx, handle.pack())\n");
     out.push_str("        };\n");
     out.push_str("        if interface.is_null() {\n");
@@ -1400,7 +1400,7 @@ fn generate_host_fn_caller(
         out.push_str("core::ptr::null_mut();\n");
     }
     out.push_str("        // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.\n");
-    out.push_str("        let vtable: &PluginInterface = unsafe { &*self.interface };\n");
+    out.push_str("        let vtable: &GuestContractInterface = unsafe { &*self.interface };\n");
     out.push_str("        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n");
     out.push_str("        let err: AbiError = unsafe {\n");
     out.push_str(&format!(
@@ -2331,7 +2331,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(header);
 
-    out.push_str("use polyplug_guest::HostVTable;\n");
+    out.push_str("use polyplug_guest::RuntimeAbi;\n");
     out.push_str("use polyplug_guest::HostContractVTable;\n");
     out.push_str("use polyplug_guest::HostContractVTableHeader;\n");
     out.push_str("use polyplug_guest::HostContractDispatch;\n");
@@ -2398,16 +2398,16 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
 
     out.push_str(&format!("impl {caller_name} {{\n"));
 
-    out.push_str("    /// Factory method - creates caller from HostVTable or None if not found.\n");
+    out.push_str("    /// Factory method - creates caller from RuntimeAbi or None if not found.\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Safety\n");
     out.push_str("    /// The `host` pointer must be valid and non-null.\n");
-    out.push_str("    pub unsafe fn from_host(host: *const HostVTable, min_version: u32) -> Option<Self> {\n");
+    out.push_str("    pub unsafe fn from_host(host: *const RuntimeAbi, min_version: u32) -> Option<Self> {\n");
     out.push_str("        if host.is_null() {\n");
     out.push_str("            return None;\n");
     out.push_str("        }\n");
     out.push_str("        // SAFETY: host is non-null and valid per ABI contract.\n");
-    out.push_str("        let host: &HostVTable = unsafe { &*host };\n");
+    out.push_str("        let host: &RuntimeAbi = unsafe { &*host };\n");
     out.push_str("        let vtable_ptr: *const HostContractVTable = unsafe {\n");
     out.push_str(&format!(
         "            (host.get_host_contract)(core::ptr::null_mut(), 0x{:016X}_u64, min_version)\n",
