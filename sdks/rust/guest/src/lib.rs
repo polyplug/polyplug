@@ -146,6 +146,12 @@ pub use polyplug_abi::types::Buffer;
 /// `polyplug_host_free(message.ptr, message.len, 1)` after reading.
 pub use polyplug_abi::types::AbiError;
 
+/// Opaque handle to a guest contract instance.
+///
+/// Created by `GuestContractInterface::create_instance`, destroyed by `destroy_instance`.
+/// For stateless plugins, use `GuestContractInstance::null()`.
+pub use polyplug_abi::guest::GuestContractInstance;
+
 /// Opaque handle to a loaded plugin — validated on every use.
 pub use polyplug_abi::PluginHandle;
 

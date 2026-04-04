@@ -544,6 +544,7 @@ fn generate_guest_vtables_file(out: &mut String, ir: &ValidatedIr) -> Result<(),
     out.push_str("use std::sync::OnceLock;\n");
     out.push_str("use polyplug_guest::AbiError;\n");
     out.push_str("use polyplug_guest::PluginInterface;\n");
+    out.push_str("use polyplug_guest::GuestContractInstance;\n");
     out.push_str("use polyplug_guest::DispatchType;\n");
     out.push_str("use polyplug_guest::NativeDispatch;\n");
     out.push_str("use polyplug_guest::PluginDispatch;\n");
@@ -675,26 +676,67 @@ fn generate_guest_contract_vtable(
     }
     out.push_str("];\n\n");
 
-    // Static PluginInterface
+    // ─── Instance lifecycle stubs ────────────────────────────────────────────────
+    // Default create_instance stub - returns null instance.
+    // Users should provide a custom implementation for stateful plugins.
+    out.push_str(&format!(
+        "/// Default create_instance stub for {}.\n",
+        contract.name
+    ));
+    out.push_str(&format!(
+        "/// Returns null instance - users should override for stateful plugins.\n"
+    ));
+    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
+    out.push_str(&format!(
+        "unsafe extern \"C\" fn {upper}_create_instance_stub(\n"
+    ));
+    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _args: *const (),\n");
+    out.push_str(") -> GuestContractInstance {\n");
+    out.push_str("    GuestContractInstance::null()\n");
+    out.push_str("}\n\n");
+
+    // Default destroy_instance stub - no-op.
+    // Users should provide a custom implementation for cleanup.
+    out.push_str(&format!(
+        "/// Default destroy_instance stub for {}.\n",
+        contract.name
+    ));
+    out.push_str(&format!(
+        "/// No-op - users should override for state cleanup before hot-reload.\n"
+    ));
+    out.push_str(&format!(
+        "unsafe extern \"C\" fn {upper}_destroy_instance_stub(\n"
+    ));
+    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _instance: GuestContractInstance,\n");
+    out.push_str(") {\n");
+    out.push_str("    // No-op - stateless plugins don't need cleanup\n");
+    out.push_str("}\n\n");
+
+    // Static PluginInterface (GuestContractInterface)
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
         "pub(crate) static {upper}_VTABLE: PluginInterface = PluginInterface {{\n"
     ));
-    out.push_str("    rt_ctx: core::ptr::null(),\n");
     out.push_str(&format!("    contract_id: {upper}_CONTRACT_ID,\n"));
     out.push_str(&format!(
         "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
     ));
-    out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
-    let dispatch_type: &str = if is_native {
+    let dispatch_type_str: &str = if is_native {
         "DispatchType::Native"
     } else {
         "DispatchType::VirtualMachine"
     };
-    out.push_str(&format!("    dispatch_type: {dispatch_type},\n"));
+    out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
+    out.push_str(&format!("    create_instance: {upper}_create_instance_stub,\n"));
+    out.push_str(&format!("    destroy_instance: {upper}_destroy_instance_stub,\n"));
     out.push_str("    dispatch: PluginDispatch {\n");
     out.push_str("        native: NativeDispatch {\n");
+    out.push_str(&format!(
+        "            function_count: {fn_count}_u32,\n"
+    ));
     out.push_str(&format!(
         "            functions: {upper}_FNS.as_ptr() as *const *const (),\n"
     ));
@@ -763,25 +805,66 @@ fn generate_guest_plugin_vtable(
     }
     out.push_str("];\n\n");
 
+    // ─── Instance lifecycle stubs ────────────────────────────────────────────────
+    // Default create_instance stub - returns null instance.
+    // Users should provide a custom implementation for stateful plugins.
+    out.push_str(&format!(
+        "/// Default create_instance stub for {}.\n",
+        plugin_name
+    ));
+    out.push_str(&format!(
+        "/// Returns null instance - users should override for stateful plugins.\n"
+    ));
+    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
+    out.push_str(&format!(
+        "unsafe extern \"C\" fn {plugin_upper}_create_instance_stub(\n"
+    ));
+    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _args: *const (),\n");
+    out.push_str(") -> GuestContractInstance {\n");
+    out.push_str("    GuestContractInstance::null()\n");
+    out.push_str("}\n\n");
+
+    // Default destroy_instance stub - no-op.
+    // Users should provide a custom implementation for cleanup.
+    out.push_str(&format!(
+        "/// Default destroy_instance stub for {}.\n",
+        plugin_name
+    ));
+    out.push_str(&format!(
+        "/// No-op - users should override for state cleanup before hot-reload.\n"
+    ));
+    out.push_str(&format!(
+        "unsafe extern \"C\" fn {plugin_upper}_destroy_instance_stub(\n"
+    ));
+    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _instance: GuestContractInstance,\n");
+    out.push_str(") {\n");
+    out.push_str("    // No-op - stateless plugins don't need cleanup\n");
+    out.push_str("}\n\n");
+
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
         "pub static {plugin_upper}_VTABLE: PluginInterface = PluginInterface {{\n"
     ));
-    out.push_str("    rt_ctx: core::ptr::null(),\n");
     out.push_str(&format!("    contract_id: {plugin_upper}_CONTRACT_ID,\n"));
     out.push_str(&format!(
         "    contract_version: {minor}_u32 << 16 | {patch}_u32,\n"
     ));
-    out.push_str(&format!("    function_count: {fn_count}_u32,\n"));
-    let dispatch_type: &str = if is_native {
+    let dispatch_type_str: &str = if is_native {
         "DispatchType::Native"
     } else {
         "DispatchType::VirtualMachine"
     };
-    out.push_str(&format!("    dispatch_type: {dispatch_type},\n"));
+    out.push_str(&format!("    dispatch_type: {dispatch_type_str},\n"));
+    out.push_str(&format!("    create_instance: {plugin_upper}_create_instance_stub,\n"));
+    out.push_str(&format!("    destroy_instance: {plugin_upper}_destroy_instance_stub,\n"));
     out.push_str("    dispatch: PluginDispatch {\n");
     out.push_str("        native: NativeDispatch {\n");
+    out.push_str(&format!(
+        "            function_count: {fn_count}_u32,\n"
+    ));
     out.push_str(&format!(
         "            functions: {plugin_upper}_FNS.as_ptr() as *const *const (),\n"
     ));
@@ -815,9 +898,16 @@ fn generate_guest_abi_wrapper(
         func.name, func.function_id
     ));
     out.push_str("// SAFETY: args and out pointers are validated at entry before dereferencing.\n");
+    out.push_str("#[allow(clippy::unnecessary_cast)]\n");
     out.push_str(&format!(
-        "extern \"C\" fn {wrapper_name}(args: *const (), {out_param}) -> AbiError {{\n"
+        "extern \"C\" fn {wrapper_name}(instance: GuestContractInstance, args: *const (), {out_param}) -> AbiError {{\n"
     ));
+    // For stateless plugins, instance is null - we use the OnceLock impl.
+    // For stateful plugins, users would override create_instance to return a valid instance
+    // and this wrapper would cast instance.data to the state type.
+    out.push_str("    // Instance is ignored for stateless plugins (instance is null).\n");
+    out.push_str("    // For stateful plugins, users override create_instance and use instance.data.\n");
+    out.push_str("    let _ = instance;\n");
     out.push_str("    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n");
     out.push_str(&format!(
         "        let impl_ref: &dyn {trait_name} = match {contract_upper}_IMPL.get() {{\n"
