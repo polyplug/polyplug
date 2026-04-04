@@ -52,7 +52,7 @@
 
 ### Category: Host Contracts
 
-- [ ] **HC-01**: `HostContractInterface` supports `singleton: bool` field
+- [x] **HC-01**: `HostContractInterface` supports `singleton: bool` field
 - [ ] **HC-02**: `get_host_contract` returns same instance for singleton
 - [ ] **HC-03**: `get_host_contract` creates new instance for multi-instance
 - [ ] **HC-04**: Update codegen for host contract implementations
@@ -77,12 +77,12 @@
 
 ### Category: Codegen
 
-- [ ] **CG-01**: Update codegen to use `GuestContractInterface` naming
+- [x] **CG-01**: Update codegen to use `GuestContractInterface` naming
 - [ ] **CG-02**: Update codegen to generate instance wrappers
 - [ ] **CG-03**: Generated instance wrappers hold `interface` + `instance` pointer
 - [ ] **CG-04**: Generated wrappers call `create_instance`/`destroy_instance`
 - [ ] **CG-05**: Update host contract vtable generation for `HostContractInterface`
-- [ ] **CG-06**: Generate `singleton` support for host contracts
+- [x] **CG-06**: Generate `singleton` support for host contracts
 
 ### Category: Cleanup
 

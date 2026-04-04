@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: planning
-last_updated: "2026-04-04T10:30:38.303Z"
+status: executing
+last_updated: "2026-04-04T12:09:24.341Z"
 progress:
   total_phases: 7
   completed_phases: 1
-  total_plans: 15
-  completed_plans: 15
-  percent: 100
+  total_plans: 20
+  completed_plans: 16
+  percent: 80
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -32,12 +32,12 @@ progress:
 
 ## Current Position
 
-Phase: 01 (abi-types) — EXECUTING
-Plan: 4 of 4
+Phase: 03 (instance-model) — EXECUTING
+Plan: 1 of 5
 **Phase:** 2
 **Plan:** Not started
-**Status:** Ready to plan
-**Progress:** [██████████] 100%
+**Status:** Executing Phase 03
+**Progress:** [████████░░] 80%
 
 ## Performance Metrics
 
@@ -46,6 +46,7 @@ Plan: 4 of 4
 | Phases completed | 0/7 |
 | Plans completed | 3 |
 | Requirements covered | 50/50 mapped |
+| Phase 03-instance-model P01 | 15 | 2 tasks | 3 files |
 
 ### Plan Execution Times
 
@@ -86,6 +87,9 @@ Plan: 4 of 4
 | 2026-04-03 | RuntimeConfig moved to polyplug_abi/runtime | #[repr(C)], 24 bytes, single source of truth |
 | 2026-04-03 | ReloadPhaseData as FFI-safe variant | StringView fields, kept Rust ReloadPhase for internal use |
 | 2026-04-03 | Rust ReloadPhase enum preserved | String-based convenience, not replaced by FFI variant |
+
+- [Phase 03-instance-model]: singleton defaults to false via #[serde(default)] - explicit opt-in
+- [Phase 03-instance-model]: polyplug_utils visibility fixed: modules public, helper functions added
 
 ### Active TODOs
 
