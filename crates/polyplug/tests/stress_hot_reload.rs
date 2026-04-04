@@ -4,6 +4,11 @@
 //!
 //! Run with:
 //!   cargo test --test stress_hot_reload --package polyplug
+//!
+//! Hot-reload uses callback-based model:
+//! - Preparing callback fires before reload (host destroys instances)
+//! - Warning emitted if Arc refs remain (informational only)
+//! - Reloaded callback fires after reload (host creates new instances)
 
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;

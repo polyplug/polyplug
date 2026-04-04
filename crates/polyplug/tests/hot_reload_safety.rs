@@ -5,6 +5,10 @@
 //! Verifies the safety guarantees of the hot-reload mechanism:
 //! 1. Generation increment makes old handles stale after swap
 //! 2. Direct interface swap via RwLock write guard
+//! 3. Callback-based model: host destroys instances in Preparing callback
+//!
+//! Safety contract: Host MUST destroy all instances before interface swap.
+//! Runtime emits warning if Arc refs remain after Preparing callback.
 
 use std::sync::Arc;
 
