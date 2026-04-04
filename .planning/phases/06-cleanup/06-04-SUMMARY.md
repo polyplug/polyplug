@@ -7,6 +7,9 @@ key_files:
   created: []
   modified:
     - crates/polyplugc/src/generators/rust.rs
+    - crates/polyplugc/src/generators/python.rs
+    - crates/polyplugc/src/generators/lua.rs
+    - crates/polyplugc/src/generators/cpp.rs
     - crates/polyplug/tests/integration_load.rs
     - examples/hosts/rust/generated/host/host_callers.rs
 decisions:
@@ -14,8 +17,9 @@ decisions:
   - Use RuntimeAbi for host vtable type
   - Use DispatchMechanisms for dispatch union
   - Use register_contract instead of register_plugin
+  - Generators updated for all languages (Rust, Python, Lua, C++)
 metrics:
-  duration: ~45min
+  duration: ~90min
   completed: 2026-04-04
 ---
 
@@ -25,18 +29,22 @@ metrics:
 
 ## Completed Work
 
-### Task 1 (Partial): Updated Rust Generator
+### Task 1 (Partial): Updated All Generators
 
-Modified `crates/polyplugc/src/generators/rust.rs` to use new naming:
+Modified all code generators to use new naming:
 - `PluginInterface` -> `GuestContractInterface`
 - `HostVTable` -> `RuntimeAbi`
 - `PluginDispatch` -> `DispatchMechanisms`
 - `register_plugin` -> `register_contract`
+- `vtable()` -> `interface()` (C++)
 
-The generator now produces host caller code that:
-1. Uses `*const GuestContractInterface` instead of `PluginGuard`
-2. Properly handles instance lifecycle with `create_instance`/`destroy_instance`
-3. Returns `HostContractInstance` from `get_host_contract`
+Files updated:
+- `crates/polyplugc/src/generators/rust.rs`
+- `crates/polyplugc/src/generators/python.rs`
+- `crates/polyplugc/src/generators/lua.rs`
+- `crates/polyplugc/src/generators/cpp.rs`
+
+Also fixed test code in generators to include `singleton: false` field for `ResolvedHostContract`.
 
 ### Task 4 (Partial): Regenerated Rust Host Example
 
@@ -98,15 +106,19 @@ Test files in loader crates need similar updates:
 
 ### Task 4 (Remaining): Other Language Examples
 
-Generators for other languages (Python, C#, C++) still reference `PluginGuard` and need updates:
-- `crates/polyplugc/src/generators/python.rs` - Uses PluginGuard
-- `crates/polyplugc/src/generators/csharp.rs` - Uses PluginGuard
-- `crates/polyplugc/src/generators/cpp.rs` - Uses PluginGuard
+**BLOCKING ISSUE**: Guest examples cannot be regenerated because generators produce code for an older ABI structure:
+- `PluginDescriptor` now has `version: Version` field, but generators emit `version_major/minor/patch`
+- `AbiError.code` expects `AbiErrorCode`, but generators emit `u32` constants
+- Requires separate generator ABI alignment work
 
+Generators updated for naming, but guest code generation blocked.
 Regeneration needed for:
-- `examples/hosts/python/generated/`
-- `examples/hosts/csharp/generated/`
-- `examples/hosts/cpp/generated/`
+- `examples/guests/rust/*/generated/`
+- `examples/guests/python/*/generated/`
+- `examples/guests/lua/*/generated/`
+- `examples/guests/cpp/*/generated/`
+- `examples/guests/csharp/*/generated/`
+- `examples/guests/js/*/generated/`
 
 ### Task 5: Full Workspace Test Suite
 
