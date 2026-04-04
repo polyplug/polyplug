@@ -301,158 +301,21 @@ export class Runtime {
   }
 
   /**
-   * Resolve plugin handle to guard.
-   * Guard stores handle for hot-reload safety - re-resolves vtable on each call.
+   * Resolve plugin handle to raw pointer.
+   * Returns the resolve handle pointer for instance-based model.
+   * Host creates instances via interface.create_instance, calls methods,
+   * and destroys instances via interface.destroy_instance before hot-reload.
    * @param {bigint} packedHandle - Packed plugin handle
-   * @returns {Guard} Plugin guard
+   * @returns {Deno.PointerValue} Resolve handle pointer
    */
   resolvePlugin(packedHandle) {
     if (packedHandle === NULL_HANDLE) {
-      throw new Error("null plugin handle");
-    }
-    return new Guard(this, packedHandle);
-  }
-}
-
-/**
- * Guard holds a ref-counted ResolveHandle that keeps the vtable alive.
- * Must call reset() to release the handle when done.
- */
-export class Guard {
-  #runtime;
-  #resolveHandle;
-
-  /**
-   * @param {Runtime} runtime - Runtime instance
-   * @param {bigint} packedHandle - Packed plugin handle
-   */
-  constructor(runtime, packedHandle) {
-    this.#runtime = runtime;
-    this.#resolveHandle = runtime.lib().symbols.polyplug_runtime_resolve_plugin(
-      runtime.ptr(),
-      packedHandle
-    );
-  }
-
-  /**
-   * Get the vtable pointer from the ResolveHandle.
-   * @returns {Deno.PointerValue | null}
-   */
-  vtable() {
-    if (this.#resolveHandle === null) {
       return null;
     }
-    // ResolveHandle's first field is the vtable pointer
-    const vtablePtr = new Deno.UnsafePointerView(this.#resolveHandle).getBigUint64(0);
-    return Deno.UnsafePointer.create(vtablePtr);
-  }
-
-  /**
-   * Check if this guard is valid.
-   * @returns {boolean}
-   */
-  isValid() {
-    return this.#resolveHandle !== null;
-  }
-
-  /**
-   * Release the resolve handle.
-   */
-  reset() {
-    if (this.#resolveHandle !== null) {
-      this.#runtime.lib().symbols.polyplug_runtime_release_plugin(this.#resolveHandle);
-      this.#resolveHandle = null;
-    }
-  }
-
-  [Symbol.dispose]() {
-    this.reset();
-  }
-
-  /**
-   * Internal: resolve vtable for call (backwards compat).
-   * @returns {Deno.PointerValue}
-   */
-  #resolveVtable() {
-    const vt = this.vtable();
-    if (vt === null) {
-      throw new Error(`polyplug: guard is not valid`);
-    }
-    return vt;
-  }
-
-/**
-    * Call a plugin function by index (hot-reload safe).
-    * Re-resolves vtable on each call to detect stale handles.
-    * @param {number} funcIdx - Function index (0-based)
-    * @param {string} input - Input string
-    * @returns {string} Output string from plugin
-    */
-  call(funcIdx, input) {
-    const vtablePtr = this.#resolveVtable();
-    
-    // PluginInterface layout (48 bytes):
-    // - offset 0: rt_ctx (pointer, 8 bytes)
-    // - offset 8: contract_id (u64, 8 bytes)
-    // - offset 16: contract_version (u32, 4 bytes)
-    // - offset 20: function_count (u32, 4 bytes)
-    // - offset 24: dispatch_type (u32, 4 bytes)
-    // - offset 28: _pad (u32, 4 bytes)
-    // - offset 32: dispatch.native.functions (pointer, 8 bytes)
-    const vtableBuf = new Deno.UnsafePointerView(vtablePtr).getArrayBuffer(48);
-    const vtableView = new DataView(vtableBuf);
-    const funcCount = vtableView.getUint32(20, true);
-    const funcsPtr = vtableView.getBigUint64(32, true);
-    
-    if (funcIdx >= funcCount) {
-      throw new Error(`function index ${funcIdx} out of bounds`);
-    }
-    
-    // Read function pointer from funcs array
-    const funcsBuf = new Deno.UnsafePointerView(Deno.UnsafePointer.create(funcsPtr)).getArrayBuffer(funcCount * 8);
-    const funcs = new BigUint64Array(funcsBuf);
-    const funcPtrBigInt = funcs[funcIdx];
-    
-    let func = _funcCache.get(funcPtrBigInt);
-    if (!func) {
-      const funcPtr = Deno.UnsafePointer.create(funcPtrBigInt);
-      func = new Deno.UnsafeFnPointer(funcPtr, _DISPATCH_FN_DEF);
-      _funcCache.set(funcPtrBigInt, func);
-    }
-    
-    // Prepare input StringView struct (ptr: u64, len: u64) = 16 bytes
-    const inputData = _encoder.encode(input);
-    const inputPtr = Deno.UnsafePointer.of(inputData);
-    const argsBuf = new Uint8Array(16);
-    const argsView = new DataView(argsBuf.buffer);
-    argsView.setBigUint64(0, Deno.UnsafePointer.value(inputPtr), true);
-    argsView.setBigUint64(8, BigInt(inputData.length), true);
-    const argsPtr = Deno.UnsafePointer.of(argsBuf);
-    
-    // Prepare output StringView struct (ptr: u64, len: u64) = 16 bytes
-    const outBuf = new Uint8Array(16);
-    const outPtr = Deno.UnsafePointer.of(outBuf);
-    
-    const result = func.call(argsPtr, outPtr);
-    
-    // result is AbiError struct: { code: u32, _pad: u32, message_ptr: pointer, message_len: usize }
-    const errCode = result[0];
-    
-    if (errCode === 0) {
-      const outView = new Deno.UnsafePointerView(outPtr);
-      const resultPtr = outView.getBigUint64(0);
-      const resultLen = Number(outView.getBigUint64(8));
-      
-      if (resultPtr !== 0n && resultLen > 0) {
-        const resultPtrObj = Deno.UnsafePointer.create(resultPtr);
-        const resultBuf = new Deno.UnsafePointerView(resultPtrObj).getArrayBuffer(resultLen);
-        const outputStr = _decoder.decode(new Uint8Array(resultBuf));
-        this.#runtime.lib().symbols.polyplug_host_free(resultPtrObj, BigInt(resultLen), 1);
-        return outputStr;
-      }
-    }
-    
-    throw new Error(`plugin returned error code=${errCode}`);
+    return this.lib().symbols.polyplug_runtime_resolve_plugin(
+      this.ptr(),
+      packedHandle
+    );
   }
 }
 
