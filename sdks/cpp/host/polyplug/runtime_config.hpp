@@ -29,6 +29,10 @@ struct RuntimeConfig {
     /// If true (default): abort and fire Failed notification.
     /// If false: keep retrying forever.
     bool hot_reload_abort_on_max_retries{true};
+
+    /// Compatibility mode for version matching.
+    /// Values: 0=Strict, 1=Relaxed, 2=Yolo (from polyplug_abi::Compatibility).
+    uint32_t compatibility{0U};  // COMPATIBILITY_STRICT by default
 };
 
 }  // namespace polyplug

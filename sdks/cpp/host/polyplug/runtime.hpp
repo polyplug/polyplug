@@ -43,75 +43,22 @@ extern "C" {
     uint32_t polyplug_runtime_register_host_contract(RuntimeHandle rt, const HostContractVTable* vtable);
 }
 
+/// FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
+/// Must be in global namespace to match extern "C" FFI pattern.
+/// Layout verified against Rust offset tests.
+struct RuntimeConfig {
+    uint8_t hot_reload_enabled;           // offset 0, 1 byte
+    // padding 3 bytes (offset 1-3)
+    uint32_t hot_reload_max_retries;      // offset 4, 4 bytes
+    uint64_t hot_reload_retry_interval_ms; // offset 8, 8 bytes
+    uint8_t hot_reload_abort_on_max_retries; // offset 16, 1 byte
+    // padding 3 bytes (offset 17-19)
+    uint32_t compatibility;               // offset 20, 4 bytes (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
+};
+
+static_assert(sizeof(RuntimeConfig) == 24, "RuntimeConfig must be 24 bytes");
+
 namespace polyplug {
-
-/// C-compatible runtime configuration for FFI boundary.
-struct RuntimeConfigC {
-    uint8_t hot_reload_enabled;
-    uint32_t hot_reload_max_retries;
-    uint64_t hot_reload_retry_interval_ms;
-    uint8_t hot_reload_abort_on_max_retries;
-};
-
-/// RAII guard for a resolved plugin handle.
-/// Holds a ref-counted ResolveHandle that keeps the vtable alive.
-/// Move-only; copy is disabled.
-class PluginGuard {
-public:
-    PluginGuard() noexcept : handle_(nullptr) {}
-
-    explicit PluginGuard(const ResolveHandle* handle) noexcept : handle_(handle) {}
-
-    ~PluginGuard() noexcept {
-        release();
-    }
-
-    PluginGuard(PluginGuard&& other) noexcept : handle_(other.handle_) {
-        other.handle_ = nullptr;
-    }
-
-    PluginGuard& operator=(PluginGuard&& other) noexcept {
-        if (this != &other) {
-            release();
-            handle_ = other.handle_;
-            other.handle_ = nullptr;
-        }
-        return *this;
-    }
-
-    PluginGuard(const PluginGuard&) = delete;
-    PluginGuard& operator=(const PluginGuard&) = delete;
-
-    const PluginInterface* vtable() const noexcept {
-        if (handle_ == nullptr) {
-            return nullptr;
-        }
-        // ResolveHandle's first field is the vtable pointer
-        return static_cast<const PluginInterface*>(static_cast<const void* const*>(static_cast<const void*>(handle_))[0]);
-    }
-
-    bool is_null() const noexcept {
-        return handle_ == nullptr;
-    }
-
-    explicit operator bool() const noexcept {
-        return !is_null();
-    }
-
-    void reset() noexcept {
-        release();
-    }
-
-private:
-    void release() noexcept {
-        if (handle_ != nullptr) {
-            polyplug_runtime_release_plugin(handle_);
-            handle_ = nullptr;
-        }
-    }
-
-    const ResolveHandle* handle_;
-};
 
 class Runtime {
 public:
@@ -185,12 +132,28 @@ public:
         return handles;
     }
 
-    PluginGuard resolve_plugin(uint64_t packed_handle) const noexcept {
+    /// Resolve a packed handle to a raw resolve_handle.
+    ///
+    /// In the instance-based model, callers should:
+    /// 1. Get resolve_handle from resolve_plugin
+    /// 2. Access GuestContractInterface via FFI (ResolveHandle first field)
+    /// 3. Call create_instance on interface for stateful access
+    /// 4. Make dispatch calls with instance
+    /// 5. Call destroy_instance before hot-reload
+    /// 6. Call release_plugin when done with the handle
+    const ResolveHandle* resolve_plugin(uint64_t packed_handle) const noexcept {
         if (packed_handle == UINT64_MAX) {
-            return PluginGuard(nullptr);
+            return nullptr;
         }
-        const ResolveHandle* h = polyplug_runtime_resolve_plugin(handle_, packed_handle);
-        return PluginGuard(h);
+        return polyplug_runtime_resolve_plugin(handle_, packed_handle);
+    }
+
+    /// Release a resolved plugin handle.
+    /// Call this when done with a handle to decrement the refcount.
+    void release_plugin(const ResolveHandle* handle) const noexcept {
+        if (handle != nullptr) {
+            polyplug_runtime_release_plugin(handle);
+        }
     }
 
     RuntimeHandle handle() const noexcept {
@@ -233,13 +196,14 @@ public:
         });
     }
 
-    static void set_config(const RuntimeConfig& config) {
-        RuntimeConfigC config_c{};
+    static void set_config(const polyplug::RuntimeConfig& config) {
+        ::RuntimeConfig config_c{};  // Global namespace FFI struct
         config_c.hot_reload_enabled = config.hot_reload_enabled ? 1 : 0;
         config_c.hot_reload_max_retries = config.hot_reload_max_retries;
         config_c.hot_reload_retry_interval_ms = static_cast<uint64_t>(
             config.hot_reload_retry_interval.count());
         config_c.hot_reload_abort_on_max_retries = config.hot_reload_abort_on_max_retries ? 1 : 0;
+        config_c.compatibility = config.compatibility;
         polyplug_runtime_set_config(&config_c);
     }
 
