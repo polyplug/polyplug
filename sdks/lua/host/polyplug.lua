@@ -73,7 +73,6 @@ M.extension_id = abi.extension_id
 M.host_contract_id = runtime.host_contract_id
 
 M.Runtime = runtime.Runtime
-M.Guard = runtime.Guard
 M.on_reload = runtime.on_reload
 M.set_config = runtime.set_config
 
