@@ -2104,6 +2104,7 @@ fn generate_python_host_vtable_factory(out: &mut String, contract: &ResolvedHost
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
+    let singleton: bool = contract.singleton;
 
     // NATIVE dispatch factory
     out.push_str(&format!(
@@ -2149,6 +2150,7 @@ fn generate_python_host_vtable_factory(out: &mut String, contract: &ResolvedHost
     out.push_str(&format!("            contract_major={major},\n"));
     out.push_str(&format!("            contract_minor={minor},\n"));
     out.push_str(&format!("            function_count={fn_count},\n"));
+    out.push_str(&format!("            singleton={singleton},\n"));
     out.push_str("            dispatch_type=DispatchType.Native,\n");
     out.push_str("        ),\n");
     out.push_str("        dispatch=HostContractDispatch(\n");
@@ -2190,6 +2192,7 @@ fn generate_python_host_vtable_factory(out: &mut String, contract: &ResolvedHost
     out.push_str(&format!("            contract_major={major},\n"));
     out.push_str(&format!("            contract_minor={minor},\n"));
     out.push_str(&format!("            function_count={fn_count},\n"));
+    out.push_str(&format!("            singleton={singleton},\n"));
     out.push_str("            dispatch_type=DispatchType.VirtualMachine,\n");
     out.push_str("        ),\n");
     out.push_str("        dispatch=HostContractDispatch(\n");

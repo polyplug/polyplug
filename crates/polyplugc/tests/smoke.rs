@@ -279,8 +279,8 @@ unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance { data: core::ptr::null_mut() }
 }
 
 // ─── Test 1: Rust codegen round-trip ─────────────────────────────────────────

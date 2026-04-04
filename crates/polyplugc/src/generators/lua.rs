@@ -1553,6 +1553,7 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
+    let singleton: bool = contract.singleton;
 
     // NATIVE dispatch factory
     out.push_str(&format!(
@@ -1598,6 +1599,7 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
     out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
     out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
+    out.push_str(&format!("    vtable.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
     out.push_str("    vtable.header.dispatch_type = 0  -- DispatchType.Native\n");
     out.push_str("    vtable.dispatch.native.impl_ptr = nil  -- We use global _impl instead\n");
     out.push_str("    vtable.dispatch.native.functions = functions\n\n");
@@ -1632,6 +1634,7 @@ fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
     out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
     out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
+    out.push_str(&format!("    vtable.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
     out.push_str("    vtable.header.dispatch_type = 1  -- DispatchType.VirtualMachine\n");
     out.push_str("    vtable.dispatch.vm.call = dispatch_fn\n");
     out.push_str("    vtable.dispatch.vm.bridge_data = bridge_data\n\n");

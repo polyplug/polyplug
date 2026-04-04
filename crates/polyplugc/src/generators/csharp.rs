@@ -1685,6 +1685,7 @@ fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
+    let singleton: bool = contract.singleton;
 
     // Generate thunks for each function (must be outside the factory method)
     for func in &contract.functions {
@@ -1748,6 +1749,7 @@ fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("            ContractMajor = {major}u,\n"));
     out.push_str(&format!("            ContractMinor = {minor}u,\n"));
     out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+    out.push_str(&format!("            Singleton = {singleton},\n"));
     out.push_str("            DispatchType = DispatchType.Native,\n");
     out.push_str("        },\n");
     out.push_str("        Dispatch = new HostContractDispatch {\n");
@@ -1783,6 +1785,7 @@ fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("            ContractMajor = {major}u,\n"));
     out.push_str(&format!("            ContractMinor = {minor}u,\n"));
     out.push_str(&format!("            FunctionCount = {fn_count}u,\n"));
+    out.push_str(&format!("            Singleton = {singleton},\n"));
     out.push_str("            DispatchType = DispatchType.VirtualMachine,\n");
     out.push_str("        },\n");
     out.push_str("        Dispatch = new HostContractDispatch {\n");

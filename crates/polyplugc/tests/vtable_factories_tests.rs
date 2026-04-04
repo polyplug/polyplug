@@ -105,10 +105,10 @@ fn test_vtable_factory_generates_native_and_vm_factories() {
         "VM factory `create_host_logger_vtable_vm` must be generated:\n{vtables}"
     );
 
-    // NATIVE factory must return HostContractVTable
+    // NATIVE factory must return HostContractInterface
     assert!(
-        vtables.contains("-> &'static HostContractVTable"),
-        "Factories must return &'static HostContractVTable:\n{vtables}"
+        vtables.contains("-> &'static HostContractInterface"),
+        "Factories must return &'static HostContractInterface:\n{vtables}"
     );
 
     // NATIVE factory must take Box<dyn Trait>

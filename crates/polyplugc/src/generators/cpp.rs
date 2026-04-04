@@ -1819,6 +1819,7 @@ fn generate_cpp_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
+    let singleton: bool = contract.singleton;
 
     // NATIVE dispatch factory
     out.push_str(&format!(
@@ -1870,6 +1871,7 @@ fn generate_cpp_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str(&format!("            {major}U,  // contract_major\n"));
     out.push_str(&format!("            {minor}U,  // contract_minor\n"));
     out.push_str(&format!("            {fn_count}U,  // function_count\n"));
+    out.push_str(&format!("            {},  // singleton\n", singleton));
     out.push_str("            DispatchType::Native,\n");
     out.push_str("        },\n");
     out.push_str("        HostContractDispatch{\n");
@@ -1910,6 +1912,7 @@ fn generate_cpp_host_vtable_factory(out: &mut String, contract: &ResolvedHostCon
     out.push_str(&format!("            {major}U,  // contract_major\n"));
     out.push_str(&format!("            {minor}U,  // contract_minor\n"));
     out.push_str(&format!("            {fn_count}U,  // function_count\n"));
+    out.push_str(&format!("            {},  // singleton\n", singleton));
     out.push_str("            DispatchType::VirtualMachine,\n");
     out.push_str("        },\n");
     out.push_str("        HostContractDispatch{\n");

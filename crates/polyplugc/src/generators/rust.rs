@@ -1855,15 +1855,15 @@ fn generate_host_vtable_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(header);
 
-    out.push_str("use polyplug_abi::HostContractVTable;\n");
-    out.push_str("use polyplug_abi::HostContractVTableHeader;\n");
-    out.push_str("use polyplug_abi::HostContractDispatch;\n");
-    out.push_str("use polyplug_abi::NativeHostContractDispatch;\n");
-    out.push_str("use polyplug_abi::VmHostContractDispatch;\n");
+    out.push_str("use polyplug_abi::HostContractInterface;\n");
+    out.push_str("use polyplug_abi::HostContractInstance;\n");
+    out.push_str("use polyplug_abi::DispatchMechanisms;\n");
+    out.push_str("use polyplug_abi::NativeDispatch;\n");
+    out.push_str("use polyplug_abi::VmDispatch;\n");
     out.push_str("use polyplug_abi::DispatchType;\n");
     out.push_str("use polyplug_abi::StringView;\n");
     out.push_str("use polyplug_abi::AbiError;\n");
-    out.push_str("use polyplug_abi::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::Version;\n");
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::host_contracts::*;\n");
     out.push_str("use super::types::*;\n\n");
@@ -1906,7 +1906,7 @@ fn generate_host_vtable_factory(out: &mut String, contract: &ResolvedHostContrac
         "/// The implementation Box is also leaked (its pointer is stored in the vtable).\n",
     );
     out.push_str(&format!(
-        "pub fn {factory_name}(implementation: Box<dyn {trait_name}>) -> &'static HostContractVTable {{\n"
+        "pub fn {factory_name}(implementation: Box<dyn {trait_name}>) -> &'static HostContractInterface {{\n"
     ));
     // Wrap the fat pointer in a Box so we can store a thin pointer to it in impl_ptr.
     // SAFETY: The fat pointer (*const dyn Trait) is 128 bits, but impl_ptr is 64 bits.
@@ -1940,19 +1940,64 @@ fn generate_host_vtable_factory(out: &mut String, contract: &ResolvedHostContrac
     }
     out.push_str("    ];\n\n");
 
-    // Create the vtable
-    out.push_str("    let vtable: HostContractVTable = HostContractVTable {\n");
-    out.push_str("        header: HostContractVTableHeader {\n");
-    out.push_str("            vtable_version: 1,\n");
-    out.push_str(&format!("            contract_id: 0x{contract_id:016X},\n"));
-    out.push_str(&format!("            contract_major: {major},\n"));
-    out.push_str(&format!("            contract_minor: {minor},\n"));
-    out.push_str(&format!("            function_count: {fn_count},\n"));
-    out.push_str("            dispatch_type: DispatchType::Native,\n");
-    out.push_str("        },\n");
-    out.push_str("        dispatch: HostContractDispatch {\n");
-    out.push_str("            native: NativeHostContractDispatch {\n");
-    out.push_str("                impl_ptr: impl_ptr as *const c_void,\n");
+    // Generate instance lifecycle stubs
+    let create_stub_name: String = format!(
+        "{}_create_instance_stub",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let destroy_stub_name: String = format!(
+        "{}_destroy_instance_stub",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let singleton: bool = contract.singleton;
+
+    // Create instance stub
+    out.push_str(&format!(
+        "    /// Create instance stub for `{}` host contract.\n",
+        contract.name
+    ));
+    out.push_str("    /// For host contracts, the instance is the implementation object.\n");
+    out.push_str("    /// This stub returns the impl_ptr as the instance data.\n");
+    out.push_str(&format!(
+        "    unsafe extern \"C\" fn {create_stub_name}(\n"
+    ));
+    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _args: *const (),\n");
+    out.push_str("    ) -> HostContractInstance {\n");
+    out.push_str("        HostContractInstance { data: impl_ptr as *mut c_void }\n");
+    out.push_str("    }\n\n");
+
+    // Destroy instance stub
+    out.push_str(&format!(
+        "    /// Destroy instance stub for `{}` host contract.\n",
+        contract.name
+    ));
+    out.push_str("    /// For singleton contracts, this is a no-op.\n");
+    out.push_str("    /// For multi-instance contracts, the host must provide a custom destructor.\n");
+    out.push_str(&format!(
+        "    unsafe extern \"C\" fn {destroy_stub_name}(\n"
+    ));
+    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _instance: HostContractInstance,\n");
+    out.push_str("    ) {\n");
+    if singleton {
+        out.push_str("        // Singleton: no cleanup needed, implementation lives for program lifetime\n");
+    } else {
+        out.push_str("        // Multi-instance: host should provide custom destroy_instance\n");
+    }
+    out.push_str("    }\n\n");
+
+    // Create the HostContractInterface
+    let patch: u32 = contract.version.patch;
+    out.push_str("    let vtable: HostContractInterface = HostContractInterface {\n");
+    out.push_str(&format!("        contract_id: 0x{contract_id:016X}_u64,\n"));
+    out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
+    out.push_str(&format!("        singleton: {singleton},\n"));
+    out.push_str("        dispatch_type: DispatchType::Native,\n");
+    out.push_str(&format!("        create_instance: {create_stub_name},\n"));
+    out.push_str(&format!("        destroy_instance: {destroy_stub_name},\n"));
+    out.push_str("        dispatch: DispatchMechanisms {\n");
+    out.push_str("            native: NativeDispatch {\n");
     out.push_str("                functions: FUNCTIONS.as_ptr() as *const *const (),\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
@@ -1982,20 +2027,62 @@ fn generate_host_vtable_factory(out: &mut String, contract: &ResolvedHostContrac
     out.push_str("        args: *const (),\n");
     out.push_str("        out: *mut (),\n");
     out.push_str("    ) -> AbiError,\n");
-    out.push_str(") -> &'static HostContractVTable {\n");
-    out.push_str("    let vtable: HostContractVTable = HostContractVTable {\n");
-    out.push_str("        header: HostContractVTableHeader {\n");
-    out.push_str("            vtable_version: 1,\n");
-    out.push_str(&format!("            contract_id: 0x{contract_id:016X},\n"));
-    out.push_str(&format!("            contract_major: {major},\n"));
-    out.push_str(&format!("            contract_minor: {minor},\n"));
-    out.push_str(&format!("            function_count: {fn_count},\n"));
-    out.push_str("            dispatch_type: DispatchType::VirtualMachine,\n");
-    out.push_str("        },\n");
-    out.push_str("        dispatch: HostContractDispatch {\n");
-    out.push_str("            vm: VmHostContractDispatch {\n");
+    out.push_str(") -> &'static HostContractInterface {\n");
+
+    // Generate instance lifecycle stubs for VM
+    let vm_create_stub_name: String = format!(
+        "{}_vm_create_instance_stub",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+    let vm_destroy_stub_name: String = format!(
+        "{}_vm_destroy_instance_stub",
+        contract.name.replace('.', "_").to_lowercase()
+    );
+
+    // Create instance stub for VM
+    out.push_str(&format!(
+        "    /// Create instance stub for `{}` host contract (VM dispatch).\n",
+        contract.name
+    ));
+    out.push_str("    /// Returns bridge_data as instance for VM-based implementations.\n");
+    out.push_str(&format!(
+        "    unsafe extern \"C\" fn {vm_create_stub_name}(\n"
+    ));
+    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _args: *const (),\n");
+    out.push_str("    ) -> HostContractInstance {\n");
+    out.push_str("        HostContractInstance { data: bridge_data }\n");
+    out.push_str("    }\n\n");
+
+    // Destroy instance stub for VM
+    out.push_str(&format!(
+        "    /// Destroy instance stub for `{}` host contract (VM dispatch).\n",
+        contract.name
+    ));
+    out.push_str(&format!(
+        "    unsafe extern \"C\" fn {vm_destroy_stub_name}(\n"
+    ));
+    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _instance: HostContractInstance,\n");
+    out.push_str("    ) {\n");
+    if singleton {
+        out.push_str("        // Singleton: no cleanup needed\n");
+    } else {
+        out.push_str("        // Multi-instance: host should provide custom destroy_instance\n");
+    }
+    out.push_str("    }\n\n");
+
+    out.push_str("    let vtable: HostContractInterface = HostContractInterface {\n");
+    out.push_str(&format!("        contract_id: 0x{contract_id:016X}_u64,\n"));
+    out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
+    out.push_str(&format!("        singleton: {singleton},\n"));
+    out.push_str("        dispatch_type: DispatchType::VirtualMachine,\n");
+    out.push_str(&format!("        create_instance: {vm_create_stub_name},\n"));
+    out.push_str(&format!("        destroy_instance: {vm_destroy_stub_name},\n"));
+    out.push_str("        dispatch: DispatchMechanisms {\n");
+    out.push_str("            vm: VmDispatch {\n");
     out.push_str("                call: dispatch_fn,\n");
-    out.push_str("                bridge_data,\n");
+    out.push_str("                loader_data: bridge_data,\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n\n");
