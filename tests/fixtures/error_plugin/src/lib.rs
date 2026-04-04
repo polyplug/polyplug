@@ -37,7 +37,7 @@ const ERROR_TEST_CONTRACT_ID: u64 = fnv1a_64_const(b"error.test@1");
 #[repr(C)]
 pub struct ChainArgs {
     pub rt_ctx: *mut core::ffi::c_void,
-    pub host: *const HostVTable,
+    pub host: *const RuntimeAbi,
     pub target_contract_id: u64,
     pub target_fn_id: u32,
 }
@@ -102,7 +102,7 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
 
 /// fn 2 — error_chain_propagate
 ///
-/// Calls another plugin via the host vtable and propagates the inner error
+/// Calls another plugin via the host abi and propagates the inner error
 /// to `*out`.
 ///
 /// # Safety
@@ -110,13 +110,13 @@ extern "C" fn error_panic(_args: *const (), _out: *mut ()) -> AbiError {
 extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: args points to ChainArgs per the ABI contract.
     let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
-    // SAFETY: chain_args.host is a valid HostVTable pointer provided by the host runtime.
-    let host: &HostVTable = unsafe { &*chain_args.host };
+    // SAFETY: chain_args.host is a valid RuntimeAbi pointer provided by the host runtime.
+    let host: &RuntimeAbi = unsafe { &*chain_args.host };
     // SAFETY: host.find_by_contract is a valid function pointer set by the host runtime.
     let plugin: PluginHandle =
         unsafe { (host.find_by_contract)(chain_args.rt_ctx, chain_args.target_contract_id, 0_u32) };
-    // SAFETY: host.resolve_contract returns a 'static PluginInterface pointer for the handle.
-    let iface_ptr: *const PluginInterface =
+    // SAFETY: host.resolve_contract returns a 'static GuestContractInterface pointer for the handle.
+    let iface_ptr: *const GuestContractInterface =
         unsafe { (host.resolve_contract)(chain_args.rt_ctx, plugin) };
     // Dispatch through the interface if non-null and fn_id is in range.
     let inner_result: AbiError = if iface_ptr.is_null() {
@@ -126,7 +126,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
         }
     } else {
         // SAFETY: iface_ptr is 'static and non-null.
-        let iface: &PluginInterface = unsafe { &*iface_ptr };
+        let iface: &GuestContractInterface = unsafe { &*iface_ptr };
         // SAFETY: Access union field based on dispatch_type == Native
         let function_count = unsafe { iface.dispatch.native.function_count };
         if chain_args.target_fn_id >= function_count {
@@ -201,13 +201,13 @@ static ERROR_TEST_FNS: [FnPtr; 3] = [
     FnPtr(error_chain_propagate as *const ()),
 ];
 
-static ERROR_TEST_INTERFACE: PluginInterface = PluginInterface {
+static ERROR_TEST_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(ERROR_TEST_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
-    dispatch: PluginDispatch {
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 3,
             functions: ERROR_TEST_FNS.as_ptr() as *const *const (),
@@ -235,19 +235,19 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
     1
 }
 
-/// Plugin init — called by the loader to register vtables.
+/// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
 /// `rt_ctx` must be a valid opaque pointer to the host runtime context.
-/// `host_vtable` must be a valid non-null pointer to a HostVTable from the host.
+/// `host_abi` must be a valid non-null pointer to a RuntimeAbi from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     rt_ctx: *mut core::ffi::c_void,
-    host_vtable: *const HostVTable,
+    host_abi: *const RuntimeAbi,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if host_vtable.is_null() {
+    if host_abi.is_null() {
         return AbiError {
             code: AbiErrorCode::Generic,
             message: string_view_null(),
@@ -260,8 +260,8 @@ pub unsafe extern "C" fn polyplug_init(
         };
     }
 
-    // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
-    let host: &HostVTable = unsafe { &*host_vtable };
+    // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
+    let host: &RuntimeAbi = unsafe { &*host_abi };
 
     // SAFETY: register_contract is a valid function pointer set by the host.
     // ERROR_TEST_DESCRIPTOR and ERROR_TEST_INTERFACE are 'static.
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn polyplug_init(
         (host.register_contract)(
             rt_ctx,
             &ERROR_TEST_DESCRIPTOR as *const PluginDescriptor,
-            &ERROR_TEST_INTERFACE as *const PluginInterface,
+            &ERROR_TEST_INTERFACE as *const GuestContractInterface,
         )
     }
 }

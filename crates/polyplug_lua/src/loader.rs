@@ -15,19 +15,21 @@ use mlua::Value;
 use crate::config::LuaConfig;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug::runtime::HostContext;
-use polyplug::runtime::Runtime;
-use polyplug_abi::contract_id;
+use polyplug_abi::host::host_context::HostContext;
+use polyplug::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
-use polyplug_abi::VmDispatch;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
+use polyplug_abi::types::Version;
+use polyplug_utils::GuestContractId;
 
 /// The path to the sdks/lua/guest/ directory, set at compile time by build.rs.
 const GUEST_LUA_DIR: &str = env!("POLYPLUG_GUEST_LUA_DIR");
@@ -46,6 +48,29 @@ pub struct LuaLoaderData {
     pub functions: Vec<Function>,
 }
 
+// ─── Instance Lifecycle Stubs ──────────────────────────────────────────────────
+
+/// Stub create_instance for Lua plugins - returns null instance.
+///
+/// # Safety
+/// Lua plugins use VM dispatch with global state; instances are not used.
+unsafe extern "C" fn lua_create_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for Lua plugins - no cleanup needed.
+///
+/// # Safety
+/// Lua plugins don't own instance data.
+unsafe extern "C" fn lua_destroy_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {
+}
+
 // ─── Lua Dispatch Function ─────────────────────────────────────────────────────
 
 /// Dispatch function for Lua plugins using VM dispatch pattern.
@@ -55,6 +80,7 @@ pub struct LuaLoaderData {
 /// - `args` and `out` must be valid pointers for the ABI call
 unsafe extern "C" fn lua_dispatch(
     loader_data: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -66,7 +92,7 @@ unsafe extern "C" fn lua_dispatch(
         Some(f) => f,
         None => {
             return AbiError {
-                code: AbiErrorCode::FunctionNotAvailable as u32,
+                code: AbiErrorCode::FunctionNotAvailable,
                 message: StringView::null(),
             };
         }
@@ -80,14 +106,11 @@ unsafe extern "C" fn lua_dispatch(
     let call_result: Result<(), mlua::Error> = lua_fn.call::<()>((args_i64, out_i64));
 
     match call_result {
-        Ok(()) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
+        Ok(()) => AbiError::ok(),
         Err(e) => {
             eprintln!("[polyplug_lua] Lua function call failed: {}", e);
             AbiError {
-                code: polyplug_abi::ABI_ERROR_GENERIC,
+                code: AbiErrorCode::Generic,
                 message: StringView::null(),
             }
         }
@@ -239,8 +262,9 @@ impl BundleLoader for LuaLoader {
 
         // Create HostContext for rt_ctx parameter.
         let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut Runtime,
+            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
@@ -257,7 +281,6 @@ impl BundleLoader for LuaLoader {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
             bundle_id,
         };
         let rt_ctx_i64: i64 = rt_ctx as usize as i64;
@@ -335,7 +358,7 @@ impl BundleLoader for LuaLoader {
         }
 
         // Build contract_id from contract_name and version.
-        let cid: u64 = contract_id(&contract_name_str, contract_version);
+        let cid: GuestContractId = GuestContractId::new(&contract_name_str, contract_version);
 
         // Create LuaLoaderData with the Lua VM and functions.
         let loader_data: Box<LuaLoaderData> = Box::new(LuaLoaderData {
@@ -347,12 +370,12 @@ impl BundleLoader for LuaLoader {
 
         // Build GuestContractInterface with VM dispatch.
         let plugin_interface: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
             contract_id: cid,
-            contract_version,
-            function_count,
+            contract_version: Version { major: contract_version, minor: 0, patch: 0 },
             dispatch_type: DispatchType::VirtualMachine,
-            dispatch: polyplug_abi::PluginDispatch {
+            create_instance: lua_create_instance,
+            destroy_instance: lua_destroy_instance,
+            dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: lua_dispatch,
                     loader_data: loader_data_ptr as *mut core::ffi::c_void,
@@ -379,28 +402,26 @@ impl BundleLoader for LuaLoader {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version_major: contract_version,
-            version_minor: 0_u32,
-            version_patch: 0_u32,
+            version: Version { major: contract_version, minor: 0, patch: 0 },
         };
 
-        // Call register_plugin via the HostVTable.
+        // Call register_contract via the RuntimeAbi.
         // SAFETY: `rt_ctx` is a valid HostContext pointer for this call.
-        // `descriptor` is stack-allocated and valid for this call (register_plugin must copy
+        // `descriptor` is stack-allocated and valid for this call (register_contract must copy
         // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
         // `static_interface` is a leaked Box — valid for 'static lifetime.
         let reg_result: AbiError = unsafe {
-            (host_vtable.register_plugin)(
+            (host_vtable.register_contract)(
                 rt_ctx,
                 &descriptor as *const PluginDescriptor,
                 static_interface,
             )
         };
 
-        if reg_result.code != ABI_OK {
+        if !reg_result.is_ok() {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
-                error: format!("register_plugin error: code={}", reg_result.code),
+                error: format!("register_contract error: code={:?}", reg_result.code),
             }));
         }
 

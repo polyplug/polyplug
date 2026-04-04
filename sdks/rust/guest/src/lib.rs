@@ -60,10 +60,10 @@
 
 use std::sync::OnceLock;
 
-/// Wrapper for host vtable pointer that implements Send + Sync.
-/// The host vtable is 'static and immutable, safe to share across threads.
+/// Wrapper for host abi pointer that implements Send + Sync.
+/// The host abi is 'static and immutable, safe to share across threads.
 #[repr(transparent)]
-pub struct HostVtablePtr(pub *const polyplug_abi::HostVTable);
+pub struct HostVtablePtr(pub *const polyplug_abi::RuntimeAbi);
 
 // SAFETY: HostVtablePtr wraps a 'static host vtable pointer provided by the host runtime.
 // The vtable is immutable and valid for the plugin's lifetime. Multiple threads may read
@@ -155,10 +155,13 @@ pub use polyplug_abi::guest::GuestContractInstance;
 /// Opaque handle to a loaded plugin — validated on every use.
 pub use polyplug_abi::PluginHandle;
 
-/// Plugin VTable — one per contract implemented by a plugin.
+/// Plugin Interface — one per contract implemented by a plugin.
 ///
 /// OWNERSHIP: Must be `'static` or intentionally leaked.
-pub use polyplug_abi::PluginInterface;
+pub use polyplug_abi::GuestContractInterface;
+
+/// Legacy alias for GuestContractInterface (backward compatibility).
+pub type PluginInterface = GuestContractInterface;
 
 /// Host context passed to plugins.
 pub use polyplug_abi::host::host_context::HostContext;
@@ -198,7 +201,10 @@ pub type HostContractVTableHeader = polyplug_abi::HostContractInterface;
 ///
 /// Accessed via `PluginRegistrar::host`. Provides allocation, plugin lookup,
 /// and extension vtable retrieval.
-pub use polyplug_abi::HostVTable;
+pub use polyplug_abi::RuntimeAbi;
+
+/// Legacy alias for RuntimeAbi (backward compatibility).
+pub type HostVTable = RuntimeAbi;
 
 /// Metadata about a plugin within a bundle.
 ///
@@ -411,21 +417,21 @@ pub fn split(sv: StringView, delimiter: &str) -> Vec<&'static str> {
 
 // ─── Host Vtable Access ────────────────────────────────────────────────────────
 
-/// Store the host vtable during initialization.
+/// Store the host abi during initialization.
 ///
 /// # Safety
 /// Must be called exactly once during polyplug_init, before any host contract access.
-/// The vtable pointer must remain valid for the lifetime of the plugin.
-pub unsafe fn store_host_vtable(vtable: *const polyplug_abi::HostVTable) {
+/// The abi pointer must remain valid for the lifetime of the plugin.
+pub unsafe fn store_host_vtable(vtable: *const polyplug_abi::RuntimeAbi) {
     let _: Result<(), HostVtablePtr> = HOST_VTABLE.set(HostVtablePtr(vtable));
 }
 
-/// Get the host vtable that was passed during polyplug_init.
+/// Get the host abi that was passed during polyplug_init.
 ///
-/// Returns a pointer to the host vtable stored during initialization.
+/// Returns a pointer to the host abi stored during initialization.
 /// The pointer is valid for the lifetime of the plugin.
 /// Returns null if called before polyplug_init completes.
-pub fn get_host_vtable() -> *const polyplug_abi::HostVTable {
+pub fn get_host_vtable() -> *const polyplug_abi::RuntimeAbi {
     HOST_VTABLE.get().map(|p| p.0).unwrap_or(core::ptr::null())
 }
 
@@ -446,12 +452,12 @@ pub mod ffi {
     /// Passing null or size=0 is a safe no-op.
     pub use polyplug_abi::ffi::polyplug_host_free;
 
-    /// Get the host vtable that was passed during polyplug_init.
+    /// Get the host abi that was passed during polyplug_init.
     ///
-    /// Returns a pointer to the host vtable stored during initialization.
+    /// Returns a pointer to the host abi stored during initialization.
     /// The pointer is valid for the lifetime of the plugin.
     /// Returns null if called before polyplug_init completes.
-    pub fn get_host_vtable() -> *const polyplug_abi::HostVTable {
+    pub fn get_host_vtable() -> *const polyplug_abi::RuntimeAbi {
         crate::get_host_vtable()
     }
 }

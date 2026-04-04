@@ -43,20 +43,6 @@ pub use polyplug_utils::GuestContractId;
 
 pub use host::{HostContractInterface, HostContractInstance, RuntimeAbi};
 
-// ─── Legacy aliases for transition (Phase 6 removes these) ────────────────────
-
-/// Legacy alias for GuestContractInterface during transition.
-/// Will be removed in Phase 6.
-pub type PluginInterface = GuestContractInterface;
-
-/// Legacy alias for RuntimeAbi during transition.
-/// Will be removed in Phase 6.
-pub type HostVTable = RuntimeAbi;
-
-/// Legacy alias for DispatchMechanisms during transition.
-/// Will be removed in Phase 6.
-pub type PluginDispatch = DispatchMechanisms;
-
 pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
 
 // ─── ABI version sentinel ────────────────────────────────────────────────────

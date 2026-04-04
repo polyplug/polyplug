@@ -35,8 +35,7 @@ use mlua::Lua;
 
 use polyplug::host_bridge::BridgeError;
 use polyplug::host_bridge::RuntimeLanguageBridge;
-use polyplug_abi::ABI_HOST_CONTRACT_CALL_FAILED;
-use polyplug_abi::ABI_HOST_CONTRACT_NOT_FOUND;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::RuntimeLanguage;
 use polyplug_abi::StringView;
@@ -192,8 +191,8 @@ impl RuntimeLanguageBridge for LuaHostBridge {
     /// # Returns
     ///
     /// - `AbiError::ok()` on success
-    /// - `AbiError { code: ABI_HOST_CONTRACT_NOT_FOUND, ... }` if contract not found
-    /// - `AbiError { code: ABI_HOST_CONTRACT_CALL_FAILED, ... }` if dispatch failed
+    /// - `AbiError { code: AbiErrorCode::HostContractNotFound, ... }` if contract not found
+    /// - `AbiError { code: AbiErrorCode::HostContractCallFailed, ... }` if dispatch failed
     ///
     /// # Safety
     ///
@@ -219,7 +218,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
                 Ok(guard) => guard,
                 Err(_) => {
                     return AbiError {
-                        code: ABI_HOST_CONTRACT_CALL_FAILED,
+                        code: AbiErrorCode::HostContractCallFailed,
                         message: StringView::from_static(
                             b"failed to acquire read lock on contracts map",
                         ),
@@ -231,7 +230,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
             Some(f) => f,
             None => {
                 return AbiError {
-                    code: ABI_HOST_CONTRACT_NOT_FOUND,
+                    code: AbiErrorCode::HostContractNotFound,
                     message: StringView::from_static(b"host contract not found"),
                 };
             }
@@ -265,7 +264,7 @@ impl RuntimeLanguageBridge for LuaHostBridge {
                 // 3. This matches the pattern used in other loaders
                 let message_static: &'static str = Box::leak(message.into_boxed_str());
                 AbiError {
-                    code: ABI_HOST_CONTRACT_CALL_FAILED,
+                    code: AbiErrorCode::HostContractCallFailed,
                     message: StringView {
                         ptr: message_static.as_ptr(),
                         len: message_static.len(),
@@ -414,7 +413,7 @@ mod tests {
 
         let result: AbiError =
             bridge.call_host_contract(9999, 0, std::ptr::null(), std::ptr::null_mut());
-        assert_eq!(result.code, ABI_HOST_CONTRACT_NOT_FOUND);
+        assert_eq!(result.code, AbiErrorCode::HostContractNotFound);
     }
 
     #[test]
@@ -458,6 +457,6 @@ mod tests {
         // Call it - should return error
         let result: AbiError =
             bridge.call_host_contract(1234, 0, std::ptr::null(), std::ptr::null_mut());
-        assert_eq!(result.code, ABI_HOST_CONTRACT_CALL_FAILED);
+        assert_eq!(result.code, AbiErrorCode::HostContractCallFailed);
     }
 }

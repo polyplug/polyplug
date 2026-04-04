@@ -20,23 +20,25 @@ use rquickjs::Value;
 
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug::runtime::HostContext;
-use polyplug::runtime::Runtime as PolyplugRuntime;
+use polyplug_abi::host::host_context::HostContext;
+use polyplug::Runtime as PolyplugRuntime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginDispatch;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
-use polyplug_abi::VmDispatch;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
+use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
+use polyplug_abi::types::Version;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_utils::GuestContractId;
 
 use crate::config::JsConfig;
 
@@ -91,6 +93,31 @@ pub struct JsLoaderData {
 
 // ─── JS Dispatch Function ─────────────────────────────────────────────────────
 
+// ─── Instance Lifecycle Stubs ──────────────────────────────────────────────────
+
+/// Stub create_instance for JS plugins - returns null instance.
+///
+/// # Safety
+/// JS plugins use VM dispatch with global state; instances are not used.
+unsafe extern "C" fn js_create_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for JS plugins - no cleanup needed.
+///
+/// # Safety
+/// JS plugins don't own instance data.
+unsafe extern "C" fn js_destroy_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {
+}
+
+// ─── JS Dispatch Function ─────────────────────────────────────────────────────
+
 /// Dispatch function for JS plugins using VM dispatch pattern.
 ///
 /// # Safety
@@ -98,6 +125,7 @@ pub struct JsLoaderData {
 /// - `args` and `out` must be valid pointers for the ABI call
 unsafe extern "C" fn js_dispatch(
     loader_data: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
@@ -109,7 +137,7 @@ unsafe extern "C" fn js_dispatch(
         Some(f) => f,
         None => {
             return AbiError {
-                code: AbiErrorCode::FunctionNotAvailable as u32,
+                code: AbiErrorCode::FunctionNotAvailable,
                 message: StringView::null(),
             };
         }
@@ -138,18 +166,15 @@ unsafe extern "C" fn js_dispatch(
     });
 
     match call_result {
-        Ok(0) => AbiError {
-            code: ABI_OK,
-            message: StringView::null(),
-        },
+        Ok(0) => AbiError::ok(),
         Ok(code) => AbiError {
-            code: code as u32,
+            code: unsafe { core::mem::transmute(code as u32) },
             message: StringView::null(),
         },
         Err(e) => {
             eprintln!("[polyplug_js] JS function call failed: {}", e);
             AbiError {
-                code: polyplug_abi::ABI_ERROR_GENERIC,
+                code: AbiErrorCode::Generic,
                 message: StringView::null(),
             }
         }
@@ -162,7 +187,7 @@ fn pack_handle(h: PluginHandle) -> Option<u64> {
     if h.is_null() {
         None
     } else {
-        Some((h.generation as u64) << 32 | h.index as u64)
+        Some(h.index as u64)
     }
 }
 
@@ -308,14 +333,10 @@ fn register_host_functions<'js>(
 
     let find_by_bundle_fn: Function<'js> = Function::new(
         ctx.clone(),
-        |ctx: Ctx<'js>, blo: u32, bhi: u32, clo: u32, chi: u32, min_ver: u32| -> Option<u64> {
-            let bundle_id: u64 = (bhi as u64) << 32 | blo as u64;
-            let contract_id: u64 = (chi as u64) << 32 | clo as u64;
-            let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
-            // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-            let handle: PluginHandle =
-                unsafe { ((*hvt).find_by_bundle)(rt_ctx, bundle_id, contract_id, min_ver) };
-            pack_handle(handle)
+        |_ctx: Ctx<'js>, _blo: u32, _bhi: u32, _clo: u32, _chi: u32, _min_ver: u32| -> Option<u64> {
+            // Note: find_by_bundle was removed from RuntimeAbi in the instance-based model.
+            // Use find_by_contract instead.
+            None
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -374,12 +395,11 @@ fn register_host_functions<'js>(
     let resolve_plugin_fn: Function<'js> =
         Function::new(ctx.clone(), |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
             let index: u32 = packed as u32;
-            let generation: u32 = (packed >> 32) as u32;
-            let handle: PluginHandle = PluginHandle { index, generation };
+            let handle: PluginHandle = PluginHandle { index };
             let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
             let vtable_ptr: *const GuestContractInterface =
-                unsafe { ((*hvt).resolve_plugin)(rt_ctx, handle) };
+                unsafe { ((*hvt).resolve_contract)(rt_ctx, handle) };
             if vtable_ptr.is_null() {
                 None
             } else {
@@ -407,12 +427,12 @@ fn register_host_functions<'js>(
         |ctx: Ctx<'js>, contract_id: u64, min_version: u32| -> Option<u64> {
             let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-            let contract_ptr: *const polyplug_abi::HostContractVTable =
+            let instance: polyplug_abi::HostContractInstance =
                 unsafe { ((*hvt).get_host_contract)(rt_ctx, contract_id, min_version) };
-            if contract_ptr.is_null() {
+            if instance.data.is_null() {
                 None
             } else {
-                Some(contract_ptr as usize as u64)
+                Some(instance.data as usize as u64)
             }
         },
     )
@@ -849,8 +869,9 @@ impl BundleLoader for JsLoader {
         })?;
 
         let mut host_ctx: HostContext = HostContext {
-            runtime: runtime as *const PolyplugRuntime as *mut PolyplugRuntime,
+            runtime: runtime as *const PolyplugRuntime as *mut core::ffi::c_void,
             bundle_id,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         let rt_ctx: *mut core::ffi::c_void =
             &mut host_ctx as *mut HostContext as *mut core::ffi::c_void;
@@ -931,7 +952,6 @@ impl BundleLoader for JsLoader {
                     ptr: bundle_path_static.as_ptr(),
                     len: bundle_path_static.len(),
                 },
-                host_abi_version: POLYPLUG_ABI_VERSION,
                 bundle_id,
             };
 
@@ -999,13 +1019,16 @@ impl BundleLoader for JsLoader {
 
         let loader_data_ptr: *mut JsLoaderData = Box::into_raw(loader_data);
 
+        let contract_id = GuestContractId::from_u64(registration_data.contract_id);
+        let major_version = (registration_data.contract_version >> 16) as u32;
+
         let plugin_interface: GuestContractInterface = GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: registration_data.contract_id,
-            contract_version: registration_data.contract_version,
-            function_count: registration_data.fn_count as u32,
+            contract_id,
+            contract_version: Version { major: major_version, minor: 0, patch: 0 },
             dispatch_type: DispatchType::VirtualMachine,
-            dispatch: PluginDispatch {
+            create_instance: js_create_instance,
+            destroy_instance: js_destroy_instance,
+            dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: js_dispatch,
                     loader_data: loader_data_ptr as *mut core::ffi::c_void,
@@ -1023,19 +1046,17 @@ impl BundleLoader for JsLoader {
                 ptr: contract_name_leaked.as_ptr(),
                 len: contract_name_leaked.len(),
             },
-            version_major: registration_data.contract_version >> 16,
-            version_minor: registration_data.contract_version & 0xFFFF,
-            version_patch: 0_u32,
+            version: Version { major: major_version, minor: 0, patch: 0 },
         };
 
         // SAFETY: rt_ctx, descriptor, and static_interface are valid for this call.
         let abi_result: AbiError =
-            unsafe { (host_vtable.register_plugin)(rt_ctx, &descriptor, static_interface) };
+            unsafe { (host_vtable.register_contract)(rt_ctx, &descriptor, static_interface) };
 
-        if abi_result.code != ABI_OK {
+        if !abi_result.is_ok() {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: manifest.name.clone(),
-                error: format!("JS runtime js-quickjs error: register_plugin returned error code {}", abi_result.code),
+                error: format!("JS runtime js-quickjs error: register_contract returned error code {:?}", abi_result.code),
             }));
         }
 

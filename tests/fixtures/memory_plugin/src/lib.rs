@@ -37,7 +37,7 @@ pub struct FillArgs {
 #[repr(C)]
 pub struct AllocArgs {
     pub rt_ctx: *mut core::ffi::c_void,
-    pub host: *const HostVTable,
+    pub host: *const RuntimeAbi,
     pub size: u64,
     pub fill_byte: u8,
 }
@@ -107,19 +107,19 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
     abi_error_ok()
 }
 
-/// fn 1 — allocate a buffer via the host vtable, fill it, and return it.
+/// fn 1 — allocate a buffer via the host abi, fill it, and return it.
 ///
-/// Args: `*const AllocArgs` (host vtable ptr, size, fill byte).
+/// Args: `*const AllocArgs` (host abi ptr, size, fill byte).
 /// Out:  `*mut Buffer` (allocated buffer filled with fill_byte).
 ///
 /// # Safety
 /// `args` must point to a valid `AllocArgs`. `out` must point to a valid `Buffer`.
-/// `alloc_args.host` must be a valid `HostVTable` pointer.
+/// `alloc_args.host` must be a valid `RuntimeAbi` pointer.
 extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: args points to a valid AllocArgs per the ABI contract.
     let alloc_args: &AllocArgs = unsafe { &*(args as *const AllocArgs) };
-    // SAFETY: host is a valid non-null HostVTable pointer provided by the caller per ABI contract.
-    let host: &HostVTable = unsafe { &*alloc_args.host };
+    // SAFETY: host is a valid non-null RuntimeAbi pointer provided by the caller per ABI contract.
+    let host: &RuntimeAbi = unsafe { &*alloc_args.host };
     let size: usize = alloc_args.size as usize;
     // SAFETY: host.alloc is a valid function pointer set by the host runtime.
     // size and align=1 are valid arguments for the host allocator.
@@ -241,13 +241,13 @@ static MEMORY_TEST_FNS: [FnPtr; 4] = [
     FnPtr(memory_zero_length_roundtrip as *const ()),
 ];
 
-static MEMORY_TEST_INTERFACE: PluginInterface = PluginInterface {
+static MEMORY_TEST_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(MEMORY_TEST_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
-    dispatch: PluginDispatch {
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 4,
             functions: MEMORY_TEST_FNS.as_ptr() as *const *const (),
@@ -275,19 +275,19 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
     1
 }
 
-/// Plugin init — called by the loader to register vtables.
+/// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
 /// `rt_ctx` must be a valid opaque pointer to the host runtime context.
-/// `host_vtable` must be a valid non-null pointer to a HostVTable from the host.
+/// `host_abi` must be a valid non-null pointer to a RuntimeAbi from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     rt_ctx: *mut core::ffi::c_void,
-    host_vtable: *const HostVTable,
+    host_abi: *const RuntimeAbi,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if host_vtable.is_null() {
+    if host_abi.is_null() {
         return AbiError {
             code: AbiErrorCode::Generic,
             message: string_view_null(),
@@ -300,8 +300,8 @@ pub unsafe extern "C" fn polyplug_init(
         };
     }
 
-    // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
-    let host: &HostVTable = unsafe { &*host_vtable };
+    // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
+    let host: &RuntimeAbi = unsafe { &*host_abi };
 
     // SAFETY: register_contract is a valid function pointer set by the host.
     // MEMORY_TEST_DESCRIPTOR and MEMORY_TEST_INTERFACE are 'static.
@@ -309,7 +309,7 @@ pub unsafe extern "C" fn polyplug_init(
         (host.register_contract)(
             rt_ctx,
             &MEMORY_TEST_DESCRIPTOR as *const PluginDescriptor,
-            &MEMORY_TEST_INTERFACE as *const PluginInterface,
+            &MEMORY_TEST_INTERFACE as *const GuestContractInterface,
         )
     }
 }

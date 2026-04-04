@@ -10,6 +10,7 @@ use std::process::Command;
 
 use polyplug_abi::string_view_null;
 use polyplug_abi::AbiError;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::HostVTable;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
@@ -168,7 +169,7 @@ pub unsafe extern "C" fn polyplug_init(
 
     // SAFETY: desc and TEST_ADDER_VTABLE are 'static; host is valid.
     unsafe {
-        (host.register_plugin)(
+        (host.register_contract)(
             rt_ctx,
             &desc as *const PluginDescriptor,
             &TEST_ADDER_VTABLE as *const _,
@@ -242,19 +243,6 @@ unsafe extern "C" fn stub_find_by_contract(
 ) -> PluginHandle {
     PluginHandle {
         index: u32::MAX,
-        generation: 0,
-    }
-}
-
-unsafe extern "C" fn stub_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle {
-        index: u32::MAX,
-        generation: 0,
     }
 }
 
@@ -268,11 +256,24 @@ unsafe extern "C" fn stub_find_all_by_contract(
     0
 }
 
-unsafe extern "C" fn stub_resolve_plugin(
+unsafe extern "C" fn stub_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
 ) -> *const PluginInterface {
     core::ptr::null()
+}
+
+unsafe extern "C" fn stub_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: polyplug_abi::ABI_ERROR_GENERIC,
+        message: string_view_null(),
+    }
 }
 
 unsafe extern "C" fn stub_get_host_contract(
@@ -357,21 +358,20 @@ fn test_rust_codegen_compile_and_run() {
     CAPTURED_VTABLE.with(|cell| cell.set(core::ptr::null()));
 
     let host_vtable: HostVTable = HostVTable {
-        register_plugin: capture_vtable_callback,
+        register_contract: capture_vtable_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        resolve_contract: stub_resolve_contract,
+        call_method: stub_call_method,
         get_host_contract: stub_get_host_contract,
     };
 
     // SAFETY: init_fn is valid; host_vtable lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
-        bundle_path: string_view_null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
+        bundle_path: string_view_null(),
     };
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {

@@ -6,6 +6,8 @@ pub mod ffi;
 pub mod version;
 pub use config::DotnetConfig;
 pub use config::HostfxrLocation;
+use polyplug_abi::PluginContext;
+use polyplug_abi::StringView;
 
 use std::path::Path;
 
@@ -14,8 +16,8 @@ use netcorehost::pdcstring::PdCString;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug::runtime::HostContext;
-use polyplug::runtime::Runtime;
+use polyplug_abi::host::host_context::HostContext;
+use polyplug::Runtime;
 use polyplug_abi::RuntimeAbi;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 
@@ -99,7 +101,7 @@ impl BundleLoader for DotnetLoader {
 
     fn load(
         &self,
-        manifest: &polyplug::loader::manifest::ManifestData,
+        manifest: &polyplug::loader::ManifestData,
         runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
         let bundle_path: std::path::PathBuf = if !manifest.file.is_empty() {
@@ -161,18 +163,18 @@ impl BundleLoader for DotnetLoader {
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
-        let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
-            bundle_path: polyplug_abi::StringView {
+        let ctx = PluginContext {
+            bundle_id,
+            bundle_path: StringView {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
-            host_abi_version: POLYPLUG_ABI_VERSION,
-            bundle_id,
         };
 
         let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut Runtime,
+            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id,
+            host_abi_version: POLYPLUG_ABI_VERSION,
         };
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
@@ -193,7 +195,7 @@ impl BundleLoader for DotnetLoader {
 
     fn reload(
         &self,
-        _manifest: &polyplug::loader::manifest::ManifestData,
+        _manifest: &polyplug::loader::ManifestData,
         _runtime: &Runtime,
     ) -> Result<(), RuntimeError> {
         Err(RuntimeError::HotReloadDisabled)

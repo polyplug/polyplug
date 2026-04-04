@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug::runtime::HostContext;
+use polyplug_abi::host::host_context::HostContext;
 use polyplug::Runtime;
 use polyplug_abi::RuntimeAbi;
 use polyplug_abi::plugin::PluginContext;
@@ -120,14 +120,14 @@ impl BundleLoader for NativeLoader {
                 ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
                 len: bundle_dir.as_os_str().as_encoded_bytes().len(),
             },
-            host_abi_version: POLYPLUG_ABI_VERSION,
         };
 
         // ─── Step 5: Create HostContext for dependency enforcement ─────────────────────
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut Runtime,
+            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id: expected_bundle_id.id(),
+            host_abi_version: POLYPLUG_ABI_VERSION,
         };
 
         // ─── Step 6: Call init ────────────────────────────────────────────────────────
@@ -243,14 +243,14 @@ impl BundleLoader for NativeLoader {
                 ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
                 len: bundle_dir.as_os_str().as_encoded_bytes().len(),
             },
-            host_abi_version: POLYPLUG_ABI_VERSION,
         };
 
         // ─── Step 5: Create HostContext for dependency enforcement ───────────────────────
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
         let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut Runtime,
+            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id: expected_bundle_id.id(),
+            host_abi_version: POLYPLUG_ABI_VERSION,
         };
 
         // ─── Step 6: Call init ──────────────────────────────────────────────────────────

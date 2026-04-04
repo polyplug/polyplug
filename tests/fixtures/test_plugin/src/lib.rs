@@ -89,6 +89,7 @@ static TEST_ADD_INTERFACE: GuestContractInterface = GuestContractInterface {
     destroy_instance: destroy_instance_stub,
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
+            function_count: 1,
             functions: TEST_ADD_FNS.as_ptr() as *const *const (),
         },
     },
@@ -114,19 +115,19 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
     1
 }
 
-/// Plugin init — called by the loader to register vtables.
+/// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
 /// `rt_ctx` must be a valid opaque pointer to the host runtime context.
-/// `host_vtable` must be a valid non-null pointer to a HostVTable from the host.
+/// `host_abi` must be a valid non-null pointer to a RuntimeAbi from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     rt_ctx: *mut core::ffi::c_void,
-    host_vtable: *const HostVTable,
+    host_abi: *const RuntimeAbi,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if host_vtable.is_null() {
+    if host_abi.is_null() {
         return AbiError {
             code: AbiErrorCode::Generic,
             message: string_view_null(),
@@ -144,8 +145,8 @@ pub unsafe extern "C" fn polyplug_init(
     LAST_BUNDLE_PATH_PTR.store(sv.ptr as *mut u8, Ordering::SeqCst);
     LAST_BUNDLE_PATH_LEN.store(sv.len, Ordering::SeqCst);
 
-    // SAFETY: host_vtable is non-null and provided by the host runtime per ABI contract.
-    let host: &HostVTable = unsafe { &*host_vtable };
+    // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
+    let host: &RuntimeAbi = unsafe { &*host_abi };
 
     // SAFETY: register_contract is a valid function pointer set by the host.
     // TEST_ADD_DESCRIPTOR and TEST_ADD_INTERFACE are 'static.

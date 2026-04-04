@@ -54,13 +54,13 @@ unsafe impl Sync for FnPtr {}
 
 static VTABLE_FNS: [FnPtr; 1] = [FnPtr(version_check as *const ())];
 
-static VTABLE: PluginInterface = PluginInterface {
+static VTABLE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(RELOAD_TEST_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: create_instance_stub,
     destroy_instance: destroy_instance_stub,
-    dispatch: PluginDispatch {
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 1,
             functions: VTABLE_FNS.as_ptr() as *const *const (),
@@ -85,19 +85,19 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
     POLYPLUG_ABI_VERSION
 }
 
-/// Plugin init — called by the loader to register vtables.
+/// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
 /// `rt_ctx` must be a valid opaque pointer to the host runtime context.
-/// `host_vtable` must be a valid non-null pointer to a HostVTable from the host.
+/// `host_abi` must be a valid non-null pointer to a RuntimeAbi from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     rt_ctx: *mut core::ffi::c_void,
-    host_vtable: *const HostVTable,
+    host_abi: *const RuntimeAbi,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if host_vtable.is_null() {
+    if host_abi.is_null() {
         return AbiError {
             code: AbiErrorCode::Generic,
             message: string_view_null(),
@@ -109,15 +109,15 @@ pub unsafe extern "C" fn polyplug_init(
             message: string_view_null(),
         };
     }
-    // SAFETY: host_vtable is a valid non-null pointer from the host runtime, outlives this call.
-    let host: &HostVTable = unsafe { &*host_vtable };
+    // SAFETY: host_abi is a valid non-null pointer from the host runtime, outlives this call.
+    let host: &RuntimeAbi = unsafe { &*host_abi };
     // SAFETY: register_contract is a valid function pointer set by the host.
     // DESCRIPTOR and VTABLE are 'static.
     unsafe {
         (host.register_contract)(
             rt_ctx,
             &DESCRIPTOR as *const PluginDescriptor,
-            &VTABLE as *const PluginInterface,
+            &VTABLE as *const GuestContractInterface,
         )
     }
 }

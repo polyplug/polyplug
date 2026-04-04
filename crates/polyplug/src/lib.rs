@@ -16,3 +16,6 @@ pub use polyplug_abi::runtime::{RuntimeConfig, Compatibility};
 
 // Keep ReloadPhase and ReloadEvent exports (internal Rust types)
 pub use reload::{ReloadPhase, ReloadEvent};
+
+// Re-export Runtime for loader crates
+pub use runtime::Runtime;

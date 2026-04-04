@@ -1524,6 +1524,7 @@ dependencies = [
  "criterion",
  "polyplug",
  "polyplug_abi",
+ "polyplug_utils",
  "rquickjs",
  "tempfile",
  "thiserror",
@@ -1537,6 +1538,7 @@ dependencies = [
  "mlua",
  "polyplug",
  "polyplug_abi",
+ "polyplug_utils",
  "tempfile",
 ]
 
