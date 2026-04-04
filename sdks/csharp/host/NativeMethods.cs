@@ -61,32 +61,61 @@ internal static partial class NativeMethods
     }
 
     /// <summary>
-    /// C-compatible configuration for hot-reload behavior.
+    /// FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
+    /// Layout verified against Rust offset tests.
     /// </summary>
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     internal struct RuntimeConfigC
     {
         /// <summary>
-        /// Whether hot-reload is enabled for this runtime.
-        /// 0 = false (disabled), non-zero = true (enabled).
+        /// Whether hot-reload is enabled (0=false, non-zero=true).
+        /// Offset 0, 1 byte.
         /// </summary>
         public byte HotReloadEnabled;
 
+        // Padding: 3 bytes (offset 1-3) from Pack=4
+
         /// <summary>
-        /// Maximum number of retry attempts for hot-reload operations.
+        /// Maximum retry attempts for hot-reload.
+        /// Offset 4, 4 bytes.
         /// </summary>
         public uint HotReloadMaxRetries;
 
         /// <summary>
-        /// Interval between hot-reload retry attempts, in milliseconds.
+        /// Interval between retry attempts in milliseconds.
+        /// Offset 8, 8 bytes.
         /// </summary>
         public ulong HotReloadRetryIntervalMs;
 
         /// <summary>
-        /// Whether to abort the runtime when max retries are exhausted.
-        /// 0 = false (continue retrying), non-zero = true (abort).
+        /// Abort when max retries exhausted (0=false, non-zero=true).
+        /// Offset 16, 1 byte.
         /// </summary>
         public byte HotReloadAbortOnMaxRetries;
+
+        // Padding: 3 bytes (offset 17-19) from Pack=4
+
+        /// <summary>
+        /// Compatibility mode: 0=Strict, 1=Relaxed, 2=Yolo.
+        /// Matches polyplug_abi::Compatibility #[repr(u32)].
+        /// Offset 20, 4 bytes.
+        /// </summary>
+        public uint Compatibility;
+    }
+
+    /// <summary>
+    /// Compatibility modes matching polyplug_abi::Compatibility #[repr(u32)].
+    /// </summary>
+    internal static class CompatibilityMode
+    {
+        /// <summary>Exact major match and minor >= required.</summary>
+        public const uint Strict = 0;
+
+        /// <summary>Same major, any minor.</summary>
+        public const uint Relaxed = 1;
+
+        /// <summary>Any version accepted.</summary>
+        public const uint Yolo = 2;
     }
 
     // Lifecycle (init-time only, no SuppressGCTransition needed)
