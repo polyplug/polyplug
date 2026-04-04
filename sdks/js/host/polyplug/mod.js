@@ -28,6 +28,11 @@ export {
 /** @type {bigint} */
 export const NULL_HANDLE = 0xFFFFFFFFFFFFFFFFn;
 
+// Compatibility modes matching polyplug_abi::Compatibility (#[repr(u32)])
+export const COMPATIBILITY_STRICT = 0;
+export const COMPATIBILITY_RELAXED = 1;
+export const COMPATIBILITY_YOLO = 2;
+
 /** FNV-1a offset basis for 64-bit hash */
 const FNV_OFFSET = 0xcbf29ce484222325n;
 /** FNV-1a prime for 64-bit hash */
@@ -64,7 +69,7 @@ const _decoder = new TextDecoder();
 // Module-level pending callbacks for hot-reload notification
 /** @type {function(ReloadPhase): void | null} */
 let _pendingReloadCallback = null;
-/** @type {import("./runtime_config.js").RuntimeConfig | null} */
+/** @type {{ hotReloadEnabled: boolean, hotReloadMaxRetries: number, hotReloadRetryIntervalMs: number, hotReloadAbortOnMaxRetries: boolean, compatibility: number } | null} */
 let _pendingConfig = null;
 /** @type {Deno.UnsafeCallback | null} */
 let _ffiReloadCallback = null;
@@ -149,10 +154,21 @@ export function onReload(callback) {
 /**
  * Set runtime configuration for subsequently created runtimes.
  * Must be called BEFORE creating a Runtime instance.
- * @param {import("./runtime_config.js").RuntimeConfig} config - Configuration options
+ * @param {Object} config - Configuration options
+ * @param {boolean} [config.hotReloadEnabled=false] - Whether hot-reload is enabled
+ * @param {number} [config.hotReloadMaxRetries=3] - Maximum retry attempts
+ * @param {number} [config.hotReloadRetryIntervalMs=3000] - Interval between retries in ms
+ * @param {boolean} [config.hotReloadAbortOnMaxRetries=true] - Abort after max retries
+ * @param {number} [config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
  */
 export function setConfig(config) {
-    _pendingConfig = config;
+    _pendingConfig = {
+        hotReloadEnabled: config.hotReloadEnabled ?? false,
+        hotReloadMaxRetries: config.hotReloadMaxRetries ?? 3,
+        hotReloadRetryIntervalMs: config.hotReloadRetryIntervalMs ?? 3000,
+        hotReloadAbortOnMaxRetries: config.hotReloadAbortOnMaxRetries ?? true,
+        compatibility: config.compatibility ?? COMPATIBILITY_STRICT,
+    };
 }
 
 export class Runtime {
@@ -463,11 +479,21 @@ export function runtimeNew(lib) {
     let configBuf = null;
 
     if (_pendingConfig) {
-      configBuf = new Uint8Array(17);
+      // RuntimeConfig is 24 bytes matching polyplug_abi::RuntimeConfig
+      configBuf = new Uint8Array(24);
       const configView = new DataView(configBuf.buffer);
-      configView.setUint32(0, _pendingConfig.hotReloadMaxRetries, true);
-      configView.setBigUint64(4, BigInt(_pendingConfig.hotReloadRetryIntervalMs), true);
-      configView.setUint8(12, _pendingConfig.hotReloadAbortOnMaxRetries ? 1 : 0);
+
+      // offset 0: hot_reload_enabled (1 byte bool)
+      configView.setUint8(0, _pendingConfig.hotReloadEnabled ? 1 : 0);
+      // offset 4: hot_reload_max_retries (4 bytes u32)
+      configView.setUint32(4, _pendingConfig.hotReloadMaxRetries, true);
+      // offset 8: hot_reload_retry_interval_ms (8 bytes u64)
+      configView.setBigUint64(8, BigInt(_pendingConfig.hotReloadRetryIntervalMs), true);
+      // offset 16: hot_reload_abort_on_max_retries (1 byte bool)
+      configView.setUint8(16, _pendingConfig.hotReloadAbortOnMaxRetries ? 1 : 0);
+      // offset 20: compatibility (4 bytes u32 enum)
+      configView.setUint32(20, _pendingConfig.compatibility, true);
+
       optionsView.setBigUint64(0, Deno.UnsafePointer.value(Deno.UnsafePointer.of(configBuf)), true);
     }
 
