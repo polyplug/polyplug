@@ -93,7 +93,12 @@ Plans:
 3. ReloadPhase::Reloaded callback fires after swap for host to create new instances
 4. Warning callback fires if any instances remain after Preparing callback (UB warning)
 5. Arc::strong_count quiescence wait removed from hot-reload code
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Remove wait_for_quiescence from reload.rs, QuiescenceTimeout from RuntimeError, update NativeLoader
+- [ ] 04-02-PLAN.md — Add Arc::strong_count warning check after Preparing callback, update documentation
+- [ ] 04-03-PLAN.md — Update hot-reload tests and documentation for callback-based model
 
 ### Phase 5: SDK Updates
 **Goal:** All five SDKs use types from polyplug_abi without duplicates
@@ -139,7 +144,7 @@ Plans:
 | 1. ABI Types | 12/12 | Complete | 2026-04-04 |
 | 2. Registry | 0/3 | Not started | - |
 | 3. Instance Model | 0/5 | Not started | - |
-| 4. Hot-Reload | 0/0 | Not started | - |
+| 4. Hot-Reload | 0/3 | Not started | - |
 | 5. SDK Updates | 0/0 | Not started | - |
 | 6. Cleanup | 0/0 | Not started | - |
 | 7. Typed Handles | 0/0 | Not started | - |
@@ -176,3 +181,4 @@ Phase 7 (Typed Handles)
 *Additional gap closure plans added: 2026-04-04*
 *Phase 2 plans added: 2026-04-04*
 *Phase 3 plans added: 2026-04-04*
+*Phase 4 plans added: 2026-04-04*
