@@ -90,6 +90,8 @@ Plan: 4 of 5 complete
 | 2026-04-03 | RuntimeConfig moved to polyplug_abi/runtime | #[repr(C)], 24 bytes, single source of truth |
 | 2026-04-03 | ReloadPhaseData as FFI-safe variant | StringView fields, kept Rust ReloadPhase for internal use |
 | 2026-04-03 | Rust ReloadPhase enum preserved | String-based convenience, not replaced by FFI variant |
+| 2026-04-04 | Double-check locking for singleton cache | Prevents race conditions in singleton instance creation |
+| 2026-04-04 | call_method placeholder documented | Requires instance-contract mapping for full implementation |
 
 - [Phase 03-instance-model]: singleton defaults to false via #[serde(default)] - explicit opt-in
 - [Phase 03-instance-model]: polyplug_utils visibility fixed: modules public, helper functions added
