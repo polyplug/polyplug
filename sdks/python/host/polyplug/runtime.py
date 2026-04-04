@@ -27,12 +27,12 @@ COMPATIBILITY_RELAXED: int = 1  # Same major, any minor
 COMPATIBILITY_YOLO: int = 2     # Any version accepted
 
 
-# ─── RuntimeConfigC Structure ─────────────────────────────────────────────────────
+# ─── RuntimeConfig Structure ─────────────────────────────────────────────────────
 # FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes)
 # Layout verified in polyplug_abi/tests: offset_of checks
 
 
-class RuntimeConfigC(ctypes.Structure):
+class RuntimeConfig(ctypes.Structure):
     """FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
 
     Layout:
@@ -60,7 +60,7 @@ class RuntimeCreateOptionsC(ctypes.Structure):
     """FFI RuntimeCreateOptions matching polyplug_abi::RuntimeCreateOptions."""
 
     _fields_ = [
-        ("config", ctypes.POINTER(RuntimeConfigC)),
+        ("config", ctypes.POINTER(RuntimeConfig)),
         ("on_reload", ctypes.c_void_p),
     ]
 
@@ -317,7 +317,7 @@ class CFFIBackend:
             uint8_t hot_reload_abort_on_max_retries;
             uint8_t _pad2[3];
             uint32_t compatibility;
-        } RuntimeConfigC;
+        } RuntimeConfig;
 
         typedef void (*ReloadPhaseCallback)(
             uint32_t phase_type,
@@ -330,7 +330,7 @@ class CFFIBackend:
         );
 
         typedef struct {
-            const RuntimeConfigC* config;
+            const RuntimeConfig* config;
             void (*on_reload)(uint32_t, uint64_t, const uint8_t*, size_t, uint32_t, const uint8_t*, size_t);
         } RuntimeCreateOptions;
 
@@ -506,7 +506,7 @@ class Runtime:
         config_c = None
 
         if self._config is not None:
-            config_c = RuntimeConfigC(
+            config_c = RuntimeConfig(
                 hot_reload_enabled=1 if self._config.hot_reload_enabled else 0,
                 hot_reload_max_retries=self._config.hot_reload_max_retries,
                 hot_reload_retry_interval_ms=self._config.hot_reload_retry_interval_ms,

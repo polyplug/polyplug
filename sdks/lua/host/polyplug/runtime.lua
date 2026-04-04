@@ -40,10 +40,10 @@ ffi.cdef([[
         uint8_t hot_reload_abort_on_max_retries; // offset 16
         uint8_t _pad2[3];                  // padding for alignment
         uint32_t compatibility;            // offset 20 (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
-    } RuntimeConfigC;
+    } RuntimeConfig;
 
     typedef struct {
-        const RuntimeConfigC* config;
+        const RuntimeConfig* config;
         ReloadPhaseCallback on_reload;
     } RuntimeCreateOptions;
 
@@ -164,7 +164,7 @@ function M.Runtime.new()
         local config_c
 
         if M._pending_config then
-            config_c = ffi.new("RuntimeConfigC", {
+            config_c = ffi.new("RuntimeConfig", {
                 hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
                 _pad1 = {0, 0, 0},
                 hot_reload_max_retries = M._pending_config.hot_reload_max_retries,

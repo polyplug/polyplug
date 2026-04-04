@@ -1,10 +1,10 @@
-"""Tests for Python SDK RuntimeConfigC matching polyplug_abi RuntimeConfig."""
+"""Tests for Python SDK RuntimeConfig matching polyplug_abi RuntimeConfig."""
 
 import ctypes
 
 
-# Define RuntimeConfigC directly to test without native library loading
-class RuntimeConfigC(ctypes.Structure):
+# Define RuntimeConfig directly to test without native library loading
+class RuntimeConfig(ctypes.Structure):
     """FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes)."""
 
     _fields_ = [
@@ -23,24 +23,24 @@ COMPATIBILITY_RELAXED = 1
 COMPATIBILITY_YOLO = 2
 
 
-def test_runtime_config_c_has_compatibility_field():
-    """RuntimeConfigC must have compatibility field."""
-    fields = [f[0] for f in RuntimeConfigC._fields_]
+def test_runtime_config_has_compatibility_field():
+    """RuntimeConfig must have compatibility field."""
+    fields = [f[0] for f in RuntimeConfig._fields_]
     assert "compatibility" in fields, f"Missing compatibility field. Fields: {fields}"
 
 
-def test_runtime_config_c_has_correct_field_types():
-    """RuntimeConfigC field types must match polyplug_abi."""
+def test_runtime_config_has_correct_field_types():
+    """RuntimeConfig field types must match polyplug_abi."""
     # Check compatibility is c_uint32
-    field_types = {f[0]: f[1] for f in RuntimeConfigC._fields_}
+    field_types = {f[0]: f[1] for f in RuntimeConfig._fields_}
     assert field_types["compatibility"] == ctypes.c_uint32, \
         f"compatibility must be c_uint32, got {field_types['compatibility']}"
 
 
-def test_runtime_config_c_size_is_24_bytes():
-    """RuntimeConfigC must be 24 bytes to match polyplug_abi."""
-    size = ctypes.sizeof(RuntimeConfigC)
-    assert size == 24, f"RuntimeConfigC must be 24 bytes, got {size}"
+def test_runtime_config_size_is_24_bytes():
+    """RuntimeConfig must be 24 bytes to match polyplug_abi."""
+    size = ctypes.sizeof(RuntimeConfig)
+    assert size == 24, f"RuntimeConfig must be 24 bytes, got {size}"
 
 
 def test_compatibility_constants_defined():
@@ -51,8 +51,8 @@ def test_compatibility_constants_defined():
 
 
 if __name__ == "__main__":
-    test_runtime_config_c_has_compatibility_field()
-    test_runtime_config_c_has_correct_field_types()
-    test_runtime_config_c_size_is_24_bytes()
+    test_runtime_config_has_compatibility_field()
+    test_runtime_config_has_correct_field_types()
+    test_runtime_config_size_is_24_bytes()
     test_compatibility_constants_defined()
     print("All tests passed!")

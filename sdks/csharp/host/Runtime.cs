@@ -71,7 +71,7 @@ public sealed class Runtime
         bool hotReloadAbortOnMaxRetries = true,
         uint compatibility = NativeMethods.CompatibilityMode.Strict)
     {
-        NativeMethods.RuntimeConfigC configC = new NativeMethods.RuntimeConfigC
+        NativeMethods.RuntimeConfig configC = new NativeMethods.RuntimeConfig
         {
             HotReloadEnabled = hotReloadEnabled ? (byte)1 : (byte)0,
             HotReloadMaxRetries = hotReloadMaxRetries,

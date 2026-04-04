@@ -65,7 +65,7 @@ internal static partial class NativeMethods
     /// Layout verified against Rust offset tests.
     /// </summary>
     [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    internal struct RuntimeConfigC
+    internal struct RuntimeConfig
     {
         /// <summary>
         /// Whether hot-reload is enabled (0=false, non-zero=true).
@@ -187,7 +187,7 @@ internal static partial class NativeMethods
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_set_config")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeSetConfig(ref RuntimeConfigC config);
+    public static partial uint PolyplugRuntimeSetConfig(ref RuntimeConfig config);
 
     // Host contract registration
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_host_contract")]
