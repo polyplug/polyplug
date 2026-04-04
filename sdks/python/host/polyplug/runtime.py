@@ -19,6 +19,52 @@ from polyplug_abi import ReloadPhase, ReloadPhaseType, StringView
 
 _LIB_NAME: str = "polyplug"
 
+# ─── Compatibility Constants ─────────────────────────────────────────────────────
+# These match polyplug_abi::Compatibility #[repr(u32)] enum
+
+COMPATIBILITY_STRICT: int = 0   # Exact major match and minor >= required
+COMPATIBILITY_RELAXED: int = 1  # Same major, any minor
+COMPATIBILITY_YOLO: int = 2     # Any version accepted
+
+
+# ─── RuntimeConfigC Structure ─────────────────────────────────────────────────────
+# FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes)
+# Layout verified in polyplug_abi/tests: offset_of checks
+
+
+class RuntimeConfigC(ctypes.Structure):
+    """FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
+
+    Layout:
+        offset 0: hot_reload_enabled (1 byte, c_uint8)
+        offset 1-3: padding (3 bytes)
+        offset 4: hot_reload_max_retries (4 bytes, c_uint32)
+        offset 8: hot_reload_retry_interval_ms (8 bytes, c_uint64)
+        offset 16: hot_reload_abort_on_max_retries (1 byte, c_uint8)
+        offset 17-19: padding (3 bytes)
+        offset 20: compatibility (4 bytes, c_uint32)
+    """
+
+    _fields_ = [
+        ("hot_reload_enabled", ctypes.c_uint8),           # offset 0, 1 byte
+        ("_pad1", ctypes.c_uint8 * 3),                    # padding 3 bytes
+        ("hot_reload_max_retries", ctypes.c_uint32),      # offset 4, 4 bytes
+        ("hot_reload_retry_interval_ms", ctypes.c_uint64), # offset 8, 8 bytes
+        ("hot_reload_abort_on_max_retries", ctypes.c_uint8), # offset 16, 1 byte
+        ("_pad2", ctypes.c_uint8 * 3),                    # padding 3 bytes
+        ("compatibility", ctypes.c_uint32),               # offset 20, 4 bytes
+    ]
+
+
+class RuntimeCreateOptionsC(ctypes.Structure):
+    """FFI RuntimeCreateOptions matching polyplug_abi::RuntimeCreateOptions."""
+
+    _fields_ = [
+        ("config", ctypes.POINTER(RuntimeConfigC)),
+        ("on_reload", ctypes.c_void_p),
+    ]
+
+
 # ─── Host Contract VTable Structures ──────────────────────────────────────────────
 # These structures match the Rust ABI exactly for VM-based host contract registration.
 
@@ -264,9 +310,13 @@ class CFFIBackend:
         uint32_t polyplug_runtime_register_host_contract(void* rt, const void* vtable);
 
         typedef struct {
+            uint8_t hot_reload_enabled;
+            uint8_t _pad1[3];
             uint32_t hot_reload_max_retries;
             uint64_t hot_reload_retry_interval_ms;
             uint8_t hot_reload_abort_on_max_retries;
+            uint8_t _pad2[3];
+            uint32_t compatibility;
         } RuntimeConfigC;
 
         typedef void (*ReloadPhaseCallback)(
@@ -493,22 +543,6 @@ class Runtime:
 
     def _create_runtime_with_options(self) -> int:
         """Create runtime using polyplug_runtime_create_with_options."""
-        import ctypes
-
-        class RuntimeConfigC(ctypes.Structure):
-            _fields_ = [
-                ("hot_reload_enabled", ctypes.c_uint8),
-                ("hot_reload_max_retries", ctypes.c_uint32),
-                ("hot_reload_retry_interval_ms", ctypes.c_uint64),
-                ("hot_reload_abort_on_max_retries", ctypes.c_uint8),
-            ]
-
-        class RuntimeCreateOptionsC(ctypes.Structure):
-            _fields_ = [
-                ("config", ctypes.POINTER(RuntimeConfigC)),
-                ("on_reload", ctypes.c_void_p),
-            ]
-
         options = RuntimeCreateOptionsC()
         config_c = None
 
@@ -520,6 +554,7 @@ class Runtime:
                 hot_reload_abort_on_max_retries=1
                 if self._config.hot_reload_abort_on_max_retries
                 else 0,
+                compatibility=COMPATIBILITY_STRICT,  # Default to Strict mode
             )
             options.config = ctypes.pointer(config_c)
 
