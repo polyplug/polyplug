@@ -1869,7 +1869,11 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::DispatchType;\n");
     out.push_str("use polyplug_abi::StringView;\n");
     out.push_str("use polyplug_abi::AbiError;\n");
+    out.push_str("use polyplug_abi::AbiErrorCode;\n");
+    out.push_str("use polyplug_abi::abi_error_ok;\n");
+    out.push_str("use polyplug_abi::string_view_from_static;\n");
     out.push_str("use polyplug_abi::Version;\n");
+    out.push_str("use polyplug_utils::HostContractId;\n");
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::host_contracts::*;\n");
     out.push_str("use super::types::*;\n\n");
@@ -1885,11 +1889,11 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
 fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
     let trait_name: String = host_contract_name_to_trait(&contract.name);
     let factory_name: String = format!(
-        "create_{}_vtable",
+        "create_{}_interface",
         contract.name.replace('.', "_").to_lowercase()
     );
     let factory_vm_name: String = format!(
-        "create_{}_vtable_vm",
+        "create_{}_interface_vm",
         contract.name.replace('.', "_").to_lowercase()
     );
     let fn_count: usize = contract.functions.len();
@@ -1996,7 +2000,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     // Create the HostContractInterface
     let patch: u32 = contract.version.patch;
     out.push_str("    let vtable: HostContractInterface = HostContractInterface {\n");
-    out.push_str(&format!("        contract_id: 0x{contract_id:016X}_u64,\n"));
+    out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
     out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::Native,\n");
@@ -2004,6 +2008,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("        destroy_instance: {destroy_stub_name},\n"));
     out.push_str("        dispatch: DispatchMechanisms {\n");
     out.push_str("            native: NativeDispatch {\n");
+    out.push_str(&format!("                function_count: {fn_count}_u32,\n"));
     out.push_str("                functions: FUNCTIONS.as_ptr() as *const *const (),\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
@@ -2079,7 +2084,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("    }\n\n");
 
     out.push_str("    let vtable: HostContractInterface = HostContractInterface {\n");
-    out.push_str(&format!("        contract_id: 0x{contract_id:016X}_u64,\n"));
+    out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
     out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
     out.push_str(&format!("        singleton: {singleton},\n"));
     out.push_str("        dispatch_type: DispatchType::VirtualMachine,\n");
@@ -2166,7 +2171,7 @@ fn generate_host_thunk(
     out.push_str("        })) {\n");
     out.push_str("            Ok(err) => err,\n");
     out.push_str("            Err(_) => AbiError {\n");
-    out.push_str("                code: AbiErrorCode::Panic as u32,\n");
+    out.push_str("                code: AbiErrorCode::Panic,\n");
     out.push_str(&format!(
         "                message: string_view_from_static(b\"panic in host.{}::{}\"),\n",
         trait_name.to_lowercase().replace("host", ""),
@@ -2474,8 +2479,11 @@ fn generate_guest_host_contract_method(
     out.push_str("        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.\n");
     out.push_str("        let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };\n\n");
 
+    // SAFETY: interface.dispatch is a union; accessing .native requires unsafe block.
+    // The dispatch_type field indicates which union variant is active.
+    out.push_str("        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };");
     out.push_str(&format!(
-        "        if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
+        "\n        if {fn_id}_u32 >= fn_count {{\n"
     ));
     out.push_str(
         "            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));\n",

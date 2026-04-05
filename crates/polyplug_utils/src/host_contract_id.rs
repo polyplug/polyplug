@@ -29,6 +29,16 @@ impl HostContractId {
     }
 }
 
+impl From<u64> for HostContractId {
+    /// Create a HostContractId from a raw u64 value.
+    ///
+    /// Use this when you have a pre-computed contract ID (e.g., from code generation).
+    #[inline(always)]
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{HostContractId, fnv1a_64};
