@@ -12,11 +12,11 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 ## Phases
 
 - [x] **Phase 1: ABI Types** - Foundation types moved to polyplug_abi with renamed interfaces
-- [ ] **Phase 2: Registry** - Simplified registry with direct interface storage
-- [ ] **Phase 3: Instance Model** - Factory-based instance lifecycle with codegen support
+- [x] **Phase 2: Registry** - Simplified registry with direct interface storage
+- [x] **Phase 3: Instance Model** - Factory-based instance lifecycle with codegen support
 - [x] **Phase 4: Hot-Reload** - Callback-based reload with instance safety contract
-- [ ] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
-- [ ] **Phase 6: Cleanup** - Naming consistency and documentation updates
+- [x] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
+- [x] **Phase 6: Cleanup** - Naming consistency and documentation updates
 - [ ] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
 
 ## Phase Details
@@ -170,11 +170,11 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. ABI Types | 12/12 | Complete | 2026-04-04 |
-| 2. Registry | 0/3 | Not started | - |
-| 3. Instance Model | 0/5 | Not started | - |
+| 2. Registry | 3/3 | Complete | 2026-04-04 |
+| 3. Instance Model | 5/5 | Complete | 2026-04-04 |
 | 4. Hot-Reload | 3/3 | Complete | 2026-04-04 |
 | 5. SDK Updates | 8/8 | Complete | 2026-04-04 |
-| 6. Cleanup | 0/9 | Gap closure | - |
+| 6. Cleanup | 13/13 | Complete | 2026-04-05 |
 | 7. Typed Handles | 0/4 | Not started | - |
 
 ## Dependencies
