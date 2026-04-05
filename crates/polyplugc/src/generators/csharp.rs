@@ -648,6 +648,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
 
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
+    out.push_str("    // rtCtx is a RuntimeContext handle (opaque pointer wrapping HostContext)\n");
     out.push_str(
         "    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n",
     );
