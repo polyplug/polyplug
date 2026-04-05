@@ -40,7 +40,7 @@ const POLYPLUG_ABI_VERSION: u32 = 1_u32;
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -51,7 +51,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
 ) {}
 
@@ -101,7 +101,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: *mut core::ffi::c_void,
+    rt_ctx: RuntimeContext,
     host_abi: *const RuntimeAbi,
     ctx: *const PluginContext,
 ) -> AbiError {
