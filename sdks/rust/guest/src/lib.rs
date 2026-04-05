@@ -155,6 +155,11 @@ pub use polyplug_abi::types::Version;
 /// For stateless plugins, use `GuestContractInstance::null()`.
 pub use polyplug_abi::guest::GuestContractInstance;
 
+/// Opaque handle to the runtime context passed to plugin functions.
+///
+/// Wraps a HostContext pointer passed during polyplug_init.
+pub use polyplug_abi::RuntimeContext;
+
 /// Opaque handle to a loaded plugin — validated on every use.
 pub use polyplug_abi::PluginHandle;
 

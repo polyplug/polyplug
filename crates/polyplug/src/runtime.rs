@@ -238,6 +238,17 @@ impl Runtime {
         Box::into_raw(boxed) as *mut core::ffi::c_void
     }
 
+    /// Get the runtime as a RuntimeContext handle.
+    ///
+    /// # Safety
+    /// The returned RuntimeContext is only valid while the Runtime is alive.
+    /// This creates a HostContext on the stack and wraps it in RuntimeContext,
+    /// so the handle is only valid for the duration of the call.
+    #[inline(always)]
+    pub fn as_context(&self) -> RuntimeContext {
+        RuntimeContext { data: self.as_context_ptr() }
+    }
+
     #[inline(always)]
     pub fn registry(&self) -> &Arc<PluginRegistry> {
         &self.registry

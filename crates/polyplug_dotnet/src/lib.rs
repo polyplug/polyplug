@@ -18,7 +18,7 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug_abi::host::host_context::HostContext;
 use polyplug::Runtime;
-use polyplug_abi::RuntimeAbi;
+use polyplug_abi::RuntimeContext;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::context::init_context;
@@ -176,13 +176,14 @@ impl BundleLoader for DotnetLoader {
             bundle_id,
             host_abi_version: POLYPLUG_ABI_VERSION,
         };
-        let rt_ctx: *mut core::ffi::c_void =
-            &host_ctx as *const HostContext as *mut core::ffi::c_void;
-        let host_vtable: &'static polyplug_abi::RuntimeAbi = runtime.host_vtable();
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+        };
+        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
 
-        // SAFETY: managed_init is a valid fn ptr from CLR. rt_ctx, host_vtable, and ctx are non-null and valid.
+        // SAFETY: managed_init is a valid fn ptr from CLR. rt_ctx, host_abi, and ctx are non-null and valid.
         let result: u32 =
-            unsafe { (*managed_init)(rt_ctx, host_vtable as *const polyplug_abi::RuntimeAbi, &ctx) };
+            unsafe { (*managed_init)(rt_ctx.data, host_abi as *const polyplug_abi::RuntimeAbi, &ctx) };
         if result != 0 {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
