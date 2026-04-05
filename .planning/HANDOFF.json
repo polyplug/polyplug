@@ -1,0 +1,60 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-04-05T08:45:02.063Z",
+  "phase": "06",
+  "phase_name": "cleanup",
+  "phase_dir": ".planning/phases/06-cleanup",
+  "plan": 13,
+  "task": 1,
+  "total_tasks": 6,
+  "status": "paused",
+  "completed_plans": [
+    {"id": "06-10", "name": "Fix Rust Generator Host Interface Factory Issues", "status": "done", "commit": "39dc8ad"},
+    {"id": "06-11", "name": "Export VmDispatch from polyplug_abi and Regenerate", "status": "done", "commit": "63084c8"},
+    {"id": "06-12", "name": "Update Host Example to Use New Interface Names", "status": "done", "commit": "c1236ee"}
+  ],
+  "current_plan": {
+    "id": "06-13",
+    "name": "Update Test Files to Use New Type Names",
+    "status": "partial",
+    "commit": "ad9b9a8"
+  },
+  "remaining_work": [
+    "Fix VmDispatch.call signature in generator - requires GuestContractInstance parameter",
+    "Update test files across crates to use new type names",
+    "Add Display impl to AbiErrorCode or use .code as u32 in format strings",
+    "Fix NativeLoader::new() to take 2 arguments (config + RuntimeAbi)"
+  ],
+  "blockers": [
+    {
+      "description": "3 build errors in pipeline_host after regeneration",
+      "type": "technical",
+      "files": [
+        "examples/hosts/rust/src/generated/host/host_callers.rs:64 - VmDispatch.call signature",
+        "examples/hosts/rust/src/generated/host/host_callers.rs:111 - AbiErrorCode vs u32",
+        "examples/hosts/rust/src/generated/host/host_callers.rs:135 - AbiErrorCode vs u32"
+      ]
+    }
+  ],
+  "human_actions_pending": [],
+  "decisions": [
+    {
+      "decision": "Use AtomicPtr instead of OnceLock for thread-safe static storage in generated factories",
+      "rationale": "OnceLock<*mut c_void> doesn't compile because *mut c_void doesn't implement Send/Sync",
+      "phase": "06"
+    },
+    {
+      "decision": "Changed ContractError and HostContractError code field from u32 to AbiErrorCode",
+      "rationale": "Type safety - error codes are now typed enums, not raw u32",
+      "phase": "06"
+    },
+    {
+      "decision": "Add UpperHex/LowerHex impl to BundleId",
+      "rationale": "Enables {:016X} formatting for bundle IDs in display/debug output",
+      "phase": "06"
+    }
+  ],
+  "uncommitted_files": [],
+  "next_action": "Fix VmDispatch.call signature in generator - the dispatch function now requires GuestContractInstance parameter",
+  "context_notes": "Executing gap closure plans from VERIFICATION.md. Plans 06-10, 06-11, 06-12 completed successfully. Plan 06-13 partially complete - generator fixes committed but 3 build errors remain. The VmDispatch struct's call function signature changed and the generated code needs updating."
+}
