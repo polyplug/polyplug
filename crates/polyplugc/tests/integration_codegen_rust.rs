@@ -11,12 +11,12 @@ use std::process::Command;
 use polyplug_abi::string_view_null;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractInstance;
-use polyplug_abi::HostVTable;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::AbiErrorCode;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
 
@@ -111,9 +111,10 @@ use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::AbiError;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginError;
-use polyplug_guest::HostVTable;
+use polyplug_guest::RuntimeAbi;
 use polyplug_guest::PluginContext;
 use polyplug_guest::StringView;
+use polyplug_guest::Version;
 use polyplug_guest::string_view_null;
 use core::ffi::c_void;
 use guest::contracts::TestAddPlugin;
@@ -146,7 +147,7 @@ impl TestAddPlugin for MyPlugin {
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(
     rt_ctx: *mut c_void,
-    host: *const HostVTable,
+    host: *const RuntimeAbi,
     _ctx: *const PluginContext,
 ) -> AbiError {
     if host.is_null() {
@@ -157,14 +158,12 @@ pub unsafe extern "C" fn polyplug_init(
     let _ = set_test_adder_impl(Box::new(MyPlugin));
 
     // SAFETY: host is non-null and valid per ABI contract.
-    let host: &HostVTable = unsafe { &*host };
+    let host: &RuntimeAbi = unsafe { &*host };
 
     let desc: PluginDescriptor = PluginDescriptor {
         name: StringView { ptr: b"codegen_test_plugin".as_ptr(), len: 19_usize },
         contract_name: StringView { ptr: b"test.add".as_ptr(), len: 8_usize },
-        version_major: 1_u32,
-        version_minor: 0_u32,
-        version_patch: 0_u32,
+        version: Version { major: 1, minor: 0, patch: 0 },
     };
 
     // SAFETY: desc and TEST_ADDER_VTABLE are 'static; host is valid.
@@ -181,26 +180,26 @@ pub unsafe extern "C" fn polyplug_init(
     std::fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
 }
 
-// ─── HostVTable callback capturing the vtable pointer ─────────────────────────
+// ─── RuntimeAbi callback capturing the interface pointer ─────────────────────────
 
-// Captured vtable pointer from the register_plugin callback, stored in a thread-local.
+// Captured interface pointer from the register_contract callback, stored in a thread-local.
 std::thread_local! {
-    static CAPTURED_VTABLE: core::cell::Cell<*const PluginInterface> =
+    static CAPTURED_INTERFACE: core::cell::Cell<*const GuestContractInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
-/// Register_plugin callback that captures the vtable pointer into `CAPTURED_VTABLE`.
+/// register_contract callback that captures the interface pointer into `CAPTURED_INTERFACE`.
 ///
 /// # Safety
-/// `descriptor` and `vtable` must be valid for the duration of the call.
-unsafe extern "C" fn capture_vtable_callback(
+/// `descriptor` and `interface` must be valid for the duration of the call.
+unsafe extern "C" fn capture_interface_callback(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    CAPTURED_VTABLE.with(|cell| cell.set(vtable));
+    CAPTURED_INTERFACE.with(|cell| cell.set(interface));
     AbiError {
-        code: ABI_OK,
+        code: AbiErrorCode::Ok,
         message: string_view_null(),
     }
 }
@@ -259,7 +258,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 unsafe extern "C" fn stub_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
@@ -271,7 +270,7 @@ unsafe extern "C" fn stub_call_method(
     _out: *mut (),
 ) -> AbiError {
     AbiError {
-        code: polyplug_abi::ABI_ERROR_GENERIC,
+        code: AbiErrorCode::Generic,
         message: string_view_null(),
     }
 }
@@ -345,7 +344,7 @@ fn test_rust_codegen_compile_and_run() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -354,11 +353,11 @@ fn test_rust_codegen_compile_and_run() {
             .expect("polyplug_init symbol not found")
     };
 
-    // ── 8. Build HostVTable + call polyplug_init ───────────────────────────────
-    CAPTURED_VTABLE.with(|cell| cell.set(core::ptr::null()));
+    // ── 8. Build RuntimeAbi + call polyplug_init ───────────────────────────────
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
 
-    let host_vtable: HostVTable = HostVTable {
-        register_contract: capture_vtable_callback,
+    let host_abi: RuntimeAbi = RuntimeAbi {
+        register_contract: capture_interface_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -368,34 +367,36 @@ fn test_rust_codegen_compile_and_run() {
         get_host_contract: stub_get_host_contract,
     };
 
-    // SAFETY: init_fn is valid; host_vtable lives for the duration of the call.
+    // SAFETY: init_fn is valid; host_abi lives for the duration of the call.
     let ctx: PluginContext = PluginContext {
         bundle_id: 0,
         bundle_path: string_view_null(),
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return ABI_OK");
 
-    // ── 9. Retrieve the captured vtable ──────────────────────────────────────
-    let vtable_ptr: *const PluginInterface = CAPTURED_VTABLE.with(|cell| cell.get());
+    // ── 9. Retrieve the captured interface ──────────────────────────────────────
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable pointer must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface pointer must be non-null after polyplug_init"
     );
 
-    // SAFETY: vtable_ptr is valid — plugin is loaded and library is not yet dropped.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid — plugin is loaded and library is not yet dropped.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
+    // Get function_count from the native dispatch structure
+    let function_count: u32 = unsafe { interface.dispatch.native.function_count };
     assert_eq!(
-        vtable.function_count, 4_u32,
-        "test.add vtable must have 4 functions"
+        function_count, 4_u32,
+        "test.add interface must have 4 functions"
     );
 
     // ── 10. Dispatch add(3, 5) via function_id 0 ─────────────────────────────
@@ -404,7 +405,7 @@ fn test_rust_codegen_compile_and_run() {
 
     // SAFETY: functions[0] is the `add` ABI wrapper with signature
     //   extern "C" fn(*const (), *mut ()) -> AbiError.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
     // types are enforced by the test: AddArgs matches what the generated wrapper expects.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
@@ -418,7 +419,7 @@ fn test_rust_codegen_compile_and_run() {
         )
     };
 
-    assert_eq!(call_result.code, ABI_OK, "add(3, 5) must return ABI_OK");
+    assert_eq!(call_result.code, AbiErrorCode::Ok, "add(3, 5) must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     println!("test_rust_codegen_compile_and_run: add(3, 5) = {} ✓", out);

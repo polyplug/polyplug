@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn abi_ok_constant() {
-        assert_eq!(polyplug_abi::ABI_OK, 0_u32);
+        assert_eq!(polyplug_abi::AbiErrorCode::Ok as u32, 0_u32);
     }
 
     #[test]
@@ -894,8 +894,9 @@ mod tests {
 
         // Create a HostContext with a non-zero bundle_id to simulate init phase
         let host_ctx: HostContext = HostContext {
-            runtime: &runtime as *const Runtime as *mut Runtime,
+            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id: 0xDEAD_BEEF_u64,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         let rt_ptr: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
@@ -930,39 +931,38 @@ mod tests {
     }
 
     fn register_contract(
-        registry: &crate::plugin_registry::PluginRegistry,
+        registry: &crate::registry::PluginRegistry,
         contract_id: u64,
         bundle_id: u64,
     ) -> PluginHandle {
         use polyplug_abi::{
             DispatchType,
-            dispatch::dispatch_mechanisms::DispatchMechanisms,
-            dispatch::native_dispatch::NativeDispatch,
+            DispatchMechanisms,
+            NativeDispatch,
             GuestContractInterface,
             GuestContractInstance,
         };
-        let vtable: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
-            contract_id: polyplug_utils::GuestContractId(contract_id),
-            contract_version: polyplug_abi::types::Version::new(0, 0, 0),
+        let interface: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
+            contract_id: polyplug_utils::GuestContractId::from_u64(contract_id),
+            contract_version: Version { major: 0, minor: 0, patch: 0 },
             dispatch_type: DispatchType::Native,
+            create_instance: |_rt_ctx: *mut core::ffi::c_void, _args: *const ()| GuestContractInstance::null(),
+            destroy_instance: |_rt_ctx: *mut core::ffi::c_void, _instance: GuestContractInstance| {},
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
+                    function_count: 0,
                     functions: core::ptr::null(),
                 },
             },
-            create_instance: |_rt_ctx: *mut core::ffi::c_void, _args: *const ()| GuestContractInstance { data: core::ptr::null_mut() },
-            destroy_instance: |_rt_ctx: *mut core::ffi::c_void, _instance: GuestContractInstance| {},
         }));
         let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-            name: polyplug_abi::types::StringView::from_static(b"stub"),
-            contract_name: polyplug_abi::types::StringView::from_static(b"stub.contract"),
-            version_major: 1_u32,
-            version_minor: 0_u32,
-            version_patch: 0_u32,
+            name: polyplug_abi::StringView::from_static(b"stub"),
+            contract_name: polyplug_abi::StringView::from_static(b"stub.contract"),
+            version: Version { major: 1, minor: 0, patch: 0 },
         };
-        // SAFETY: vtable is leaked and lives for the process lifetime.
+        // SAFETY: interface is leaked and lives for the process lifetime.
         let result: Result<PluginHandle, crate::error::RegistryError> =
-            unsafe { registry.register(descriptor, vtable, "stub.contract".to_owned(), bundle_id) };
+            unsafe { registry.register(descriptor, interface, "stub.contract".to_owned(), bundle_id) };
         match result {
             Ok(handle) => handle,
             Err(e) => panic!("failed to register contract: {e}"),
@@ -981,7 +981,7 @@ mod tests {
 
         fn load(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::UndeclaredDependency {
@@ -992,7 +992,7 @@ mod tests {
 
         fn reload(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::HotReloadDisabled)
@@ -1010,7 +1010,7 @@ mod tests {
 
         fn load(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             let mut guard: std::sync::MutexGuard<'_, Option<bool>> = match self.observed_init.lock()
@@ -1024,7 +1024,7 @@ mod tests {
 
         fn reload(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::HotReloadDisabled)
@@ -1040,7 +1040,7 @@ mod tests {
 
         fn load(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             panic!("intentional panic in PanicLoader");
@@ -1048,7 +1048,7 @@ mod tests {
 
         fn reload(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::HotReloadDisabled)
@@ -1072,7 +1072,7 @@ mod tests {
 
         fn load(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             let state: std::sync::MutexGuard<'_, ReentrantState> = match self.state.lock() {
@@ -1114,7 +1114,7 @@ mod tests {
 
         fn reload(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::HotReloadDisabled)
@@ -1136,7 +1136,7 @@ mod tests {
 
         fn load(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             let mut state: std::sync::MutexGuard<'_, LazyState> = match self.state.lock() {
@@ -1151,7 +1151,7 @@ mod tests {
 
         fn reload(
             &self,
-            _manifest: &crate::loader::manifest::ManifestData,
+            _manifest: &ManifestData,
             _runtime: &Runtime,
         ) -> Result<(), crate::error::RuntimeError> {
             Err(RuntimeError::HotReloadDisabled)
@@ -1164,7 +1164,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_abi::contract_id("trust.test", 1_u32);
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.test", 1_u32).id();
         let bundle_name: &str = "enforce_bundle";
         let bundle_path: PathBuf = create_bundle_dir(&temp, bundle_name, "enforce");
         let runtime: Runtime = match Runtime::builder()
@@ -1200,7 +1200,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_abi::contract_id("trust.tls", 1_u32);
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.tls", 1_u32).id();
         let observed: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
         let bundle_path: PathBuf = create_bundle_dir(&temp, "probe_bundle", "probe");
         let runtime: Runtime = match Runtime::builder()
@@ -1261,7 +1261,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_abi::contract_id("trust.reentrant", 1_u32);
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.reentrant", 1_u32).id();
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "outer_bundle", "reentrant");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "inner_bundle", "probe");
         let state: Arc<std::sync::Mutex<ReentrantState>> =
@@ -1319,7 +1319,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_abi::contract_id("trust.lazy", 1_u32);
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.lazy", 1_u32).id();
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "lazy_outer", "lazy");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "lazy_inner", "probe");
         let state: Arc<std::sync::Mutex<LazyState>> = Arc::new(std::sync::Mutex::new(LazyState {
@@ -1374,7 +1374,7 @@ mod tests {
     ) -> &'static HostContractInterface {
         use polyplug_abi::{dispatch::dispatch_mechanisms::DispatchMechanisms, dispatch::native_dispatch::NativeDispatch, GuestContractInstance};
         Box::leak(Box::new(HostContractInterface {
-            contract_id: polyplug_utils::HostContractId(contract_id),
+            contract_id: polyplug_utils::HostContractId::from_u64(contract_id),
             contract_version: polyplug_abi::types::Version { major, minor, patch: 0 },
             singleton: true,
             dispatch_type: polyplug_abi::DispatchType::Native,
@@ -1394,7 +1394,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
+        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
         let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
 
         let result: Result<(), HostContractError> =
@@ -1414,7 +1414,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
+        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
         let vtable1: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
         let vtable2: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 1);
 
@@ -1440,7 +1440,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 1);
+        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
         let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
 
         runtime
@@ -1472,7 +1472,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_abi::host_contract_id("host.logger", 2);
+        let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 2);
         let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 2, 5);
 
         runtime
@@ -1525,7 +1525,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_abi::host_contract_id("host.test", 1);
+        let contract_id: u64 = polyplug_utils::host_contract_id("host.test", 1);
         let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
 
         runtime
@@ -1558,7 +1558,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        let contract_id: u64 = polyplug_abi::host_contract_id("host.nonexistent", 1);
+        let contract_id: u64 = polyplug_utils::host_contract_id("host.nonexistent", 1);
 
         let host_ctx: HostContext = HostContext {
             runtime: &runtime as *const Runtime as *mut Runtime,

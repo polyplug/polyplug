@@ -10,13 +10,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
 
-use polyplug_abi::ABI_ERROR_PANIC;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -28,28 +27,25 @@ use polyplug_abi::ffi::polyplug_host_free;
 /// # Safety
 /// Only written by `capture_register_callback` which is called once during
 /// `polyplug_init`, before the vtable pointer is read in the test.
-static mut CAPTURED_VTABLE_PTR: *const PluginInterface = core::ptr::null();
+static mut CAPTURED_VTABLE_PTR: *const GuestContractInterface = core::ptr::null();
 
-/// A register_plugin callback that captures the vtable pointer.
+/// A register_contract callback that captures the vtable pointer.
 ///
 /// # Safety
-/// `rt_ctx`, `_descriptor`, and `vtable` must be valid for the duration of the call.
+/// `rt_ctx`, `_descriptor`, and `interface` must be valid for the duration of the call.
 unsafe extern "C" fn capture_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
     // SAFETY: CAPTURED_VTABLE_PTR is only written here, during polyplug_init,
     // before the test reads it. Single-threaded test execution ensures no data race.
     unsafe {
-        CAPTURED_VTABLE_PTR = vtable;
+        CAPTURED_VTABLE_PTR = interface;
     }
     AbiError {
-        code: 0,
-        message: StringView {
-            ptr: core::ptr::null(),
-            len: 0,
-        },
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
     }
 }
 
@@ -82,16 +78,6 @@ unsafe extern "C" fn noop_find_by_contract(
     polyplug_abi::PluginHandle::null()
 }
 
-/// No-op find_by_bundle callback.
-unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> polyplug_abi::PluginHandle {
-    polyplug_abi::PluginHandle::null()
-}
-
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
@@ -103,12 +89,26 @@ unsafe extern "C" fn noop_find_all_by_contract(
     0
 }
 
-/// No-op resolve_plugin callback.
-unsafe extern "C" fn noop_resolve_plugin(
+/// No-op resolve_contract callback.
+unsafe extern "C" fn noop_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: polyplug_abi::PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
+}
+
+/// No-op call_method callback.
+unsafe extern "C" fn noop_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: polyplug_abi::GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_host_contract callback.
@@ -116,15 +116,15 @@ unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 // ─── Test ─────────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_panic_returns_abi_error_panic() {
-    // ── Step 1: Locate workspace root and polyplugc binary ────────────────────
+    // -- Step 1: Locate workspace root and polyplugc binary --
     let manifest_dir: &Path = Path::new(env!("CARGO_MANIFEST_DIR"));
     // CARGO_MANIFEST_DIR = crates/polyplug; workspace root is two up.
     let workspace_root: &Path = manifest_dir
@@ -138,12 +138,12 @@ fn test_panic_returns_abi_error_panic() {
         .join("fixtures")
         .join("test_panic_api.toml");
 
-    // ── Step 2: Create a temp directory for the panic plugin crate ────────────
+    // -- Step 2: Create a temp directory for the panic plugin crate --
     let tmp_dir: PathBuf = std::env::temp_dir().join("polyplug_panic_plugin_test");
     std::fs::create_dir_all(&tmp_dir).expect("create tmp dir");
     std::fs::create_dir_all(tmp_dir.join("src")).expect("create tmp src dir");
 
-    // ── Step 2b: Create a minimal bundle.toml referencing the API ─────────────
+    // -- Step 2b: Create a minimal bundle.toml referencing the API --
     let bundle_toml_content: String = format!(
         "[bundle]\n\
          name = \"panic_plugin\"\n\
@@ -163,7 +163,7 @@ fn test_panic_returns_abi_error_panic() {
     let bundle_toml_path: PathBuf = tmp_dir.join("bundle.toml");
     std::fs::write(&bundle_toml_path, bundle_toml_content).expect("write bundle.toml");
 
-    // ── Step 3: Run polyplugc generate into tmp_dir/src ───────────────────────
+    // -- Step 3: Run polyplugc generate into tmp_dir/src --
     let polyplugc_bin: &str = env!("CARGO_BIN_EXE_polyplugc");
     let gen_status: ExitStatus = Command::new(polyplugc_bin)
         .arg("generate")
@@ -181,7 +181,7 @@ fn test_panic_returns_abi_error_panic() {
         "polyplugc generate exited with non-zero status"
     );
 
-    // ── Step 4: Write Cargo.toml for the cdylib crate ─────────────────────────
+    // -- Step 4: Write Cargo.toml for the cdylib crate --
     // Only depend on polyplug_guest; polyplug is an indirect dep.
     // We do NOT add polyplug as a direct dep to avoid duplicate
     // `polyplug_abi_version` symbol (it is defined in polyplug/src/lib.rs).
@@ -202,13 +202,13 @@ fn test_panic_returns_abi_error_panic() {
     );
     std::fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");
 
-    // ── Step 5: Write src/lib.rs implementing TestPanicPlugin ─────────────────
+    // -- Step 5: Write src/lib.rs implementing TestPanicPlugin --
     // The generated src/guest/vtables.rs, src/guest/contracts.rs, src/guest/types.rs already exist.
     // We provide the crate root lib.rs that declares the guest submodule and implements the trait.
-    // We do NOT include mod guest::init — we write our own polyplug_init here.
-    // We do NOT define polyplug_abi_version — it comes from polyplug rlib.
+    // We do NOT include mod guest::init -- we write our own polyplug_init here.
+    // We do NOT define polyplug_abi_version -- it comes from polyplug rlib.
     let lib_rs_content: &str = concat!(
-        "// THIS FILE IS WRITTEN BY THE integration_panic TEST — NOT generated by polyplugc.\n",
+        "// THIS FILE IS WRITTEN BY THE integration_panic TEST -- NOT generated by polyplugc.\n",
         "// It implements the TestPanicPlugin trait with a function that always panics.\n",
         "\n",
         "mod guest {\n",
@@ -218,13 +218,13 @@ fn test_panic_returns_abi_error_panic() {
         "}\n",
         "\n",
         "use polyplug_guest::AbiError;\n",
-        "use polyplug_guest::HostVTable;\n",
+        "use polyplug_guest::RuntimeAbi;\n",
         "use polyplug_guest::PluginContext;\n",
         "use polyplug_guest::PluginDescriptor;\n",
         "use polyplug_guest::PluginError;\n",
-        "use polyplug_guest::PluginInterface;\n",
+        "use polyplug_guest::GuestContractInterface;\n",
         "use polyplug_guest::StringView;\n",
-        "use polyplug_guest::ABI_ERROR_GENERIC;\n",
+        "use polyplug_guest::AbiErrorCode;\n",
         "use guest::vtables::PANIC_PLUGIN_IMPL;\n",
         "use guest::vtables::PANIC_PLUGIN_VTABLE;\n",
         "use guest::contracts::TestPanicPlugin;\n",
@@ -240,22 +240,22 @@ fn test_panic_returns_abi_error_panic() {
         "/// Register the panic plugin vtable with the host.\n",
         "///\n",
         "/// # Safety\n",
-        "/// `rt_ctx` and `host_vtable` must be valid pointers.\n",
+        "/// `rt_ctx` and `runtime_abi` must be valid pointers.\n",
         "#[unsafe(no_mangle)]\n",
         "pub unsafe extern \"C\" fn polyplug_init(\n",
         "    _rt_ctx: *mut core::ffi::c_void,\n",
-        "    host_vtable: *const HostVTable,\n",
+        "    runtime_abi: *const RuntimeAbi,\n",
         "    ctx: *const PluginContext,\n",
         ") -> AbiError {\n",
         "    PANIC_PLUGIN_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
-        "    if host_vtable.is_null() || ctx.is_null() {\n",
+        "    if runtime_abi.is_null() || ctx.is_null() {\n",
         "        return AbiError {\n",
-        "            code: ABI_ERROR_GENERIC,\n",
+        "            code: AbiErrorCode::Generic,\n",
         "            message: StringView::null(),\n",
         "        };\n",
         "    }\n",
-        "    // SAFETY: host_vtable is non-null and valid per ABI contract.\n",
-        "    let host: &HostVTable = unsafe { &*host_vtable };\n",
+        "    // SAFETY: runtime_abi is non-null and valid per ABI contract.\n",
+        "    let host: &RuntimeAbi = unsafe { &*runtime_abi };\n",
         "    let desc: PluginDescriptor = PluginDescriptor {\n",
         "        name: StringView {\n",
         "            ptr: b\"panic_plugin\".as_ptr(),\n",
@@ -265,23 +265,21 @@ fn test_panic_returns_abi_error_panic() {
         "            ptr: b\"test.panic\".as_ptr(),\n",
         "            len: 10_usize,\n",
         "        },\n",
-        "        version_major: 1_u32,\n",
-        "        version_minor: 0_u32,\n",
-        "        version_patch: 0_u32,\n",
+        "        version: polyplug_guest::Version { major: 1, minor: 0, patch: 0 },\n",
         "    };\n",
         "    // SAFETY: desc and vtable are valid for the duration of the call.\n",
         "    unsafe {\n",
-        "        (host.register_plugin)(\n",
+        "        (host.register_contract)(\n",
         "            core::ptr::null_mut(),\n",
         "            &desc as *const PluginDescriptor,\n",
-        "            &PANIC_PLUGIN_VTABLE as *const PluginInterface,\n",
+        "            &PANIC_PLUGIN_VTABLE as *const GuestContractInterface,\n",
         "        )\n",
         "    }\n",
         "}\n",
     );
     std::fs::write(tmp_dir.join("src").join("lib.rs"), lib_rs_content).expect("write src/lib.rs");
 
-    // ── Step 6: Build the cdylib ───────────────────────────────────────────────
+    // -- Step 6: Build the cdylib --
     let build_status: ExitStatus = Command::new(env!("CARGO"))
         .arg("build")
         .arg("--manifest-path")
@@ -295,7 +293,7 @@ fn test_panic_returns_abi_error_panic() {
         "cargo build for panic_plugin cdylib failed"
     );
 
-    // ── Step 7: Locate the compiled .so ───────────────────────────────────────
+    // -- Step 7: Locate the compiled .so --
     let lib_filename: &str = if cfg!(target_os = "macos") {
         "libpanic_plugin.dylib"
     } else if cfg!(target_os = "windows") {
@@ -306,19 +304,19 @@ fn test_panic_returns_abi_error_panic() {
 
     let so_path: PathBuf = tmp_dir.join("target").join("release").join(lib_filename);
 
-    // ── Step 8: Load with libloading ──────────────────────────────────────────
+    // -- Step 8: Load with libloading --
     // SAFETY: so_path is a compiled cdylib.
     let library: libloading::Library = unsafe {
         libloading::Library::new(&so_path).expect("failed to load panic_plugin shared library")
     };
 
-    // ── Step 9: Resolve and call polyplug_init ────────────────────────────────
+    // -- Step 9: Resolve and call polyplug_init --
     // SAFETY: polyplug_init matches the expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -327,53 +325,47 @@ fn test_panic_returns_abi_error_panic() {
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: capture_register_callback,
+    let runtime_abi: RuntimeAbi = RuntimeAbi {
+        register_contract: capture_register_callback,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
-        find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
-        resolve_plugin: noop_resolve_plugin,
+        resolve_contract: noop_resolve_contract,
+        call_method: noop_call_method,
         get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &runtime_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, 0, "polyplug_init must succeed (code 0)");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed (code Ok)");
 
     // SAFETY: CAPTURED_VTABLE_PTR was written by capture_register_callback above.
     // Single-threaded; no race condition.
-    let vtable_ptr: *const PluginInterface = unsafe { CAPTURED_VTABLE_PTR };
+    let vtable_ptr: *const GuestContractInterface = unsafe { CAPTURED_VTABLE_PTR };
     assert!(!vtable_ptr.is_null(), "vtable pointer must be non-null");
 
     // SAFETY: vtable_ptr is valid (plugin library is loaded, not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
 
-    assert_eq!(
-        vtable.function_count, 1_u32,
-        "test.panic vtable must have 1 function"
-    );
-
-    // ── Step 10: Call function_id 0 (do_panic) through the vtable ────────────
+    // -- Step 10: Call function_id 0 (do_panic) through the vtable --
     // The generated ABI wrapper uses catch_unwind internally, so the panic is
-    // caught inside the extern "C" boundary. The host sees AbiError { code: 3 }.
+    // caught inside the extern "C" boundary. The host sees AbiError { code: Panic }.
 
     // SAFETY: fn_ptr is function 0 in the vtable (do_panic).
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
-        // SAFETY: fn_ptr is the do_panic ABI wrapper — extern "C" with no
+        // SAFETY: fn_ptr is the do_panic ABI wrapper -- extern "C" with no
         // meaningful args/out (void, no params). The catch_unwind wrapper
         // inside the plugin catches the panic before it crosses the FFI boundary.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -381,14 +373,14 @@ fn test_panic_returns_abi_error_panic() {
     // SAFETY: do_panic ignores args and out entirely (void function, no params).
     let call_result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
 
-    // ── Step 11: Assert panic was caught and returned ABI_ERROR_PANIC ─────────
+    // -- Step 11: Assert panic was caught and returned ABI_ERROR_PANIC --
     assert_eq!(
-        call_result.code, ABI_ERROR_PANIC,
-        "do_panic ABI wrapper must return ABI_ERROR_PANIC (={ABI_ERROR_PANIC}), got {}",
+        call_result.code, AbiErrorCode::Panic,
+        "do_panic ABI wrapper must return AbiErrorCode::Panic, got {:?}",
         call_result.code
     );
 
-    // Process continues here — no abort occurred. Test completing IS the proof.
+    // Process continues here -- no abort occurred. Test completing IS the proof.
 
     // Leak the library to avoid dlclose issues on some platforms.
     core::mem::forget(library);

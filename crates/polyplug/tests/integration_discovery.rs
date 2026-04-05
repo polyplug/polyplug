@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use polyplug::error::GraphError;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::error::RuntimeError;
-use polyplug::graph::CapabilityGraph;
-use polyplug::loader::manifest::ManifestData;
-use polyplug::loader::manifest::RawManifestDependency;
+use polyplug::compatibility::CapabilityGraph;
+use polyplug::loader::ManifestData;
+use polyplug::loader::RawManifestDependency;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
+use polyplug_utils::guest_contract_id;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,8 +29,8 @@ fn write_bundle_with_manifest(dir: &Path, manifest: &ManifestData) {
 fn chain_loads_in_dependency_order() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
-    let cid_y: u64 = polyplug_abi::contract_id("contract.Y", 1);
+    let cid_x: u64 = guest_contract_id("contract.X", 1);
+    let cid_y: u64 = guest_contract_id("contract.Y", 1);
 
     write_bundle_with_manifest(
         tmp.path(),
@@ -84,7 +84,9 @@ fn chain_loads_in_dependency_order() {
         },
     );
 
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
+    // scan_dirs takes a slice of PathBufs
+    let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
     assert_eq!(discovered.len(), 3, "expected 3 bundles");
 
     let graph: CapabilityGraph =
@@ -128,7 +130,7 @@ fn empty_manifest() -> ManifestData {
 fn missing_dep_fails_before_load() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_x: u64 = polyplug_abi::contract_id("contract.X", 1);
+    let cid_x: u64 = guest_contract_id("contract.X", 1);
 
     write_bundle_with_manifest(
         tmp.path(),
@@ -150,7 +152,8 @@ fn missing_dep_fails_before_load() {
         },
     );
 
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
+    let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
 
     let result: Result<CapabilityGraph, GraphError> = CapabilityGraph::from_manifests(&discovered);
     assert!(
@@ -163,8 +166,8 @@ fn missing_dep_fails_before_load() {
 fn cycle_detected_with_clear_error() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_a: u64 = polyplug_abi::contract_id("contract.A", 1);
-    let cid_b: u64 = polyplug_abi::contract_id("contract.B", 1);
+    let cid_a: u64 = guest_contract_id("contract.A", 1);
+    let cid_b: u64 = guest_contract_id("contract.B", 1);
 
     write_bundle_with_manifest(
         tmp.path(),
@@ -206,7 +209,8 @@ fn cycle_detected_with_clear_error() {
         },
     );
 
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
+    let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
     assert_eq!(discovered.len(), 2);
 
     let result: Result<CapabilityGraph, GraphError> = CapabilityGraph::from_manifests(&discovered);
@@ -259,7 +263,8 @@ fn malformed_manifest_skips_bundle() {
     )
     .expect("write bad manifest");
 
-    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dir(tmp.path());
+    let dirs: &[PathBuf] = &[tmp.path().to_path_buf()];
+    let discovered: Vec<(PathBuf, ManifestData)> = scanner::scan_dirs(dirs);
 
     assert_eq!(
         discovered.len(),
@@ -288,7 +293,7 @@ fn unknown_runtime_fails_build() {
     );
 
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dir(tmp.path().to_path_buf())
+        .plugin_dirs(vec![tmp.path().to_path_buf()])
         .build();
 
     match result {

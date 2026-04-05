@@ -8,18 +8,18 @@ use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::plugin_registry::PluginRegistry;
+use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor, PluginDispatch,
-    PluginHandle, StringView,
+    DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor,
+    PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
 
 const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;
 const RESOLVE_ROUNDS: usize = 32_usize;
 const SWAP_ROUNDS: usize = 24_usize;
-const VERSION_V1: u32 = 1_u32 << 16;
-const VERSION_V2: u32 = 2_u32 << 16;
+const VERSION_V1: Version = Version { major: 1, minor: 0, patch: 0 };
+const VERSION_V2: Version = Version { major: 2, minor: 0, patch: 0 };
 
 const CONTRACT_IDS: [u64; THREADS] = [
     0x7171_0000_0000_1000_u64,
@@ -56,15 +56,30 @@ const CONTRACT_NAMES: [&str; THREADS] = [
 
 const MOCK_FUNCTIONS: [*const (); 0] = [];
 
+/// No-op create_instance callback.
+unsafe extern "C" fn noop_create_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> polyplug_abi::GuestContractInstance {
+    polyplug_abi::GuestContractInstance::null()
+}
+
+/// No-op destroy_instance callback.
+unsafe extern "C" fn noop_destroy_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: polyplug_abi::GuestContractInstance,
+) {
+}
+
 macro_rules! make_interface {
     ($contract_id:expr, $version:expr) => {
         GuestContractInterface {
-            rt_ctx: core::ptr::null(),
-            contract_id: $contract_id,
+            contract_id: GuestContractId::from_u64($contract_id),
             contract_version: $version,
-            function_count: 0_u32,
             dispatch_type: DispatchType::Native,
-            dispatch: PluginDispatch {
+            create_instance: noop_create_instance,
+            destroy_instance: noop_destroy_instance,
+            dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     functions: MOCK_FUNCTIONS.as_ptr(),
                 },
@@ -94,9 +109,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version_major: 1_u32,
-        version_minor: 0_u32,
-        version_patch: 0_u32,
+        version: Version { major: 1, minor: 0, patch: 0 },
     }
 }
 
@@ -128,16 +141,16 @@ fn stress_concurrent_register_find_resolve() {
 
             for _round in 0_usize..RESOLVE_ROUNDS {
                 let found: PluginHandle = reg_clone
-                    .find_by_contract(CONTRACT_IDS[idx], VERSION_V1)
+                    .find_by_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
                     .expect("find_by_contract must succeed");
                 let vtable_ptr: *const GuestContractInterface =
                     reg_clone.resolve(found).expect("resolve must succeed");
                 // SAFETY: vtable_ptr is from the registry and valid.
-                let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
+                let contract_id: GuestContractId = unsafe { (*vtable_ptr).contract_id };
                 // SAFETY: vtable_ptr is from the registry and valid.
-                let version: u32 = unsafe { (*vtable_ptr).contract_version };
-                assert_eq!(contract_id, CONTRACT_IDS[idx]);
-                assert_eq!(version, VERSION_V1);
+                let version: &Version = unsafe { &(*vtable_ptr).contract_version };
+                assert_eq!(contract_id.id(), CONTRACT_IDS[idx]);
+                assert_eq!(*version, VERSION_V1);
             }
 
             let resolved: Result<*const GuestContractInterface, RegistryError> =
@@ -156,13 +169,13 @@ fn stress_concurrent_register_find_resolve() {
 
     for (idx, &expected_cid) in CONTRACT_IDS.iter().enumerate().take(THREADS) {
         let found: PluginHandle = registry
-            .find_by_contract(expected_cid, VERSION_V1)
+            .find_by_contract(GuestContractId::from_u64(expected_cid), 0_u32)
             .expect("main-thread find must succeed");
         let vtable_ptr: *const GuestContractInterface =
             registry.resolve(found).expect("main-thread resolve must succeed");
         // SAFETY: vtable_ptr is valid.
-        let contract_id: u64 = unsafe { (*vtable_ptr).contract_id };
-        assert_eq!(contract_id, CONTRACT_IDS[idx]);
+        let contract_id: GuestContractId = unsafe { (*vtable_ptr).contract_id };
+        assert_eq!(contract_id.id(), CONTRACT_IDS[idx]);
     }
 }
 
@@ -197,15 +210,15 @@ fn stress_concurrent_swaps_with_resolvers() {
             ready_clone.wait();
             while !stop_clone.load(Ordering::Relaxed) {
                 let handle_result: Result<PluginHandle, RegistryError> =
-                    reg_clone.find_by_contract(SWAP_CONTRACT_ID, 0_u32);
+                    reg_clone.find_by_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =
                         reg_clone.resolve(found);
                     if let Ok(vtable_ptr) = resolve_result {
                         // SAFETY: vtable_ptr is valid.
-                        let version: u32 = unsafe { (*vtable_ptr).contract_version };
+                        let version: &Version = unsafe { &(*vtable_ptr).contract_version };
                         assert!(
-                            version == VERSION_V1 || version == VERSION_V2,
+                            *version == VERSION_V1 || *version == VERSION_V2,
                             "version must be V1 or V2"
                         );
                         resolve_counter.fetch_add(1_usize, Ordering::Relaxed);

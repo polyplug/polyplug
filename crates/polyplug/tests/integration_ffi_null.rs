@@ -89,7 +89,8 @@ fn test_resolve_plugin_null_handle() {
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     // SAFETY: rt is valid (asserted above); u64::MAX is the sentinel NULL_HANDLE value.
-    let vtable: *const polyplug::ffi::ResolveHandle =
+    // polyplug_runtime_resolve_plugin returns *const GuestContractInterface now.
+    let vtable: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
         vtable.is_null(),

@@ -8,32 +8,31 @@
 //!
 //! This test crate is the crate root for the `integration_context` test binary.
 
-use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 
-/// Path to the compiled test_plugin shared library — set by build.rs.
+/// Path to the compiled test_plugin shared library -- set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
 // ─── No-op host functions ─────────────────────────────────────────────────────
 
-/// No-op register_plugin callback — accepts the registration and returns ABI_OK.
+/// No-op register_contract callback -- accepts the registration and returns Ok.
 ///
 /// # Safety
-/// `rt_ctx`, `descriptor`, and `vtable` must be valid non-null pointers for
+/// `rt_ctx`, `descriptor`, and `interface` must be valid non-null pointers for
 /// the duration of this call (guaranteed by the ABI contract).
 unsafe extern "C" fn noop_register(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginInterface,
+    _interface: *const GuestContractInterface,
 ) -> AbiError {
     AbiError {
-        code: ABI_OK,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
@@ -67,16 +66,6 @@ unsafe extern "C" fn noop_find_by_contract(
     polyplug_abi::PluginHandle::null()
 }
 
-/// No-op find_by_bundle callback.
-unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> polyplug_abi::PluginHandle {
-    polyplug_abi::PluginHandle::null()
-}
-
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
@@ -88,12 +77,26 @@ unsafe extern "C" fn noop_find_all_by_contract(
     0
 }
 
-/// No-op resolve_plugin callback.
-unsafe extern "C" fn noop_resolve_plugin(
+/// No-op resolve_contract callback.
+unsafe extern "C" fn noop_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: polyplug_abi::PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
+}
+
+/// No-op call_method callback.
+unsafe extern "C" fn noop_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: polyplug_abi::GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Generic,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_host_contract callback.
@@ -101,8 +104,8 @@ unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -117,12 +120,12 @@ fn rust_plugin_receives_bundle_path() {
 
     // Resolve the three-arg polyplug_init symbol.
     // SAFETY: polyplug_init is a C function with signature
-    //   `unsafe extern "C" fn(*mut c_void, *const HostVTable, *const PluginContext) -> AbiError`.
+    //   `unsafe extern "C" fn(*mut c_void, *const RuntimeAbi, *const PluginContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -140,15 +143,15 @@ fn rust_plugin_receives_bundle_path() {
             .expect("polyplug_get_last_bundle_path symbol not found")
     };
 
-    // Build a HostVTable with no-op callbacks.
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: noop_register,
+    // Build a RuntimeAbi with no-op callbacks.
+    let runtime_abi: RuntimeAbi = RuntimeAbi {
+        register_contract: noop_register,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
-        find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
-        resolve_plugin: noop_resolve_plugin,
+        resolve_contract: noop_resolve_contract,
+        call_method: noop_call_method,
         get_host_contract: noop_get_host_contract,
     };
 
@@ -159,22 +162,21 @@ fn rust_plugin_receives_bundle_path() {
             ptr: bundle_path_str.as_ptr(),
             len: bundle_path_str.len(),
         },
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
 
     // Call polyplug_init with the crafted context.
-    // SAFETY: init_fn is a valid function pointer. host_vtable and ctx are valid
+    // SAFETY: init_fn is a valid function pointer. runtime_abi and ctx are valid
     // stack-allocated values whose lifetimes span this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &runtime_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
 
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
 
     // Call polyplug_get_last_bundle_path to retrieve the stored StringView.
     // SAFETY: get_path_fn is a valid function pointer. The bundle_path_str
@@ -201,10 +203,10 @@ fn rust_plugin_receives_bundle_path() {
     );
 
     println!(
-        "rust_plugin_receives_bundle_path: bundle_path round-trip verified for {:?} ✓",
+        "rust_plugin_receives_bundle_path: bundle_path round-trip verified for {:?}",
         bundle_path_str
     );
 
-    // Leak the library — keeping vtable pointers valid until process exit.
+    // Leak the library -- keeping vtable pointers valid until process exit.
     core::mem::forget(library);
 }

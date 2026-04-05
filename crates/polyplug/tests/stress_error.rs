@@ -11,46 +11,42 @@ use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
 
-use polyplug::plugin_registry::PluginRegistry;
-use polyplug_abi::ABI_ERROR_PANIC;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::StringView;
+use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug_abi::{
+    AbiErrorCode, AbiError, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    DispatchType, NativeDispatch,
+};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
+use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
-// ─── Plugin environment variable ──────────────────────────────────────────────
+// --- Plugin environment variable ---------------------------------------------
 
-/// Path to the compiled error_plugin shared library — set by build.rs.
+/// Path to the compiled error_plugin shared library -- set by build.rs.
 const ERROR_PLUGIN_SO: &str = env!("ERROR_PLUGIN_SO");
 
-// ─── ChainArgs (mirrors error_plugin's ChainArgs) ─────────────────────────────
+// --- ChainArgs (mirrors error_plugin's ChainArgs) ----------------------------
 
 /// Arguments for error_chain_propagate (fn 2).
 /// Mirrors the definition in tests/fixtures/error_plugin/src/lib.rs.
 #[repr(C)]
 struct ChainArgs {
     rt_ctx: *mut core::ffi::c_void,
-    host: *const HostVTable,
+    host: *const RuntimeAbi,
     target_contract_id: u64,
     target_fn_id: u32,
 }
 
-// ─── Thread-local registry ────────────────────────────────────────────────────
+// --- Thread-local registry ---------------------------------------------------
 
 std::thread_local! {
     static ERROR_REGISTRY: core::cell::RefCell<PluginRegistry> =
         core::cell::RefCell::new(PluginRegistry::new());
 }
 
-// ─── HostVTable callbacks (for Test 3 chain dispatch) ───────────────────────
+// --- RuntimeAbi callbacks (for Test 3 chain dispatch) -----------------------
 
 /// find_by_contract that looks up a plugin from the thread-local ERROR_REGISTRY.
 ///
@@ -63,31 +59,14 @@ unsafe extern "C" fn chain_find_by_contract(
 ) -> PluginHandle {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
-        match registry.find(contract_id, 0) {
+        match registry.find(GuestContractId::from_u64(contract_id), 0) {
             Ok(handle) => handle,
-            Err(_) => PluginHandle {
-                index: u32::MAX,
-                generation: 0,
-            },
+            Err(_) => PluginHandle::null(),
         }
     })
 }
 
-/// find_by_bundle stub — delegates to find_by_contract (bundle-scoped lookup not implemented).
-///
-/// # Safety
-/// Always safe to call; delegates to chain_find_by_contract.
-unsafe extern "C" fn chain_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    contract_id: u64,
-    min_version: u32,
-) -> PluginHandle {
-    // SAFETY: chain_find_by_contract has no pointer preconditions.
-    unsafe { chain_find_by_contract(core::ptr::null_mut(), contract_id, min_version) }
-}
-
-/// find_all_by_contract stub — returns 0 (not needed for error chain tests).
+/// find_all_by_contract stub -- returns 0 (not needed for error chain tests).
 ///
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
@@ -101,27 +80,41 @@ unsafe extern "C" fn chain_find_all_by_contract(
     0
 }
 
-/// resolve_plugin that dispatches through the thread-local ERROR_REGISTRY.
+/// resolve_contract that dispatches through the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
-unsafe extern "C" fn chain_resolve_plugin(
+unsafe extern "C" fn chain_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
         registry.resolve(handle).unwrap_or(core::ptr::null())
     })
 }
 
-/// Stub get_host_contract — returns null.
+/// Stub call_method -- returns Ok.
+unsafe extern "C" fn stub_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
+}
+
+/// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 /// Stub alloc callback.
@@ -153,16 +146,6 @@ unsafe extern "C" fn noop_find_by_contract(
     PluginHandle::null()
 }
 
-/// No-op find_by_bundle callback.
-unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
-}
-
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
@@ -174,12 +157,26 @@ unsafe extern "C" fn noop_find_all_by_contract(
     0
 }
 
-/// No-op resolve_plugin callback.
-unsafe extern "C" fn noop_resolve_plugin(
+/// No-op resolve_contract callback.
+unsafe extern "C" fn noop_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
+}
+
+/// No-op call_method callback.
+unsafe extern "C" fn noop_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_host_contract callback.
@@ -187,62 +184,62 @@ unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
-// ─── Registry callback ────────────────────────────────────────────────────────
+// --- Registry callback -------------------------------------------------------
 
-/// A register_plugin callback that stores vtable entries into the thread-local ERROR_REGISTRY.
+/// A register_contract callback that stores vtable entries into the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
-/// `_rt_ctx`, `descriptor`, and `vtable` must be valid for the call duration.
+/// `_rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
+    if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: 1_u32,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
 
-    // SAFETY: descriptor and vtable are valid for this call (ABI contract).
+    // SAFETY: descriptor and interface are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginInterface = unsafe { &*vtable };
+    // SAFETY: interface is valid for this call (ABI contract).
+    let iface: &GuestContractInterface = unsafe { &*interface };
 
     // Extract contract name from StringView.
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
+    // &'static str contract name -- guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+    // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
-        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
+        // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
 
     match result {
         Ok(_) => AbiError {
-            code: ABI_OK,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: 1_u32,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
 }
 
-// ─── Helper functions ─────────────────────────────────────────────────────────
+// --- Helper functions --------------------------------------------------------
 
 /// Loads the error_plugin shared library with RTLD_GLOBAL so that the plugin can
 /// resolve `polyplug_host_alloc` and `polyplug_host_free` from the host binary.
@@ -270,7 +267,7 @@ fn load_error_plugin() -> libloading::Library {
 
 /// Initialise error_plugin and return the vtable pointer.
 /// Also resets the thread-local registry.
-fn init_error_plugin(library: &libloading::Library) -> *const PluginInterface {
+fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     ERROR_REGISTRY.with(|cell| {
         *cell.borrow_mut() = PluginRegistry::new();
@@ -281,7 +278,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginInterface {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -290,33 +287,32 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginInterface {
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: registry_register_callback,
+    let host_vtable: RuntimeAbi = RuntimeAbi {
+        register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: noop_find_by_contract,
-        find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
-        resolve_plugin: noop_resolve_plugin,
+        resolve_contract: noop_resolve_contract,
+        call_method: noop_call_method,
         get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
 
-    let contract_id: u64 = polyplug_abi::contract_id("error.test", 1);
+    let contract_id: GuestContractId = GuestContractId::new("error.test", 1);
     let handle: PluginHandle = ERROR_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -330,20 +326,20 @@ fn init_error_plugin(library: &libloading::Library) -> *const PluginInterface {
     })
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// --- Tests -------------------------------------------------------------------
 
 /// Test 1: error_return_with_message writes an AbiError { code=99, message="test error from plugin" }
 /// to the out pointer, and the message must be freed after reading.
 #[test]
 fn stress_error_code_and_message_received_correctly() {
     let library: libloading::Library = load_error_plugin();
-    let vtable_ptr: *const PluginInterface = init_error_plugin(&library);
+    let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // SAFETY: fn_ptr is function 0 in the vtable (error_return_with_message).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
@@ -360,7 +356,7 @@ fn stress_error_code_and_message_received_correctly() {
 
     // The dispatch wrapper returns ABI_OK (success).
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "dispatch wrapper must return ABI_OK"
     );
 
@@ -390,19 +386,19 @@ fn stress_error_code_and_message_received_correctly() {
 }
 
 /// Test 2: error_panic catches an intentional panic and returns ABI_ERROR_PANIC (code=3).
-/// The message is from_static — must NOT be freed. Process continues after the call.
+/// The message is from_static -- must NOT be freed. Process continues after the call.
 #[test]
 fn stress_panic_returns_abi_error_panic_process_continues() {
     let library: libloading::Library = load_error_plugin();
-    let vtable_ptr: *const PluginInterface = init_error_plugin(&library);
+    let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // SAFETY: fn_ptr is function 1 in the vtable (error_panic).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. fn 1 ignores both
-    // args and out — it catches the panic internally and returns ABI_ERROR_PANIC directly.
+    // args and out -- it catches the panic internally and returns ABI_ERROR_PANIC directly.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
@@ -411,11 +407,12 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     let result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
 
     assert_eq!(
-        result.code, ABI_ERROR_PANIC,
-        "error_panic must return ABI_ERROR_PANIC (code={ABI_ERROR_PANIC})"
+        result.code, AbiErrorCode::Panic as u32,
+        "error_panic must return ABI_ERROR_PANIC (code={})",
+        AbiErrorCode::Panic as u32
     );
 
-    // The message is from_static ("plugin panicked") — do NOT free it.
+    // The message is from_static ("plugin panicked") -- do NOT free it.
     // SAFETY: result.message.ptr points to 'static bytes that remain valid indefinitely.
     let msg_bytes: &[u8] =
         unsafe { core::slice::from_raw_parts(result.message.ptr, result.message.len) };
@@ -430,41 +427,41 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     core::mem::forget(library);
 }
 
-/// Test 3: error_chain_propagate (fn 2) calls another plugin via a real HostVTable
+/// Test 3: error_chain_propagate (fn 2) calls another plugin via a real RuntimeAbi
 /// and propagates the error back to the test. The chain target is fn 1 (error_panic)
 /// which returns ABI_ERROR_PANIC via its return value (not via out pointer).
 /// The propagated error code is written to *out by error_chain_propagate.
 #[test]
 fn stress_error_chain_b_errors_a_propagates() {
     let library: libloading::Library = load_error_plugin();
-    let vtable_ptr: *const PluginInterface = init_error_plugin(&library);
+    let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Build a HostVTable that routes find_by_contract and resolve_plugin through the
+    // Build a RuntimeAbi that routes find_by_contract and resolve_contract through the
     // thread-local ERROR_REGISTRY that contains error_plugin's vtable.
-    let chain_host_vtable: HostVTable = HostVTable {
-        register_plugin: registry_register_callback,
+    let chain_host_vtable: RuntimeAbi = RuntimeAbi {
+        register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: chain_find_by_contract,
-        find_by_bundle: chain_find_by_bundle,
         find_all_by_contract: chain_find_all_by_contract,
-        resolve_plugin: chain_resolve_plugin,
+        resolve_contract: chain_resolve_contract,
+        call_method: stub_call_method,
         get_host_contract: stub_get_host_contract,
     };
 
     // error.test contract_id is FNV-1a("error.test@1").
-    let error_contract_id: u64 = polyplug_abi::contract_id("error.test", 1);
+    let error_contract_id: GuestContractId = GuestContractId::new("error.test", 1);
 
     // ChainArgs pointing to fn 1 (error_panic).
     // fn 1 returns ABI_ERROR_PANIC via its return value (not via *out),
     // so error_chain_propagate receives it as inner_result and writes it to *out.
     let chain_args: ChainArgs = ChainArgs {
         rt_ctx: core::ptr::null_mut(),
-        host: &chain_host_vtable as *const HostVTable,
-        target_contract_id: error_contract_id,
+        host: &chain_host_vtable as *const RuntimeAbi,
+        target_contract_id: error_contract_id.id(),
         target_fn_id: 1_u32, // fn 1 = error_panic
     };
 
@@ -474,13 +471,13 @@ fn stress_error_chain_b_errors_a_propagates() {
     };
 
     // SAFETY: fn_ptr is function 2 in the vtable (error_chain_propagate).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Args is *const ChainArgs,
-    // out is *mut AbiError — types enforced by this test.
+    // out is *mut AbiError -- types enforced by this test.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: chain_args is a valid ChainArgs with a live HostVTable.
+    // SAFETY: chain_args is a valid ChainArgs with a live RuntimeAbi.
     // out is a valid AbiError location. error_chain_propagate calls fn 1 via the host
     // vtable and writes the returned AbiError (ABI_ERROR_PANIC) to *out.
     let call_result: AbiError = unsafe {
@@ -492,17 +489,18 @@ fn stress_error_chain_b_errors_a_propagates() {
 
     // error_chain_propagate itself returns ABI_OK (wrapper success).
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "error_chain_propagate wrapper must return ABI_OK"
     );
 
     // The propagated error from fn 1 (error_panic) is ABI_ERROR_PANIC.
     assert_eq!(
-        out.code, ABI_ERROR_PANIC,
-        "propagated error must be ABI_ERROR_PANIC (={ABI_ERROR_PANIC})"
+        out.code, AbiErrorCode::Panic as u32,
+        "propagated error must be ABI_ERROR_PANIC (={})",
+        AbiErrorCode::Panic as u32
     );
 
-    // The message from error_panic is from_static — do NOT free it.
+    // The message from error_panic is from_static -- do NOT free it.
     // No host_alloc'd memory was produced by fn 1.
 
     let tracker: TrackingAllocator = TrackingAllocator::new();
@@ -517,13 +515,13 @@ fn stress_error_chain_b_errors_a_propagates() {
 #[test]
 fn stress_error_message_lifetime_valid_during_read() {
     let library: libloading::Library = load_error_plugin();
-    let vtable_ptr: *const PluginInterface = init_error_plugin(&library);
+    let interface_ptr: *const GuestContractInterface = init_error_plugin(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // SAFETY: fn_ptr is function 0 in the vtable (error_return_with_message).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
@@ -539,7 +537,7 @@ fn stress_error_message_lifetime_valid_during_read() {
         unsafe { dispatch_fn(core::ptr::null(), &mut out as *mut AbiError as *mut ()) };
 
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "dispatch wrapper must return ABI_OK"
     );
     assert_eq!(out.code, 99_u32, "error code must be 99");

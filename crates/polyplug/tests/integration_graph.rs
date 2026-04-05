@@ -9,68 +9,64 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-use polyplug::plugin_registry::PluginRegistry;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::StringView;
-use polyplug_abi::contract_id;
+use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug_abi::{
+    AbiErrorCode, AbiError, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    DispatchType, NativeDispatch,
+};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
-/// Path to the compiled test_plugin shared library — set by build.rs.
+/// Path to the compiled test_plugin shared library -- set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
-// ─── Host functions for integration tests ─────────────────────────────────────
+// --- Host functions for integration tests ------------------------------------
 
-/// A register_plugin callback that stores vtable entries into a Registry
+/// A register_contract callback that stores vtable entries into a Registry
 /// via thread-local state (avoids threading through the opaque host pointer).
 ///
 /// # Safety
-/// `rt_ctx`, `descriptor`, and `vtable` must be valid non-null pointers for the call duration.
+/// `rt_ctx`, `descriptor`, and `interface` must be valid non-null pointers for the call duration.
 unsafe extern "C" fn graph_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
+    if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: 1,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
 
-    // SAFETY: descriptor and vtable are valid for this call.
+    // SAFETY: descriptor and interface are valid for this call.
     let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call.
-    let vt: &PluginInterface = unsafe { &*vtable };
+    // SAFETY: interface is valid for this call.
+    let iface: &GuestContractInterface = unsafe { &*interface };
 
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
+    // &'static str contract name -- guaranteed valid UTF-8 by construction.
     let contract_name_str: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+    // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
         cell.borrow()
-            .register(*desc, vtable, contract_name_str.to_owned(), vt.contract_id)
+            .register(*desc, interface, contract_name_str.to_owned(), BundleId::from_u64(iface.contract_id.id()))
     });
 
     match result {
         Ok(_) => AbiError {
-            code: ABI_OK,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: 1,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
@@ -105,16 +101,6 @@ unsafe extern "C" fn noop_find_by_contract(
     PluginHandle::null()
 }
 
-/// No-op find_by_bundle callback.
-unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
-}
-
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
@@ -126,12 +112,26 @@ unsafe extern "C" fn noop_find_all_by_contract(
     0
 }
 
-/// No-op resolve_plugin callback.
-unsafe extern "C" fn noop_resolve_plugin(
+/// No-op resolve_contract callback.
+unsafe extern "C" fn noop_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
+}
+
+/// No-op call_method callback.
+unsafe extern "C" fn noop_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_host_contract callback.
@@ -139,8 +139,8 @@ unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 std::thread_local! {
@@ -156,12 +156,12 @@ fn load_and_init_plugin() -> libloading::Library {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
     };
 
-    // SAFETY: polyplug_init signature is `extern "C" fn(*mut c_void, *const HostVTable, *const PluginContext) -> AbiError`.
+    // SAFETY: polyplug_init signature is `extern "C" fn(*mut c_void, *const RuntimeAbi, *const PluginContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -170,36 +170,35 @@ fn load_and_init_plugin() -> libloading::Library {
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: graph_register_callback,
+    let host_vtable: RuntimeAbi = RuntimeAbi {
+        register_contract: graph_register_callback,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
-        find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
-        resolve_plugin: noop_resolve_plugin,
+        resolve_contract: noop_resolve_contract,
+        call_method: noop_call_method,
         get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
 
     library
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// --- Tests -------------------------------------------------------------------
 
 #[test]
 fn test_single_contract_registration_and_lookup() {
@@ -207,7 +206,7 @@ fn test_single_contract_registration_and_lookup() {
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    let test_add_id: u64 = contract_id("test.add", 1);
+    let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
     // Find the test.add contract.
     let handle: PluginHandle = GRAPH_REGISTRY.with(|cell| {
@@ -219,19 +218,22 @@ fn test_single_contract_registration_and_lookup() {
     assert!(!handle.is_null(), "handle must not be null");
 
     // Resolve the vtable.
-    let vtable_ptr: *const PluginInterface = GRAPH_REGISTRY.with(|cell| {
+    let interface_ptr: *const GuestContractInterface = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
             .expect("handle must resolve to vtable")
     });
 
-    // SAFETY: vtable_ptr is valid — library is alive (not yet forgotten).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid -- library is alive (not yet forgotten).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     assert_eq!(
-        vtable.contract_id, test_add_id,
-        "vtable contract_id must match"
+        interface.contract_id, test_add_id,
+        "interface contract_id must match"
     );
-    assert_eq!(vtable.function_count, 1, "test.add must have 1 function");
+    assert_eq!(
+        interface.dispatch.native.function_count, 1,
+        "test.add must have 1 function"
+    );
 
     core::mem::forget(lib);
 }
@@ -242,7 +244,7 @@ fn test_unknown_contract_returns_not_found() {
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    let unknown_id: u64 = contract_id("unknown.contract", 1);
+    let unknown_id: GuestContractId = GuestContractId::new("unknown.contract", 1);
     let result: Result<PluginHandle, _> =
         GRAPH_REGISTRY.with(|cell| cell.borrow().find(unknown_id, 0));
 
@@ -260,19 +262,20 @@ fn test_duplicate_registration_allowed() {
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    // Try to manually register the same contract again — should succeed (multi-impl).
-    let test_add_id: u64 = contract_id("test.add", 1);
+    // Try to manually register the same contract again -- should succeed (multi-impl).
+    let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
-    // Build a fake vtable for the second registration.
+    // Build a fake interface for the second registration.
     // function_count=0, so the functions pointer is never dereferenced.
-    let fake_vtable: PluginInterface = PluginInterface {
-        rt_ctx: core::ptr::null(),
+    let fake_interface: GuestContractInterface = GuestContractInterface {
         contract_id: test_add_id,
-        contract_version: 0_u32,
-        function_count: 0_u32,
+        contract_version: Version { major: 1, minor: 0, patch: 0 },
         dispatch_type: polyplug_abi::DispatchType::Native,
-        dispatch: polyplug_abi::PluginDispatch {
+        create_instance: |_| GuestContractInstance::null(),
+        destroy_instance: |_, _| {},
+        dispatch: polyplug_abi::DispatchMechanisms {
             native: polyplug_abi::NativeDispatch {
+                function_count: 0,
                 functions: core::ptr::null(),
             },
         },
@@ -280,18 +283,16 @@ fn test_duplicate_registration_allowed() {
     let fake_descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"duplicate_adder"),
         contract_name: StringView::from_static(b"test.add"),
-        version_major: 1,
-        version_minor: 0,
-        version_patch: 0,
+        version: Version { major: 1, minor: 0, patch: 0 },
     };
 
-    // SAFETY: fake_vtable is a local static with 'static lifetime.
+    // SAFETY: fake_interface is a local static with 'static lifetime.
     let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
         cell.borrow().register(
             fake_descriptor,
-            &fake_vtable as *const PluginInterface,
+            &fake_interface as *const GuestContractInterface,
             "test.add".to_owned(),
-            test_add_id,
+            BundleId::from_u64(test_add_id.id()),
         )
     });
 
@@ -304,28 +305,25 @@ fn test_duplicate_registration_allowed() {
 }
 
 #[test]
-fn test_stale_handle_detected_after_explicit_construction() {
+fn test_invalid_handle_detected() {
     GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    let test_add_id: u64 = contract_id("test.add", 1);
+    let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
     let handle: PluginHandle = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(test_add_id, 0)
             .expect("must find test.add")
     });
 
-    // Construct a stale handle with wrong generation.
-    let stale: PluginHandle = PluginHandle {
-        index: handle.index,
-        generation: handle.generation + 1,
-    };
+    // Construct an invalid handle with an out-of-bounds index.
+    let invalid: PluginHandle = PluginHandle { index: 999 };
 
-    let result: Result<*const PluginInterface, _> =
-        GRAPH_REGISTRY.with(|cell| cell.borrow().resolve(stale));
+    let result: Result<*const GuestContractInterface, _> =
+        GRAPH_REGISTRY.with(|cell| cell.borrow().resolve(invalid));
 
-    assert!(result.is_err(), "stale handle must return Err");
+    assert!(result.is_err(), "invalid handle must return Err");
 
     core::mem::forget(lib);
 }
@@ -336,7 +334,7 @@ fn test_multi_lookup_consistent() {
 
     let lib: libloading::Library = load_and_init_plugin();
 
-    let test_add_id: u64 = contract_id("test.add", 1);
+    let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
     // Repeated lookups must return consistent results.
     let handle_a: PluginHandle = GRAPH_REGISTRY.with(|cell| {
@@ -353,10 +351,6 @@ fn test_multi_lookup_consistent() {
     assert_eq!(
         handle_a.index, handle_b.index,
         "repeated lookups must return same slot index"
-    );
-    assert_eq!(
-        handle_a.generation, handle_b.generation,
-        "repeated lookups must return same generation"
     );
 
     core::mem::forget(lib);

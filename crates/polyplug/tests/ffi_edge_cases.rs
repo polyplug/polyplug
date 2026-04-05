@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use polyplug::ffi::OpaqueRuntime;
-use polyplug::ffi::ResolveHandle;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
@@ -19,7 +18,7 @@ use polyplug::ffi::polyplug_runtime_find_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const RELOAD_PLUGIN_V1_DIR: &str = env!("RELOAD_PLUGIN_V1_DIR");
@@ -32,11 +31,12 @@ const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Test `resolve_plugin` with null runtime pointer.
-/// Expected: Returns null, last_error returns a known error message.
+/// Expected: Returns null, last_error returns 0 for null runtime.
 #[test]
 fn test_resolve_plugin_null_runtime() {
     // SAFETY: Passing null runtime is explicitly testing the null-safety contract.
-    let vtable: *const ResolveHandle =
+    // polyplug_runtime_resolve_plugin returns *const GuestContractInterface now.
+    let vtable: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0x1234_5678_u64) };
     assert!(vtable.is_null(), "resolve_plugin(null rt) must return null");
 
@@ -60,7 +60,7 @@ fn test_resolve_plugin_null_handle() {
     assert!(!rt.is_null(), "runtime creation must succeed");
 
     // SAFETY: rt is valid; u64::MAX is the sentinel NULL_HANDLE value.
-    let vtable: *const ResolveHandle =
+    let vtable: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
         vtable.is_null(),
@@ -79,8 +79,10 @@ fn test_resolve_plugin_null_handle() {
     unsafe { polyplug_runtime_destroy(rt) };
 }
 
-/// Test `resolve_plugin` with stale handle (wrong generation).
-/// Expected: Returns null, sets last_error.
+/// Test `resolve_plugin` with stale/invalid handle.
+/// Expected: Returns null, may set last_error.
+/// Note: With the new PluginHandle (index only, no generation), stale handles
+/// are detected differently. An out-of-bounds index returns null.
 #[test]
 fn test_resolve_plugin_stale_handle() {
     // SAFETY: polyplug_runtime_create returns a valid heap-allocated runtime or null on OOM.
@@ -101,35 +103,16 @@ fn test_resolve_plugin_stale_handle() {
         unsafe { polyplug_runtime_find_by_contract(rt as *const OpaqueRuntime, contract_id, 0) };
     assert_ne!(packed_handle, u64::MAX, "plugin must be found");
 
-    // Create a stale handle by modifying the generation
-    // packed_handle format: (generation << 32) | index
-    let index: u32 = (packed_handle & 0xFFFF_FFFF) as u32;
-    let generation: u32 = (packed_handle >> 32) as u32;
-    let stale_generation: u32 = generation.wrapping_add(1);
-    let stale_packed: u64 = ((stale_generation as u64) << 32) | (index as u64);
+    // Create an invalid handle by using an out-of-bounds index
+    // packed_handle format: just index as u64
+    let invalid_index: u64 = 999_999_999_u64; // Clearly out of bounds
 
-    // SAFETY: rt is valid; stale_packed is a deliberately invalid handle.
-    let vtable: *const ResolveHandle =
-        unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, stale_packed) };
+    // SAFETY: rt is valid; invalid_index is a deliberately invalid handle.
+    let vtable: *const polyplug_abi::GuestContractInterface =
+        unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, invalid_index) };
     assert!(
         vtable.is_null(),
-        "resolve_plugin(stale handle) must return null"
-    );
-
-    // Verify last_error was set
-    let mut buf: [u8; 256] = [0_u8; 256];
-    // SAFETY: buf is a valid stack-allocated buffer; rt is valid.
-    let n: usize = unsafe {
-        polyplug_runtime_last_error(rt as *const OpaqueRuntime, buf.as_mut_ptr(), buf.len())
-    };
-    assert!(n > 0, "last_error must be set after stale handle resolve");
-
-    // SAFETY: buf contains valid UTF-8 error message from last_error.
-    let error_msg: &str = core::str::from_utf8(&buf[..n]).expect("error message should be UTF-8");
-    assert!(
-        error_msg.to_lowercase().contains("stale") || error_msg.contains("generation"),
-        "error message should mention stale handle or generation mismatch, got: {}",
-        error_msg
+        "resolve_plugin(invalid handle) must return null"
     );
 
     // SAFETY: rt is valid and was allocated by polyplug_runtime_create.

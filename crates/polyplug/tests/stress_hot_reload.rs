@@ -19,9 +19,9 @@ use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
-use polyplug::plugin_registry::PluginRegistry;
+use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug::runtime::Runtime;
-use polyplug_abi::{DispatchType, GuestContractInterface, NativeDispatch, PluginDispatch};
+use polyplug_abi::{DispatchType, GuestContractInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -32,13 +32,28 @@ const RELOAD_V2_DIR: &str = env!("RELOAD_PLUGIN_V2_DIR");
 
 const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
+/// No-op create_instance callback.
+unsafe extern "C" fn noop_create_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> polyplug_abi::GuestContractInstance {
+    polyplug_abi::GuestContractInstance::null()
+}
+
+/// No-op destroy_instance callback.
+unsafe extern "C" fn noop_destroy_instance(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: polyplug_abi::GuestContractInstance,
+) {
+}
+
 static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: 0xDEAD_BEEF_0000_0001_u64,
-    contract_version: (1_u32 << 16),
-    function_count: 0_u32,
+    contract_id: 0xDEAD_BEEF_0000_0001_u64.into(),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    dispatch: PluginDispatch {
+    create_instance: noop_create_instance,
+    destroy_instance: noop_destroy_instance,
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
         },
@@ -46,12 +61,12 @@ static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
 };
 
 static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: 0xDEAD_BEEF_0000_0001_u64,
-    contract_version: (2_u32 << 16),
-    function_count: 0_u32,
+    contract_id: 0xDEAD_BEEF_0000_0001_u64.into(),
+    contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    dispatch: PluginDispatch {
+    create_instance: noop_create_instance,
+    destroy_instance: noop_destroy_instance,
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
         },
@@ -59,12 +74,12 @@ static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
 };
 
 static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: 0xCAFE_BABE_0000_0001_u64,
-    contract_version: (1_u32 << 16),
-    function_count: 0_u32,
+    contract_id: 0xCAFE_BABE_0000_0001_u64.into(),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    dispatch: PluginDispatch {
+    create_instance: noop_create_instance,
+    destroy_instance: noop_destroy_instance,
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
         },
@@ -72,12 +87,12 @@ static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
 };
 
 static VTABLE_QU_B: GuestContractInterface = GuestContractInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: 0xCAFE_BABE_0000_0001_u64,
-    contract_version: (2_u32 << 16),
-    function_count: 0_u32,
+    contract_id: 0xCAFE_BABE_0000_0001_u64.into(),
+    contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    dispatch: PluginDispatch {
+    create_instance: noop_create_instance,
+    destroy_instance: noop_destroy_instance,
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
         },
@@ -98,8 +113,9 @@ fn hot_reload_config() -> polyplug::runtime::RuntimeConfig {
     polyplug::runtime::RuntimeConfig {
         hot_reload_enabled: true,
         hot_reload_max_retries: 3,
-        hot_reload_retry_interval: core::time::Duration::from_secs(1),
+        hot_reload_retry_interval_ms: 1000,
         hot_reload_abort_on_max_retries: true,
+        compatibility: polyplug::runtime::Compatibility::Strict,
     }
 }
 
@@ -134,7 +150,7 @@ fn stress_rapid_reload_cycles_100() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
 
     for i in 0_u32..CYCLES {
         let so_path: PathBuf = if i % 2_u32 == 0_u32 {
@@ -154,7 +170,7 @@ fn stress_rapid_reload_cycles_100() {
             });
 
         let version: u32 = version_fn();
-        // Cycle 0 → v2 (200), cycle 1 → v1 (100), ...
+        // Cycle 0 -> v2 (200), cycle 1 -> v1 (100), ...
         let expected: u32 = if i % 2_u32 == 0_u32 { 200_u32 } else { 100_u32 };
         assert_eq!(
             version, expected,
@@ -162,7 +178,7 @@ fn stress_rapid_reload_cycles_100() {
         );
     }
 
-    // 100 cycles: last reload (cycle 99, odd) used v1_so_path → expects 100.
+    // 100 cycles: last reload (cycle 99, odd) used v1_so_path -> expects 100.
     let final_fn: extern "C" fn() -> u32 =
         resolve_version_fn(&rt, contract_id).expect("final vtable resolution must succeed");
     assert_eq!(
@@ -179,12 +195,10 @@ fn stress_memory_interface_swap_cycles() {
 
     let registry: PluginRegistry = PluginRegistry::new();
 
-    let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-        name: polyplug_abi::StringView::from_static(b"stress-mem-plugin"),
-        contract_name: polyplug_abi::StringView::from_static(b"stress.mem.contract"),
-        version_major: 1_u32,
-        version_minor: 0_u32,
-        version_patch: 0_u32,
+    let descriptor: PluginDescriptor = PluginDescriptor {
+        name: StringView::from_static(b"stress-mem-plugin"),
+        contract_name: StringView::from_static(b"stress.mem.contract"),
+        version: Version { major: 1, minor: 0, patch: 0 },
     };
 
     // SAFETY: VTABLE_MEM_A is 'static and valid for the lifetime of this test.
@@ -222,12 +236,10 @@ fn stress_direct_swap_under_concurrent_reader_load() {
 
     let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
-    let descriptor: polyplug_abi::PluginDescriptor = polyplug_abi::PluginDescriptor {
-        name: polyplug_abi::StringView::from_static(b"swap-load-plugin"),
-        contract_name: polyplug_abi::StringView::from_static(b"swap.load.contract"),
-        version_major: 1_u32,
-        version_minor: 0_u32,
-        version_patch: 0_u32,
+    let descriptor: PluginDescriptor = PluginDescriptor {
+        name: StringView::from_static(b"swap-load-plugin"),
+        contract_name: StringView::from_static(b"swap.load.contract"),
+        version: Version { major: 1, minor: 0, patch: 0 },
     };
 
     // SAFETY: VTABLE_QU_A is 'static and valid for the test lifetime.
@@ -256,7 +268,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                 let find_result: Result<
                     polyplug_abi::PluginHandle,
                     polyplug::error::RegistryError,
-                > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64, 0_u32);
+                > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64.into(), 0_u32);
                 if let Ok(resolved_handle) = find_result {
                     let resolve_result: Result<
                         *const GuestContractInterface,
@@ -264,10 +276,10 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                     > = reg_clone.resolve(resolved_handle);
                     if let Ok(vtable_ptr) = resolve_result {
                         // SAFETY: vtable_ptr is valid
-                        let version: u32 = unsafe { (*vtable_ptr).contract_version };
+                        let version: &Version = unsafe { &(*vtable_ptr).contract_version };
                         assert!(
-                            version == (1_u32 << 16) || version == (2_u32 << 16),
-                            "version must be V1 or V2"
+                            version.major == 1 || version.major == 2,
+                            "version must be 1 or 2"
                         );
                     }
                 }
@@ -304,7 +316,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
 /// (neither v1 nor v2) is observable between swaps.
 ///
 /// Dispatcher threads spin-read the vtable version function; every return value
-/// must be exactly 100 (v1) or 200 (v2) — never anything else.
+/// must be exactly 100 (v1) or 200 (v2) -- never anything else.
 #[test]
 fn stress_vtable_handoff_correctness_no_torn_reads() {
     const DISPATCHER_THREADS: usize = 6_usize;
@@ -314,7 +326,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
 
     let stop_flag: Arc<core::sync::atomic::AtomicBool> =
         Arc::new(core::sync::atomic::AtomicBool::new(false));
@@ -453,7 +465,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
 }
 
 /// Concurrent reloaders: two threads alternate reloading the same plugin.
-/// Both may succeed or one may get a transient error — but neither must panic
+/// Both may succeed or one may get a transient error -- but neither must panic
 /// and the final vtable must be valid and callable.
 #[test]
 fn stress_concurrent_reload_threads_no_panic() {
@@ -463,7 +475,7 @@ fn stress_concurrent_reload_threads_no_panic() {
     rt.load_bundle(std::path::Path::new(RELOAD_V1_DIR))
         .expect("load v1");
 
-    let contract_id: u64 = polyplug_abi::contract_id("reload.test", 1);
+    let contract_id: u64 = GuestContractId::new("reload.test", 1).id();
     let rt_a: Arc<Runtime> = Arc::clone(&rt);
     let rt_b: Arc<Runtime> = Arc::clone(&rt);
 
@@ -474,7 +486,7 @@ fn stress_concurrent_reload_threads_no_panic() {
             } else {
                 v1_so_path()
             };
-            // Ignore errors — concurrent reloads may race; what matters is no panic.
+            // Ignore errors -- concurrent reloads may race; what matters is no panic.
             let _: Result<(), RuntimeError> = rt_a.reload_bundle(so_path.as_path());
         }
     });

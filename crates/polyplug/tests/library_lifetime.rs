@@ -7,17 +7,17 @@
 //! dlclose() would unmap plugin code pages while vtable fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
 
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 use polyplug::loader::parse_manifest;
-use polyplug::plugin_registry::PluginRegistry;
+use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostVTable;
+use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::bundle_id;
+use polyplug_abi::GuestContractInterface;
+use polyplug_utils::bundle_id;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 
@@ -47,10 +47,10 @@ unsafe extern "C" fn stub_free(
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_register_plugin(
+unsafe extern "C" fn stub_register_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _descriptor: *const PluginDescriptor,
-    _vtable: *const PluginInterface,
+    _interface: *const GuestContractInterface,
 ) -> AbiError {
     AbiError::ok()
 }
@@ -59,17 +59,6 @@ unsafe extern "C" fn stub_register_plugin(
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_find_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
-}
-
-/// # Safety
-/// Stub callback — not called during this test.
-unsafe extern "C" fn stub_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -90,11 +79,22 @@ unsafe extern "C" fn stub_find_all_by_contract(
 
 /// # Safety
 /// Stub callback — not called during this test.
-unsafe extern "C" fn stub_resolve_plugin(
+unsafe extern "C" fn stub_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const polyplug_abi::PluginInterface {
+) -> *const polyplug_abi::GuestContractInterface {
     core::ptr::null()
+}
+
+/// Stub call_method callback.
+unsafe extern "C" fn stub_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: polyplug_abi::GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError::ok()
 }
 
 /// Stub get_host_contract callback.
@@ -102,8 +102,8 @@ unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -134,14 +134,14 @@ fn library_handle_outlives_load_call() {
     manifest.id = bundle_id(&manifest.name);
     let so_path: std::path::PathBuf = plugin_dir.join(&manifest.file);
 
-    let host_vtable: &'static HostVTable = Box::leak(Box::new(HostVTable {
-        register_plugin: stub_register_plugin,
+    let runtime_abi: &'static RuntimeAbi = Box::leak(Box::new(RuntimeAbi {
+        register_contract: stub_register_contract,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        resolve_contract: stub_resolve_contract,
+        call_method: stub_call_method,
         get_host_contract: stub_get_host_contract,
     }));
 
@@ -161,7 +161,7 @@ fn library_handle_outlives_load_call() {
     // epic fixes), dlclose() would fire while init is executing plugin code, which
     // could SIGBUS or corrupt state. Returning Ok(()) here proves the Library was
     // alive through the entire load sequence.
-    polyplug::loader::load_bundle(&so_path, &manifest, &registry, host_vtable, &runtime)
+    polyplug::loader::load_bundle(&so_path, &manifest, &registry, runtime_abi, &runtime)
         .expect("load_bundle must succeed for test_plugin");
 
     // NOTE: registry.find() is NOT called here because registrar_callback is a stub

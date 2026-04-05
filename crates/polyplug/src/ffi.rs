@@ -584,27 +584,19 @@ mod tests {
 
     #[test]
     fn handle_roundtrip_zero() {
-        let h: PluginHandle = PluginHandle {
-            index: 0u32,
-            generation: 0u32,
-        };
+        let h: PluginHandle = PluginHandle { index: 0u32 };
         let packed: u64 = pack_handle(h);
         let unpacked: PluginHandle = unpack_handle(packed);
         assert_eq!(unpacked.index, h.index);
-        assert_eq!(unpacked.generation, h.generation);
     }
 
     #[test]
     fn handle_roundtrip_max_values() {
         // index = u32::MAX - 1 avoids the null sentinel (index == u32::MAX means null)
-        let h: PluginHandle = PluginHandle {
-            index: u32::MAX - 1,
-            generation: u32::MAX,
-        };
+        let h: PluginHandle = PluginHandle { index: u32::MAX - 1 };
         let packed: u64 = pack_handle(h);
         let unpacked: PluginHandle = unpack_handle(packed);
         assert_eq!(unpacked.index, h.index);
-        assert_eq!(unpacked.generation, h.generation);
     }
 
     #[test]
@@ -810,7 +802,7 @@ mod tests {
         let handle: u64 = unsafe { polyplug_runtime_find_by_contract(core::ptr::null(), 1, 0) };
         assert_eq!(handle, u64::MAX);
 
-        let vtable: *const ResolveHandle =
+        let vtable: *const GuestContractInterface =
             unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0) };
         assert!(vtable.is_null());
 

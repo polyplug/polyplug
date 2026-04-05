@@ -2468,6 +2468,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -2508,6 +2509,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -2627,6 +2629,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,
@@ -2675,6 +2678,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -2715,6 +2719,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -2779,6 +2784,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -2842,6 +2848,7 @@ mod tests {
                     minor: 0,
                     patch: 0,
                 },
+                singleton: false,
                 functions: vec![ResolvedFunction {
                     name: "log".to_owned(),
                     function_id: 0,
@@ -2892,6 +2899,7 @@ mod tests {
                 minor: 0,
                 patch: 0,
             },
+            singleton: false,
             functions: vec![ResolvedFunction {
                 name: "log".to_owned(),
                 function_id: 0,

@@ -3,19 +3,15 @@
 use core::cell::RefCell;
 use std::sync::Arc;
 
-use polyplug::plugin_registry::PluginRegistry;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::Buffer;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::StringView;
+use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug_abi::{
+    AbiErrorCode, AbiError, Buffer, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    DispatchType, NativeDispatch,
+};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
@@ -32,19 +28,19 @@ struct FillArgs {
 unsafe extern "C" fn registry_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
+    if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: 1_u32,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
 
-    // SAFETY: descriptor and vtable are valid for this call (ABI contract).
+    // SAFETY: descriptor and interface are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginInterface = unsafe { &*vtable };
+    // SAFETY: interface is valid for this call (ABI contract).
+    let iface: &GuestContractInterface = unsafe { &*interface };
 
     // SAFETY: desc.contract_name originates from a test plugin with static UTF-8.
     let contract_name: &str = unsafe {
@@ -55,17 +51,17 @@ unsafe extern "C" fn registry_register_callback(
 
     let result: Result<PluginHandle, _> = FFI_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
-        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
+        // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
 
     match result {
         Ok(_) => AbiError {
-            code: ABI_OK,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: 1_u32,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
@@ -100,16 +96,6 @@ unsafe extern "C" fn noop_find_by_contract(
     PluginHandle::null()
 }
 
-/// No-op find_by_bundle callback.
-unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
-}
-
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
@@ -121,12 +107,26 @@ unsafe extern "C" fn noop_find_all_by_contract(
     0
 }
 
-/// No-op resolve_plugin callback.
-unsafe extern "C" fn noop_resolve_plugin(
+/// No-op resolve_contract callback.
+unsafe extern "C" fn noop_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
+}
+
+/// No-op call_method callback.
+unsafe extern "C" fn noop_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
 }
 
 /// No-op get_host_contract callback.
@@ -134,15 +134,16 @@ unsafe extern "C" fn noop_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 fn load_memory_plugin() -> libloading::Library {
     // SAFETY: MEMORY_PLUGIN_SO is a compiled cdylib built by build.rs.
     unsafe { libloading::Library::new(MEMORY_PLUGIN_SO).expect("failed to load memory_plugin .so") }
 }
-fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInterface {
+
+fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContractInterface {
     FFI_REGISTRY.with(|cell| {
         *cell.borrow_mut() = PluginRegistry::new();
     });
@@ -152,7 +153,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -161,20 +162,19 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: registry_register_callback,
+    let host_vtable: RuntimeAbi = RuntimeAbi {
+        register_contract: registry_register_callback,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
-        find_by_bundle: noop_find_by_bundle,
         find_all_by_contract: noop_find_all_by_contract,
-        resolve_plugin: noop_resolve_plugin,
+        resolve_contract: noop_resolve_contract,
+        call_method: noop_call_method,
         get_host_contract: noop_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
 
@@ -182,13 +182,13 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
 
-    let contract_id: u64 = polyplug_abi::contract_id("memory.test", 1);
+    let contract_id: GuestContractId = GuestContractId::new("memory.test", 1);
     let handle: PluginHandle = FFI_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -205,10 +205,10 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
 #[test]
 fn test_misaligned_buffer_fill() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     const BUFFER_SIZE: usize = 64;
     let base_ptr: *mut u8 = polyplug_host_alloc(BUFFER_SIZE, 8);
@@ -232,7 +232,7 @@ fn test_misaligned_buffer_fill() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -245,7 +245,7 @@ fn test_misaligned_buffer_fill() {
         )
     };
 
-    assert_ne!(call_result.code, ABI_OK, "misaligned buffer must error");
+    assert_ne!(call_result.code, AbiErrorCode::Ok as u32, "misaligned buffer must error");
     assert_eq!(out, 0_u32, "out must remain zero on error");
 
     // SAFETY: base_ptr was allocated by polyplug_host_alloc with matching size and alignment.
@@ -256,10 +256,10 @@ fn test_misaligned_buffer_fill() {
 #[test]
 fn test_stringview_cross_thread_echo() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     let bytes: Arc<Vec<u8>> = Arc::new(b"cross-thread string".to_vec());
     let len: usize = bytes.len();
@@ -273,7 +273,7 @@ fn test_stringview_cross_thread_echo() {
             let mut out_sv: StringView = StringView::null();
 
             // SAFETY: fn_ptr is function 2 in the vtable (memory_echo_string_view).
-            let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
+            let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
             let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                 // SAFETY: fn_ptr is cast to the generic dispatch signature.
                 unsafe { core::mem::transmute(fn_ptr) };
@@ -286,7 +286,7 @@ fn test_stringview_cross_thread_echo() {
                 )
             };
 
-            assert_eq!(call_result.code, ABI_OK, "echo must return ABI_OK");
+            assert_eq!(call_result.code, AbiErrorCode::Ok as u32, "echo must return ABI_OK");
             assert_eq!(out_sv.ptr, input_sv.ptr, "ptr must round-trip");
             assert_eq!(out_sv.len, input_sv.len, "len must round-trip");
 
@@ -306,10 +306,10 @@ fn test_stringview_cross_thread_echo() {
 #[test]
 fn test_buffer_cap_less_than_len() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     const BUFFER_SIZE: usize = 32;
     let ptr: *mut u8 = polyplug_host_alloc(BUFFER_SIZE, 8);
@@ -327,7 +327,7 @@ fn test_buffer_cap_less_than_len() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature.
         unsafe { core::mem::transmute(fn_ptr) };
@@ -340,7 +340,7 @@ fn test_buffer_cap_less_than_len() {
         )
     };
 
-    assert_ne!(call_result.code, ABI_OK, "cap < len must error");
+    assert_ne!(call_result.code, AbiErrorCode::Ok as u32, "cap < len must error");
     assert_eq!(out, 0_u32, "out must remain zero on error");
 
     // SAFETY: ptr is valid for BUFFER_SIZE bytes.

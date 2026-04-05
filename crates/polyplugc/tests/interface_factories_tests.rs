@@ -8,7 +8,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug_abi::host_contract_id;
+use polyplug_utils::host_contract_id;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
 use std::path::PathBuf;
@@ -215,7 +215,7 @@ fn test_vtable_factory_thunks_have_panic_safety() {
         "Thunks must use AssertUnwindSafe wrapper:\n{vtables}"
     );
 
-    // Panic must return ABI_ERROR_PANIC
+    // Panic must return ABI_ERROR_PANIC (AbiErrorCode::Panic)
     assert!(
         vtables.contains("ABI_ERROR_PANIC"),
         "Panic handler must return ABI_ERROR_PANIC:\n{vtables}"

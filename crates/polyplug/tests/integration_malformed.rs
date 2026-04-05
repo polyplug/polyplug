@@ -12,7 +12,7 @@ use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 
 fn load_bundle_path(rt: *mut OpaqueRuntime, dir: &str) -> u32 {
     let bytes: &[u8] = dir.as_bytes();

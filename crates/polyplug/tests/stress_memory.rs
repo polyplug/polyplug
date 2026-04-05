@@ -11,27 +11,23 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use polyplug::plugin_registry::PluginRegistry;
-use polyplug_abi::ABI_OK;
-use polyplug_abi::AbiError;
-use polyplug_abi::Buffer;
-use polyplug_abi::HostVTable;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
-use polyplug_abi::PluginContext;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
-use polyplug_abi::StringView;
+use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug_abi::{
+    AbiErrorCode, AbiError, Buffer, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    DispatchType, NativeDispatch,
+};
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
+use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
-// ─── Plugin environment variable ──────────────────────────────────────────────
+// --- Plugin environment variable ---------------------------------------------
 
-/// Path to the compiled memory_plugin shared library — set by build.rs.
+/// Path to the compiled memory_plugin shared library -- set by build.rs.
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
-// ─── Thread-local registry ────────────────────────────────────────────────────
+// --- Thread-local registry ---------------------------------------------------
 
 std::thread_local! {
     static STRESS_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
@@ -41,7 +37,7 @@ std::thread_local! {
         RefCell::new(polyplug_host_free);
 }
 
-// ─── ABI argument/result types (mirror memory_plugin's definitions) ───────────
+// --- ABI argument/result types (mirror memory_plugin's definitions) ----------
 
 /// Arguments to `memory_fill_preallocated_buffer` (fn 0).
 #[repr(C)]
@@ -54,7 +50,7 @@ struct FillArgs {
 #[repr(C)]
 struct AllocArgs {
     rt_ctx: *mut core::ffi::c_void,
-    host: *const HostVTable,
+    host: *const RuntimeAbi,
     size: u64,
     fill_byte: u8,
 }
@@ -73,9 +69,9 @@ struct ZeroResult {
     sv_len: u64,
 }
 
-// ─── HostVTable stub functions ────────────────────────────────────────────────
+// --- RuntimeAbi stub functions -----------------------------------------------
 
-/// Stub find_by_contract — returns a null handle (not needed for memory stress tests).
+/// Stub find_by_contract -- returns a null handle (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
@@ -84,29 +80,10 @@ unsafe extern "C" fn stub_find_by_contract(
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
-    PluginHandle {
-        index: u32::MAX,
-        generation: 0,
-    }
+    PluginHandle::null()
 }
 
-/// Stub find_by_bundle — returns a null handle (not needed for memory stress tests).
-///
-/// # Safety
-/// Always safe to call; returns a sentinel null handle.
-unsafe extern "C" fn stub_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
-    _contract_id: u64,
-    _min_version: u32,
-) -> PluginHandle {
-    PluginHandle {
-        index: u32::MAX,
-        generation: 0,
-    }
-}
-
-/// Stub find_all_by_contract — returns 0 (not needed for memory stress tests).
+/// Stub find_all_by_contract -- returns 0 (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
@@ -120,24 +97,38 @@ unsafe extern "C" fn stub_find_all_by_contract(
     0
 }
 
-/// Stub resolve_plugin — returns null (not needed for memory stress tests).
+/// Stub resolve_contract -- returns null (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; returns null pointer.
-unsafe extern "C" fn stub_resolve_plugin(
+unsafe extern "C" fn stub_resolve_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _handle: PluginHandle,
-) -> *const polyplug_abi::PluginInterface {
+) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-/// Stub get_host_contract — returns null.
+/// Stub call_method -- returns Ok.
+unsafe extern "C" fn stub_call_method(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok as u32,
+        message: StringView::null(),
+    }
+}
+
+/// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const polyplug_abi::HostContractVTable {
-    core::ptr::null()
+) -> polyplug_abi::HostContractInstance {
+    polyplug_abi::HostContractInstance::null()
 }
 
 /// Stub alloc callback.
@@ -160,58 +151,58 @@ unsafe extern "C" fn stub_free(
     unsafe { polyplug_host_free(ptr, size, align) }
 }
 
-// ─── Registry callback ────────────────────────────────────────────────────────
+// --- Registry callback -------------------------------------------------------
 
-/// A register_plugin callback that stores vtable entries into the thread-local Registry.
+/// A register_contract callback that stores vtable entries into the thread-local Registry.
 ///
 /// # Safety
-/// `_rt_ctx`, `descriptor`, and `vtable` must be valid for the call duration.
+/// `_rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
     _rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
+    if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: 1,
+            code: AbiErrorCode::InvalidPointer as u32,
             message: StringView::null(),
         };
     }
 
-    // SAFETY: descriptor and vtable are valid for this call (ABI contract).
+    // SAFETY: descriptor and interface are valid for this call (ABI contract).
     let desc: &PluginDescriptor = unsafe { &*descriptor };
-    // SAFETY: vtable is valid for this call (ABI contract).
-    let vt: &PluginInterface = unsafe { &*vtable };
+    // SAFETY: interface is valid for this call (ABI contract).
+    let iface: &GuestContractInterface = unsafe { &*interface };
 
     // Extract contract name from StringView.
     // SAFETY: desc.contract_name is set by a test fixture plugin that uses a
-    // &'static str contract name — guaranteed valid UTF-8 by construction.
+    // &'static str contract name -- guaranteed valid UTF-8 by construction.
     let contract_name: &str = unsafe {
         let bytes: &[u8] =
             core::slice::from_raw_parts(desc.contract_name.ptr, desc.contract_name.len);
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
+    // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<PluginHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
-        // SAFETY: vtable pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, vtable, contract_name.to_owned(), vt.contract_id) }
+        // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
+        unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
 
     match result {
         Ok(_) => AbiError {
-            code: ABI_OK,
+            code: AbiErrorCode::Ok as u32,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: 1,
+            code: AbiErrorCode::Generic as u32,
             message: StringView::null(),
         },
     }
 }
 
-// ─── Helper functions ─────────────────────────────────────────────────────────
+// --- Helper functions --------------------------------------------------------
 
 /// Returns the workspace root path (two levels up from crates/polyplug/).
 fn workspace_root() -> PathBuf {
@@ -231,7 +222,7 @@ fn load_memory_plugin() -> libloading::Library {
 
 /// Initialise the memory_plugin and store vtable into the thread-local registry.
 /// Returns the vtable pointer.
-fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInterface {
+fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     STRESS_REGISTRY.with(|cell| {
         *cell.borrow_mut() = PluginRegistry::new();
@@ -242,7 +233,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -251,33 +242,32 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: registry_register_callback,
+    let host_vtable: RuntimeAbi = RuntimeAbi {
+        register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        resolve_contract: stub_resolve_contract,
+        call_method: stub_call_method,
         get_host_contract: stub_get_host_contract,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
-        host_abi_version: POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
 
-    let contract_id: u64 = polyplug_abi::contract_id("memory.test", 1);
+    let contract_id: GuestContractId = GuestContractId::new("memory.test", 1);
     let handle: PluginHandle = STRESS_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
@@ -291,15 +281,15 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const PluginInte
     })
 }
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
+// --- Tests -------------------------------------------------------------------
 
 #[test]
 fn stress_large_buffer_fill_and_read() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // Allocate 1 MiB buffer via the host allocator.
     const BUFFER_SIZE: usize = 1024 * 1024;
@@ -321,7 +311,7 @@ fn stress_large_buffer_fill_and_read() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are enforced
         // by the test (FillArgs matches what memory_plugin fn 0 expects).
@@ -336,7 +326,7 @@ fn stress_large_buffer_fill_and_read() {
     };
 
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "memory_fill_preallocated_buffer must return ABI_OK"
     );
     assert_eq!(
@@ -366,12 +356,12 @@ fn stress_large_buffer_fill_and_read() {
 #[test]
 fn stress_string_view_non_ascii_utf8() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Non-ASCII UTF-8: "café" encoded as bytes.
+    // Non-ASCII UTF-8: "cafe" encoded as bytes.
     let input_bytes: &[u8] = b"caf\xc3\xa9";
     let input_sv: StringView = StringView {
         ptr: input_bytes.as_ptr(),
@@ -381,7 +371,7 @@ fn stress_string_view_non_ascii_utf8() {
     let mut out_sv: StringView = StringView::null();
 
     // SAFETY: fn_ptr is function 2 in the vtable (memory_echo_string_view).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(2) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (StringView matches what memory_plugin fn 2 expects).
@@ -396,7 +386,7 @@ fn stress_string_view_non_ascii_utf8() {
     };
 
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "memory_echo_string_view must return ABI_OK"
     );
     assert_eq!(
@@ -413,7 +403,7 @@ fn stress_string_view_non_ascii_utf8() {
     let returned_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_sv.ptr, out_sv.len) };
     let returned_str: &str =
         core::str::from_utf8(returned_bytes).expect("echoed StringView must be valid UTF-8");
-    assert_eq!(returned_str, "café", "echoed string must equal input");
+    assert_eq!(returned_str, "cafe", "echoed string must equal input");
 
     // TrackingAllocator verifies the tracking layer is balanced (no allocs/frees through it).
     let tracker: TrackingAllocator = TrackingAllocator::new();
@@ -425,10 +415,10 @@ fn stress_string_view_non_ascii_utf8() {
 #[test]
 fn stress_zero_length_buffer_and_string_view() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // Zero-length Buffer and StringView.
     let zero_buf: Buffer = Buffer {
@@ -450,7 +440,7 @@ fn stress_zero_length_buffer_and_string_view() {
     };
 
     // SAFETY: fn_ptr is function 3 in the vtable (memory_zero_length_roundtrip).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(3) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(3) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (ZeroArgs/ZeroResult match what memory_plugin fn 3 expects).
@@ -465,7 +455,7 @@ fn stress_zero_length_buffer_and_string_view() {
     };
 
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "memory_zero_length_roundtrip must return ABI_OK"
     );
     assert_eq!(
@@ -487,11 +477,11 @@ fn stress_zero_length_buffer_and_string_view() {
 #[test]
 fn stress_concurrent_8_threads_no_shared_memory() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    // PluginInterface is Send+Sync per its unsafe impls in the plugin.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    // GuestContractInterface is Send+Sync per its unsafe impls in the plugin.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     const THREAD_COUNT: usize = 8;
     const THREAD_BUFFER_SIZE: usize = 4096;
@@ -514,8 +504,8 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 alloc_counter.fetch_add(1, Ordering::Relaxed);
 
                 // Get function 0 (memory_fill_preallocated_buffer) from vtable.
-                // SAFETY: vtable.functions is valid for function_count (4) entries.
-                let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+                // SAFETY: interface.functions is valid for function_count (4) entries.
+                let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                     // SAFETY: fn_ptr is the fill function with compatible signature.
                     unsafe { core::mem::transmute(fn_ptr) };
@@ -538,7 +528,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                     )
                 };
                 assert_eq!(
-                    result.code, ABI_OK,
+                    result.code, AbiErrorCode::Ok as u32,
                     "thread {}: fill must return ABI_OK",
                     thread_idx
                 );
@@ -589,12 +579,12 @@ fn stress_concurrent_8_threads_no_shared_memory() {
 #[test]
 fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Set up a tracking allocator and build a HostVTable that uses wrapper functions.
+    // Set up a tracking allocator and build a RuntimeAbi that uses wrapper functions.
     let tracker: TrackingAllocator = TrackingAllocator::new();
     let alloc_fn: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
     let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
@@ -629,20 +619,20 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     TLS_TRACKING_ALLOC.with(|cell| *cell.borrow_mut() = alloc_fn);
     TLS_TRACKING_FREE.with(|cell| *cell.borrow_mut() = free_fn);
 
-    let host_vtable: HostVTable = HostVTable {
-        register_plugin: registry_register_callback,
+    let host_vtable: RuntimeAbi = RuntimeAbi {
+        register_contract: registry_register_callback,
         alloc: tracking_alloc_wrapper,
         free: tracking_free_wrapper,
         find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
         find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        resolve_contract: stub_resolve_contract,
+        call_method: stub_call_method,
         get_host_contract: stub_get_host_contract,
     };
 
     let args: AllocArgs = AllocArgs {
         rt_ctx: core::ptr::null_mut(),
-        host: &host_vtable as *const HostVTable,
+        host: &host_vtable as *const RuntimeAbi,
         size: 4096_u64,
         fill_byte: 0xCC_u8,
     };
@@ -653,7 +643,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     // SAFETY: fn_ptr is function 1 in the vtable (memory_alloc_buffer_via_host).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(1) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (AllocArgs/Buffer match what memory_plugin fn 1 expects).
@@ -668,7 +658,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "memory_alloc_buffer_via_host must return ABI_OK"
     );
     assert!(
@@ -680,7 +670,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         "plugin-allocated buffer len must be non-zero"
     );
 
-    // Plugin called host.alloc — tracking counter should be 1.
+    // Plugin called host.alloc -- tracking counter should be 1.
     assert_eq!(
         tracker.alloc_count(),
         1,
@@ -715,10 +705,10 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 #[test]
 fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let library: libloading::Library = load_memory_plugin();
-    let vtable_ptr: *const PluginInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
 
-    // SAFETY: vtable_ptr is valid (plugin is loaded, library not yet dropped).
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // Use the tracking allocator for the caller-side allocation.
     let tracker: TrackingAllocator = TrackingAllocator::new();
@@ -745,7 +735,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
         // enforced by the test (FillArgs matches what memory_plugin fn 0 expects).
@@ -760,7 +750,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     };
 
     assert_eq!(
-        call_result.code, ABI_OK,
+        call_result.code, AbiErrorCode::Ok as u32,
         "memory_fill_preallocated_buffer must return ABI_OK"
     );
     assert_eq!(out, 64_u32, "written byte count must be 64");
@@ -799,17 +789,17 @@ fn run_double_free_subprocess() -> ! {
     let ptr: *mut u8 = unsafe { alloc(64_usize, 1_usize) };
     // SAFETY: ptr was just allocated with size=64, align=1.
     unsafe { free_fn(ptr, 64_usize, 1_usize) };
-    // Second free — triggers abort() in tracking_free.
-    // SAFETY: This is intentionally invalid — the abort fires before UB occurs.
+    // Second free -- triggers abort() in tracking_free.
+    // SAFETY: This is intentionally invalid -- the abort fires before UB occurs.
     unsafe { free_fn(ptr, 64_usize, 1_usize) };
-    // unreachable — abort() terminates the process.
+    // unreachable -- abort() terminates the process.
     std::process::exit(0)
 }
 
 #[test]
 #[cfg(debug_assertions)]
 fn test_double_free_detected() {
-    // Use an env var (not a CLI arg) as the subprocess sentinel — CLI args are intercepted
+    // Use an env var (not a CLI arg) as the subprocess sentinel -- CLI args are intercepted
     // by the cargo test harness and cause "Unrecognized option" errors.
     const SENTINEL: &str = "POLYPLUG_DOUBLE_FREE_SUBPROCESS";
     // If this invocation IS the subprocess, perform the double-free and let abort() fire.
