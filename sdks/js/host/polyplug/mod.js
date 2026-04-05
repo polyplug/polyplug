@@ -279,13 +279,13 @@ export class Runtime {
   }
 
   /**
-   * Register a host contract vtable with the runtime.
+   * Register a host contract interface with the runtime.
    * This allows VM-based hosts (JavaScript) to register host contract implementations.
-   * @param {Deno.PointerValue} vtable - Pointer to a HostContractVTable struct
+   * @param {Deno.PointerValue} hostInterface - Pointer to a HostContractInterface struct
    * @throws {Error} If registration fails (null pointer, duplicate, or other error)
    */
-  registerHostContract(vtable) {
-    const result = this.#lib.symbols.polyplug_runtime_register_host_contract(this.#ptr, vtable);
+  registerHostContract(hostInterface) {
+    const result = this.#lib.symbols.polyplug_runtime_register_host_contract(this.#ptr, hostInterface);
     if (result === 1) {
       throw new Error("registerHostContract failed: null runtime or vtable pointer");
     }

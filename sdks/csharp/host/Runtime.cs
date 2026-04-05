@@ -151,11 +151,15 @@ public sealed class Runtime
         return NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
     }
 
-    public void RegisterHostContract(nint vtable)
+    /// <summary>
+    /// Register a host contract interface with the runtime.
+    /// </summary>
+    /// <param name="hostInterface">Pointer to a HostContractInterface structure.</param>
+    public void RegisterHostContract(nint hostInterface)
     {
         EnsureHandle();
 
-        uint result = NativeMethods.PolyplugRuntimeRegisterHostContract(Handle, vtable);
+        uint result = NativeMethods.PolyplugRuntimeRegisterHostContract(Handle, hostInterface);
         if (result != 0u)
         {
             ThrowLastError("Failed to register host contract.");

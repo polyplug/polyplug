@@ -65,15 +65,15 @@ class RuntimeCreateOptionsC(ctypes.Structure):
     ]
 
 
-# ─── Host Contract VTable Structures ──────────────────────────────────────────────
+# ─── Host Contract Interface Structures ─────────────────────────────────────────────
 # These structures match the Rust ABI exactly for VM-based host contract registration.
 
 
-class HostContractVTableHeader(ctypes.Structure):
-    """Host contract vtable header — metadata for a host-provided contract."""
+class HostContractInterfaceHeader(ctypes.Structure):
+    """Host contract interface header — metadata for a host-provided contract."""
 
     _fields_ = [
-        ("vtable_version", ctypes.c_uint32),
+        ("interface_version", ctypes.c_uint32),
         ("contract_id", ctypes.c_uint64),
         ("contract_major", ctypes.c_uint32),
         ("contract_minor", ctypes.c_uint32),
@@ -99,11 +99,11 @@ class HostContractDispatch(ctypes.Union):
     ]
 
 
-class HostContractVTable(ctypes.Structure):
-    """Host contract vtable — complete interface for a host-provided contract."""
+class HostContractInterface(ctypes.Structure):
+    """Host contract interface — complete interface for a host-provided contract."""
 
     _fields_ = [
-        ("header", HostContractVTableHeader),
+        ("header", HostContractInterfaceHeader),
         ("dispatch", HostContractDispatch),
     ]
 
@@ -143,7 +143,7 @@ class Backend(Protocol):
     def release_plugin(self, handle: int) -> None: ...
     def last_error(self, rt: int, buf: Any, buf_len: int) -> int: ...
     def error_message_len(self) -> int: ...
-    def register_host_contract(self, rt: int, vtable_ptr: int) -> int: ...
+    def register_host_contract(self, rt: int, interface_ptr: int) -> int: ...
 
 
 class CTypesBackend:
@@ -284,8 +284,8 @@ class CTypesBackend:
     def error_message_len(self) -> int:
         return self.lib.polyplug_runtime_error_message_len()
 
-    def register_host_contract(self, rt: int, vtable_ptr: int) -> int:
-        return self.lib.polyplug_runtime_register_host_contract(rt, vtable_ptr)
+    def register_host_contract(self, rt: int, interface_ptr: int) -> int:
+        return self.lib.polyplug_runtime_register_host_contract(rt, interface_ptr)
 
     def create_uint64_array(self, cap: int) -> Any:
         return (self.ctypes.c_uint64 * cap)()
@@ -397,9 +397,9 @@ class CFFIBackend:
     def error_message_len(self) -> int:
         return self.lib.polyplug_runtime_error_message_len()
 
-    def register_host_contract(self, rt: int, vtable_ptr: int) -> int:
+    def register_host_contract(self, rt: int, interface_ptr: int) -> int:
         return self.lib.polyplug_runtime_register_host_contract(
-            self.ffi.cast("void*", rt), self.ffi.cast("void*", vtable_ptr)
+            self.ffi.cast("void*", rt), self.ffi.cast("void*", interface_ptr)
         )
 
     def create_uint64_array(self, cap: int) -> Any:
@@ -749,27 +749,27 @@ class Runtime:
             Runtime._host_contract_callbacks: dict[int, ctypes.CFUNCTYPE] = {}
         Runtime._host_contract_callbacks[contract_id] = dispatch_callback
 
-        # Create the HostContractVTable structure
-        vtable: HostContractVTable = HostContractVTable()
-        vtable.header.vtable_version = 1
-        vtable.header.contract_id = contract_id
-        vtable.header.contract_major = contract_major
-        vtable.header.contract_minor = contract_minor
-        vtable.header.function_count = function_count
-        vtable.header.dispatch_type = DISPATCH_TYPE_VIRTUAL_MACHINE
-        vtable.dispatch.vm.call = ctypes.cast(dispatch_callback, ctypes.c_void_p)
-        vtable.dispatch.vm.bridge_data = 0  # Not used for Python
+        # Create the HostContractInterface structure
+        interface: HostContractInterface = HostContractInterface()
+        interface.header.interface_version = 1
+        interface.header.contract_id = contract_id
+        interface.header.contract_major = contract_major
+        interface.header.contract_minor = contract_minor
+        interface.header.function_count = function_count
+        interface.header.dispatch_type = DISPATCH_TYPE_VIRTUAL_MACHINE
+        interface.dispatch.vm.call = ctypes.cast(dispatch_callback, ctypes.c_void_p)
+        interface.dispatch.vm.bridge_data = 0  # Not used for Python
 
-        # Store the vtable to keep it alive
-        if not hasattr(Runtime, "_host_contract_vtables"):
-            Runtime._host_contract_vtables: dict[int, HostContractVTable] = {}
-        Runtime._host_contract_vtables[contract_id] = vtable
+        # Store the interface to keep it alive
+        if not hasattr(Runtime, "_host_contract_interfaces"):
+            Runtime._host_contract_interfaces: dict[int, HostContractInterface] = {}
+        Runtime._host_contract_interfaces[contract_id] = interface
 
-        # Get pointer to the vtable
-        vtable_ptr: int = ctypes.addressof(vtable)
+        # Get pointer to the interface
+        interface_ptr: int = ctypes.addressof(interface)
 
         # Call the FFI to register
-        code: int = self._backend.register_host_contract(runtime_ptr, vtable_ptr)
+        code: int = self._backend.register_host_contract(runtime_ptr, interface_ptr)
         if code == 2:
             raise RuntimeError(
                 f"duplicate host contract registration: contract_id={contract_id}"

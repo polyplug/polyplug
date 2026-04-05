@@ -40,7 +40,7 @@ extern "C" {
     size_t polyplug_runtime_last_error(RuntimeHandle rt, uint8_t* buf, size_t buf_len);
     void polyplug_runtime_on_reload(void (*cb)(void* phase));
     void polyplug_runtime_set_config(const void* config);
-    uint32_t polyplug_runtime_register_host_contract(RuntimeHandle rt, const HostContractVTable* vtable);
+    uint32_t polyplug_runtime_register_host_contract(RuntimeHandle rt, const HostContractInterface* interface);
 }
 
 /// FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
@@ -176,11 +176,13 @@ public:
         }
     }
 
-    void register_host_contract(const HostContractVTable* vtable) {
-        if (vtable == nullptr) {
-            throw std::runtime_error("register_host_contract: null vtable pointer");
+    /// Register a host contract interface with the runtime.
+    /// The interface must remain valid for the lifetime of the runtime.
+    void register_host_contract(const HostContractInterface* interface) {
+        if (interface == nullptr) {
+            throw std::runtime_error("register_host_contract: null interface pointer");
         }
-        uint32_t result = polyplug_runtime_register_host_contract(handle_, vtable);
+        uint32_t result = polyplug_runtime_register_host_contract(handle_, interface);
         if (result != 0) {
             throw std::runtime_error("Failed to register host contract: error " + std::to_string(result));
         }

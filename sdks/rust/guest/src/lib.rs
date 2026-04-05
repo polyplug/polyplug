@@ -193,18 +193,14 @@ pub type NativeHostContractDispatch = NativeDispatch;
 /// Legacy alias for VmDispatch (host contract variant).
 pub type VmHostContractDispatch = VmDispatch;
 
-/// Legacy alias for HostContractInterface.
-pub type HostContractVTable = polyplug_abi::HostContractInterface;
-
-/// Host contract interface (same as HostContractVTable).
+/// Host contract interface for calling host-provided contracts (`HostContractInterface`).
+///
+/// Use this type when declaring host contract interfaces in guest code.
+/// The code generator produces `register_contract` functions that populate this.
 pub use polyplug_abi::HostContractInterface;
 
 /// Host contract instance - opaque handle to a host contract.
 pub use polyplug_abi::HostContractInstance;
-
-/// Legacy alias for host contract vtable header.
-/// The header portion of HostContractInterface.
-pub type HostContractVTableHeader = polyplug_abi::HostContractInterface;
 
 /// Host capabilities passed to every plugin at init time.
 ///

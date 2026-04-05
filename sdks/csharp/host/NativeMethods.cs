@@ -192,5 +192,5 @@ internal static partial class NativeMethods
     // Host contract registration
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_host_contract")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeRegisterHostContract(nint rt, nint vtable);
+    public static partial uint PolyplugRuntimeRegisterHostContract(nint rt, nint hostInterface);
 }

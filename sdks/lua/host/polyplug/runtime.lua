@@ -49,15 +49,15 @@ ffi.cdef([[
 
     OpaqueRuntime* polyplug_runtime_create_with_options(const RuntimeCreateOptions* options);
 
-    // Host Contract VTable types
-    typedef struct HostContractVTableHeader {
+    // Host Contract Interface types
+    typedef struct HostContractInterfaceHeader {
         uint32_t vtable_version;
         uint64_t contract_id;
         uint32_t contract_major;
         uint32_t contract_minor;
         uint32_t function_count;
         DispatchType dispatch_type;
-    } HostContractVTableHeader;
+    } HostContractInterfaceHeader;
 
     typedef struct NativeHostContractDispatch {
         void* const* functions;
@@ -73,12 +73,12 @@ ffi.cdef([[
         VmHostContractDispatch vm;
     } HostContractDispatch;
 
-    typedef struct HostContractVTable {
-        HostContractVTableHeader header;
+    typedef struct HostContractInterface {
+        HostContractInterfaceHeader header;
         HostContractDispatch dispatch;
-    } HostContractVTable;
+    } HostContractInterface;
 
-    uint32_t polyplug_runtime_register_host_contract(OpaqueRuntime* rt, const HostContractVTable* vtable);
+    uint32_t polyplug_runtime_register_host_contract(OpaqueRuntime* rt, const HostContractInterface* interface);
 ]])
 
 local M = {}
@@ -256,11 +256,11 @@ function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
     return result
 end
 
-function M.Runtime:register_host_contract(vtable)
+function M.Runtime:register_host_contract(interface)
     local lib = self._lib
-    local result = lib.polyplug_runtime_register_host_contract(self._ptr, vtable)
+    local result = lib.polyplug_runtime_register_host_contract(self._ptr, interface)
     if result == 1 then
-        error("polyplug_runtime_register_host_contract: null runtime or vtable pointer")
+        error("polyplug_runtime_register_host_contract: null runtime or interface pointer")
     elseif result == 2 then
         error("polyplug_runtime_register_host_contract: duplicate contract registration")
     elseif result == 3 then

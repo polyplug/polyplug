@@ -147,8 +147,8 @@ ffi.cdef[[
 -- ─── ABI Structs (after unions) ──────────────────────────────────────────────
 
 ffi.cdef[[
-    // Forward declaration for host contract vtable
-    typedef struct HostContractVTable HostContractVTable;
+    // Forward declaration for host contract interface
+    typedef struct HostContractInterface HostContractInterface;
 
     //  Metadata about a plugin within a bundle.
     // 
@@ -203,9 +203,9 @@ ffi.cdef[[
         PluginHandle (*find_by_bundle )(void*, uint64_t, uint64_t, uint32_t);
         size_t (*find_all_by_contract )(void*, uint64_t, uint32_t, PluginHandle*, size_t);
         const PluginInterface* (*resolve_plugin )(void*, PluginHandle);
-        //  Get host contract vtable by contract_id and minimum version.
+        //  Get host contract interface by contract_id and minimum version.
         //  Returns null if no host contract matches the criteria.
-        const HostContractVTable* (*get_host_contract )(void*, uint64_t, uint32_t);
+        const HostContractInterface* (*get_host_contract )(void*, uint64_t, uint32_t);
     } HostVTable;
 
     //  Context passed to every guest `polyplug_init()` function.
