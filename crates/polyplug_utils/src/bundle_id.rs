@@ -1,3 +1,5 @@
+use core::fmt;
+
 use crate::fnv1a_64;
 
 #[repr(transparent)]
@@ -34,6 +36,18 @@ impl BundleId {
     #[inline(always)]
     pub fn id(&self) -> u64 {
         self.0
+    }
+}
+
+impl fmt::UpperHex for BundleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::UpperHex::fmt(&self.0, f)
+    }
+}
+
+impl fmt::LowerHex for BundleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::LowerHex::fmt(&self.0, f)
     }
 }
 

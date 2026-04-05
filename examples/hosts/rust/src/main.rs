@@ -1,9 +1,10 @@
 use polyplug::ReloadPhase;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
-use polyplug::runtime::RuntimeConfig;
+use polyplug::RuntimeConfig;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
+use polyplug_abi::HostContractInterface;
 use polyplug_js::{JsConfig, JsLoader};
 use polyplug_lua::{LuaConfig, LuaLoader};
 use polyplug_native::{NativeConfig, NativeLoader};
@@ -17,7 +18,7 @@ mod generated;
 use generated::host::host_callers::*;
 use generated::host::host_contracts::{HOSTLOGGER_CONTRACT_ID, HostLogger};
 use generated::host::types::*;
-use generated::host::vtable_factories::create_host_logger_vtable;
+use generated::host::interface_factories::create_host_logger_interface;
 
 struct ConsoleLogger;
 
@@ -51,11 +52,12 @@ fn run() -> Result<(), String> {
 
     eprintln!("loading plugins from: {}", plugin_path.display());
 
-    let config: RuntimeConfig = RuntimeConfig {
+    let config = RuntimeConfig {
         hot_reload_enabled: true,
         hot_reload_max_retries: 5,
-        hot_reload_retry_interval: Duration::from_millis(200),
+        hot_reload_retry_interval_ms: 200,
         hot_reload_abort_on_max_retries: false,
+        compatibility: polyplug_abi::Compatibility::Strict,
     };
 
     let runtime: &'static Runtime = Box::leak(Box::new(
@@ -100,13 +102,13 @@ fn run() -> Result<(), String> {
             .map_err(|e| e.to_string())?,
     ));
 
-    let vtable: &'static polyplug_abi::HostContractVTable =
-        create_host_logger_vtable(Box::new(ConsoleLogger));
+    let vtable: &'static HostContractInterface =
+        create_host_logger_interface(Box::new(ConsoleLogger));
     runtime
         .register_host_contract(HOSTLOGGER_CONTRACT_ID, vtable)
         .map_err(|e| format!("failed to register host.logger contract: {e}"))?;
 
-    let bundles: Vec<(PathBuf, _)> = scanner::scan_dir(&plugin_path);
+    let bundles: Vec<(PathBuf, _)> = scanner::scan_dirs(&[plugin_path.clone()]);
     if bundles.is_empty() {
         return Err("no plugins found".into());
     }

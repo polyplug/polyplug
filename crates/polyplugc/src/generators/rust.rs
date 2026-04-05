@@ -106,7 +106,7 @@ impl CodeGenerator for RustGenerator {
             ));
             types_out.push_str(&format!(
                 "pub const {contract_upper}_REQUIRED_VERSION: Version = \
-                 Version {{ major: {major}, minor: {minor} }};\n",
+                 Version {{ major: {major}, minor: {minor}, patch: 0 }};\n",
                 major = contract.version.major,
                 minor = contract.version.minor,
             ));
@@ -1922,7 +1922,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     // Static to store the implementation pointer for the create_instance stub
     // SAFETY: This is set once during factory call and read by the stub.
     out.push_str(&format!(
-        "    static IMPL_PTR: std::sync::OnceLock<*mut c_void> = std::sync::OnceLock::new();\n\n"
+        "    static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());\n\n"
     ));
     // Wrap the fat pointer in a Box so we can store a thin pointer to it in impl_ptr.
     // SAFETY: The fat pointer (*const dyn Trait) is 128 bits, but impl_ptr is 64 bits.
@@ -1936,7 +1936,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "    let impl_ptr: *const *const dyn {trait_name} = Box::into_raw(wrapper);\n"
     ));
-    out.push_str("    IMPL_PTR.get_or_init(|| impl_ptr as *mut c_void);\n\n");
+    out.push_str("    IMPL_PTR.store(impl_ptr as *mut c_void, std::sync::atomic::Ordering::SeqCst);\n\n");
 
     // Generate thunks for each function
     for func in &contract.functions {
@@ -1981,7 +1981,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        _rt_ctx: *mut c_void,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
-    out.push_str("        HostContractInstance { data: *IMPL_PTR.get().unwrap() }\n");
+    out.push_str("        HostContractInstance { data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst) }\n");
     out.push_str("    }\n\n");
 
     // Destroy instance stub
@@ -2048,8 +2048,8 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(") -> &'static HostContractInterface {\n");
     // Static to store the bridge_data for the create_instance stub
     // SAFETY: This is set once during factory call and read by the stub.
-    out.push_str("    static BRIDGE_DATA: std::sync::OnceLock<*mut c_void> = std::sync::OnceLock::new();\n");
-    out.push_str("    BRIDGE_DATA.get_or_init(|| bridge_data);\n\n");
+    out.push_str("    static BRIDGE_DATA: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());\n");
+    out.push_str("    BRIDGE_DATA.store(bridge_data, std::sync::atomic::Ordering::SeqCst);\n\n");
 
     // Generate instance lifecycle stubs for VM
     let vm_create_stub_name: String = format!(
@@ -2073,7 +2073,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        _rt_ctx: *mut c_void,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
-    out.push_str("        HostContractInstance { data: *BRIDGE_DATA.get().unwrap() }\n");
+    out.push_str("        HostContractInstance { data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst) }\n");
     out.push_str("    }\n\n");
 
     // Destroy instance stub for VM
