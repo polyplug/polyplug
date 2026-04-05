@@ -27,7 +27,6 @@ use polyplug::Runtime as PolyplugRuntime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
-use polyplug_abi::RuntimeAbi;
 use polyplug_abi::RuntimeContext;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::PluginContext;
@@ -39,7 +38,6 @@ use polyplug_abi::StringView;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
 use polyplug_abi::types::Version;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 use polyplug_utils::GuestContractId;
 
 use crate::config::JsConfig;

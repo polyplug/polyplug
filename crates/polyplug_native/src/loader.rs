@@ -8,7 +8,6 @@ use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug_abi::host::host_context::HostContext;
 use polyplug::Runtime;
-use polyplug_abi::RuntimeAbi;
 use polyplug_abi::RuntimeContext;
 use polyplug_abi::plugin::PluginContext;
 use polyplug_abi::types::AbiError;
