@@ -695,7 +695,7 @@ fn generate_guest_contract_vtable(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {upper}_create_instance_stub(\n"
     ));
-    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _rt_ctx: RuntimeContext,\n");
     out.push_str("    _args: *const (),\n");
     out.push_str(") -> GuestContractInstance {\n");
     out.push_str("    GuestContractInstance::null()\n");
@@ -713,7 +713,7 @@ fn generate_guest_contract_vtable(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {upper}_destroy_instance_stub(\n"
     ));
-    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _rt_ctx: RuntimeContext,\n");
     out.push_str("    _instance: GuestContractInstance,\n");
     out.push_str(") {\n");
     out.push_str("    // No-op - stateless plugins don't need cleanup\n");
@@ -825,7 +825,7 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {plugin_upper}_create_instance_stub(\n"
     ));
-    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _rt_ctx: RuntimeContext,\n");
     out.push_str("    _args: *const (),\n");
     out.push_str(") -> GuestContractInstance {\n");
     out.push_str("    GuestContractInstance::null()\n");
@@ -843,7 +843,7 @@ fn generate_guest_plugin_interface(
     out.push_str(&format!(
         "unsafe extern \"C\" fn {plugin_upper}_destroy_instance_stub(\n"
     ));
-    out.push_str("    _rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    _rt_ctx: RuntimeContext,\n");
     out.push_str("    _instance: GuestContractInstance,\n");
     out.push_str(") {\n");
     out.push_str("    // No-op - stateless plugins don't need cleanup\n");
@@ -1037,6 +1037,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("use polyplug_guest::Version;\n");
     out.push_str("use polyplug_guest::PluginContext;\n");
     out.push_str("use polyplug_guest::store_host_vtable;\n");
+    out.push_str("use polyplug_guest::RuntimeContext;\n");
     out.push_str("use core::ffi::c_void;\n");
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -1068,7 +1069,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("/// `rt_ctx` and `host` must be valid non-null pointers provided by the host.\n");
     out.push_str("#[unsafe(no_mangle)]\n");
     out.push_str("pub unsafe extern \"C\" fn polyplug_init(\n");
-    out.push_str("    rt_ctx: *mut c_void,\n");
+    out.push_str("    rt_ctx: RuntimeContext,\n");
     out.push_str("    host: *const RuntimeAbi,\n");
     out.push_str("    ctx: *const PluginContext,\n");
     out.push_str(") -> AbiError {\n");
@@ -1280,8 +1281,8 @@ fn generate_host_contract_caller(
     out.push_str("    interface: *const GuestContractInterface,\n");
     out.push_str("    /// Instance handle created by `create_instance`.\n");
     out.push_str("    instance: GuestContractInstance,\n");
-    out.push_str("    /// Runtime context pointer (needed for destroy_instance).\n");
-    out.push_str("    rt_ctx: *mut core::ffi::c_void,\n");
+    out.push_str("    /// Runtime context (needed for destroy_instance).\n");
+    out.push_str("    rt_ctx: RuntimeContext,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {struct_name} {{\n"));
@@ -1290,15 +1291,15 @@ fn generate_host_contract_caller(
     out.push_str("    ///\n");
     out.push_str("    /// # Arguments\n");
     out.push_str("    /// - `handle`: Contract handle from `find_by_contract`\n");
-    out.push_str("    /// - `rt_ctx`: Runtime context pointer (opaque)\n");
+    out.push_str("    /// - `rt_ctx`: Runtime context handle\n");
     out.push_str("    ///\n");
     out.push_str("    /// # Returns\n");
     out.push_str("    /// - `Some(Self)` if interface found and instance created\n");
     out.push_str("    /// - `None` if interface not found or `create_instance` failed\n");
-    out.push_str("    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {\n");
+    out.push_str("    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {\n");
     out.push_str("        // Resolve the interface from the handle via FFI\n");
     out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
-    out.push_str("            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())\n");
+    out.push_str("            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())\n");
     out.push_str("        };\n");
     out.push_str("        if interface.is_null() {\n");
     out.push_str("            return None;\n");
@@ -1979,7 +1980,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "    unsafe extern \"C\" fn {create_stub_name}(\n"
     ));
-    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _rt_ctx: RuntimeContext,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
     out.push_str("        HostContractInstance { data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst) }\n");
@@ -1995,7 +1996,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "    unsafe extern \"C\" fn {destroy_stub_name}(\n"
     ));
-    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _rt_ctx: RuntimeContext,\n");
     out.push_str("        _instance: HostContractInstance,\n");
     out.push_str("    ) {\n");
     if singleton {
@@ -2072,7 +2073,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "    unsafe extern \"C\" fn {vm_create_stub_name}(\n"
     ));
-    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _rt_ctx: RuntimeContext,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
     out.push_str("        HostContractInstance { data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst) }\n");
@@ -2086,7 +2087,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "    unsafe extern \"C\" fn {vm_destroy_stub_name}(\n"
     ));
-    out.push_str("        _rt_ctx: *mut c_void,\n");
+    out.push_str("        _rt_ctx: RuntimeContext,\n");
     out.push_str("        _instance: HostContractInstance,\n");
     out.push_str("    ) {\n");
     if singleton {
