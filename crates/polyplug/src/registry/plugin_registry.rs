@@ -520,17 +520,31 @@ mod tests {
     use super::*;
     use polyplug_abi::{
         DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor, StringView,
-        Version, DispatchMechanisms,
+        Version, DispatchMechanisms, GuestContractInstance,
     };
+
+    /// No-op create_instance callback.
+    unsafe extern "C" fn noop_create_instance(
+        _rt_ctx: *mut core::ffi::c_void,
+        _args: *const (),
+    ) -> GuestContractInstance {
+        GuestContractInstance::null()
+    }
+
+    /// No-op destroy_instance callback.
+    unsafe extern "C" fn noop_destroy_instance(
+        _rt_ctx: *mut core::ffi::c_void,
+        _instance: GuestContractInstance,
+    ) {
+    }
 
     fn mock_interface(contract_id: u64) -> GuestContractInterface {
         GuestContractInterface {
-            rt_ctx: core::ptr::null(),
             contract_id: GuestContractId::from_u64(contract_id),
             contract_version: Version { major: 1, minor: 0, patch: 0 },
             dispatch_type: DispatchType::Native,
-            create_instance: |_| GuestContractInstance::null(),
-            destroy_instance: |_, _| {},
+            create_instance: noop_create_instance,
+            destroy_instance: noop_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     function_count: 0,
@@ -572,13 +586,13 @@ mod tests {
     }
 
     #[test]
-    fn stale_handle_detection() {
+    fn invalid_handle_detection() {
         let registry: PluginRegistry = PluginRegistry::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "audio.decode");
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
         // SAFETY: interface is a local value, but we're just testing registration
-        let handle: PluginHandle = unsafe {
+        let _handle: PluginHandle = unsafe {
             registry.register(
                 descriptor,
                 &interface,
@@ -588,15 +602,12 @@ mod tests {
         }
         .expect("registration should succeed");
 
-        // Use a handle with wrong generation
-        let stale: PluginHandle = PluginHandle {
-            index: handle.index,
-            generation: handle.generation + 1,
-        };
-        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(stale);
+        // Use a handle with out-of-bounds index
+        let invalid: PluginHandle = PluginHandle { index: 999 };
+        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(invalid);
         assert!(
-            matches!(result, Err(RegistryError::StaleHandle { .. })),
-            "expected StaleHandle error"
+            matches!(result, Err(RegistryError::InvalidHandle { .. })),
+            "expected InvalidHandle error"
         );
     }
 
@@ -694,6 +705,4 @@ mod tests {
             "undeclared dep should not be found"
         );
     }
-
-    use polyplug_abi::GuestContractInstance;
 }

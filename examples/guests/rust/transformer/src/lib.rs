@@ -4,7 +4,7 @@ use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
 mod generated;
 
 use generated::contracts::DataTransformerPlugin;
-use generated::vtables::set_transformer_impl;
+use generated::interfaces::set_transformer_impl;
 
 struct Plugin;
 

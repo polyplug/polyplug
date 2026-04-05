@@ -31,3 +31,22 @@ pub enum AbiErrorCode {
     /// Host contract call failed — host contract function call failed.
     HostContractCallFailed = 102,
 }
+
+impl core::fmt::Display for AbiErrorCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AbiErrorCode::Ok => write!(f, "Ok"),
+            AbiErrorCode::Generic => write!(f, "Generic"),
+            AbiErrorCode::BufferTooSmall => write!(f, "BufferTooSmall"),
+            AbiErrorCode::Panic => write!(f, "Panic"),
+            AbiErrorCode::NotFound => write!(f, "NotFound"),
+            AbiErrorCode::StaleHandle => write!(f, "StaleHandle"),
+            AbiErrorCode::FunctionNotAvailable => write!(f, "FunctionNotAvailable"),
+            AbiErrorCode::DuplicateProvider => write!(f, "DuplicateProvider"),
+            AbiErrorCode::InvalidPointer => write!(f, "InvalidPointer"),
+            AbiErrorCode::HostContractNotFound => write!(f, "HostContractNotFound"),
+            AbiErrorCode::HostContractVersionMismatch => write!(f, "HostContractVersionMismatch"),
+            AbiErrorCode::HostContractCallFailed => write!(f, "HostContractCallFailed"),
+        }
+    }
+}

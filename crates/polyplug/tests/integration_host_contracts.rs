@@ -12,8 +12,9 @@
 
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
-    DispatchType, HostContractInterface, DispatchMechanisms, NativeDispatch, Version, HostContractId,
+    DispatchType, HostContractInterface, DispatchMechanisms, NativeDispatch, Version,
 };
+use polyplug_utils::HostContractId;
 
 // ─── Helper: Create a static host contract interface ─────────────────────────────
 
@@ -43,7 +44,7 @@ fn create_static_interface(
     // Create a dummy function pointer - use null for simplicity in tests
     // since we never actually call the functions in these tests.
     let interface: Box<HostContractInterface> = Box::new(HostContractInterface {
-        contract_id: HostContractId::from_u64(contract_id),
+        contract_id: HostContractId::from(contract_id),
         contract_version: Version { major, minor, patch: 0 },
         singleton,
         dispatch_type: DispatchType::Native,
@@ -51,6 +52,7 @@ fn create_static_interface(
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
+                function_count: 0,
                 functions: core::ptr::null(),
             },
         },

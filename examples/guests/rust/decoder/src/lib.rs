@@ -4,7 +4,7 @@ use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
 mod generated;
 
 use generated::contracts::PipelineDecoderPlugin;
-use generated::vtables::set_decoder_impl;
+use generated::interfaces::set_decoder_impl;
 
 struct Plugin;
 

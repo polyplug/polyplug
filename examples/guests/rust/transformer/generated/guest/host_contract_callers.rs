@@ -73,7 +73,8 @@ impl HostLoggerCaller {
         // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
         let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
-        if 0_u32 >= interface.dispatch.native.function_count {
+        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
+        if 0_u32 >= fn_count {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));
         }
 
@@ -126,7 +127,8 @@ impl HostLoggerCaller {
         // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
         let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
-        if 1_u32 >= interface.dispatch.native.function_count {
+        let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
+        if 1_u32 >= fn_count {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));
         }
 

@@ -232,30 +232,30 @@ trait ContractCaller: Sized {
 
 impl ContractCaller for PipelineDecoderContract {
     fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        Self::new(handle, runtime)
+        Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataTransformerContract {
     fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        Self::new(handle, runtime)
+        Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineEncoderContract {
     fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        Self::new(handle, runtime)
+        Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataReporterContract {
     fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        Self::new(handle, runtime)
+        Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineValidatorContract {
     fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
-        Self::new(handle, runtime)
+        Self::new(handle, runtime.as_context_ptr())
     }
 }

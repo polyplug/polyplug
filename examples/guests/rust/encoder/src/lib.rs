@@ -4,7 +4,7 @@ use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
 mod generated;
 
 use generated::contracts::PipelineEncoderPlugin;
-use generated::vtables::set_encoder_impl;
+use generated::interfaces::set_encoder_impl;
 
 struct Plugin;
 

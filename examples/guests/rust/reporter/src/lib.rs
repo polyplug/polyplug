@@ -6,7 +6,7 @@ mod generated;
 use generated::contracts::DataReporterPlugin;
 use generated::host_contract_callers::HostLoggerCaller;
 use generated::types::LogLevel;
-use generated::vtables::set_reporter_impl;
+use generated::interfaces::set_reporter_impl;
 
 struct Plugin;
 

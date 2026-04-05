@@ -7,6 +7,7 @@
 #![allow(clippy::identity_op)]
 
 use polyplug_abi::StringView;
+use polyplug_abi::Version;
 
 /// Enum `LogLevel` (repr u32)
 #[repr(u32)]
@@ -26,23 +27,19 @@ pub struct HostLoggerLogWithLevelArgs {
     pub message: StringView,
 }
 
-pub const PIPELINE_DECODER_CONTRACT_ID: u64 = 0x12f3c106b0c3dc1e;
-pub const PIPELINE_DECODER_REQUIRED_VERSION: polyplug_abi::Version =
-    polyplug_abi::Version { major: 1, minor: 0 };
+pub const PIPELINE_DECODER_CONTRACT_ID: u64 = 0xe1d7de773be6e7f7;
+pub const PIPELINE_DECODER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
 pub const PIPELINE_DECODER_REQUIRED_FUNCTION_COUNT: u32 = 1;
-pub const DATA_TRANSFORMER_CONTRACT_ID: u64 = 0x3d53c682f3f5a9ef;
-pub const DATA_TRANSFORMER_REQUIRED_VERSION: polyplug_abi::Version =
-    polyplug_abi::Version { major: 1, minor: 0 };
+pub const DATA_TRANSFORMER_CONTRACT_ID: u64 = 0x4775991362cd68ee;
+pub const DATA_TRANSFORMER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
 pub const DATA_TRANSFORMER_REQUIRED_FUNCTION_COUNT: u32 = 1;
-pub const PIPELINE_ENCODER_CONTRACT_ID: u64 = 0x127d1703c6efb432;
-pub const PIPELINE_ENCODER_REQUIRED_VERSION: polyplug_abi::Version =
-    polyplug_abi::Version { major: 1, minor: 0 };
+pub const PIPELINE_ENCODER_CONTRACT_ID: u64 = 0xfc50f9d1d3db629f;
+pub const PIPELINE_ENCODER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
 pub const PIPELINE_ENCODER_REQUIRED_FUNCTION_COUNT: u32 = 1;
-pub const DATA_REPORTER_CONTRACT_ID: u64 = 0x81d41d43e511d297;
-pub const DATA_REPORTER_REQUIRED_VERSION: polyplug_abi::Version =
-    polyplug_abi::Version { major: 1, minor: 0 };
+pub const DATA_REPORTER_CONTRACT_ID: u64 = 0x76bb4643a9f5ad68;
+pub const DATA_REPORTER_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
 pub const DATA_REPORTER_REQUIRED_FUNCTION_COUNT: u32 = 1;
-pub const PIPELINE_VALIDATOR_CONTRACT_ID: u64 = 0xa553fab5d11c7af0;
-pub const PIPELINE_VALIDATOR_REQUIRED_VERSION: polyplug_abi::Version =
-    polyplug_abi::Version { major: 1, minor: 0 };
+pub const PIPELINE_VALIDATOR_CONTRACT_ID: u64 = 0x45173a959eec57c5;
+pub const PIPELINE_VALIDATOR_REQUIRED_VERSION: Version = Version { major: 1, minor: 0, patch: 0 };
 pub const PIPELINE_VALIDATOR_REQUIRED_FUNCTION_COUNT: u32 = 1;
+

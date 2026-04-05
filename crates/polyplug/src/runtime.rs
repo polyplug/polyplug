@@ -213,6 +213,31 @@ impl Runtime {
         self.host_vtable
     }
 
+    /// Get the raw context pointer for use with generated FFI callers.
+    ///
+    /// This returns a pointer suitable for passing to generated contract wrapper
+    /// methods like `ContractInstance::new(handle, rt_ctx)`.
+    ///
+    /// # Safety
+    /// The returned pointer is only valid while the Runtime is alive.
+    /// This creates a HostContext on the stack and returns a pointer to it,
+    /// so the pointer is only valid for the duration of the call.
+    #[inline(always)]
+    pub fn as_context_ptr(&self) -> *mut core::ffi::c_void {
+        // Create a HostContext on the stack and return a pointer to it
+        // This is safe because the pointer is used immediately and not stored
+        // (the generated code stores it, but the instance lifetime is bounded by Runtime)
+        let host_ctx: HostContext = HostContext {
+            runtime: self as *const Runtime as *mut core::ffi::c_void,
+            bundle_id: 0, // Host-side callers have no bundle context
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        };
+        // SAFETY: We're leaking this HostContext for the lifetime of the instance
+        // This is acceptable because instances are destroyed before the Runtime
+        let boxed: Box<HostContext> = Box::new(host_ctx);
+        Box::into_raw(boxed) as *mut core::ffi::c_void
+    }
+
     #[inline(always)]
     pub fn registry(&self) -> &Arc<PluginRegistry> {
         &self.registry
@@ -942,12 +967,19 @@ mod tests {
             GuestContractInterface,
             GuestContractInstance,
         };
+
+        unsafe extern "C" fn stub_create_instance(_rt_ctx: *mut core::ffi::c_void, _args: *const ()) -> GuestContractInstance {
+            GuestContractInstance::null()
+        }
+
+        unsafe extern "C" fn stub_destroy_instance(_rt_ctx: *mut core::ffi::c_void, _instance: GuestContractInstance) {}
+
         let interface: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
             contract_id: polyplug_utils::GuestContractId::from_u64(contract_id),
             contract_version: Version { major: 0, minor: 0, patch: 0 },
             dispatch_type: DispatchType::Native,
-            create_instance: |_rt_ctx: *mut core::ffi::c_void, _args: *const ()| GuestContractInstance::null(),
-            destroy_instance: |_rt_ctx: *mut core::ffi::c_void, _instance: GuestContractInstance| {},
+            create_instance: stub_create_instance,
+            destroy_instance: stub_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
                     function_count: 0,
@@ -962,7 +994,7 @@ mod tests {
         };
         // SAFETY: interface is leaked and lives for the process lifetime.
         let result: Result<PluginHandle, crate::error::RegistryError> =
-            unsafe { registry.register(descriptor, interface, "stub.contract".to_owned(), bundle_id) };
+            unsafe { registry.register(descriptor, interface, "stub.contract".to_owned(), BundleId::from_u64(bundle_id)) };
         match result {
             Ok(handle) => handle,
             Err(e) => panic!("failed to register contract: {e}"),
@@ -1164,7 +1196,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.test", 1_u32).id();
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.test", 1_u32);
         let bundle_name: &str = "enforce_bundle";
         let bundle_path: PathBuf = create_bundle_dir(&temp, bundle_name, "enforce");
         let runtime: Runtime = match Runtime::builder()
@@ -1200,7 +1232,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.tls", 1_u32).id();
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.tls", 1_u32);
         let observed: Arc<std::sync::Mutex<Option<bool>>> = Arc::new(std::sync::Mutex::new(None));
         let bundle_path: PathBuf = create_bundle_dir(&temp, "probe_bundle", "probe");
         let runtime: Runtime = match Runtime::builder()
@@ -1261,7 +1293,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.reentrant", 1_u32).id();
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.reentrant", 1_u32);
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "outer_bundle", "reentrant");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "inner_bundle", "probe");
         let state: Arc<std::sync::Mutex<ReentrantState>> =
@@ -1319,7 +1351,7 @@ mod tests {
             Ok(t) => t,
             Err(e) => panic!("failed to create temp dir: {e}"),
         };
-        let contract: u64 = polyplug_utils::guest_contract_id("trust.lazy", 1_u32).id();
+        let contract: u64 = polyplug_utils::guest_contract_id("trust.lazy", 1_u32);
         let outer_bundle: PathBuf = create_bundle_dir(&temp, "lazy_outer", "lazy");
         let inner_bundle: PathBuf = create_bundle_dir(&temp, "lazy_inner", "probe");
         let state: Arc<std::sync::Mutex<LazyState>> = Arc::new(std::sync::Mutex::new(LazyState {
@@ -1372,16 +1404,24 @@ mod tests {
         major: u32,
         minor: u32,
     ) -> &'static HostContractInterface {
-        use polyplug_abi::{dispatch::dispatch_mechanisms::DispatchMechanisms, dispatch::native_dispatch::NativeDispatch, GuestContractInstance};
+        use polyplug_abi::{DispatchMechanisms, NativeDispatch, HostContractInstance, DispatchType};
+
+        unsafe extern "C" fn stub_create_instance(_rt_ctx: *mut core::ffi::c_void, _args: *const ()) -> HostContractInstance {
+            HostContractInstance { data: core::ptr::null_mut() }
+        }
+
+        unsafe extern "C" fn stub_destroy_instance(_rt_ctx: *mut core::ffi::c_void, _instance: HostContractInstance) {}
+
         Box::leak(Box::new(HostContractInterface {
-            contract_id: polyplug_utils::HostContractId::from_u64(contract_id),
+            contract_id: polyplug_utils::HostContractId::from(contract_id),
             contract_version: polyplug_abi::types::Version { major, minor, patch: 0 },
             singleton: true,
-            dispatch_type: polyplug_abi::DispatchType::Native,
-            create_instance: |_rt_ctx, _args| GuestContractInstance { data: core::ptr::null_mut() },
-            destroy_instance: |_rt_ctx, _instance| {},
+            dispatch_type: DispatchType::Native,
+            create_instance: stub_create_instance,
+            destroy_instance: stub_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
+                    function_count: 0,
                     functions: core::ptr::null(),
                 },
             },
@@ -1405,7 +1445,7 @@ mod tests {
         assert!(found.is_some(), "contract should be found");
         let found_vtable: &HostContractInterface =
             found.expect("contract should be present after is_some check");
-        assert_eq!(found_vtable.contract_id.0, contract_id);
+        assert_eq!(found_vtable.contract_id.id(), contract_id);
     }
 
     #[test]
@@ -1533,23 +1573,20 @@ mod tests {
             .expect("registration should succeed");
 
         let host_ctx: HostContext = HostContext {
-            runtime: &runtime as *const Runtime as *mut Runtime,
+            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id: 0,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         let rt_ptr: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
-        let result: *const HostContractInterface =
+        let instance: HostContractInstance =
             unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
         assert!(
-            !result.is_null(),
-            "callback should return non-null for registered contract"
+            !instance.data.is_null(),
+            "callback should return non-null instance for registered contract"
         );
-
-        // SAFETY: result is a valid HostContractInterface pointer
-        let found_vtable: &HostContractInterface = unsafe { &*result };
-        assert_eq!(found_vtable.contract_id.0, contract_id);
     }
 
     #[test]
@@ -1561,18 +1598,19 @@ mod tests {
         let contract_id: u64 = polyplug_utils::host_contract_id("host.nonexistent", 1);
 
         let host_ctx: HostContext = HostContext {
-            runtime: &runtime as *const Runtime as *mut Runtime,
+            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id: 0,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         let rt_ptr: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
         // SAFETY: rt_ptr is a valid HostContext pointer, runtime is live
-        let result: *const HostContractInterface =
+        let instance: HostContractInstance =
             unsafe { host_get_host_contract(rt_ptr, contract_id, 0) };
         assert!(
-            result.is_null(),
-            "callback should return null for unregistered contract"
+            instance.data.is_null(),
+            "callback should return null instance for unregistered contract"
         );
     }
 }

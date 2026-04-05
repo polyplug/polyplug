@@ -4,7 +4,7 @@ use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
 mod generated;
 
 use generated::contracts::PipelineValidatorPlugin;
-use generated::vtables::set_validator_impl;
+use generated::interfaces::set_validator_impl;
 
 struct Plugin;
 

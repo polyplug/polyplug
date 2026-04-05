@@ -29,8 +29,8 @@ use pyo3::types::PyModule;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug::loader::manifest::ManifestData;
-use polyplug::runtime::HostContext;
+use polyplug::loader::ManifestData;
+use polyplug_abi::host::host_context::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
@@ -107,8 +107,9 @@ impl BundleLoader for PythonLoader {
 
         // Create HostContext for rt_ctx parameter.
         let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut Runtime,
+            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
             bundle_id,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
@@ -208,7 +209,7 @@ impl BundleLoader for PythonLoader {
             // Step 3b: Execute the module.
             spec.getattr("loader")
                 .and_then(|loader: pyo3::Bound<'_, pyo3::PyAny>| loader.getattr("exec_module"))
-                .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny| {
+                .and_then(|exec_module: pyo3::Bound<'_, pyo3::PyAny>| {
                     exec_module.call1((&module_from_spec,))
                 })
                 .map_err(|e| {
@@ -234,12 +235,11 @@ impl BundleLoader for PythonLoader {
             let bundle_path_static: &'static str =
                 Box::leak(bundle_dir_str.clone().into_boxed_str());
             let ctx: PluginContext = PluginContext {
+                bundle_id,
                 bundle_path: StringView {
                     ptr: bundle_path_static.as_ptr(),
                     len: bundle_path_static.len(),
                 },
-                host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-                bundle_id,
             };
 
             // Pass pointers as i64 to preserve full 64-bit precision.

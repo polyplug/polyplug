@@ -1864,6 +1864,7 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
 
     out.push_str("use polyplug_abi::HostContractInterface;\n");
     out.push_str("use polyplug_abi::HostContractInstance;\n");
+    out.push_str("use polyplug_abi::GuestContractInstance;\n");
     out.push_str("use polyplug_abi::DispatchMechanisms;\n");
     out.push_str("use polyplug_abi::NativeDispatch;\n");
     out.push_str("use polyplug_abi::VmDispatch;\n");
@@ -2040,7 +2041,8 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("pub fn {factory_vm_name}(\n"));
     out.push_str("    bridge_data: *mut c_void,\n");
     out.push_str("    dispatch_fn: unsafe extern \"C\" fn(\n");
-    out.push_str("        bridge_data: *mut c_void,\n");
+    out.push_str("        loader_data: *mut c_void,\n");
+    out.push_str("        instance: GuestContractInstance,\n");
     out.push_str("        fn_id: u32,\n");
     out.push_str("        args: *const (),\n");
     out.push_str("        out: *mut (),\n");
