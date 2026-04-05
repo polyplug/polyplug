@@ -646,13 +646,22 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Guest;\n");
     out.push_str("using Polyplug.Abi;\n\n");
 
+    // Add RuntimeContext struct definition
+    out.push_str("namespace Polyplug.Abi {\n");
+    out.push_str("/// Opaque handle to the runtime context passed to plugin functions.\n");
+    out.push_str("/// Wraps a HostContext pointer passed during polyplug_init.\n");
+    out.push_str("public readonly struct RuntimeContext {\n");
+    out.push_str("    public readonly IntPtr Data;\n");
+    out.push_str("    public RuntimeContext(IntPtr data) => Data = data;\n");
+    out.push_str("    public static RuntimeContext Null => new RuntimeContext(IntPtr.Zero);\n");
+    out.push_str("    public bool IsNull => Data == IntPtr.Zero;\n");
+    out.push_str("}\n");
+    out.push_str("}\n\n");
+
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
-    out.push_str("    // rtCtx is a RuntimeContext handle (opaque pointer wrapping HostContext)\n");
-    out.push_str(
-        "    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n",
-    );
-    out.push_str("        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
+    out.push_str("    public static uint PolyplugInit(RuntimeContext rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n");
+    out.push_str("        if (rtCtx.IsNull || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
     out.push_str("        HostVTableStorage.StoreHostVTable(hostPtr);\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
