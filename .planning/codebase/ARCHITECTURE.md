@@ -1,6 +1,6 @@
 # Architecture
 
-**Analysis Date:** 2026-04-02
+**Analysis Date:** 2026-04-05 (updated from 2026-04-02)
 
 ## System Overview
 
@@ -9,25 +9,25 @@
 **Problem Solved:** Traditional plugin systems require language-specific bindings, manual FFI management, and have significant runtime overhead. polyplug provides:
 - Single API for all supported languages
 - Direct function pointer dispatch (zero overhead for native, minimal for VM-based)
-- Hot-reload with quiescence-based safety
+- Hot-reload with callback-based instance safety
 - Type-safe code generation for all bindings
 - Cross-platform support (Linux, macOS, Windows)
 
 ## Pattern Overview
 
-**Overall:** Plugin Runtime with Generational Registry
+**Overall:** Plugin Runtime with Instance-Based Model
 
 **Key Characteristics:**
 - Trait-based loader abstraction (`BundleLoader`) for multi-language support
-- Generational index pattern for safe handle management (stale handle detection)
-- `ArcSwap` for atomic vtable swapping during hot-reload
+- Simple index-based handles (no generation counter - safety via callback contract)
+- Direct `Arc<GuestContractInterface>` storage (no wrapper)
 - Two-phase lifecycle: initialization (single-threaded, graph-based load order) then runtime (lock-free dispatch)
 - Code generation via `polyplugc` CLI for type-safe bindings
 
 ## Layers
 
-**Host Integration Layer:**
-- Purpose: FFI entry points for host language bindings
+**FFI Layer:**
+- Purpose: C ABI entry points for host language bindings
 - Location: `crates/polyplug/src/ffi.rs`
 - Contains: `#[no_mangle]` C ABI functions (`polyplug_runtime_create`, `polyplug_runtime_load_bundle`, etc.)
 - Depends on: Runtime, Registry
@@ -37,14 +37,14 @@
 - Purpose: Plugin lifecycle management, loader coordination, hot-reload
 - Location: `crates/polyplug/src/runtime.rs`, `runtime_builder.rs`, `reload.rs`
 - Contains: `Runtime` struct, `RuntimeBuilder` pattern, reload orchestration
-- Depends on: Registry, Loaders, Compatibility graph
+- Depends on: Registry, Loaders, Capability graph
 - Used by: FFI layer, Host SDKs
 
 **Registry Layer:**
-- Purpose: VTable storage, handle validation, contract lookup
+- Purpose: Interface storage, handle validation, contract lookup
 - Location: `crates/polyplug/src/registry/plugin_registry.rs`
-- Contains: `PluginRegistry` with generational slots, `PluginGuard` for RAII vtable access
-- Depends on: ABI types (`PluginInterface`, `PluginHandle`)
+- Contains: `PluginRegistry` with index-based slots, direct `Arc<GuestContractInterface>` storage
+- Depends on: ABI types (`GuestContractInterface`, `PluginHandle`)
 - Used by: Runtime, Host callbacks
 
 **Loader Layer:**
@@ -57,7 +57,7 @@
 **ABI Layer:**
 - Purpose: C-compatible type definitions for host/plugin boundary
 - Location: `crates/polyplug_abi/src/`
-- Contains: `PluginInterface`, `HostVTable`, `PluginHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
+- Contains: `GuestContractInterface`, `HostContractInterface`, `RuntimeAbi`, `PluginHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
 - Depends on: No internal dependencies (standalone)
 - Used by: All layers crossing FFI boundary
 
@@ -70,7 +70,7 @@
 
 ## Data Flow
 
-**Plugin Loading Flow:**
+### Plugin Loading Flow
 
 1. Host calls `Runtime::builder().loader(...).build()` or FFI `polyplug_runtime_create`
 2. `RuntimeBuilder::build()` scans plugin directories via `scanner::scan_dirs`
@@ -79,83 +79,119 @@
 5. Validates version compatibility (`validate_bundle_compatibility`)
 6. Computes topological load order (providers before dependents)
 7. For each bundle in order: dispatches to matching `BundleLoader` via `runtime_name`
-8. Loader calls plugin's `polyplug_init(rt_ctx, host_vtable, ctx)`
-9. Plugin calls `host_vtable.register_plugin` to register vtables
-10. Registry stores vtables with generational handles
+8. Loader calls plugin's `polyplug_init(rt_ctx, abi, ctx)`
+9. Plugin calls `abi.register_contract` to register interfaces
+10. Registry stores interfaces with index-based handles
 
-**Plugin Dispatch Flow:**
+### Plugin Dispatch Flow
 
 1. Host calls `runtime.find_by_contract(contract_id, min_version)`
-2. Registry returns `PluginHandle` (index + generation)
-3. Host calls `runtime.resolve_plugin(handle)` or FFI `polyplug_runtime_resolve_plugin`
-4. Registry validates generation, returns `PluginGuard` wrapping `Arc<VTableSlot>`
-5. Host calls generated contract caller method (e.g., `decoder.decode(input)`)
-6. Caller dereferences vtable function pointer, invokes with args
-7. Plugin executes, returns result via ABI types (`StringView`, `Buffer`, `AbiError`)
-8. Guard dropped, Arc reference released
+2. Registry returns `ContractHandle` (index only)
+3. Host calls `runtime.resolve_contract(handle)` or FFI `polyplug_runtime_resolve_plugin`
+4. Registry returns `&GuestContractInterface`
+5. Host calls `interface.create_instance(rt_ctx)` → `GuestContractInstance`
+6. Host dispatches through interface (native pointers or VM call)
+7. Plugin executes, returns result via ABI types
+8. Host calls `interface.destroy_instance(rt_ctx, instance)` when done
 
-**Hot-Reload Flow:**
+### Hot-Reload Flow
 
 1. Host calls `runtime.reload_bundle(path)` (triggered by file watcher or manual)
 2. Runtime fires `ReloadPhase::Preparing` callback
-3. Loader loads new library/VM code, calls `polyplug_init`
-4. Registry atomically swaps vtables via `swap_vtable` (`ArcSwap`)
-5. Runtime waits for quiescence (`wait_for_quiescence`) using Arc strong_count
+3. **Host MUST destroy all instances in this callback** (safety contract)
+4. Loader loads new library/VM code, calls `polyplug_init`
+5. Registry atomically swaps interfaces
 6. Runtime fires `ReloadPhase::Reloaded` callback
-7. Host releases cached raw pointers (CRITICAL safety step)
-8. Loader drops old library (native) or lets GC clean up (VM-based)
+7. Host can create new instances from new interfaces
 
 ## Key Abstractions
 
-**`BundleLoader` Trait:**
+### `BundleLoader` Trait
 - Purpose: Abstract loader interface for all language runtime types
-- Examples: `crates/polyplug_native/src/loader.rs:166-244`, `crates/polyplug_python/src/lib.rs:62-248`
+- Location: `crates/polyplug/src/loader/bundle_loader.rs`
 - Pattern: Trait with `runtime_name()`, `load()`, `reload()` methods
 
-**`PluginInterface` VTable:**
+### `GuestContractInterface`
 - Purpose: Function dispatch table registered by plugins
-- Examples: `crates/polyplug_abi/src/plugin/plugin_interface.rs`
-- Pattern: `#[repr(C)]` struct with `contract_id`, `contract_version`, `function_count`, `dispatch_type`, dispatch union
+- Location: `crates/polyplug_abi/src/guest/guest_contract_interface.rs`
+- Pattern: `#[repr(C)]` struct with:
+  - `contract_id`, `contract_version`
+  - `dispatch_type`, `dispatch` (Native or VM)
+  - `create_instance`, `destroy_instance` factory functions
 
-**`PluginHandle` Generational Index:**
-- Purpose: Safe handle to plugin vtable with stale detection
-- Examples: `crates/polyplug_abi/src/plugin/plugin_handle.rs`
-- Pattern: `{ index: u32, generation: u32 }` - validated against slot generation on each resolve
+### `HostContractInterface`
+- Purpose: Host-provided services to plugins
+- Location: `crates/polyplug_abi/src/host/host_contract_interface.rs`
+- Pattern: `#[repr(C)]` struct with:
+  - `contract_id`, `contract_version`, `singleton` flag
+  - `dispatch_type`, `dispatch`
+  - `create_instance`, `destroy_instance`
 
-**`HostVTable` Callback Table:**
+### `PluginHandle`
+- Purpose: Simple handle to registry slot
+- Location: `crates/polyplug_abi/src/plugin/plugin_handle.rs`
+- Pattern: `{ index: u32 }` - no generation counter (safety via callback contract)
+
+### `RuntimeAbi`
 - Purpose: Host capabilities exposed to plugins during init
-- Examples: `crates/polyplug_abi/src/host/host_vtable/host_vtable.rs`
-- Pattern: Function pointers for `register_plugin`, `alloc`, `free`, `find_by_contract`, `resolve_plugin`
+- Location: `crates/polyplug_abi/src/host/runtime_abi.rs`
+- Pattern: Function pointers for `register_contract`, `alloc`, `free`, `find_contract`, `resolve_contract`, `get_host_contract`, `call_method`
 
-**`CapabilityGraph`:**
+### `CapabilityGraph`
 - Purpose: Dependency resolution for load ordering
-- Examples: `crates/polyplug/src/compatibility/capability_graph.rs`
+- Location: `crates/polyplug/src/compatibility/capability_graph.rs`
 - Pattern: Directed graph with petgraph, cycle detection, topological sort
 
-**`PluginGuard` RAII Wrapper:**
-- Purpose: Reference-counted vtable access for hot-reload safety
-- Examples: `crates/polyplug/src/registry/plugin_registry.rs` (internal)
-- Pattern: Wraps `Arc<VTableSlot>`, provides `vtable()` method, dropped after call
+## Instance Model
+
+### Guest Contracts (Plugins)
+
+```rust
+// Created by host
+let instance = interface.create_instance(rt_ctx);
+
+// Passed as first arg to all dispatch calls
+dispatch(instance, fn_id, args, out);
+
+// Destroyed by host
+interface.destroy_instance(rt_ctx, instance);
+```
+
+### Host Contracts (Host Services)
+
+```rust
+// Singleton: same instance every time
+let instance = runtime.get_host_contract(contract_id, 0);
+
+// Multi-instance: new instance each call
+// Caller owns and must destroy
+```
+
+### Safety Contract
+
+- **Before hot-reload**: Host MUST destroy all instances in `ReloadPhase::Preparing` callback
+- **After hot-reload**: Host can create new instances from new interfaces
+- **Leaked instances**: Undefined behavior if used after reload
 
 ## Entry Points
 
 **Rust Host Entry:**
-- Location: `crates/polyplug/src/runtime.rs:99-103`
+- Location: `crates/polyplug/src/runtime.rs`
 - Triggers: `Runtime::builder().build()`
 - Responsibilities: Creates runtime, registers loaders, loads bundles
 
 **FFI Entry Points:**
-- Location: `crates/polyplug/src/ffi.rs:135-526`
+- Location: `crates/polyplug/src/ffi.rs`
 - Triggers: C ABI calls from Python/C#/Lua/JS SDKs
 - Responsibilities: `polyplug_runtime_create`, `polyplug_runtime_load_bundle`, `polyplug_runtime_find_by_contract`, etc.
 
 **Plugin Entry Point:**
 - Location: Required symbol in plugin binary
 - Triggers: Loader after dlopen/import
-- Responsibilities: Register vtables via `host_vtable.register_plugin`
+- Responsibilities: Register interfaces via `abi.register_contract`
 
 **Code Generation Entry:**
-- Location: `crates/polyplugc/src/lib.rs:15-56`
+- Location: `crates/polyplugc/src/lib.rs`
 - Triggers: CLI `polyplugc generate --bundle bundle.toml --lang rust --out src/generated`
 - Responsibilities: Parse API, validate IR, generate host/guest bindings
 
@@ -171,36 +207,29 @@
 
 **Error Categories:**
 - `LoaderError`: Init failures, missing symbols, version mismatches, VM-specific errors
-- `RegistryError`: Stale handles, contract collisions, duplicate providers
+- `RegistryError`: Invalid handles, contract collisions, duplicate providers
 - `GraphError`: Dependency cycles, unsatisfied capabilities
 - `HostContractError`: Duplicate/missing host contracts
 
 ## Cross-Cutting Concerns
 
-**Logging:** Host-provided warning callback via `RuntimeBuilder::on_warning`, falls back to stderr
-
-**Validation:** 
+**Validation:**
 - Manifest parsing with required fields (`id`, `name`, `runtime`, `file`)
 - Version compatibility checks with `Compatibility::Strict/Relaxed/Yolo` modes
 - Function count validation against manifest `function_count` entries
-- Bundle ID tampering detection via `HostContext.bundle_id` verification
-
-**Authentication/Security:** 
 - Bundle ID enforcement prevents plugins from accessing undeclared dependencies
 - ABI version sentinel (`POLYPLUG_ABI_VERSION`) rejects mismatched plugins
-- Panic isolation via `catch_unwind` at every FFI boundary
 
 **Memory Management:**
 - Host allocator (`polyplug_host_alloc`, `polyplug_host_free`) for all cross-boundary memory
 - `Buffer` type owns memory via host allocator
 - `StringView` is non-owning borrow (caller responsible for lifetime)
+- Interfaces are `'static` (live for process lifetime after registration)
 
 **Concurrency:**
 - Registry uses `RwLock` for registration (rare) and read guards for dispatch (common)
-- `ArcSwap` for atomic vtable swaps during hot-reload
 - `Mutex` for loader-internal library handles
 - TLS for init-phase bundle context (dependency enforcement)
 
 ---
-
-*Architecture analysis: 2026-04-02*
+*Architecture analysis: 2026-04-05 (updated)*
