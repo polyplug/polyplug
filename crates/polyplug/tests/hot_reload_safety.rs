@@ -14,8 +14,9 @@ use std::sync::Arc;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, RuntimeContext, NativeDispatch, PluginDescriptor,
-    PluginHandle, StringView, Version, DispatchMechanisms,
+    PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
+use polyplug_utils::BundleId;
 
 // ─── Static vtables for testing ──────────────────────────────────────────────
 
@@ -37,26 +38,28 @@ unsafe extern "C" fn noop_destroy_instance(
 }
 
 static VTABLE_V1: GuestContractInterface = GuestContractInterface {
-    contract_id: 0xDEAD_BEEF_0000_0001_u64.into(),
+    contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
+            function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         },
     },
 };
 
 static VTABLE_V2: GuestContractInterface = GuestContractInterface {
-    contract_id: 0xDEAD_BEEF_0000_0001_u64.into(),
+    contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
     destroy_instance: noop_destroy_instance,
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
+            function_count: 0,
             functions: MOCK_FNS.as_ptr(),
         },
     },
@@ -87,7 +90,7 @@ fn test_swap_interface_changes_vtable() {
             descriptor,
             &VTABLE_V1,
             "swap.test.contract".to_owned(),
-            2_u64,
+            BundleId::from_u64(2_u64),
         )
     }
     .expect("registration should succeed");
@@ -110,7 +113,7 @@ fn test_swap_interface_changes_vtable() {
     );
 
     // Perform the swap - direct swap_interface
-    let new_arc: Arc<GuestContractInterface> = Arc::new(&VTABLE_V2);
+    let new_arc: Arc<GuestContractInterface> = Arc::new(VTABLE_V2.clone());
     registry
         .swap_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
@@ -149,7 +152,7 @@ fn test_direct_swap_interface() {
             descriptor,
             &VTABLE_V1,
             "swap.direct.contract".to_owned(),
-            3_u64,
+            BundleId::from_u64(3_u64),
         )
     }
     .expect("registration should succeed");
@@ -163,7 +166,7 @@ fn test_direct_swap_interface() {
     assert_eq!(version_before.major, 1, "before swap: V1");
 
     // Perform direct swap
-    let new_arc: Arc<GuestContractInterface> = Arc::new(&VTABLE_V2);
+    let new_arc: Arc<GuestContractInterface> = Arc::new(VTABLE_V2.clone());
     registry
         .swap_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");

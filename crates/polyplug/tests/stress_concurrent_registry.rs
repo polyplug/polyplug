@@ -3,7 +3,6 @@
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
-use core::time::Duration;
 use std::sync::Arc;
 use std::sync::Barrier;
 
@@ -13,6 +12,7 @@ use polyplug_abi::{
     DispatchType, GuestContractInterface, RuntimeContext, NativeDispatch, PluginDescriptor,
     PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
+use polyplug_utils::BundleId;
 
 const THREADS: usize = 8_usize;
 const RESOLVER_THREADS: usize = 6_usize;
@@ -81,6 +81,7 @@ macro_rules! make_interface {
             destroy_instance: noop_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
+                    function_count: 0,
                     functions: MOCK_FUNCTIONS.as_ptr(),
                 },
             },
@@ -134,7 +135,7 @@ fn stress_concurrent_register_find_resolve() {
                         descriptor,
                         vtable,
                         CONTRACT_NAMES[idx].to_owned(),
-                        idx as u64,
+                        BundleId::from_u64(idx as u64),
                     )
                     .expect("register must succeed")
             };
@@ -190,7 +191,7 @@ fn stress_concurrent_swaps_with_resolvers() {
                 descriptor,
                 &VTABLE_SWAP_V1,
                 "stress.swap.contract".to_owned(),
-                0xABCD_0001_u64,
+                BundleId::from_u64(0xABCD_0001_u64),
             )
             .expect("initial register must succeed")
     };
@@ -237,7 +238,7 @@ fn stress_concurrent_swaps_with_resolvers() {
         } else {
             &VTABLE_SWAP_V1
         };
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable);
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable.clone());
         registry
             .swap_interface(handle.index, new_arc)
             .expect("swap_interface must succeed");

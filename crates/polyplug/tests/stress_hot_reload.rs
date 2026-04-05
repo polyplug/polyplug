@@ -114,13 +114,13 @@ fn v2_so_path() -> PathBuf {
     PathBuf::from(RELOAD_V2_DIR).join("libreload_plugin_v2.so")
 }
 
-fn hot_reload_config() -> polyplug::runtime::RuntimeConfig {
-    polyplug::runtime::RuntimeConfig {
+fn hot_reload_config() -> polyplug::RuntimeConfig {
+    polyplug::RuntimeConfig {
         hot_reload_enabled: true,
         hot_reload_max_retries: 3,
         hot_reload_retry_interval_ms: 1000,
         hot_reload_abort_on_max_retries: true,
-        compatibility: polyplug::runtime::Compatibility::Strict,
+        compatibility: polyplug::Compatibility::Strict,
     }
 }
 
@@ -415,9 +415,9 @@ fn stress_reload_callback_fires_on_every_cycle() {
     let events_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&events);
 
     let rt: Runtime = Runtime::builder()
-        .config(polyplug::runtime::RuntimeConfig {
+        .config(polyplug::RuntimeConfig {
             hot_reload_enabled: true,
-            ..polyplug::runtime::RuntimeConfig::default()
+            ..polyplug::RuntimeConfig::default()
         })
         .on_reload(move |ev: ReloadPhase| {
             events_clone

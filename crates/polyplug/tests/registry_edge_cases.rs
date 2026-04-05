@@ -17,6 +17,7 @@ use polyplug_abi::{
     DispatchType, GuestContractInterface, RuntimeContext, NativeDispatch, PluginDescriptor,
     PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
+use polyplug_utils::BundleId;
 
 const MOCK_FUNCTIONS: [*const (); 0] = [];
 
@@ -45,6 +46,7 @@ macro_rules! make_interface {
             destroy_instance: noop_destroy_instance,
             dispatch: DispatchMechanisms {
                 native: NativeDispatch {
+                    function_count: 0,
                     functions: MOCK_FUNCTIONS.as_ptr(),
                 },
             },
@@ -71,21 +73,21 @@ fn resolve_valid_handle_after_multiple_registrations() {
     // SAFETY: VTABLE_A, VTABLE_B, VTABLE_C are 'static, pointers are valid for Registry lifetime.
     let handle_a: PluginHandle = unsafe {
         registry
-            .register(descriptor_a, &VTABLE_A, "contract.a".to_owned(), 1_u64)
+            .register(descriptor_a, &VTABLE_A, "contract.a".to_owned(), BundleId::from_u64(1_u64))
             .expect("registration A should succeed")
     };
 
     // SAFETY: VTABLE_B is 'static, pointer is valid for Registry lifetime.
     let handle_b: PluginHandle = unsafe {
         registry
-            .register(descriptor_b, &VTABLE_B, "contract.b".to_owned(), 2_u64)
+            .register(descriptor_b, &VTABLE_B, "contract.b".to_owned(), BundleId::from_u64(2_u64))
             .expect("registration B should succeed")
     };
 
     // SAFETY: VTABLE_C is 'static, pointer is valid for Registry lifetime.
     let handle_c: PluginHandle = unsafe {
         registry
-            .register(descriptor_c, &VTABLE_C, "contract.c".to_owned(), 3_u64)
+            .register(descriptor_c, &VTABLE_C, "contract.c".to_owned(), BundleId::from_u64(3_u64))
             .expect("registration C should succeed")
     };
 
@@ -131,7 +133,7 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     // SAFETY: VTABLE is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry
-            .register(descriptor, &VTABLE, "contract.single".to_owned(), 100_u64)
+            .register(descriptor, &VTABLE, "contract.single".to_owned(), BundleId::from_u64(100_u64))
             .expect("registration should succeed")
     };
 
@@ -232,7 +234,7 @@ fn resolve_concurrent_access_thread_safety() {
                     descriptor,
                     &CONCURRENT_VTABLES[idx],
                     CONCURRENT_CONTRACT_NAMES[idx].to_owned(),
-                    idx as u64,
+                    BundleId::from_u64(idx as u64),
                 )
                 .expect("registration should succeed")
         };
@@ -294,7 +296,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
                 descriptor_a,
                 &VTABLE_IMPL_A,
                 "multi.contract".to_owned(),
-                1000_u64,
+                BundleId::from_u64(1000_u64),
             )
             .expect("registration A should succeed")
     };
@@ -306,7 +308,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
                 descriptor_b,
                 &VTABLE_IMPL_B,
                 "multi.contract".to_owned(),
-                2000_u64,
+                BundleId::from_u64(2000_u64),
             )
             .expect("registration B should succeed")
     };
@@ -318,7 +320,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
                 descriptor_c,
                 &VTABLE_IMPL_C,
                 "multi.contract".to_owned(),
-                3000_u64,
+                BundleId::from_u64(3000_u64),
             )
             .expect("registration C should succeed")
     };
@@ -387,7 +389,7 @@ fn swap_interface_during_active_resolve() {
                 descriptor,
                 &VTABLE_V1,
                 "swap.test.contract".to_owned(),
-                5000_u64,
+                BundleId::from_u64(5000_u64),
             )
             .expect("initial registration should succeed")
     };
@@ -402,7 +404,7 @@ fn swap_interface_during_active_resolve() {
     );
 
     // Perform the swap - direct swap_interface takes Arc<GuestContractInterface>
-    let new_arc: Arc<GuestContractInterface> = Arc::new(&VTABLE_V2);
+    let new_arc: Arc<GuestContractInterface> = Arc::new(VTABLE_V2.clone());
     registry
         .swap_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
