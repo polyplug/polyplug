@@ -130,6 +130,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::AbiErrorCode;\n");
         callers_out.push_str("use polyplug_abi::AbiError;\n");
         callers_out.push_str("use polyplug_abi::GuestContractInterface;\n");
+        callers_out.push_str("use polyplug_abi::RuntimeContext;\n");
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::PluginHandle;\n");
@@ -548,6 +549,7 @@ fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<
     out.push_str("use polyplug_guest::GuestContractId;\n");
     out.push_str("use polyplug_guest::GuestContractInterface;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
+    out.push_str("use polyplug_guest::RuntimeContext;\n");
     out.push_str("use polyplug_guest::DispatchType;\n");
     out.push_str("use polyplug_guest::NativeDispatch;\n");
     out.push_str("use polyplug_guest::DispatchMechanisms;\n");
@@ -1866,6 +1868,8 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::HostContractInterface;\n");
     out.push_str("use polyplug_abi::HostContractInstance;\n");
     out.push_str("use polyplug_abi::GuestContractInstance;\n");
+    out.push_str("use polyplug_abi::RuntimeContext;\n");
+    out.push_str("use polyplug_abi::VmLoaderData;\n");
     out.push_str("use polyplug_abi::DispatchMechanisms;\n");
     out.push_str("use polyplug_abi::NativeDispatch;\n");
     out.push_str("use polyplug_abi::VmDispatch;\n");
@@ -2042,7 +2046,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!("pub fn {factory_vm_name}(\n"));
     out.push_str("    bridge_data: *mut c_void,\n");
     out.push_str("    dispatch_fn: unsafe extern \"C\" fn(\n");
-    out.push_str("        loader_data: *mut c_void,\n");
+    out.push_str("        loader_data: VmLoaderData,\n");
     out.push_str("        instance: GuestContractInstance,\n");
     out.push_str("        fn_id: u32,\n");
     out.push_str("        args: *const (),\n");
@@ -2107,7 +2111,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        dispatch: DispatchMechanisms {\n");
     out.push_str("            vm: VmDispatch {\n");
     out.push_str("                call: dispatch_fn,\n");
-    out.push_str("                loader_data: bridge_data,\n");
+    out.push_str("                loader_data: VmLoaderData { data: bridge_data },\n");
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n\n");
@@ -2357,6 +2361,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str(header);
 
     out.push_str("use polyplug_guest::RuntimeAbi;\n");
+    out.push_str("use polyplug_guest::RuntimeContext;\n");
     out.push_str("use polyplug_guest::HostContractInterface;\n");
     out.push_str("use polyplug_guest::HostContractInstance;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
@@ -2430,7 +2435,7 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
     out.push_str("        let host: &RuntimeAbi = unsafe { &*host };\n");
     out.push_str("        let instance: HostContractInstance = unsafe {\n");
     out.push_str(&format!(
-        "            (host.get_host_contract)(core::ptr::null_mut(), 0x{:016X}_u64, min_version)\n",
+        "            (host.get_host_contract)(RuntimeContext::null(), 0x{:016X}_u64, min_version)\n",
         contract.contract_id
     ));
     out.push_str("        };\n");
