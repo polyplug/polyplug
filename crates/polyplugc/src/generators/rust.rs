@@ -3180,8 +3180,8 @@ mod tests {
             "missing struct: {out}"
         );
         assert!(
-            out.contains("vtable: *const HostContractVTable"),
-            "missing vtable field: {out}"
+            out.contains("instance: HostContractInstance"),
+            "missing instance field: {out}"
         );
         assert!(
             out.contains("pub unsafe fn from_host"),
@@ -3330,11 +3330,11 @@ mod tests {
         let out: String = generate_host_interface_factories_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
-            out.contains("pub fn create_host_logger_vtable(implementation: Box<dyn HostLogger>)"),
+            out.contains("pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>)"),
             "missing native factory: {out}"
         );
         assert!(
-            out.contains("pub fn create_host_logger_vtable_vm"),
+            out.contains("pub fn create_host_logger_interface_vm"),
             "missing vm factory: {out}"
         );
         assert!(

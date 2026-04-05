@@ -472,15 +472,15 @@ mod tests {
 
     #[test]
     fn contract_id_golden_values() {
-        // Golden: FNV-1a of "image.decode@1" — must match runtime abi::contract_id
+        // Golden values for "guest_contract:name@version" FNV-1a hash
+        // These match polyplug_utils::GuestContractId::new()
         assert_eq!(
             compute_contract_id("image.decode", 1),
-            0xa1ba05dd7da18569_u64
+            18154885241241252316_u64
         );
-        // Golden: FNV-1a of "audio.encode@2"
         assert_eq!(
             compute_contract_id("audio.encode", 2),
-            0x7a7958404b1d72a5_u64
+            6632138859905976100_u64
         );
     }
 
