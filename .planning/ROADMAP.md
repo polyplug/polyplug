@@ -17,7 +17,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - [x] **Phase 4: Hot-Reload** - Callback-based reload with instance safety contract
 - [x] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
 - [x] **Phase 6: Cleanup** - Naming consistency and documentation updates
-- [ ] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
+- [x] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
 
 ## Phase Details
 
@@ -160,10 +160,10 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Create RuntimeContext and VmLoaderData opaque handle structs following GuestContractInstance pattern
-- [ ] 07-02-PLAN.md — Update RuntimeAbi function signatures and host callbacks to use RuntimeContext
-- [ ] 07-03-PLAN.md — Update GuestContractInterface, HostContractInterface, VmDispatch to use typed handles
-- [ ] 07-04-PLAN.md — Update codegen and loaders for typed handles, final verification
+- [x] 07-01-PLAN.md — Create RuntimeContext and VmLoaderData opaque handle structs following GuestContractInstance pattern
+- [x] 07-02-PLAN.md — Update RuntimeAbi function signatures and host callbacks to use RuntimeContext
+- [x] 07-03-PLAN.md — Update GuestContractInterface, HostContractInterface, VmDispatch to use typed handles
+- [x] 07-04-PLAN.md — Update codegen and loaders for typed handles, final verification
 
 ## Progress
 
@@ -175,7 +175,7 @@ Plans:
 | 4. Hot-Reload | 3/3 | Complete | 2026-04-04 |
 | 5. SDK Updates | 8/8 | Complete | 2026-04-04 |
 | 6. Cleanup | 13/13 | Complete | 2026-04-05 |
-| 7. Typed Handles | 0/4 | Not started | - |
+| 7. Typed Handles | 4/4 | Complete | 2026-04-05 |
 
 ## Dependencies
 
