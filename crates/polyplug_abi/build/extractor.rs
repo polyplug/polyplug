@@ -21,6 +21,10 @@ const ABI_TYPES: &[&str] = &[
     "AbiError",
     "PluginHandle",
     "HostContext",
+    "RuntimeContext",     // Opaque handle wrapping HostContext
+    "VmLoaderData",       // Opaque handle for VM loader state
+    "GuestContractInstance", // Opaque handle for guest contract instances
+    "HostContractInstance",  // Opaque handle for host contract instances
     "DispatchType",
     "NativeDispatch",
     "VmDispatch",
