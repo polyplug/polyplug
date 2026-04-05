@@ -2394,7 +2394,7 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("pub struct {caller_name} {{\n"));
-    out.push_str("    vtable: *const HostContractInterface,\n");
+    out.push_str("    instance: HostContractInstance,\n");
     out.push_str("}\n\n");
 
     out.push_str(&format!("impl {caller_name} {{\n"));
@@ -2415,17 +2415,17 @@ fn generate_guest_host_contract_caller(out: &mut String, contract: &ResolvedHost
         contract.contract_id
     ));
     out.push_str("        };\n");
-    out.push_str("        if instance.vtable.is_null() {\n");
+    out.push_str("        if instance.data.is_null() {\n");
     out.push_str("            return None;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        Some({caller_name} {{ vtable: instance.vtable }})\n"
+        "        Some({caller_name} {{ instance }})\n"
     ));
     out.push_str("    }\n\n");
 
-    out.push_str("    /// Check if caller is valid (vtable is non-null).\n");
+    out.push_str("    /// Check if caller is valid (instance data is non-null).\n");
     out.push_str("    pub fn is_valid(&self) -> bool {\n");
-    out.push_str("        !self.vtable.is_null()\n");
+    out.push_str("        !self.instance.data.is_null()\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -2467,15 +2467,15 @@ fn generate_guest_host_contract_method(
         func.name, params_str
     ));
 
-    out.push_str("        if self.vtable.is_null() {\n");
+    out.push_str("        if self.instance.data.is_null() {\n");
     out.push_str("            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound as u32));\n");
     out.push_str("        }\n");
 
-    out.push_str("        // SAFETY: vtable is non-null and valid per ABI contract.\n");
-    out.push_str("        let vtable: &HostContractInterface = unsafe { &*self.vtable };\n\n");
+    out.push_str("        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.\n");
+    out.push_str("        let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };\n\n");
 
     out.push_str(&format!(
-        "        if {fn_id}_u32 >= vtable.dispatch.native.function_count {{\n"
+        "        if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
     ));
     out.push_str(
         "            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));\n",
@@ -2487,10 +2487,10 @@ fn generate_guest_host_contract_method(
     emit_guest_host_contract_out_setup(out, &func.returns);
 
     out.push_str("        let err: AbiError = unsafe {\n");
-    out.push_str("            match vtable.dispatch_type {\n");
+    out.push_str("            match interface.dispatch_type {\n");
     out.push_str("                DispatchType::Native => {\n");
     out.push_str(&format!(
-        "                    let fn_ptr: *const () = *vtable.dispatch.native.functions.add({fn_id}_usize);\n"
+        "                    let fn_ptr: *const () = *interface.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
     out.push_str("                    // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
     out.push_str("                    // - Function pointers have the same size and alignment as data pointers\n");
@@ -2503,7 +2503,7 @@ fn generate_guest_host_contract_method(
     out.push_str("                }\n");
     out.push_str("                DispatchType::VirtualMachine => {\n");
     out.push_str(&format!(
-        "                    (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr)\n"
+        "                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), {fn_id}_u32, args_ptr, out_ptr)\n"
     ));
     out.push_str("                }\n");
     out.push_str("            }\n");

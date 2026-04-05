@@ -37,7 +37,7 @@ impl HostContractError {
 
 /// Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 pub struct HostLoggerCaller {
-    vtable: *const HostContractInterface,
+    instance: HostContractInstance,
 }
 
 impl HostLoggerCaller {
@@ -54,26 +54,26 @@ impl HostLoggerCaller {
         let instance: HostContractInstance = unsafe {
             (host.get_host_contract)(core::ptr::null_mut(), 0xF53EB5F2845853BB_u64, min_version)
         };
-        if instance.vtable.is_null() {
+        if instance.data.is_null() {
             return None;
         }
-        Some(HostLoggerCaller { vtable: instance.vtable })
+        Some(HostLoggerCaller { instance })
     }
 
-    /// Check if caller is valid (vtable is non-null).
+    /// Check if caller is valid (instance data is non-null).
     pub fn is_valid(&self) -> bool {
-        !self.vtable.is_null()
+        !self.instance.data.is_null()
     }
 
     /// Call host contract function `log` (function_id=0)
     pub fn log(&self, message: String) -> Result<(), HostContractError> {
-        if self.vtable.is_null() {
+        if self.instance.data.is_null() {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound as u32));
         }
-        // SAFETY: vtable is non-null and valid per ABI contract.
-        let vtable: &HostContractInterface = unsafe { &*self.vtable };
+        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
+        let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
-        if 0_u32 >= vtable.dispatch.native.function_count {
+        if 0_u32 >= interface.dispatch.native.function_count {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));
         }
 
@@ -81,9 +81,9 @@ impl HostLoggerCaller {
         let args_ptr: *const () = &message_view as *const StringView as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
         let err: AbiError = unsafe {
-            match vtable.dispatch_type {
+            match interface.dispatch_type {
                 DispatchType::Native => {
-                    let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                    let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
                     // - The vtable guarantees that the function at this index is a native dispatch
@@ -92,7 +92,7 @@ impl HostLoggerCaller {
                     dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
                 }
                 DispatchType::VirtualMachine => {
-                    (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, GuestContractInstance::null(), 0_u32, args_ptr, out_ptr)
+                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), 0_u32, args_ptr, out_ptr)
                 }
             }
         };
@@ -120,13 +120,13 @@ impl HostLoggerCaller {
 
     /// Call host contract function `log_with_level` (function_id=1)
     pub fn log_with_level(&self, level: LogLevel, message: String) -> Result<(), HostContractError> {
-        if self.vtable.is_null() {
+        if self.instance.data.is_null() {
             return Err(HostContractError::new(AbiErrorCode::HostContractNotFound as u32));
         }
-        // SAFETY: vtable is non-null and valid per ABI contract.
-        let vtable: &HostContractInterface = unsafe { &*self.vtable };
+        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
+        let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
-        if 1_u32 >= vtable.dispatch.native.function_count {
+        if 1_u32 >= interface.dispatch.native.function_count {
             return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));
         }
 
@@ -137,9 +137,9 @@ impl HostLoggerCaller {
         let args_ptr: *const () = &args_val as *const HostLoggerLogWithLevelArgs as *const ();
         let out_ptr: *mut () = core::ptr::null_mut();
         let err: AbiError = unsafe {
-            match vtable.dispatch_type {
+            match interface.dispatch_type {
                 DispatchType::Native => {
-                    let fn_ptr: *const () = *vtable.dispatch.native.functions.add(1_usize);
+                    let fn_ptr: *const () = *interface.dispatch.native.functions.add(1_usize);
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
                     // - The vtable guarantees that the function at this index is a native dispatch
@@ -148,7 +148,7 @@ impl HostLoggerCaller {
                     dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
                 }
                 DispatchType::VirtualMachine => {
-                    (vtable.dispatch.vm.call)(vtable.dispatch.vm.loader_data, GuestContractInstance::null(), 1_u32, args_ptr, out_ptr)
+                    (interface.dispatch.vm.call)(interface.dispatch.vm.loader_data, GuestContractInstance::null(), 1_u32, args_ptr, out_ptr)
                 }
             }
         };
