@@ -25,7 +25,7 @@ pub use types::{AbiError, AbiErrorCode, StringView, Version, Buffer};
 
 // ─── Dispatch exports ────────────────────────────────────────────────────────
 
-pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch, VmDispatch};
+pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch, VmDispatch, VmLoaderData};
 
 // ─── FFI Helper Function exports ────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ pub use polyplug_utils::{GuestContractId, HostContractId};
 
 // ─── New exports from host module ────────────────────────────────────────────
 
-pub use host::{HostContractInterface, HostContractInstance, RuntimeAbi};
+pub use host::{HostContractInterface, HostContractInstance, RuntimeAbi, RuntimeContext};
 
 pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
 
