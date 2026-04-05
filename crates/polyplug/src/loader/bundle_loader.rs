@@ -35,8 +35,8 @@ pub trait BundleLoader: Send + Sync {
     ///
     /// Implementation must:
     /// 1. Load/reload the bundle code (loader-specific mechanism)
-    /// 2. Call init to get new vtables
-    /// 3. Register new vtables with registry (vtable swap happens in registry)
+    /// 2. Call init to get new interfaces
+    /// 3. Register new interfaces with registry (interface swap happens in registry)
     /// 4. Return Ok(()) - runtime handles callback and quiescence wait
     ///
     /// # Safety Contract

@@ -5,7 +5,7 @@
 //!  - Build capability graph
 //!  - dlopen bundles in topological order
 //!  - Call init() on each bundle
-//!  - Register vtables
+//!  - Register interfaces
 //!
 //! Phase 2 (runtime, multi-threaded, lock-free):
 //!  - Plugin dispatch is a direct pointer dereference
@@ -61,13 +61,13 @@ pub struct Runtime {
     /// Loaded bundles, never dropped.
     pub(crate) _bundles: Vec<LoadedBundle>,
     /// The static RuntimeAbi given to plugins. Must be 'static.
-    pub(crate) host_vtable: &'static RuntimeAbi,
+    pub(crate) host_abi: &'static RuntimeAbi,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
     pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
     /// Used by reload_bundle() for cascade detection.
     pub(crate) bundle_manifests: Mutex<HashMap<String, ManifestData>>,
-    /// Optional callback fired after vtable swap, before dlclose.
+    /// Optional callback fired after interface swap, before dlclose.
     pub(crate) on_reload_cb: Option<ReloadCb>,
     pub(crate) config: RuntimeConfig,
     /// Optional warning callback. If None, warnings go to stderr.
@@ -144,12 +144,12 @@ impl Runtime {
         self.registry.resolve(handle)
     }
 
-    /// Register a host contract vtable.
+    /// Register a host contract interface.
     /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
     pub fn register_host_contract(
         &self,
         contract_id: u64,
-        vtable: &'static HostContractInterface,
+        interface: &'static HostContractInterface,
     ) -> Result<(), HostContractError> {
         let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>> =
             self.host_contracts.write().unwrap_or_else(|e| {
@@ -159,11 +159,11 @@ impl Runtime {
         if guard.contains_key(&contract_id) {
             return Err(HostContractError::DuplicateContract { contract_id });
         }
-        guard.insert(contract_id, vtable);
+        guard.insert(contract_id, interface);
         Ok(())
     }
 
-    /// Unregister a host contract vtable.
+    /// Unregister a host contract interface.
     /// Returns `true` if the contract was registered and removed, `false` if it was not found.
     pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
         let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>> =
@@ -174,7 +174,7 @@ impl Runtime {
         guard.remove(&contract_id).is_some()
     }
 
-    /// Get a host contract vtable by contract_id and minimum version.
+    /// Get a host contract interface by contract_id and minimum version.
     /// Returns `None` if no matching contract is found or if the version is too low.
     pub fn get_host_contract(
         &self,
@@ -186,10 +186,10 @@ impl Runtime {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        guard.get(&contract_id).and_then(|vtable| {
-            let version: u32 = (vtable.contract_version.major << 16) | vtable.contract_version.minor;
+        guard.get(&contract_id).and_then(|interface| {
+            let version: u32 = (interface.contract_version.major << 16) | interface.contract_version.minor;
             if version >= min_version {
-                Some(*vtable)
+                Some(*interface)
             } else {
                 None
             }
@@ -209,8 +209,8 @@ impl Runtime {
 
     /// Get the RuntimeAbi for use in plugin registrars.
     #[inline(always)]
-    pub fn host_vtable(&self) -> &'static RuntimeAbi {
-        self.host_vtable
+    pub fn host_abi(&self) -> &'static RuntimeAbi {
+        self.host_abi
     }
 
     /// Get the raw context pointer for use with generated FFI callers.
@@ -573,18 +573,18 @@ fn string_view_to_string_owned(sv: &polyplug_abi::types::StringView) -> String {
     String::from_utf8_lossy(slice).into_owned()
 }
 
-// ─── HostVTable C ABI callbacks ───────────────────────────────────────────────
+// ─── RuntimeAbi C ABI callbacks ───────────────────────────────────────────────
 
 /// RuntimeAbi.register_contract callback — registers a guest contract implementation with the runtime.
 ///
 /// # Safety
 /// - rt_ctx must be a valid pointer to a HostContext
 /// - descriptor must point to a valid PluginDescriptor
-/// - vtable must point to a valid GuestContractInterface that remains valid for the Runtime lifetime
+/// - interface must point to a valid GuestContractInterface that remains valid for the Runtime lifetime
 pub(crate) unsafe extern "C" fn host_register_contract(
     rt_ctx: *mut core::ffi::c_void,
     descriptor: *const PluginDescriptor,
-    vtable: *const GuestContractInterface,
+    interface: *const GuestContractInterface,
 ) -> polyplug_abi::types::AbiError {
     if rt_ctx.is_null() {
         return polyplug_abi::types::AbiError {
@@ -615,8 +615,8 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes
     let contract_name: String = unsafe { string_view_to_string_owned(&desc.contract_name) };
 
-    // SAFETY: vtable is a valid 'static GuestContractInterface from the plugin binary
-    match unsafe { registry.register(desc, vtable, contract_name, BundleId::from_u64(bundle_id)) } {
+    // SAFETY: interface is a valid 'static GuestContractInterface from the plugin binary
+    match unsafe { registry.register(desc, interface, contract_name, BundleId::from_u64(bundle_id)) } {
         Ok(_handle) => polyplug_abi::types::AbiError::ok(),
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");

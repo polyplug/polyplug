@@ -263,12 +263,12 @@ fn get_host_ctx_from_globals<'js>(
 fn register_host_functions<'js>(
     ctx: &Ctx<'js>,
     polyplug_obj: &Object<'js>,
-    host_vtable: *const polyplug_abi::RuntimeAbi,
+    host_abi: *const polyplug_abi::RuntimeAbi,
     rt_ctx: *mut core::ffi::c_void,
     bundle_name: &str,
 ) -> Result<(), RuntimeError> {
     // Store host context pointers as JS globals on the polyplug object
-    let vtable_usize: usize = host_vtable as usize;
+    let vtable_usize: usize = host_abi as usize;
     let rt_ctx_usize: usize = rt_ctx as usize;
 
     polyplug_obj
@@ -836,7 +836,7 @@ impl BundleLoader for JsLoader {
         manifest: &ManifestData,
         runtime: &PolyplugRuntime,
     ) -> Result<(), RuntimeError> {
-        let host_vtable: &'static polyplug_abi::RuntimeAbi = runtime.host_vtable();
+        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
         let bundle_id: u64 = manifest.id;
 
         let bundle_path: PathBuf = if !manifest.file.is_empty() {
@@ -903,7 +903,7 @@ impl BundleLoader for JsLoader {
             register_host_functions(
                 &ctx_ref,
                 &polyplug_obj,
-                host_vtable as *const polyplug_abi::RuntimeAbi,
+                host_abi as *const polyplug_abi::RuntimeAbi,
                 rt_ctx,
                 &manifest.name,
             )?;
@@ -956,7 +956,7 @@ impl BundleLoader for JsLoader {
             };
 
             let rt_ctx_i64: i64 = rt_ctx as usize as i64;
-            let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::RuntimeAbi as usize as i64;
+            let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
             let ctx_ptr_i64: i64 = &ctx as *const PluginContext as i64;
 
             let rt_ctx_bigint: rquickjs::BigInt<'_> =
@@ -968,12 +968,12 @@ impl BundleLoader for JsLoader {
                         })
                     },
                 )?;
-            let host_vtable_bigint: rquickjs::BigInt<'_> =
-                rquickjs::BigInt::from_i64(ctx_ref.clone(), host_vtable_i64).map_err(
+            let host_abi_bigint: rquickjs::BigInt<'_> =
+                rquickjs::BigInt::from_i64(ctx_ref.clone(), host_abi_i64).map_err(
                     |e: rquickjs::Error| {
                         RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: manifest.name.clone(),
-                            error: format!("JS runtime js-quickjs error: host_vtable BigInt creation failed: {e}"),
+                            error: format!("JS runtime js-quickjs error: host_abi BigInt creation failed: {e}"),
                         })
                     },
                 )?;
@@ -992,7 +992,7 @@ impl BundleLoader for JsLoader {
                     rquickjs::BigInt<'_>,
                     rquickjs::BigInt<'_>,
                     rquickjs::BigInt<'_>,
-                ), ()>((rt_ctx_bigint, host_vtable_bigint, ctx_ptr_bigint))
+                ), ()>((rt_ctx_bigint, host_abi_bigint, ctx_ptr_bigint))
                 .map_err(|e: rquickjs::Error| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
@@ -1051,7 +1051,7 @@ impl BundleLoader for JsLoader {
 
         // SAFETY: rt_ctx, descriptor, and static_interface are valid for this call.
         let abi_result: AbiError =
-            unsafe { (host_vtable.register_contract)(rt_ctx, &descriptor, static_interface) };
+            unsafe { (host_abi.register_contract)(rt_ctx, &descriptor, static_interface) };
 
         if !abi_result.is_ok() {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {

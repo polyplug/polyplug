@@ -69,7 +69,7 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Register a callback fired after each successful vtable swap, before dlclose.
+    /// Register a callback fired after each successful interface swap, before dlclose.
     ///
     /// The callback receives a `ReloadPhase` describing the reload phase.
     pub fn on_reload(
@@ -95,13 +95,13 @@ impl RuntimeBuilder {
     /// Build the runtime.
     //
     //  For MVP: scans plugin_dirs for .so/.dll/.dylib files,
-    //  loads them in sorted order, registers vtables.
+    //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
     pub fn build(self) -> Result<Runtime, RuntimeError> {
         let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
         // Build the static RuntimeAbi. This must be 'static.
-        let host_vtable: &'static RuntimeAbi = Box::leak(Box::new(RuntimeAbi {
+        let host_abi: &'static RuntimeAbi = Box::leak(Box::new(RuntimeAbi {
             register_contract: crate::runtime::host_register_contract,
             alloc: crate::runtime::host_alloc,
             free: crate::runtime::host_free,
@@ -150,7 +150,7 @@ impl RuntimeBuilder {
         let runtime: Runtime = Runtime {
             registry: Arc::clone(&registry),
             _bundles: Vec::new(),
-            host_vtable,
+            host_abi,
             loaders: loader_map,
             bundle_manifests: std::sync::Mutex::new(manifests_map),
             on_reload_cb: self.on_reload_cb,

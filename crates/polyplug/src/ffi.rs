@@ -522,41 +522,41 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
     .unwrap_or(1u32)
 }
 
-/// Register a host contract vtable with the runtime.
+/// Register a host contract interface with the runtime.
 ///
 /// This function allows VM-based hosts (Python, Lua, JavaScript) to register
 /// host contract implementations through a HostContractInterface.
 ///
 /// # Safety
 /// - `rt` must be a valid non-null pointer returned by `polyplug_runtime_create`.
-/// - `vtable` must be a valid non-null pointer to a `HostContractInterface` that:
+/// - `interface` must be a valid non-null pointer to a `HostContractInterface` that:
 ///   - Has correct header fields (contract_id, version, function_count)
 ///   - Uses `DispatchType::VirtualMachine` for VM-based hosts
 ///   - Has a valid `dispatch.vm.call` function pointer
 ///   - Has valid `dispatch.vm.bridge_data` (owned by the caller, must remain valid)
-/// - The vtable must remain valid for the lifetime of the runtime.
+/// - The interface must remain valid for the lifetime of the runtime.
 /// - Do not register the same contract_id twice (returns error code 2).
 ///
 /// # Returns
 /// - 0: Success
-/// - 1: Null runtime or vtable pointer
+/// - 1: Null runtime or interface pointer
 /// - 2: Duplicate contract registration
 /// - 3: Other error (check last_error for details)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_register_host_contract(
     rt: *mut OpaqueRuntime,
-    vtable: *const polyplug_abi::HostContractInterface,
+    interface: *const polyplug_abi::HostContractInterface,
 ) -> u32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if rt.is_null() || vtable.is_null() {
+        if rt.is_null() || interface.is_null() {
             return 1u32;
         }
         // SAFETY: rt is a valid *mut OpaqueRuntime produced by polyplug_runtime_create per ABI contract.
         let runtime: &mut Runtime = unsafe { &mut (*rt).0 };
-        // SAFETY: vtable is a valid *const HostContractInterface per ABI contract.
-        // The caller guarantees the vtable remains valid for the runtime's lifetime.
-        let vtable_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*vtable };
-        match runtime.register_host_contract(vtable_ref.contract_id.id(), vtable_ref) {
+        // SAFETY: interface is a valid *const HostContractInterface per ABI contract.
+        // The caller guarantees the interface remains valid for the runtime's lifetime.
+        let interface_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*interface };
+        match runtime.register_host_contract(interface_ref.contract_id.id(), interface_ref) {
             Ok(()) => 0u32,
             Err(crate::error::HostContractError::DuplicateContract { .. }) => 2u32,
             Err(e) => {
@@ -803,9 +803,9 @@ mod tests {
         let handle: u64 = unsafe { polyplug_runtime_find_by_contract(core::ptr::null(), 1, 0) };
         assert_eq!(handle, u64::MAX);
 
-        let vtable: *const GuestContractInterface =
+        let interface: *const GuestContractInterface =
             unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0) };
-        assert!(vtable.is_null());
+        assert!(interface.is_null());
 
         unsafe {
             polyplug_runtime_destroy(rt1);

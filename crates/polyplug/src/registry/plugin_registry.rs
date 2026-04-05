@@ -206,7 +206,7 @@ impl PluginRegistry {
 
     /// Find any registered plugin satisfying the given contract_id and minimum version.
     //
-    //  Returns the first slot whose vtable.contract_version >= min_version.
+    //  Returns the first slot whose interface.contract_version >= min_version.
     //  Pass min_version=0 to accept any version.
     pub fn find_by_contract(
         &self,
@@ -448,7 +448,7 @@ impl PluginRegistry {
     /// Find all slot indices that were registered by `bundle_id`.
     ///
     /// Returns an empty `Vec` if the bundle has no registered slots.
-    /// Used by `reload_bundle()` to locate every vtable slot to swap.
+    /// Used by `reload_bundle()` to locate every interface slot to swap.
     pub fn find_slots_by_bundle(&self, bundle_id: BundleId) -> Vec<u32> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {

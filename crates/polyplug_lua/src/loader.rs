@@ -269,11 +269,11 @@ impl BundleLoader for LuaLoader {
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const HostContext as *mut core::ffi::c_void;
 
-        // Get host_vtable from runtime.
-        let host_vtable: &'static polyplug_abi::RuntimeAbi = runtime.host_vtable();
+        // Get host_abi from runtime.
+        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
 
         // Call polyplug_init — it populates _G._polyplug_handlers.
-        // Pass rt_ctx, host_vtable pointer, and PluginContext pointer.
+        // Pass rt_ctx, host_abi pointer, and PluginContext pointer.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
         let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
@@ -284,10 +284,10 @@ impl BundleLoader for LuaLoader {
             bundle_id,
         };
         let rt_ctx_i64: i64 = rt_ctx as usize as i64;
-        let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::RuntimeAbi as usize as i64;
+        let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
-            .call::<()>((rt_ctx_i64, host_vtable_i64, ctx_ptr))
+            .call::<()>((rt_ctx_i64, host_abi_i64, ctx_ptr))
             .map_err(|e: mlua::Error| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
@@ -411,7 +411,7 @@ impl BundleLoader for LuaLoader {
         // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
         // `static_interface` is a leaked Box — valid for 'static lifetime.
         let reg_result: AbiError = unsafe {
-            (host_vtable.register_contract)(
+            (host_abi.register_contract)(
                 rt_ctx,
                 &descriptor as *const PluginDescriptor,
                 static_interface,
