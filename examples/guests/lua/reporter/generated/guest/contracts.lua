@@ -9,24 +9,36 @@ local M = {}
 
 -- Function pointer type for reporter (data.Reporter@1)
 --   report(input: StringView) -> StringView
-local REPORTER_VTABLE = ffi.new("PluginInterface")
-REPORTER_VTABLE.contract_id = 0x81D41D43E511D297
-REPORTER_VTABLE.contract_version = 0
-REPORTER_VTABLE.function_count = 1
+local REPORTER_VTABLE = ffi.new("GuestContractInterface")
+REPORTER_VTABLE.contract_id = 0x76BB4643A9F5AD68
+REPORTER_VTABLE.contract_version.major = 1
+REPORTER_VTABLE.contract_version.minor = 0
+REPORTER_VTABLE.contract_version.patch = 0
 REPORTER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
-REPORTER_VTABLE.functions = nil
+-- Default create_instance stub for reporter - returns null instance.
+function REPORTER_create_instance_stub(rt_ctx, args)
+    -- Default stub returns null instance - users override for stateful plugins.
+    return ffi.new("GuestContractInstance", nil)
+end
+REPORTER_VTABLE.create_instance = REPORTER_create_instance_stub
+-- Default destroy_instance stub for reporter - no-op.
+function REPORTER_destroy_instance_stub(rt_ctx, instance)
+    -- Default stub is no-op - users override for cleanup before hot-reload.
+end
+REPORTER_VTABLE.destroy_instance = REPORTER_destroy_instance_stub
 
 local REPORTER_DESCRIPTOR = ffi.new("PluginDescriptor")
 REPORTER_DESCRIPTOR.name = polyplug_guest.string_view("reporter")
 REPORTER_DESCRIPTOR.contract_name = polyplug_guest.string_view("data.Reporter@1")
-REPORTER_DESCRIPTOR.version_major = 1
-REPORTER_DESCRIPTOR.version_minor = 0
-REPORTER_DESCRIPTOR.version_patch = 0
+REPORTER_DESCRIPTOR.version.major = 1
+REPORTER_DESCRIPTOR.version.minor = 0
+REPORTER_DESCRIPTOR.version.patch = 0
 
 
 function M.set_reporter_impl(report_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", report_fn)
-    REPORTER_VTABLE.functions = functions
+    REPORTER_VTABLE.dispatch.native.function_count = 1
+    REPORTER_VTABLE.dispatch.native.functions = functions
 end
 return M

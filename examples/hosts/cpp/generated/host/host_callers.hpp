@@ -9,7 +9,7 @@
 
 namespace polyplug_generated {
 
-/// Host caller for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
+/// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 class PipelineDecoderContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -43,7 +43,7 @@ public:
     StringView decode(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.vtable();
+        const PluginInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -67,7 +67,7 @@ private:
     polyplug::PluginGuard guard_;
 };
 
-/// Host caller for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
+/// Host caller for contract `data.Transformer` (id=0x4775991362CD68EE)
 class DataTransformerContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -101,7 +101,7 @@ public:
     StringView transform(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.vtable();
+        const PluginInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -125,7 +125,7 @@ private:
     polyplug::PluginGuard guard_;
 };
 
-/// Host caller for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
+/// Host caller for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
 class PipelineEncoderContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -159,7 +159,7 @@ public:
     StringView encode(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.vtable();
+        const PluginInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -183,7 +183,7 @@ private:
     polyplug::PluginGuard guard_;
 };
 
-/// Host caller for contract `data.Reporter` (id=0x81D41D43E511D297)
+/// Host caller for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
 class DataReporterContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -217,7 +217,7 @@ public:
     StringView report(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.vtable();
+        const PluginInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -241,7 +241,7 @@ private:
     polyplug::PluginGuard guard_;
 };
 
-/// Host caller for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
+/// Host caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 class PipelineValidatorContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
@@ -275,7 +275,7 @@ public:
     StringView validate(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.vtable();
+        const PluginInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});

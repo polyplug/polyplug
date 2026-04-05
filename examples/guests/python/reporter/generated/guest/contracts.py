@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
+from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version
 from polyplug_guest import store_host_vtable
 
 if TYPE_CHECKING:
@@ -40,43 +40,69 @@ REPORTER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(REPORTER_CONTRACT_NA
 REPORTER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
     name=StringView(ptr=REPORTER_PLUGIN_NAME_C, len=len(REPORTER_PLUGIN_NAME_BYTES)),
     contract_name=StringView(ptr=REPORTER_CONTRACT_NAME_C, len=len(REPORTER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
+    version=Version(major=1, minor=0, patch=0),
 )
 
-def reporter_report_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
+def reporter_report_abi(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
+    # Instance is ignored for stateless plugins (instance.data is null).
+    # For stateful plugins, users override create_instance and use instance.data.
     impl: REPORTERDataReporterPlugin | None = _reporter_IMPL
     if impl is None:
-        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)
+        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)
     if args_ptr.value is None or args_ptr.value == 0:
-        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)
+        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
     if out_ptr.value is None or out_ptr.value == 0:
-        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)
+        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
     args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
     input: StringView = args_ptr_t.contents
     result = impl.report(input)
     out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
     out_ptr_t[0] = result
-    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)
+    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)
 
 REPORTER_reporter_report_abi_CFUNC = _DISPATCH_FN_CTYPE(reporter_report_abi)
 
 REPORTER_FNS = (ctypes.c_void_p * 1) (
     ctypes.cast(REPORTER_reporter_report_abi_CFUNC, ctypes.c_void_p),
 )
-REPORTER_VTABLE: PluginInterface = PluginInterface(
-    contract_id=0x81D41D43E511D297,
+
+# Default create_instance stub for reporter - returns null instance.
+def REPORTER_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
+    # Default stub returns null instance - users override for stateful plugins.
+    return _GuestContractInstance(data=ctypes.c_void_p(0))
+
+def REPORTER_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
+    # Default stub is no-op - users override for cleanup before hot-reload.
+    pass
+
+REPORTER_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(REPORTER_create_instance_stub)
+REPORTER_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(REPORTER_destroy_instance_stub)
+
+REPORTER_VTABLE: GuestContractInterface = GuestContractInterface(
+    contract_id=0x76BB4643A9F5AD68,
     contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(REPORTER_FNS, ctypes.c_void_p),
     dispatch_type=DispatchType.VirtualMachine,
+    create_instance=ctypes.cast(REPORTER_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),
+    destroy_instance=ctypes.cast(REPORTER_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),
+    dispatch=_PluginDispatch(
+        native=_NativeDispatch(
+            function_count=1,
+            functions=ctypes.cast(REPORTER_FNS, ctypes.c_void_p),
+        )
+    ),
 )
 
 def polyplug_abi_version() -> int:
     return 1
 
 def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
+    """Initialize plugin with runtime context.
+
+    Args:
+        rt_ctx: RuntimeContext handle (opaque pointer as int)
+        host_ptr: Pointer to RuntimeAbi
+        ctx_ptr: Pointer to PluginContext
+    """
     if rt_ctx == 0:
         return
     if host_ptr == 0:
@@ -85,10 +111,10 @@ def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
         return
     store_host_vtable(host_ptr)
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))
-    err_REPORTER: AbiError = host.contents.register_plugin(
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))
+    err_REPORTER: AbiError = host.contents.register_contract(
         rt_ctx, ctypes.byref(REPORTER_DESCRIPTOR), ctypes.byref(REPORTER_VTABLE)
     )
-    if err_REPORTER.code != ABI_OK:
+    if err_REPORTER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")
 

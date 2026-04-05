@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, HostVTable, PluginContext, PluginDescriptor, PluginInterface, StringView
+from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version
 from polyplug_guest import store_host_vtable
 
 if TYPE_CHECKING:
@@ -40,43 +40,69 @@ DECODER_CONTRACT_NAME_C: ctypes.c_char_p = ctypes.c_char_p(DECODER_CONTRACT_NAME
 DECODER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
     name=StringView(ptr=DECODER_PLUGIN_NAME_C, len=len(DECODER_PLUGIN_NAME_BYTES)),
     contract_name=StringView(ptr=DECODER_CONTRACT_NAME_C, len=len(DECODER_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
+    version=Version(major=1, minor=0, patch=0),
 )
 
-def decoder_decode_abi(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
+def decoder_decode_abi(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
+    # Instance is ignored for stateless plugins (instance.data is null).
+    # For stateful plugins, users override create_instance and use instance.data.
     impl: DECODERPipelineDecoderPlugin | None = _decoder_IMPL
     if impl is None:
-        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)
+        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)
     if args_ptr.value is None or args_ptr.value == 0:
-        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)
+        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
     if out_ptr.value is None or out_ptr.value == 0:
-        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)
+        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)
     args_ptr_t: Any = ctypes.cast(args_ptr, ctypes.POINTER(StringView))
     input: StringView = args_ptr_t.contents
     result = impl.decode(input)
     out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
     out_ptr_t[0] = result
-    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)
+    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)
 
 DECODER_decoder_decode_abi_CFUNC = _DISPATCH_FN_CTYPE(decoder_decode_abi)
 
 DECODER_FNS = (ctypes.c_void_p * 1) (
     ctypes.cast(DECODER_decoder_decode_abi_CFUNC, ctypes.c_void_p),
 )
-DECODER_VTABLE: PluginInterface = PluginInterface(
-    contract_id=0x12F3C106B0C3DC1E,
+
+# Default create_instance stub for decoder - returns null instance.
+def DECODER_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
+    # Default stub returns null instance - users override for stateful plugins.
+    return _GuestContractInstance(data=ctypes.c_void_p(0))
+
+def DECODER_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
+    # Default stub is no-op - users override for cleanup before hot-reload.
+    pass
+
+DECODER_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(DECODER_create_instance_stub)
+DECODER_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(DECODER_destroy_instance_stub)
+
+DECODER_VTABLE: GuestContractInterface = GuestContractInterface(
+    contract_id=0xE1D7DE773BE6E7F7,
     contract_version=0,
-    function_count=1,
-    functions=ctypes.cast(DECODER_FNS, ctypes.c_void_p),
     dispatch_type=DispatchType.VirtualMachine,
+    create_instance=ctypes.cast(DECODER_CREATE_INSTANCE_CFUNC, ctypes.c_void_p),
+    destroy_instance=ctypes.cast(DECODER_DESTROY_INSTANCE_CFUNC, ctypes.c_void_p),
+    dispatch=_PluginDispatch(
+        native=_NativeDispatch(
+            function_count=1,
+            functions=ctypes.cast(DECODER_FNS, ctypes.c_void_p),
+        )
+    ),
 )
 
 def polyplug_abi_version() -> int:
     return 1
 
 def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
+    """Initialize plugin with runtime context.
+
+    Args:
+        rt_ctx: RuntimeContext handle (opaque pointer as int)
+        host_ptr: Pointer to RuntimeAbi
+        ctx_ptr: Pointer to PluginContext
+    """
     if rt_ctx == 0:
         return
     if host_ptr == 0:
@@ -85,10 +111,10 @@ def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
         return
     store_host_vtable(host_ptr)
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))
-    err_DECODER: AbiError = host.contents.register_plugin(
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))
+    err_DECODER: AbiError = host.contents.register_contract(
         rt_ctx, ctypes.byref(DECODER_DESCRIPTOR), ctypes.byref(DECODER_VTABLE)
     )
-    if err_DECODER.code != ABI_OK:
+    if err_DECODER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")
 

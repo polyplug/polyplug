@@ -24,7 +24,7 @@ function HostLoggerContract.from_host(host_ptr, min_version)
     if host_ptr == nil then
         return nil
     end
-    local host = ffi.cast("HostVTable*", host_ptr)
+    local host = ffi.cast("RuntimeAbi*", host_ptr)
     local vtable_ptr = host.get_host_contract(nil, 0xF53EB5F2845853BBULL, min_version)
     if vtable_ptr == nil then
         return nil

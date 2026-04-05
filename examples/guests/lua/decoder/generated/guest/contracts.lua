@@ -9,24 +9,36 @@ local M = {}
 
 -- Function pointer type for decoder (pipeline.Decoder@1)
 --   decode(input: StringView) -> StringView
-local DECODER_VTABLE = ffi.new("PluginInterface")
-DECODER_VTABLE.contract_id = 0x12F3C106B0C3DC1E
-DECODER_VTABLE.contract_version = 0
-DECODER_VTABLE.function_count = 1
+local DECODER_VTABLE = ffi.new("GuestContractInterface")
+DECODER_VTABLE.contract_id = 0xE1D7DE773BE6E7F7
+DECODER_VTABLE.contract_version.major = 1
+DECODER_VTABLE.contract_version.minor = 0
+DECODER_VTABLE.contract_version.patch = 0
 DECODER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
-DECODER_VTABLE.functions = nil
+-- Default create_instance stub for decoder - returns null instance.
+function DECODER_create_instance_stub(rt_ctx, args)
+    -- Default stub returns null instance - users override for stateful plugins.
+    return ffi.new("GuestContractInstance", nil)
+end
+DECODER_VTABLE.create_instance = DECODER_create_instance_stub
+-- Default destroy_instance stub for decoder - no-op.
+function DECODER_destroy_instance_stub(rt_ctx, instance)
+    -- Default stub is no-op - users override for cleanup before hot-reload.
+end
+DECODER_VTABLE.destroy_instance = DECODER_destroy_instance_stub
 
 local DECODER_DESCRIPTOR = ffi.new("PluginDescriptor")
 DECODER_DESCRIPTOR.name = polyplug_guest.string_view("decoder")
 DECODER_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Decoder@1")
-DECODER_DESCRIPTOR.version_major = 1
-DECODER_DESCRIPTOR.version_minor = 0
-DECODER_DESCRIPTOR.version_patch = 0
+DECODER_DESCRIPTOR.version.major = 1
+DECODER_DESCRIPTOR.version.minor = 0
+DECODER_DESCRIPTOR.version.patch = 0
 
 
 function M.set_decoder_impl(decode_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", decode_fn)
-    DECODER_VTABLE.functions = functions
+    DECODER_VTABLE.dispatch.native.function_count = 1
+    DECODER_VTABLE.dispatch.native.functions = functions
 end
 return M

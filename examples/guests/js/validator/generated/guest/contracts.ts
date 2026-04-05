@@ -14,23 +14,32 @@ const DispatchType = Object.freeze({
 //   validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
 export const VALIDATOR_VTABLE = {
-    contractLo: 0xD11C7AF0,
-    contractHi: 0xA553FAB5,
+    contractLo: 0x9EEC57C5,
+    contractHi: 0x45173A95,
+    dispatchType: DispatchType.VirtualMachine,
+    // Default create_instance stub for validator - returns null instance.
+    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {
+        // Default stub returns null instance - users override for stateful plugins.
+        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.
+    },
+    // Default destroy_instance stub for validator - no-op.
+    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {
+        // Default stub is no-op - users override for cleanup before hot-reload.
+    },
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "pipeline.Validator@1",
-    dispatchType: DispatchType.VirtualMachine
 };
 
 export const VALIDATOR_DESCRIPTOR = {
     name: "validator",
     contractName: "pipeline.Validator@1",
-    versionMajor: 1,
-    versionMinor: 0,
-    versionPatch: 0
+    version: { major: 1, minor: 0, patch: 0 }
 };
 
-function validator_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+function validator_fn0_abi_wrapper(instanceDataLo, instanceDataHi, args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).
+    // For stateful plugins, users override createInstance and use instanceData.
     // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.
     // The host guarantees these pointers are properly aligned and sized before calling.
     var polyplug = globalThis.polyplug;

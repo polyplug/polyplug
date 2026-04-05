@@ -8,11 +8,11 @@ using System.Runtime.InteropServices;
 namespace Polyplug.Generated;
 
 public static class ContractIds {
-    public const ulong PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1E;
-    public const ulong DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EF;
-    public const ulong PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432;
-    public const ulong DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297;
-    public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0;
+    public const ulong PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7;
+    public const ulong DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EE;
+    public const ulong PIPELINE_ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629F;
+    public const ulong DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68;
+    public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5;
 }
 
 public enum LogLevel : uint {

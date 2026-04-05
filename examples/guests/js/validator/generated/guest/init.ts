@@ -17,6 +17,11 @@ interface AbiError {
     message: { ptr: number; len: number };
 }
 
+/**
+ * Initialize plugin with host runtime.
+ * @param rt_ctx_lo - RuntimeContext handle (low 32 bits)
+ * @param rt_ctx_hi - RuntimeContext handle (high 32 bits)
+ */
 export function polyplug_init(
     rt_ctx_lo: number, rt_ctx_hi: number,
     host_lo: number, host_hi: number,
@@ -38,12 +43,12 @@ export function polyplug_init(
 
     // Get polyplug host interface from globalThis
     const polyplug = (globalThis as any).polyplug;
-    if (!polyplug || !polyplug.registerVtable) {
+    if (!polyplug || !polyplug.register_contract) {
         return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
 
     // Register plugin: validator
-    polyplug.registerVtable(
+    polyplug.register_contract(
         VALIDATOR_VTABLE.contractLo,
         VALIDATOR_VTABLE.contractHi,
         VALIDATOR_VTABLE,

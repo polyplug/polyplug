@@ -10,12 +10,12 @@ using System.Runtime.InteropServices;
 namespace Polyplug.Generated;
 
 public static class PipelineDecoderContractConstants {
-    public const ulong PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EUL;
+    public const ulong PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7UL;
     public const uint PIPELINE_DECODER_FUNCTION_COUNT = 1u;
 }
 
 /// <summary>
-/// Host caller for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
+/// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 /// </summary>
 public sealed class PipelineDecoderContractCaller : IDisposable {
     private PluginGuard _guard;
@@ -47,8 +47,8 @@ public sealed class PipelineDecoderContractCaller : IDisposable {
         }
 
         unsafe {
-            var pluginInterface = *(PluginInterface*)vtablePtr;
-            if (0u >= pluginInterface.FunctionCount) {
+            var pluginInterface = *(GuestContractInterface*)vtablePtr;
+            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
             nint funcsArray = pluginInterface.Dispatch.Native.Functions;
@@ -70,12 +70,12 @@ public sealed class PipelineDecoderContractCaller : IDisposable {
 }
 
 public static class DataTransformerContractConstants {
-    public const ulong DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFUL;
+    public const ulong DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEUL;
     public const uint DATA_TRANSFORMER_FUNCTION_COUNT = 1u;
 }
 
 /// <summary>
-/// Host caller for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
+/// Host caller for contract `data.Transformer` (id=0x4775991362CD68EE)
 /// </summary>
 public sealed class DataTransformerContractCaller : IDisposable {
     private PluginGuard _guard;
@@ -107,8 +107,8 @@ public sealed class DataTransformerContractCaller : IDisposable {
         }
 
         unsafe {
-            var pluginInterface = *(PluginInterface*)vtablePtr;
-            if (0u >= pluginInterface.FunctionCount) {
+            var pluginInterface = *(GuestContractInterface*)vtablePtr;
+            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
             nint funcsArray = pluginInterface.Dispatch.Native.Functions;
@@ -130,12 +130,12 @@ public sealed class DataTransformerContractCaller : IDisposable {
 }
 
 public static class PipelineEncoderContractConstants {
-    public const ulong PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432UL;
+    public const ulong PIPELINE_ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FUL;
     public const uint PIPELINE_ENCODER_FUNCTION_COUNT = 1u;
 }
 
 /// <summary>
-/// Host caller for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
+/// Host caller for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
 /// </summary>
 public sealed class PipelineEncoderContractCaller : IDisposable {
     private PluginGuard _guard;
@@ -167,8 +167,8 @@ public sealed class PipelineEncoderContractCaller : IDisposable {
         }
 
         unsafe {
-            var pluginInterface = *(PluginInterface*)vtablePtr;
-            if (0u >= pluginInterface.FunctionCount) {
+            var pluginInterface = *(GuestContractInterface*)vtablePtr;
+            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
             nint funcsArray = pluginInterface.Dispatch.Native.Functions;
@@ -190,12 +190,12 @@ public sealed class PipelineEncoderContractCaller : IDisposable {
 }
 
 public static class DataReporterContractConstants {
-    public const ulong DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297UL;
+    public const ulong DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68UL;
     public const uint DATA_REPORTER_FUNCTION_COUNT = 1u;
 }
 
 /// <summary>
-/// Host caller for contract `data.Reporter` (id=0x81D41D43E511D297)
+/// Host caller for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
 /// </summary>
 public sealed class DataReporterContractCaller : IDisposable {
     private PluginGuard _guard;
@@ -227,8 +227,8 @@ public sealed class DataReporterContractCaller : IDisposable {
         }
 
         unsafe {
-            var pluginInterface = *(PluginInterface*)vtablePtr;
-            if (0u >= pluginInterface.FunctionCount) {
+            var pluginInterface = *(GuestContractInterface*)vtablePtr;
+            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
             nint funcsArray = pluginInterface.Dispatch.Native.Functions;
@@ -250,12 +250,12 @@ public sealed class DataReporterContractCaller : IDisposable {
 }
 
 public static class PipelineValidatorContractConstants {
-    public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0UL;
+    public const ulong PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5UL;
     public const uint PIPELINE_VALIDATOR_FUNCTION_COUNT = 1u;
 }
 
 /// <summary>
-/// Host caller for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
+/// Host caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 /// </summary>
 public sealed class PipelineValidatorContractCaller : IDisposable {
     private PluginGuard _guard;
@@ -287,8 +287,8 @@ public sealed class PipelineValidatorContractCaller : IDisposable {
         }
 
         unsafe {
-            var pluginInterface = *(PluginInterface*)vtablePtr;
-            if (0u >= pluginInterface.FunctionCount) {
+            var pluginInterface = *(GuestContractInterface*)vtablePtr;
+            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
             nint funcsArray = pluginInterface.Dispatch.Native.Functions;

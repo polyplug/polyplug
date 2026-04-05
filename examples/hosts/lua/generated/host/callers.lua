@@ -10,11 +10,11 @@ local ABI_ERROR_GENERIC = 1
 local ABI_ERROR_INVALID_POINTER = 8
 
 -- Contract ID constants
-local PIPELINE_DECODER_CONTRACT_ID = 0x12F3C106B0C3DC1EULL
-local DATA_TRANSFORMER_CONTRACT_ID = 0x3D53C682F3F5A9EFULL
-local PIPELINE_ENCODER_CONTRACT_ID = 0x127D1703C6EFB432ULL
-local DATA_REPORTER_CONTRACT_ID = 0x81D41D43E511D297ULL
-local PIPELINE_VALIDATOR_CONTRACT_ID = 0xA553FAB5D11C7AF0ULL
+local PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL
+local DATA_TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEULL
+local PIPELINE_ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FULL
+local DATA_REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68ULL
+local PIPELINE_VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5ULL
 
 local M = {}
 
@@ -52,8 +52,8 @@ local PipelineDecoderContract_methods = {
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("PluginInterface*", vtable)
-        if 0 >= interface.function_count then
+        local interface = ffi.cast("GuestContractInterface*", vtable)
+        if 0 >= interface.dispatch.native.function_count then
             error("function not available in vtable", 2)
         end
         local fn_ptr = interface.dispatch.native.functions[0]
@@ -115,8 +115,8 @@ local DataTransformerContract_methods = {
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("PluginInterface*", vtable)
-        if 0 >= interface.function_count then
+        local interface = ffi.cast("GuestContractInterface*", vtable)
+        if 0 >= interface.dispatch.native.function_count then
             error("function not available in vtable", 2)
         end
         local fn_ptr = interface.dispatch.native.functions[0]
@@ -178,8 +178,8 @@ local PipelineEncoderContract_methods = {
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("PluginInterface*", vtable)
-        if 0 >= interface.function_count then
+        local interface = ffi.cast("GuestContractInterface*", vtable)
+        if 0 >= interface.dispatch.native.function_count then
             error("function not available in vtable", 2)
         end
         local fn_ptr = interface.dispatch.native.functions[0]
@@ -241,8 +241,8 @@ local DataReporterContract_methods = {
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("PluginInterface*", vtable)
-        if 0 >= interface.function_count then
+        local interface = ffi.cast("GuestContractInterface*", vtable)
+        if 0 >= interface.dispatch.native.function_count then
             error("function not available in vtable", 2)
         end
         local fn_ptr = interface.dispatch.native.functions[0]
@@ -304,8 +304,8 @@ local PipelineValidatorContract_methods = {
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("PluginInterface*", vtable)
-        if 0 >= interface.function_count then
+        local interface = ffi.cast("GuestContractInterface*", vtable)
+        if 0 >= interface.dispatch.native.function_count then
             error("function not available in vtable", 2)
         end
         local fn_ptr = interface.dispatch.native.functions[0]

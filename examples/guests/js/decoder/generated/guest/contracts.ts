@@ -14,23 +14,32 @@ const DispatchType = Object.freeze({
 //   decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
 export const DECODER_VTABLE = {
-    contractLo: 0xB0C3DC1E,
-    contractHi: 0x12F3C106,
+    contractLo: 0x3BE6E7F7,
+    contractHi: 0xE1D7DE77,
+    dispatchType: DispatchType.VirtualMachine,
+    // Default create_instance stub for decoder - returns null instance.
+    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {
+        // Default stub returns null instance - users override for stateful plugins.
+        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.
+    },
+    // Default destroy_instance stub for decoder - no-op.
+    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {
+        // Default stub is no-op - users override for cleanup before hot-reload.
+    },
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "pipeline.Decoder@1",
-    dispatchType: DispatchType.VirtualMachine
 };
 
 export const DECODER_DESCRIPTOR = {
     name: "decoder",
     contractName: "pipeline.Decoder@1",
-    versionMajor: 1,
-    versionMinor: 0,
-    versionPatch: 0
+    version: { major: 1, minor: 0, patch: 0 }
 };
 
-function decoder_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+function decoder_fn0_abi_wrapper(instanceDataLo, instanceDataHi, args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).
+    // For stateful plugins, users override createInstance and use instanceData.
     // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.
     // The host guarantees these pointers are properly aligned and sized before calling.
     var polyplug = globalThis.polyplug;

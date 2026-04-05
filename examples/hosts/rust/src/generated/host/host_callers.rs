@@ -9,6 +9,7 @@
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::RuntimeContext;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
 use polyplug_abi::PluginHandle;
@@ -43,8 +44,8 @@ pub struct PipelineDecoderContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context pointer (needed for destroy_instance).
-    rt_ctx: *mut core::ffi::c_void,
+    /// Runtime context (needed for destroy_instance).
+    rt_ctx: RuntimeContext,
 }
 
 impl PipelineDecoderContract {
@@ -53,15 +54,15 @@ impl PipelineDecoderContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context pointer (opaque)
+    /// - `rt_ctx`: Runtime context handle
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
+    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
@@ -178,8 +179,8 @@ pub struct DataTransformerContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context pointer (needed for destroy_instance).
-    rt_ctx: *mut core::ffi::c_void,
+    /// Runtime context (needed for destroy_instance).
+    rt_ctx: RuntimeContext,
 }
 
 impl DataTransformerContract {
@@ -188,15 +189,15 @@ impl DataTransformerContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context pointer (opaque)
+    /// - `rt_ctx`: Runtime context handle
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
+    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
@@ -313,8 +314,8 @@ pub struct PipelineEncoderContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context pointer (needed for destroy_instance).
-    rt_ctx: *mut core::ffi::c_void,
+    /// Runtime context (needed for destroy_instance).
+    rt_ctx: RuntimeContext,
 }
 
 impl PipelineEncoderContract {
@@ -323,15 +324,15 @@ impl PipelineEncoderContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context pointer (opaque)
+    /// - `rt_ctx`: Runtime context handle
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
+    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
@@ -448,8 +449,8 @@ pub struct DataReporterContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context pointer (needed for destroy_instance).
-    rt_ctx: *mut core::ffi::c_void,
+    /// Runtime context (needed for destroy_instance).
+    rt_ctx: RuntimeContext,
 }
 
 impl DataReporterContract {
@@ -458,15 +459,15 @@ impl DataReporterContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context pointer (opaque)
+    /// - `rt_ctx`: Runtime context handle
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
+    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
@@ -583,8 +584,8 @@ pub struct PipelineValidatorContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context pointer (needed for destroy_instance).
-    rt_ctx: *mut core::ffi::c_void,
+    /// Runtime context (needed for destroy_instance).
+    rt_ctx: RuntimeContext,
 }
 
 impl PipelineValidatorContract {
@@ -593,15 +594,15 @@ impl PipelineValidatorContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context pointer (opaque)
+    /// - `rt_ctx`: Runtime context handle
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
+    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;

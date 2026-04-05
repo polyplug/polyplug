@@ -15,8 +15,8 @@ using namespace polyplug_generated;
 /// Plugins use this class to call host-provided functionality.
 class HostLoggerContract {
 public:
-    /// Factory method - creates caller from HostVTable or nullopt if not found.
-    static std::optional<HostLoggerContract> from_host(const HostVTable* host, uint32_t min_version = 0) noexcept {
+    /// Factory method - creates caller from RuntimeAbi or nullopt if not found.
+    static std::optional<HostLoggerContract> from_host(const RuntimeAbi* host, uint32_t min_version = 0) noexcept {
         if (host == nullptr) {
             return std::nullopt;
         }
@@ -60,7 +60,7 @@ public:
             }
         }
 
-        if (err.code != ABI_OK) {
+        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             return;
         }
 
@@ -94,7 +94,7 @@ public:
             }
         }
 
-        if (err.code != ABI_OK) {
+        if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
             return;
         }
 

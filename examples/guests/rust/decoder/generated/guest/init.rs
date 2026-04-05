@@ -17,6 +17,7 @@ use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use polyplug_guest::PluginContext;
 use polyplug_guest::store_host_vtable;
+use polyplug_guest::RuntimeContext;
 use core::ffi::c_void;
 use super::interfaces::DECODER_CONTRACT_ID;
 use super::interfaces::DECODER_VTABLE;
@@ -32,7 +33,7 @@ use super::interfaces::DECODER_VTABLE;
 /// `rt_ctx` and `host` must be valid non-null pointers provided by the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: *mut c_void,
+    rt_ctx: RuntimeContext,
     host: *const RuntimeAbi,
     ctx: *const PluginContext,
 ) -> AbiError {

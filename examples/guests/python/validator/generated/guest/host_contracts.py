@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Self
-from polyplug_guest.abi import ABI_OK, AbiError, Buffer, DispatchType, HostContractVTable, HostVTable, StringView
+from polyplug_guest.abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractVTable, RuntimeAbi, StringView
 
 from guest.types import LogLevel
 
@@ -20,7 +20,7 @@ class HostLoggerContract:
     def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:
         if host_ptr == 0:
             return None
-        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostVTable))
+        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))
         vtable: int = host.contents.get_host_contract(0, 0xF53EB5F2845853BB, min_version)
         if vtable == 0:
             return None
@@ -50,7 +50,7 @@ class HostLoggerContract:
             err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 0, args_ptr, out_ptr)
         else:
             return
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             return
 
     def log_with_level(self, level: LogLevel, message: str) -> None:
@@ -76,7 +76,7 @@ class HostLoggerContract:
             err = header.dispatch.vm.call(header.dispatch.vm.bridge_data, 1, args_ptr, out_ptr)
         else:
             return
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             return
 
 

@@ -12,6 +12,7 @@ use polyplug_guest::AbiErrorCode;
 use polyplug_guest::GuestContractId;
 use polyplug_guest::GuestContractInterface;
 use polyplug_guest::GuestContractInstance;
+use polyplug_guest::RuntimeContext;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::DispatchMechanisms;
@@ -100,7 +101,7 @@ static DECODER_FNS: [FnPtr; 1_usize] = [
 /// Returns null instance - users should override for stateful plugins.
 #[allow(clippy::unnecessary_cast)]
 unsafe extern "C" fn DECODER_create_instance_stub(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -109,7 +110,7 @@ unsafe extern "C" fn DECODER_create_instance_stub(
 /// Default destroy_instance stub for decoder.
 /// No-op - users should override for state cleanup before hot-reload.
 unsafe extern "C" fn DECODER_destroy_instance_stub(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
 ) {
     // No-op - stateless plugins don't need cleanup

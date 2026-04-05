@@ -9,24 +9,36 @@ local M = {}
 
 -- Function pointer type for validator (pipeline.Validator@1)
 --   validate(input: StringView) -> StringView
-local VALIDATOR_VTABLE = ffi.new("PluginInterface")
-VALIDATOR_VTABLE.contract_id = 0xA553FAB5D11C7AF0
-VALIDATOR_VTABLE.contract_version = 0
-VALIDATOR_VTABLE.function_count = 1
+local VALIDATOR_VTABLE = ffi.new("GuestContractInterface")
+VALIDATOR_VTABLE.contract_id = 0x45173A959EEC57C5
+VALIDATOR_VTABLE.contract_version.major = 1
+VALIDATOR_VTABLE.contract_version.minor = 0
+VALIDATOR_VTABLE.contract_version.patch = 0
 VALIDATOR_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
-VALIDATOR_VTABLE.functions = nil
+-- Default create_instance stub for validator - returns null instance.
+function VALIDATOR_create_instance_stub(rt_ctx, args)
+    -- Default stub returns null instance - users override for stateful plugins.
+    return ffi.new("GuestContractInstance", nil)
+end
+VALIDATOR_VTABLE.create_instance = VALIDATOR_create_instance_stub
+-- Default destroy_instance stub for validator - no-op.
+function VALIDATOR_destroy_instance_stub(rt_ctx, instance)
+    -- Default stub is no-op - users override for cleanup before hot-reload.
+end
+VALIDATOR_VTABLE.destroy_instance = VALIDATOR_destroy_instance_stub
 
 local VALIDATOR_DESCRIPTOR = ffi.new("PluginDescriptor")
 VALIDATOR_DESCRIPTOR.name = polyplug_guest.string_view("validator")
 VALIDATOR_DESCRIPTOR.contract_name = polyplug_guest.string_view("pipeline.Validator@1")
-VALIDATOR_DESCRIPTOR.version_major = 1
-VALIDATOR_DESCRIPTOR.version_minor = 0
-VALIDATOR_DESCRIPTOR.version_patch = 0
+VALIDATOR_DESCRIPTOR.version.major = 1
+VALIDATOR_DESCRIPTOR.version.minor = 0
+VALIDATOR_DESCRIPTOR.version.patch = 0
 
 
 function M.set_validator_impl(validate_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", validate_fn)
-    VALIDATOR_VTABLE.functions = functions
+    VALIDATOR_VTABLE.dispatch.native.function_count = 1
+    VALIDATOR_VTABLE.dispatch.native.functions = functions
 end
 return M

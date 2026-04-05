@@ -9,24 +9,36 @@ local M = {}
 
 -- Function pointer type for transformer (data.Transformer@1)
 --   transform(input: StringView) -> StringView
-local TRANSFORMER_VTABLE = ffi.new("PluginInterface")
-TRANSFORMER_VTABLE.contract_id = 0x3D53C682F3F5A9EF
-TRANSFORMER_VTABLE.contract_version = 0
-TRANSFORMER_VTABLE.function_count = 1
+local TRANSFORMER_VTABLE = ffi.new("GuestContractInterface")
+TRANSFORMER_VTABLE.contract_id = 0x4775991362CD68EE
+TRANSFORMER_VTABLE.contract_version.major = 1
+TRANSFORMER_VTABLE.contract_version.minor = 0
+TRANSFORMER_VTABLE.contract_version.patch = 0
 TRANSFORMER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
-TRANSFORMER_VTABLE.functions = nil
+-- Default create_instance stub for transformer - returns null instance.
+function TRANSFORMER_create_instance_stub(rt_ctx, args)
+    -- Default stub returns null instance - users override for stateful plugins.
+    return ffi.new("GuestContractInstance", nil)
+end
+TRANSFORMER_VTABLE.create_instance = TRANSFORMER_create_instance_stub
+-- Default destroy_instance stub for transformer - no-op.
+function TRANSFORMER_destroy_instance_stub(rt_ctx, instance)
+    -- Default stub is no-op - users override for cleanup before hot-reload.
+end
+TRANSFORMER_VTABLE.destroy_instance = TRANSFORMER_destroy_instance_stub
 
 local TRANSFORMER_DESCRIPTOR = ffi.new("PluginDescriptor")
 TRANSFORMER_DESCRIPTOR.name = polyplug_guest.string_view("transformer")
 TRANSFORMER_DESCRIPTOR.contract_name = polyplug_guest.string_view("data.Transformer@1")
-TRANSFORMER_DESCRIPTOR.version_major = 1
-TRANSFORMER_DESCRIPTOR.version_minor = 0
-TRANSFORMER_DESCRIPTOR.version_patch = 0
+TRANSFORMER_DESCRIPTOR.version.major = 1
+TRANSFORMER_DESCRIPTOR.version.minor = 0
+TRANSFORMER_DESCRIPTOR.version.patch = 0
 
 
 function M.set_transformer_impl(transform_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", transform_fn)
-    TRANSFORMER_VTABLE.functions = functions
+    TRANSFORMER_VTABLE.dispatch.native.function_count = 1
+    TRANSFORMER_VTABLE.dispatch.native.functions = functions
 end
 return M

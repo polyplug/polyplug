@@ -14,23 +14,32 @@ const DispatchType = Object.freeze({
 //   report(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
 export const REPORTER_VTABLE = {
-    contractLo: 0xE511D297,
-    contractHi: 0x81D41D43,
+    contractLo: 0xA9F5AD68,
+    contractHi: 0x76BB4643,
+    dispatchType: DispatchType.VirtualMachine,
+    // Default create_instance stub for reporter - returns null instance.
+    createInstance: function(rtCtxLo, rtCtxHi, argsLo, argsHi) {
+        // Default stub returns null instance - users override for stateful plugins.
+        return { dataLo: 0, dataHi: 0 };  // Null GuestContractInstance.
+    },
+    // Default destroy_instance stub for reporter - no-op.
+    destroyInstance: function(rtCtxLo, rtCtxHi, instanceDataLo, instanceDataHi) {
+        // Default stub is no-op - users override for cleanup before hot-reload.
+    },
     fnCount: 1,
     functions: null as unknown as number[],
     contractName: "data.Reporter@1",
-    dispatchType: DispatchType.VirtualMachine
 };
 
 export const REPORTER_DESCRIPTOR = {
     name: "reporter",
     contractName: "data.Reporter@1",
-    versionMajor: 1,
-    versionMinor: 0,
-    versionPatch: 0
+    version: { major: 1, minor: 0, patch: 0 }
 };
 
-function reporter_fn0_abi_wrapper(args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+function reporter_fn0_abi_wrapper(instanceDataLo, instanceDataHi, args_ptr_lo, args_ptr_hi, out_ptr_lo, out_ptr_hi) {
+    // Instance is ignored for stateless plugins (instanceDataLo/Hi are 0).
+    // For stateful plugins, users override createInstance and use instanceData.
     // SAFETY: args_ptr_lo/hi and out_ptr_lo/hi are valid pointer halves per ABI contract.
     // The host guarantees these pointers are properly aligned and sized before calling.
     var polyplug = globalThis.polyplug;

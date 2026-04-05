@@ -10,35 +10,35 @@ using namespace polyplug_generated;
 
 struct RuntimeError { uint32_t code; };
 
-/// Abstract plugin base for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
+/// Abstract plugin base for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 class PipelineDecoderPlugin {
 public:
     virtual ~PipelineDecoderPlugin() = default;
     virtual StringView decode(StringView input) = 0;
 };
 
-/// Abstract plugin base for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
+/// Abstract plugin base for contract `data.Transformer` (id=0x4775991362CD68EE)
 class DataTransformerPlugin {
 public:
     virtual ~DataTransformerPlugin() = default;
     virtual StringView transform(StringView input) = 0;
 };
 
-/// Abstract plugin base for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
+/// Abstract plugin base for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
 class PipelineEncoderPlugin {
 public:
     virtual ~PipelineEncoderPlugin() = default;
     virtual StringView encode(StringView input) = 0;
 };
 
-/// Abstract plugin base for contract `data.Reporter` (id=0x81D41D43E511D297)
+/// Abstract plugin base for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
 class DataReporterPlugin {
 public:
     virtual ~DataReporterPlugin() = default;
     virtual StringView report(StringView input) = 0;
 };
 
-/// Abstract plugin base for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
+/// Abstract plugin base for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 class PipelineValidatorPlugin {
 public:
     virtual ~PipelineValidatorPlugin() = default;
