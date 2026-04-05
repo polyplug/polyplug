@@ -134,13 +134,18 @@ Plans:
 2. No *C suffix types in FFI (all types from polyplug_abi are canonical)
 3. Documentation uses Guest Contract / Host Contract terminology consistently
 4. All tests pass with new instance model and naming
-**Plans:** 4 plans
+**Plans:** 9 plans (4 main + 5 gap closure)
 
 Plans:
 - [ ] 06-01-PLAN.md — Remove all "vtable" naming from codebase
 - [ ] 06-02-PLAN.md — Verify no *C suffix types in FFI (covered by 05-08)
 - [ ] 06-03-PLAN.md — Update documentation to use Guest/Host terminology
 - [ ] 06-04-PLAN.md — Update tests to use new instance model and naming
+- [ ] 06-05-PLAN.md — Gap closure: Rename generator file/function names (vtable_factories -> interface_factories)
+- [ ] 06-06-PLAN.md — Gap closure: Fix generator ABI structure templates (version, error codes, register_contract)
+- [ ] 06-07-PLAN.md — Gap closure: Update SDK host files to use HostContractInterface terminology
+- [ ] 06-08-PLAN.md — Gap closure: Rename test file and update all test imports
+- [ ] 06-09-PLAN.md — Gap closure: Regenerate example code and final verification
 
 ### Phase 7: Typed Handles
 **Goal:** Replace all `*mut c_void` and `*const c_void` with meaningful typed handles
@@ -168,8 +173,8 @@ Plans:
 | 2. Registry | 0/3 | Not started | - |
 | 3. Instance Model | 0/5 | Not started | - |
 | 4. Hot-Reload | 3/3 | Complete | 2026-04-04 |
-| 5. SDK Updates | 6/8 | Gap closure | - |
-| 6. Cleanup | 0/4 | Not started | - |
+| 5. SDK Updates | 8/8 | Complete | 2026-04-04 |
+| 6. Cleanup | 0/9 | Gap closure | - |
 | 7. Typed Handles | 0/4 | Not started | - |
 
 ## Dependencies
@@ -206,3 +211,4 @@ Phase 7 (Typed Handles)
 *Phase 3 plans added: 2026-04-04*
 *Phase 4 plans added: 2026-04-04*
 *Phase 5 gap closure plans added: 2026-04-04*
+*Phase 6 gap closure plans added: 2026-04-04*
