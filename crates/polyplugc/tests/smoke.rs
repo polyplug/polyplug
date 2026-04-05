@@ -19,6 +19,7 @@ use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::RuntimeContext;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -116,9 +117,9 @@ use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginError;
 use polyplug_guest::RuntimeAbi;
 use polyplug_guest::PluginContext;
+use polyplug_guest::RuntimeContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
-use core::ffi::c_void;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
 use guest::vtables::TEST_ADDER_VTABLE;
@@ -148,7 +149,7 @@ impl TestAddPlugin for MyPlugin {
 /// `rt_ctx` and `host` must be valid non-null pointers provided by the host.
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: *mut c_void,
+    rt_ctx: RuntimeContext,
     host: *const RuntimeAbi,
     _ctx: *const PluginContext,
 ) -> AbiError {
@@ -195,7 +196,7 @@ std::thread_local! {
 /// # Safety
 /// `descriptor` and `interface` must be valid for the duration of the call.
 unsafe extern "C" fn capture_interface_callback(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -216,7 +217,7 @@ struct AddArgs {
 // ─── HostVTable stub functions ─────────────────────────────────────────────────
 
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -224,7 +225,7 @@ unsafe extern "C" fn stub_alloc(
 }
 
 unsafe extern "C" fn stub_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -236,7 +237,7 @@ unsafe extern "C" fn stub_free(
 }
 
 unsafe extern "C" fn stub_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -246,7 +247,7 @@ unsafe extern "C" fn stub_find_by_contract(
 }
 
 unsafe extern "C" fn stub_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -256,14 +257,14 @@ unsafe extern "C" fn stub_find_all_by_contract(
 }
 
 unsafe extern "C" fn stub_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
 unsafe extern "C" fn stub_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -276,7 +277,7 @@ unsafe extern "C" fn stub_call_method(
 }
 
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -349,7 +350,7 @@ fn smoke_rust_codegen_dispatch() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -381,7 +382,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: init_fn is valid; host_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
