@@ -602,11 +602,12 @@ mod tests {
     #[test]
     fn handle_roundtrip_pack_unpack_identity() {
         // pack(unpack(x)) == x for boundary values
+        // PluginHandle now only has index (u32), so we test values that fit
         let boundary_values: [u64; 4] = [
             0u64,
             1u64,
-            (u32::MAX as u64) << 32 | (u32::MAX - 1) as u64,
-            (1u64 << 32) | 1u64,
+            (u32::MAX - 1) as u64,  // max valid index (u32::MAX is null sentinel)
+            1000u64,
         ];
         for &val in &boundary_values {
             let unpacked: PluginHandle = unpack_handle(val);

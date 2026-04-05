@@ -1407,7 +1407,9 @@ mod tests {
         use polyplug_abi::{DispatchMechanisms, NativeDispatch, HostContractInstance, DispatchType};
 
         unsafe extern "C" fn stub_create_instance(_rt_ctx: *mut core::ffi::c_void, _args: *const ()) -> HostContractInstance {
-            HostContractInstance { data: core::ptr::null_mut() }
+            // Return a non-null dummy pointer for testing
+            static mut DUMMY: usize = 0xDEADBEEF;
+            HostContractInstance { data: &raw mut DUMMY as *mut core::ffi::c_void }
         }
 
         unsafe extern "C" fn stub_destroy_instance(_rt_ctx: *mut core::ffi::c_void, _instance: HostContractInstance) {}
