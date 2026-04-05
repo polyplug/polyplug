@@ -1,9 +1,8 @@
 //! Runtime ABI — function table passed to plugins during initialization.
 
-use core::ffi::c_void;
-
 use crate::{
     guest::{GuestContractInterface, GuestContractInstance},
+    host::RuntimeContext,
     plugin::{PluginDescriptor, PluginHandle},
     types::AbiError,
 };
@@ -16,7 +15,7 @@ pub type ContractHandle = PluginHandle;
 ///
 /// OWNERSHIP: `'static`, lives as long as the runtime.
 ///
-/// All functions take `rt_ctx` as first parameter - an opaque pointer to the Runtime.
+/// All functions take `rt_ctx` as first parameter - a RuntimeContext handle.
 /// This allows each Runtime to have its own isolated state (no global registry).
 ///
 /// # Renamed from HostVTable
@@ -29,19 +28,19 @@ pub struct RuntimeAbi {
     ///
     /// Called by plugins during `polyplug_init` to register their contracts.
     pub register_contract: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         descriptor: *const PluginDescriptor,
         interface: *const GuestContractInterface,
     ) -> AbiError,
     /// Allocate memory using the host allocator.
-    pub alloc: unsafe extern "C" fn(rt_ctx: *mut c_void, size: usize, align: usize) -> *mut u8,
+    pub alloc: unsafe extern "C" fn(rt_ctx: RuntimeContext, size: usize, align: usize) -> *mut u8,
     /// Free memory using the host allocator.
-    pub free: unsafe extern "C" fn(rt_ctx: *mut c_void, ptr: *mut u8, size: usize, align: usize),
+    pub free: unsafe extern "C" fn(rt_ctx: RuntimeContext, ptr: *mut u8, size: usize, align: usize),
     /// Find a guest contract by contract_id and minimum version.
     ///
     /// Returns a ContractHandle that can be resolved to an interface.
     pub find_by_contract: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         contract_id: u64,
         min_version: u32,
     ) -> ContractHandle,
@@ -49,7 +48,7 @@ pub struct RuntimeAbi {
     ///
     /// Returns the number of handles written to the output buffer.
     pub find_all_by_contract: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         contract_id: u64,
         min_version: u32,
         out: *mut ContractHandle,
@@ -59,7 +58,7 @@ pub struct RuntimeAbi {
     ///
     /// Returns null if the handle is invalid or stale.
     pub resolve_contract: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         handle: ContractHandle,
     ) -> *const GuestContractInterface,
     /// Call a method on a guest contract instance.
@@ -68,13 +67,13 @@ pub struct RuntimeAbi {
     /// different dispatch types (Native vs VM).
     ///
     /// # Arguments
-    /// - `rt_ctx`: Runtime context
+    /// - `rt_ctx`: RuntimeContext handle
     /// - `instance`: The guest contract instance
     /// - `method_id`: Method index within the contract
     /// - `args`: Pointer to packed arguments
     /// - `out`: Pointer to output buffer for return value
     pub call_method: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         instance: GuestContractInstance,
         method_id: u32,
         args: *const (),
@@ -85,7 +84,7 @@ pub struct RuntimeAbi {
     /// For singleton host contracts, returns the same instance every time.
     /// For multi-instance host contracts, returns a new instance each time.
     pub get_host_contract: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         contract_id: u64,
         min_version: u32,
     ) -> crate::host::HostContractInstance,

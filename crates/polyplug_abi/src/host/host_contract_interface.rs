@@ -1,11 +1,10 @@
 //! Host Contract Interface — for host-provided services.
 
-use core::ffi::c_void;
 use polyplug_utils::HostContractId;
 
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
-    host::HostContractInstance,
+    host::{HostContractInstance, RuntimeContext},
     types::Version,
 };
 
@@ -30,13 +29,13 @@ pub struct HostContractInterface {
     /// Create a new instance of this host contract.
     ///
     /// # Arguments
-    /// - `rt_ctx`: Runtime context (opaque pointer to Runtime)
+    /// - `rt_ctx`: RuntimeContext handle
     /// - `args`: Optional initialization arguments (contract-specific)
     ///
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
     pub create_instance: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         args: *const (),
     ) -> HostContractInstance,
     /// Destroy an instance of this host contract.
@@ -44,7 +43,7 @@ pub struct HostContractInterface {
     /// For singleton contracts, this is typically a no-op.
     /// For multi-instance contracts, caller must destroy after use.
     pub destroy_instance: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         instance: HostContractInstance,
     ),
     /// Union of dispatch mechanisms — access based on dispatch_type.

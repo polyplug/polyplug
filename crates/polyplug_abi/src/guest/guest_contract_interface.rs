@@ -1,11 +1,11 @@
 //! Guest Contract Interface — one per contract implemented by a guest (plugin).
 
-use core::ffi::c_void;
 use polyplug_utils::GuestContractId;
 
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
     guest::GuestContractInstance,
+    host::RuntimeContext,
     types::Version,
 };
 
@@ -33,13 +33,13 @@ pub struct GuestContractInterface {
     /// Create a new instance of this contract.
     ///
     /// # Arguments
-    /// - `rt_ctx`: Runtime context (opaque pointer to Runtime)
+    /// - `rt_ctx`: RuntimeContext handle
     /// - `args`: Optional initialization arguments (contract-specific)
     ///
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
     pub create_instance: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         args: *const (),
     ) -> GuestContractInstance,
     /// Destroy an instance of this contract.
@@ -47,10 +47,10 @@ pub struct GuestContractInterface {
     /// MUST be called before hot-reload for all instances.
     ///
     /// # Arguments
-    /// - `rt_ctx`: Runtime context
+    /// - `rt_ctx`: RuntimeContext handle
     /// - `instance`: Instance handle to destroy
     pub destroy_instance: unsafe extern "C" fn(
-        rt_ctx: *mut c_void,
+        rt_ctx: RuntimeContext,
         instance: GuestContractInstance,
     ),
     /// Union of dispatch mechanisms — access based on dispatch_type.
