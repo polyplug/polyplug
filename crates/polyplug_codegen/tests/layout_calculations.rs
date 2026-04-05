@@ -69,7 +69,8 @@ fn layout_bool_size_align() {
 
 // ─── Category 2: ABI Built-in Types (5 tests) ───────────────────────────────────
 
-use polyplug_abi::{AbiError, Buffer, HostContext, PluginHandle, StringView};
+use polyplug_abi::{AbiError, Buffer, PluginHandle, StringView};
+use polyplug_abi::host::host_context::HostContext;
 
 /// StringView: size=16, align=8, ptr@0, len@8
 #[test]
@@ -139,13 +140,13 @@ fn layout_abierror_fields_and_size() {
     );
 }
 
-/// PluginHandle: size=8, align=4, index@0, generation@4
+/// PluginHandle: size=4, align=4, index@0 (opaque handle)
 #[test]
 fn layout_plugin_handle_fields_and_size() {
     assert_eq!(
         size_of::<PluginHandle>(),
-        8,
-        "PluginHandle size must be 8 bytes (index + generation)"
+        4,
+        "PluginHandle size must be 4 bytes (opaque index handle)"
     );
     assert_eq!(
         align_of::<PluginHandle>(),
@@ -157,20 +158,15 @@ fn layout_plugin_handle_fields_and_size() {
         0,
         "PluginHandle.index must be at offset 0"
     );
-    assert_eq!(
-        offset_of!(PluginHandle, generation),
-        4,
-        "PluginHandle.generation must be at offset 4"
-    );
 }
 
-/// HostContext: size=16, align=8, runtime@0, bundle_id@8
+/// HostContext: size=24, align=8, runtime@0, bundle_id@8, host_abi_version@16
 #[test]
 fn layout_hostcontext_fields_and_size() {
     assert_eq!(
         size_of::<HostContext>(),
-        16,
-        "HostContext size must be 16 bytes (runtime + bundle_id)"
+        24,
+        "HostContext size must be 24 bytes (runtime + bundle_id + host_abi_version + padding)"
     );
     assert_eq!(
         align_of::<HostContext>(),
@@ -186,6 +182,11 @@ fn layout_hostcontext_fields_and_size() {
         offset_of!(HostContext, bundle_id),
         8,
         "HostContext.bundle_id must be at offset 8"
+    );
+    assert_eq!(
+        offset_of!(HostContext, host_abi_version),
+        16,
+        "HostContext.host_abi_version must be at offset 16"
     );
 }
 
@@ -991,17 +992,17 @@ struct AllAbiTypesStruct {
     sv: StringView,       // 16 bytes @ 0
     buf: Buffer,          // 24 bytes @ 16
     err: AbiError,        // 24 bytes @ 40
-    handle: PluginHandle, // 8 bytes @ 64
-    ctx: HostContext,     // 16 bytes @ 72
+    handle: PluginHandle, // 4 bytes @ 64
+    ctx: HostContext,     // 24 bytes @ 72 (after 4 bytes padding)
 }
 
 #[test]
 fn layout_all_abi_types_struct() {
-    // sv(16) + buf(24) + err(24) + handle(8) + ctx(16) = 88 bytes
+    // sv(16) + buf(24) + err(24) + handle(4) + padding(4) + ctx(24) = 96 bytes
     assert_eq!(
         size_of::<AllAbiTypesStruct>(),
-        88,
-        "AllAbiTypesStruct size must be 88 bytes"
+        96,
+        "AllAbiTypesStruct size must be 96 bytes"
     );
     assert_eq!(
         align_of::<AllAbiTypesStruct>(),
@@ -1031,6 +1032,6 @@ fn layout_all_abi_types_struct() {
     assert_eq!(
         offset_of!(AllAbiTypesStruct, ctx),
         72,
-        "ctx must be at offset 72"
+        "ctx must be at offset 72 (after 4 bytes padding for alignment)"
     );
 }

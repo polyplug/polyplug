@@ -8,7 +8,7 @@ use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, RuntimeAbi, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch,
+    DispatchType, NativeDispatch, RuntimeContext,
 };
 use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
@@ -23,13 +23,13 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 /// # Safety
 /// `rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
+            code: AbiErrorCode::InvalidPointer,
             message: StringView::null(),
         };
     }
@@ -58,11 +58,11 @@ unsafe extern "C" fn registry_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok as u32,
+            code: AbiErrorCode::Ok,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: StringView::null(),
         },
     }
@@ -70,7 +70,7 @@ unsafe extern "C" fn registry_register_callback(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -79,7 +79,7 @@ unsafe extern "C" fn noop_alloc(
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -90,7 +90,7 @@ unsafe extern "C" fn noop_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -99,7 +99,7 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_by_bundle callback.
 unsafe extern "C" fn noop_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _bundle_id: u64,
     _contract_id: u64,
     _min_version: u32,
@@ -109,7 +109,7 @@ unsafe extern "C" fn noop_find_by_bundle(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -120,7 +120,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 
 /// No-op resolve_plugin callback.
 unsafe extern "C" fn noop_resolve_plugin(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const PluginInterface {
     core::ptr::null()
@@ -128,7 +128,7 @@ unsafe extern "C" fn noop_resolve_plugin(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -137,7 +137,7 @@ unsafe extern "C" fn noop_get_host_contract(
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -145,21 +145,21 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
 ) {
 }
 
 /// No-op call_method callback.
 unsafe extern "C" fn noop_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
     _out: *mut (),
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok as u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
@@ -190,8 +190,8 @@ fn test_dispatch_add_function() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
-            *const HostVTable,
+            RuntimeContext,
+            *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -223,12 +223,12 @@ fn test_dispatch_add_function() {
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
 
     // Look up the test.add plugin.
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
@@ -321,7 +321,7 @@ fn test_dispatch_add_with_zero() {
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
@@ -354,7 +354,7 @@ fn test_dispatch_add_with_zero() {
         )
     };
 
-    assert_eq!(result.code, AbiErrorCode::Ok as u32);
+    assert_eq!(result.code, AbiErrorCode::Ok);
     assert_eq!(out, 0_u32, "add(0, 0) must equal 0");
 
     core::mem::forget(library);
@@ -403,7 +403,7 @@ fn test_dispatch_add_wrapping_overflow() {
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
@@ -437,7 +437,7 @@ fn test_dispatch_add_wrapping_overflow() {
         )
     };
 
-    assert_eq!(result.code, AbiErrorCode::Ok as u32);
+    assert_eq!(result.code, AbiErrorCode::Ok);
     assert_eq!(out, 0_u32, "u32::MAX + 1 wraps to 0");
 
     core::mem::forget(library);
