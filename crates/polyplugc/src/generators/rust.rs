@@ -45,7 +45,8 @@ impl CodeGenerator for RustGenerator {
         // ── types.rs ──────────────────────────────────────────────────────────
         let mut types_out: String = String::new();
         types_out.push_str(header);
-        types_out.push_str("use polyplug_abi::StringView;\n\n");
+        types_out.push_str("use polyplug_abi::StringView;\n");
+        types_out.push_str("use polyplug_abi::Version;\n\n");
 
         // Emit enums before struct types
         for e in &ir.enums {
@@ -104,8 +105,8 @@ impl CodeGenerator for RustGenerator {
                 contract.contract_id
             ));
             types_out.push_str(&format!(
-                "pub const {contract_upper}_REQUIRED_VERSION: polyplug::version::Version = \
-                 polyplug::version::Version {{ major: {major}, minor: {minor} }};\n",
+                "pub const {contract_upper}_REQUIRED_VERSION: Version = \
+                 Version {{ major: {major}, minor: {minor} }};\n",
                 major = contract.version.major,
                 minor = contract.version.minor,
             ));
@@ -1873,7 +1874,7 @@ fn generate_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("use polyplug_abi::abi_error_ok;\n");
     out.push_str("use polyplug_abi::string_view_from_static;\n");
     out.push_str("use polyplug_abi::Version;\n");
-    out.push_str("use polyplug_utils::HostContractId;\n");
+    out.push_str("use polyplug_abi::HostContractId;\n");
     out.push_str("use core::ffi::c_void;\n");
     out.push_str("use super::host_contracts::*;\n");
     out.push_str("use super::types::*;\n\n");
@@ -1918,6 +1919,11 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str(&format!(
         "pub fn {factory_name}(implementation: Box<dyn {trait_name}>) -> &'static HostContractInterface {{\n"
     ));
+    // Static to store the implementation pointer for the create_instance stub
+    // SAFETY: This is set once during factory call and read by the stub.
+    out.push_str(&format!(
+        "    static IMPL_PTR: std::sync::OnceLock<*mut c_void> = std::sync::OnceLock::new();\n\n"
+    ));
     // Wrap the fat pointer in a Box so we can store a thin pointer to it in impl_ptr.
     // SAFETY: The fat pointer (*const dyn Trait) is 128 bits, but impl_ptr is 64 bits.
     // We wrap it in a Box<*const dyn Trait> and leak that, storing a pointer to the wrapper.
@@ -1928,8 +1934,9 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
         "    let wrapper: Box<*const dyn {trait_name}> = Box::new(fat_ptr);\n"
     ));
     out.push_str(&format!(
-        "    let impl_ptr: *const *const dyn {trait_name} = Box::into_raw(wrapper);\n\n"
+        "    let impl_ptr: *const *const dyn {trait_name} = Box::into_raw(wrapper);\n"
     ));
+    out.push_str("    IMPL_PTR.get_or_init(|| impl_ptr as *mut c_void);\n\n");
 
     // Generate thunks for each function
     for func in &contract.functions {
@@ -1961,7 +1968,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     );
     let singleton: bool = contract.singleton;
 
-    // Create instance stub
+    // Create instance stub - reads from static IMPL_PTR
     out.push_str(&format!(
         "    /// Create instance stub for `{}` host contract.\n",
         contract.name
@@ -1974,7 +1981,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        _rt_ctx: *mut c_void,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
-    out.push_str("        HostContractInstance { data: impl_ptr as *mut c_void }\n");
+    out.push_str("        HostContractInstance { data: *IMPL_PTR.get().unwrap() }\n");
     out.push_str("    }\n\n");
 
     // Destroy instance stub
@@ -2039,6 +2046,10 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        out: *mut (),\n");
     out.push_str("    ) -> AbiError,\n");
     out.push_str(") -> &'static HostContractInterface {\n");
+    // Static to store the bridge_data for the create_instance stub
+    // SAFETY: This is set once during factory call and read by the stub.
+    out.push_str("    static BRIDGE_DATA: std::sync::OnceLock<*mut c_void> = std::sync::OnceLock::new();\n");
+    out.push_str("    BRIDGE_DATA.get_or_init(|| bridge_data);\n\n");
 
     // Generate instance lifecycle stubs for VM
     let vm_create_stub_name: String = format!(
@@ -2050,7 +2061,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
         contract.name.replace('.', "_").to_lowercase()
     );
 
-    // Create instance stub for VM
+    // Create instance stub for VM - reads from static BRIDGE_DATA
     out.push_str(&format!(
         "    /// Create instance stub for `{}` host contract (VM dispatch).\n",
         contract.name
@@ -2062,7 +2073,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("        _rt_ctx: *mut c_void,\n");
     out.push_str("        _args: *const (),\n");
     out.push_str("    ) -> HostContractInstance {\n");
-    out.push_str("        HostContractInstance { data: bridge_data }\n");
+    out.push_str("        HostContractInstance { data: *BRIDGE_DATA.get().unwrap() }\n");
     out.push_str("    }\n\n");
 
     // Destroy instance stub for VM
