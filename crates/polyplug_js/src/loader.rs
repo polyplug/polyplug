@@ -28,6 +28,8 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::RuntimeAbi;
+use polyplug_abi::RuntimeContext;
+use polyplug_abi::VmLoaderData;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
@@ -100,7 +102,7 @@ pub struct JsLoaderData {
 /// # Safety
 /// JS plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn js_create_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -111,7 +113,7 @@ unsafe extern "C" fn js_create_instance(
 /// # Safety
 /// JS plugins don't own instance data.
 unsafe extern "C" fn js_destroy_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
 ) {
 }
@@ -121,17 +123,17 @@ unsafe extern "C" fn js_destroy_instance(
 /// Dispatch function for JS plugins using VM dispatch pattern.
 ///
 /// # Safety
-/// - `loader_data` must be a valid pointer to `JsLoaderData`
+/// - `loader_data` must be a valid VmLoaderData wrapping JsLoaderData
 /// - `args` and `out` must be valid pointers for the ABI call
 unsafe extern "C" fn js_dispatch(
-    loader_data: *mut core::ffi::c_void,
+    loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
 ) -> AbiError {
-    // SAFETY: loader_data is a valid pointer to JsLoaderData created by the loader.
-    let data: &JsLoaderData = unsafe { &*(loader_data as *const JsLoaderData) };
+    // SAFETY: loader_data wraps a valid pointer to JsLoaderData created by the loader.
+    let data: &JsLoaderData = unsafe { &*(loader_data.data as *const JsLoaderData) };
 
     let func_persistent: &PersistentFunction = match data.functions.get(fn_id as usize) {
         Some(f) => f,
@@ -194,7 +196,7 @@ fn pack_handle(h: PluginHandle) -> Option<u64> {
 /// Helper to get host context pointers from JS globals.
 fn get_host_ctx_from_globals<'js>(
     ctx: &Ctx<'js>,
-) -> Option<(*const polyplug_abi::RuntimeAbi, *mut core::ffi::c_void)> {
+) -> Option<(*const polyplug_abi::RuntimeAbi, RuntimeContext)> {
     let polyplug_obj: Object<'js> = ctx
         .globals()
         .get::<&str, Object<'js>>("polyplug")
@@ -250,8 +252,9 @@ fn get_host_ctx_from_globals<'js>(
 
     let vtable_ptr: *const polyplug_abi::RuntimeAbi =
         ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const polyplug_abi::RuntimeAbi;
-    let rt_ctx: *mut core::ffi::c_void =
+    let rt_ctx_data: *mut core::ffi::c_void =
         ((rt_ctx_hi as u64) << 32 | rt_ctx_lo as u64) as usize as *mut core::ffi::c_void;
+    let rt_ctx: RuntimeContext = RuntimeContext { data: rt_ctx_data };
 
     if vtable_ptr.is_null() || rt_ctx.is_null() {
         None
@@ -264,12 +267,12 @@ fn register_host_functions<'js>(
     ctx: &Ctx<'js>,
     polyplug_obj: &Object<'js>,
     host_abi: *const polyplug_abi::RuntimeAbi,
-    rt_ctx: *mut core::ffi::c_void,
+    rt_ctx: RuntimeContext,
     bundle_name: &str,
 ) -> Result<(), RuntimeError> {
     // Store host context pointers as JS globals on the polyplug object
     let vtable_usize: usize = host_abi as usize;
-    let rt_ctx_usize: usize = rt_ctx as usize;
+    let rt_ctx_usize: usize = rt_ctx.data as usize;
 
     polyplug_obj
         .set("_hostVtableLo", vtable_usize as u32)
@@ -873,8 +876,10 @@ impl BundleLoader for JsLoader {
             bundle_id,
             host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
-        let rt_ctx: *mut core::ffi::c_void =
-            &mut host_ctx as *mut HostContext as *mut core::ffi::c_void;
+        // Wrap in RuntimeContext for type-safe handle.
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &mut host_ctx as *mut HostContext as *mut core::ffi::c_void,
+        };
 
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
 
@@ -955,7 +960,7 @@ impl BundleLoader for JsLoader {
                 bundle_id,
             };
 
-            let rt_ctx_i64: i64 = rt_ctx as usize as i64;
+            let rt_ctx_i64: i64 = rt_ctx.data as usize as i64;
             let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
             let ctx_ptr_i64: i64 = &ctx as *const PluginContext as i64;
 
@@ -1031,7 +1036,7 @@ impl BundleLoader for JsLoader {
             dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: js_dispatch,
-                    loader_data: loader_data_ptr as *mut core::ffi::c_void,
+                    loader_data: VmLoaderData { data: loader_data_ptr as *mut core::ffi::c_void },
                 },
             },
         };

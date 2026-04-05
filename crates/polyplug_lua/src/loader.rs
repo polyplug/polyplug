@@ -25,6 +25,8 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
+use polyplug_abi::RuntimeContext;
+use polyplug_abi::VmLoaderData;
 use polyplug_abi::StringView;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
@@ -55,7 +57,7 @@ pub struct LuaLoaderData {
 /// # Safety
 /// Lua plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn lua_create_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -66,7 +68,7 @@ unsafe extern "C" fn lua_create_instance(
 /// # Safety
 /// Lua plugins don't own instance data.
 unsafe extern "C" fn lua_destroy_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
 ) {
 }
@@ -76,17 +78,17 @@ unsafe extern "C" fn lua_destroy_instance(
 /// Dispatch function for Lua plugins using VM dispatch pattern.
 ///
 /// # Safety
-/// - `loader_data` must be a valid pointer to `LuaLoaderData`
+/// - `loader_data` must be a valid VmLoaderData wrapping LuaLoaderData
 /// - `args` and `out` must be valid pointers for the ABI call
 unsafe extern "C" fn lua_dispatch(
-    loader_data: *mut core::ffi::c_void,
+    loader_data: VmLoaderData,
     _instance: GuestContractInstance,
     fn_id: u32,
     args: *const (),
     out: *mut (),
 ) -> AbiError {
-    // SAFETY: loader_data is a valid pointer to LuaLoaderData created by the loader.
-    let data: &LuaLoaderData = unsafe { &*(loader_data as *const LuaLoaderData) };
+    // SAFETY: loader_data wraps a valid pointer to LuaLoaderData created by the loader.
+    let data: &LuaLoaderData = unsafe { &*(loader_data.data as *const LuaLoaderData) };
 
     let lua_fn: &Function = match data.functions.get(fn_id as usize) {
         Some(f) => f,
@@ -266,8 +268,10 @@ impl BundleLoader for LuaLoader {
             bundle_id,
             host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
-        let rt_ctx: *mut core::ffi::c_void =
-            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        // Wrap in RuntimeContext for type-safe handle.
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+        };
 
         // Get host_abi from runtime.
         let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
@@ -283,7 +287,7 @@ impl BundleLoader for LuaLoader {
             },
             bundle_id,
         };
-        let rt_ctx_i64: i64 = rt_ctx as usize as i64;
+        let rt_ctx_i64: i64 = rt_ctx.data as usize as i64;
         let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
@@ -378,7 +382,7 @@ impl BundleLoader for LuaLoader {
             dispatch: DispatchMechanisms {
                 vm: VmDispatch {
                     call: lua_dispatch,
-                    loader_data: loader_data_ptr as *mut core::ffi::c_void,
+                    loader_data: VmLoaderData { data: loader_data_ptr as *mut core::ffi::c_void },
                 },
             },
         };

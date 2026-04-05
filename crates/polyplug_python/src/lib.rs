@@ -32,8 +32,8 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug_abi::host::host_context::HostContext;
 use polyplug::runtime::Runtime;
-use polyplug_abi::RuntimeAbi;
 use polyplug_abi::PluginContext;
+use polyplug_abi::RuntimeContext;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
@@ -111,11 +111,13 @@ impl BundleLoader for PythonLoader {
             bundle_id,
             host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         };
-        let rt_ctx: *mut core::ffi::c_void =
-            &host_ctx as *const HostContext as *mut core::ffi::c_void;
+        // Wrap in RuntimeContext for type-safe handle.
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+        };
 
-        // Get host_vtable from runtime.
-        let host_vtable: &'static polyplug_abi::RuntimeAbi = runtime.host_vtable();
+        // Get host_abi from runtime.
+        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
 
         // Step 3: Load the Python module and call polyplug_init.
         Python::attach(|py| {
@@ -243,11 +245,11 @@ impl BundleLoader for PythonLoader {
             };
 
             // Pass pointers as i64 to preserve full 64-bit precision.
-            let rt_ctx_i64: i64 = rt_ctx as usize as i64;
-            let host_vtable_i64: i64 = host_vtable as *const polyplug_abi::RuntimeAbi as usize as i64;
+            let rt_ctx_i64: i64 = rt_ctx.data as usize as i64;
+            let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
             let ctx_ptr: i64 = &ctx as *const PluginContext as i64;
             init_fn
-                .call((rt_ctx_i64, host_vtable_i64, ctx_ptr), None)
+                .call((rt_ctx_i64, host_abi_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
