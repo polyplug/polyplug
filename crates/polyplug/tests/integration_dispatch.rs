@@ -288,7 +288,7 @@ fn test_dispatch_add_with_zero() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -371,7 +371,7 @@ fn test_dispatch_add_wrapping_overflow() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,

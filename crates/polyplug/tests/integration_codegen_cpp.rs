@@ -10,6 +10,7 @@ use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::RuntimeAbi;
+use polyplug_abi::RuntimeContext;
 use polyplug_abi::types::abi_error_ok;
 use polyplug_abi::types::StringView;
 use polyplug_abi::PluginDescriptor;
@@ -63,7 +64,7 @@ fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
 /// # Safety
 /// `rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -106,7 +107,7 @@ unsafe extern "C" fn registry_register_callback(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -115,7 +116,7 @@ unsafe extern "C" fn noop_alloc(
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -126,7 +127,7 @@ unsafe extern "C" fn noop_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -135,7 +136,7 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -146,7 +147,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
@@ -154,7 +155,7 @@ unsafe extern "C" fn noop_resolve_contract(
 
 /// No-op call_method callback.
 unsafe extern "C" fn noop_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: polyplug_abi::GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -165,7 +166,7 @@ unsafe extern "C" fn noop_call_method(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -300,7 +301,7 @@ fn test_cpp_plugin_dispatch() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -334,7 +335,7 @@ fn test_cpp_plugin_dispatch() {
     // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &runtime_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
@@ -415,7 +416,7 @@ fn test_cpp_host_loads_rust_plugin() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -447,7 +448,7 @@ fn test_cpp_host_loads_rust_plugin() {
     // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &runtime_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
@@ -524,7 +525,7 @@ fn test_exception_isolation_cpp() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -556,7 +557,7 @@ fn test_exception_isolation_cpp() {
     // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &runtime_abi as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )

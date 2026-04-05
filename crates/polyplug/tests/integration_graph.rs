@@ -11,7 +11,7 @@
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    AbiErrorCode, AbiError, RuntimeAbi, RuntimeContext, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch,
 };
@@ -24,13 +24,13 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
 // --- Host functions for integration tests ------------------------------------
 
-/// A register_contract callback that stores vtable entries into a Registry
+/// A register_contract callbacks that stores vtable entries into a Registry
 /// via thread-local state (avoids threading through the opaque host pointer).
 ///
 /// # Safety
 /// `rt_ctx`, `descriptor`, and `interface` must be valid non-null pointers for the call duration.
 unsafe extern "C" fn graph_register_callback(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -74,7 +74,7 @@ unsafe extern "C" fn graph_register_callback(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -83,7 +83,7 @@ unsafe extern "C" fn noop_alloc(
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -94,7 +94,7 @@ unsafe extern "C" fn noop_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -103,7 +103,7 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -114,7 +114,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
@@ -122,7 +122,7 @@ unsafe extern "C" fn noop_resolve_contract(
 
 /// No-op call_method callback.
 unsafe extern "C" fn noop_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -136,7 +136,7 @@ unsafe extern "C" fn noop_call_method(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -156,11 +156,11 @@ fn load_and_init_plugin() -> libloading::Library {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
     };
 
-    // SAFETY: polyplug_init signature is `extern "C" fn(*mut c_void, *const RuntimeAbi, *const PluginContext) -> AbiError`.
+    // SAFETY: polyplug_init signature is `extern "C" fn(RuntimeContext, *const RuntimeAbi, *const PluginContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -188,7 +188,7 @@ fn load_and_init_plugin() -> libloading::Library {
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )

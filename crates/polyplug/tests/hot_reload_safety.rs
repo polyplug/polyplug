@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor,
+    DispatchType, GuestContractInterface, RuntimeContext, NativeDispatch, PluginDescriptor,
     PluginHandle, StringView, Version, DispatchMechanisms,
 };
 
@@ -23,7 +23,7 @@ const MOCK_FNS: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> polyplug_abi::GuestContractInstance {
     polyplug_abi::GuestContractInstance::null()
@@ -31,7 +31,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: polyplug_abi::GuestContractInstance,
 ) {
 }

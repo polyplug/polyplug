@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, Buffer, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    AbiErrorCode, AbiError, Buffer, RuntimeAbi, RuntimeContext, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch,
 };
@@ -76,7 +76,7 @@ struct ZeroResult {
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
 unsafe extern "C" fn stub_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -88,7 +88,7 @@ unsafe extern "C" fn stub_find_by_contract(
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
 unsafe extern "C" fn stub_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -102,7 +102,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// # Safety
 /// Always safe to call; returns null pointer.
 unsafe extern "C" fn stub_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
@@ -110,7 +110,7 @@ unsafe extern "C" fn stub_resolve_contract(
 
 /// Stub call_method -- returns Ok.
 unsafe extern "C" fn stub_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -124,7 +124,7 @@ unsafe extern "C" fn stub_call_method(
 
 /// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -133,7 +133,7 @@ unsafe extern "C" fn stub_get_host_contract(
 
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -142,7 +142,7 @@ unsafe extern "C" fn stub_alloc(
 
 /// Stub free callback.
 unsafe extern "C" fn stub_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -158,7 +158,7 @@ unsafe extern "C" fn stub_free(
 /// # Safety
 /// `_rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -232,7 +232,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -260,7 +260,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )
@@ -591,7 +591,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 
     // Wrapper functions that take rt_ctx and delegate to tracking functions
     unsafe extern "C" fn tracking_alloc_wrapper(
-        _rt_ctx: *mut core::ffi::c_void,
+        _rt_ctx: RuntimeContext,
         size: usize,
         align: usize,
     ) -> *mut u8 {
@@ -603,7 +603,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     }
 
     unsafe extern "C" fn tracking_free_wrapper(
-        _rt_ctx: *mut core::ffi::c_void,
+        _rt_ctx: RuntimeContext,
         ptr: *mut u8,
         size: usize,
         align: usize,

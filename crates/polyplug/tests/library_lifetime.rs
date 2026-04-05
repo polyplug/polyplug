@@ -14,6 +14,7 @@ use polyplug::runtime::HostContext;
 use polyplug::runtime::Runtime;
 use polyplug_abi::AbiError;
 use polyplug_abi::RuntimeAbi;
+use polyplug_abi::RuntimeContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::GuestContractInterface;
@@ -26,7 +27,7 @@ use polyplug_abi::ffi::polyplug_host_free;
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -36,7 +37,7 @@ unsafe extern "C" fn stub_alloc(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -48,7 +49,7 @@ unsafe extern "C" fn stub_free(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_register_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _descriptor: *const PluginDescriptor,
     _interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -58,7 +59,7 @@ unsafe extern "C" fn stub_register_contract(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -68,7 +69,7 @@ unsafe extern "C" fn stub_find_by_contract(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -80,7 +81,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// # Safety
 /// Stub callback — not called during this test.
 unsafe extern "C" fn stub_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const polyplug_abi::GuestContractInterface {
     core::ptr::null()
@@ -88,7 +89,7 @@ unsafe extern "C" fn stub_resolve_contract(
 
 /// Stub call_method callback.
 unsafe extern "C" fn stub_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: polyplug_abi::GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -99,7 +100,7 @@ unsafe extern "C" fn stub_call_method(
 
 /// Stub get_host_contract callback.
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {

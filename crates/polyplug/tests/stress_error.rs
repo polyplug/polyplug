@@ -13,7 +13,7 @@ use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, RuntimeAbi, GuestContractInterface, GuestContractInstance,
+    AbiErrorCode, AbiError, RuntimeAbi, RuntimeContext, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch,
 };
@@ -53,7 +53,7 @@ std::thread_local! {
 /// # Safety
 /// Must only be called when ERROR_REGISTRY has been populated on this thread.
 unsafe extern "C" fn chain_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -71,7 +71,7 @@ unsafe extern "C" fn chain_find_by_contract(
 /// # Safety
 /// Always safe to call; no pointer dereferences if out_cap is 0.
 unsafe extern "C" fn chain_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -85,7 +85,7 @@ unsafe extern "C" fn chain_find_all_by_contract(
 /// # Safety
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
 unsafe extern "C" fn chain_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     handle: PluginHandle,
 ) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
@@ -96,7 +96,7 @@ unsafe extern "C" fn chain_resolve_contract(
 
 /// Stub call_method -- returns Ok.
 unsafe extern "C" fn stub_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -110,7 +110,7 @@ unsafe extern "C" fn stub_call_method(
 
 /// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -119,7 +119,7 @@ unsafe extern "C" fn stub_get_host_contract(
 
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -128,7 +128,7 @@ unsafe extern "C" fn stub_alloc(
 
 /// Stub free callback.
 unsafe extern "C" fn stub_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -139,7 +139,7 @@ unsafe extern "C" fn stub_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -148,7 +148,7 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
     _out: *mut PluginHandle,
@@ -159,7 +159,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
@@ -167,7 +167,7 @@ unsafe extern "C" fn noop_resolve_contract(
 
 /// No-op call_method callback.
 unsafe extern "C" fn noop_call_method(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -181,7 +181,7 @@ unsafe extern "C" fn noop_call_method(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -195,7 +195,7 @@ unsafe extern "C" fn noop_get_host_contract(
 /// # Safety
 /// `_rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -277,7 +277,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            *mut core::ffi::c_void,
+            RuntimeContext,
             *const RuntimeAbi,
             *const PluginContext,
         ) -> AbiError,
@@ -305,7 +305,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
     // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            core::ptr::null_mut(),
+            RuntimeContext::null(),
             &host_vtable as *const RuntimeAbi,
             &ctx as *const PluginContext,
         )

@@ -12,7 +12,7 @@
 
 use polyplug::runtime::Runtime;
 use polyplug_abi::{
-    DispatchType, HostContractInterface, DispatchMechanisms, NativeDispatch, Version,
+    DispatchType, HostContractInterface, RuntimeContext, DispatchMechanisms, NativeDispatch, Version,
 };
 use polyplug_utils::HostContractId;
 
@@ -20,7 +20,7 @@ use polyplug_utils::HostContractId;
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _args: *const (),
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance::null()
@@ -28,7 +28,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _rt_ctx: *mut core::ffi::c_void,
+    _rt_ctx: RuntimeContext,
     _instance: polyplug_abi::HostContractInstance,
 ) {
 }
