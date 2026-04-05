@@ -160,10 +160,10 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Create RuntimeContext and VmLoaderData typed handle structs
-- [ ] 07-02-PLAN.md — Update RuntimeAbi functions to use RuntimeContext
-- [ ] 07-03-PLAN.md — Update PluginContext to use typed handles
-- [ ] 07-04-PLAN.md — Verify all opaque handles are #[repr(C)] with single data field
+- [ ] 07-01-PLAN.md — Create RuntimeContext and VmLoaderData opaque handle structs following GuestContractInstance pattern
+- [ ] 07-02-PLAN.md — Update RuntimeAbi function signatures and host callbacks to use RuntimeContext
+- [ ] 07-03-PLAN.md — Update GuestContractInterface, HostContractInterface, VmDispatch to use typed handles
+- [ ] 07-04-PLAN.md — Update codegen and loaders for typed handles, final verification
 
 ## Progress
 
@@ -212,3 +212,4 @@ Phase 7 (Typed Handles)
 *Phase 4 plans added: 2026-04-04*
 *Phase 5 gap closure plans added: 2026-04-04*
 *Phase 6 gap closure plans added: 2026-04-04*
+*Phase 7 plans added: 2026-04-05*
