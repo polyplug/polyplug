@@ -8,25 +8,29 @@
 
 use std::sync::OnceLock;
 use polyplug_guest::AbiError;
-use polyplug_guest::PluginInterface;
+use polyplug_guest::AbiErrorCode;
+use polyplug_guest::GuestContractId;
+use polyplug_guest::GuestContractInterface;
+use polyplug_guest::GuestContractInstance;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
-use polyplug_guest::PluginDispatch;
+use polyplug_guest::DispatchMechanisms;
 use polyplug_guest::StringView;
+use polyplug_guest::Version;
 use polyplug_guest::PluginError;
 use polyplug_guest::alloc_string;
 use polyplug_guest::string_view_null;
 use polyplug_guest::string_view_from_static;
 use polyplug_guest::abi_error_ok;
-use polyplug_guest::abi_error_panic_caught;
-#[allow(unused_imports)]
-use polyplug_guest::{ABI_OK, ABI_ERROR_GENERIC, ABI_ERROR_PANIC, ABI_ERROR_INVALID_POINTER};
 use super::types::*;
 /// Convert a PluginError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.
 fn plugin_error_to_abi_error(e: PluginError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
-    AbiError { code: e.code, message }
+    // SAFETY: PluginError.code is u32, AbiErrorCode is #[repr(u32)].
+    // Both types have the same size and alignment, so transmute is safe.
+    // Plugin-defined error codes (256+) are valid AbiErrorCode values.
+    AbiError { code: unsafe { std::mem::transmute(e.code) }, message }
 }
 
 use super::contracts::PipelineDecoderPlugin;
@@ -46,7 +50,7 @@ unsafe impl Sync for FnPtr {}
 
 /// Plugin: decoder
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Decoder@1".
-pub const DECODER_CONTRACT_ID: u64 = 0x12F3C106B0C3DC1E;
+pub const DECODER_CONTRACT_ID: u64 = 0xE1D7DE773BE6E7F7;
 
 pub static DECODER_IMPL: OnceLock<Box<dyn PipelineDecoderPlugin>> = OnceLock::new();
 
@@ -56,17 +60,21 @@ pub fn set_decoder_impl(impl_: Box<dyn PipelineDecoderPlugin>) -> Result<(), &'s
 
 /// ABI wrapper for decode (function_id = 0).
 // SAFETY: args and out pointers are validated at entry before dereferencing.
-extern "C" fn decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
+#[allow(clippy::unnecessary_cast)]
+extern "C" fn decoder_decode_abi(instance: GuestContractInstance, args: *const (), out: *mut ()) -> AbiError {
+    // Instance is ignored for stateless plugins (instance is null).
+    // For stateful plugins, users override create_instance and use instance.data.
+    let _ = instance;
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let impl_ref: &dyn PipelineDecoderPlugin = match DECODER_IMPL.get() {
             Some(i) => i.as_ref(),
-            None => return AbiError { code: ABI_ERROR_GENERIC, message: string_view_from_static(b"implementation not registered") },
+            None => return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"implementation not registered") },
         };
         if args.is_null() {
-            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: string_view_from_static(b"args pointer is null") };
+            return AbiError { code: AbiErrorCode::InvalidPointer, message: string_view_from_static(b"args pointer is null") };
         }
         if out.is_null() {
-            return AbiError { code: ABI_ERROR_INVALID_POINTER, message: string_view_from_static(b"out pointer is null") };
+            return AbiError { code: AbiErrorCode::InvalidPointer, message: string_view_from_static(b"out pointer is null") };
         }
         // SAFETY: args is a valid *const StringView per ABI contract.
         let result = impl_ref.decode(unsafe { *(args as *const StringView) });
@@ -80,7 +88,7 @@ extern "C" fn decoder_decode_abi(args: *const (), out: *mut ()) -> AbiError {
         }
     })) {
         Ok(err) => err,
-        Err(_) => abi_error_panic_caught(),
+        Err(_) => AbiError::panic_caught(),
     }
 }
 
@@ -88,14 +96,34 @@ static DECODER_FNS: [FnPtr; 1_usize] = [
     FnPtr(decoder_decode_abi as *const ()),
 ];
 
-pub static DECODER_VTABLE: PluginInterface = PluginInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: DECODER_CONTRACT_ID,
-    contract_version: 0_u32 << 16 | 0_u32,
-    function_count: 1_u32,
+/// Default create_instance stub for decoder.
+/// Returns null instance - users should override for stateful plugins.
+#[allow(clippy::unnecessary_cast)]
+unsafe extern "C" fn DECODER_create_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Default destroy_instance stub for decoder.
+/// No-op - users should override for state cleanup before hot-reload.
+unsafe extern "C" fn DECODER_destroy_instance_stub(
+    _rt_ctx: *mut core::ffi::c_void,
+    _instance: GuestContractInstance,
+) {
+    // No-op - stateless plugins don't need cleanup
+}
+
+pub static DECODER_VTABLE: GuestContractInterface = GuestContractInterface {
+    contract_id: GuestContractId::from_u64(DECODER_CONTRACT_ID),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    dispatch: PluginDispatch {
+    create_instance: DECODER_create_instance_stub,
+    destroy_instance: DECODER_destroy_instance_stub,
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
+            function_count: 1_u32,
             functions: DECODER_FNS.as_ptr() as *const *const (),
         },
     },

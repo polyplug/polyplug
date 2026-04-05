@@ -266,8 +266,8 @@ fn generate_cs_guest_contracts(ir: &ValidatedIr) -> String {
     out
 }
 
-/// Generate `guest/Vtables.cs` — [UnmanagedCallersOnly] ABI methods + vtable construction.
-fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
+/// Generate `guest/Interfaces.cs` — [UnmanagedCallersOnly] ABI methods + interface construction.
+fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using System.Runtime.CompilerServices;\n");
@@ -283,7 +283,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_cs_guest_plugin_vtables(
+                    generate_cs_guest_plugin_interface(
                         &mut out,
                         &plugin.name,
                         contract,
@@ -300,10 +300,11 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
             let iface_name: String = contract_name_to_cs_interface(&contract.name);
             let contract_id: u64 = contract.contract_id;
             let fn_count: usize = contract.functions.len();
+            let major: u32 = contract.version.major;
             let minor: u32 = contract.version.minor;
             let patch: u32 = contract.version.patch;
 
-            out.push_str(&format!("public static class {}Vtables {{\n", class_name));
+            out.push_str(&format!("public static class {}Interfaces {{\n", class_name));
             out.push_str(&format!(
                 "    public const ulong {upper}_CONTRACT_ID = 0x{contract_id:016X}UL;\n"
             ));
@@ -341,7 +342,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                     out.push_str("            }\n");
                 }
                 out.push_str(&format!(
-                    "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n"
+                    "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, \"not initialized\");\n"
                 ));
                 out.push_str("            // call impl\n");
                 out.push_str("            return new AbiError { Code = 0 };\n");
@@ -354,7 +355,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 out.push_str(
                     "            var msg = StringHelpers.AllocString(\"plugin panicked\");\n",
                 );
-                out.push_str("            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = msg };\n");
+                out.push_str("            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
                 out.push_str("        }\n");
                 out.push_str("    }\n\n");
             }
@@ -388,10 +389,10 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
             ));
             out.push_str(&format!(
-                "    public static PluginInterface {upper}_VTABLE;\n\n"
+                "    public static GuestContractInterface {upper}_INTERFACE;\n\n"
             ));
             // Static constructor instead of Init method
-            out.push_str(&format!("    static {class_name}Vtables() {{\n"));
+            out.push_str(&format!("    static {class_name}Interfaces() {{\n"));
             out.push_str("        unsafe {\n");
             out.push_str(&format!("            {upper}_FNS = new IntPtr[] {{\n"));
             for func in &contract.functions {
@@ -407,11 +408,11 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
                 "        _{upper}_pin_handle = System.Runtime.InteropServices.GCHandle.Alloc({upper}_FNS, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
             out.push_str(&format!(
-                "        {upper}_VTABLE = new PluginInterface {{\n"
+                "        {upper}_INTERFACE = new GuestContractInterface {{\n"
             ));
             out.push_str(&format!("            ContractId = {upper}_CONTRACT_ID,\n"));
             out.push_str(&format!(
-                "            ContractVersion = {minor}u << 16 | {patch}u,\n"
+                "            ContractVersion = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
             ));
             // Default to native dispatch when no bundle info is available
             let dispatch_type_str: &str = if true {
@@ -426,7 +427,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n"
             ));
-            out.push_str("            Dispatch = new PluginDispatch {\n");
+            out.push_str("            Dispatch = new DispatchMechanisms {\n");
             out.push_str("                Native = new NativeDispatch {\n");
             out.push_str(&format!("                    FunctionCount = {fn_count}u,\n"));
             out.push_str(&format!(
@@ -442,7 +443,7 @@ fn generate_cs_guest_vtables(ir: &ValidatedIr) -> String {
     out
 }
 
-fn generate_cs_guest_plugin_vtables(
+fn generate_cs_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
@@ -455,6 +456,7 @@ fn generate_cs_guest_plugin_vtables(
     let iface_name: String = contract_name_to_cs_interface(&contract.name);
     let contract_id: u64 = contract.contract_id;
     let fn_count: usize = contract.functions.len();
+    let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
 
@@ -472,7 +474,7 @@ fn generate_cs_guest_plugin_vtables(
 
     out.push_str(&format!("// Plugin: {}\n", plugin_name));
     out.push_str(&format!(
-        "public static class {}Vtables {{\n",
+        "public static class {}Interfaces {{\n",
         class_name_pascal
     ));
     out.push_str(&format!(
@@ -514,7 +516,7 @@ fn generate_cs_guest_plugin_vtables(
             out.push_str("            }\n");
         }
         out.push_str(&format!(
-            "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiConstants.ABI_ERROR_GENERIC, \"not initialized\");\n",
+            "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, \"not initialized\");\n",
             lower = plugin_lower
         ));
         out.push_str("            // call impl\n");
@@ -524,7 +526,7 @@ fn generate_cs_guest_plugin_vtables(
         out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
         out.push_str("        } catch {\n");
         out.push_str("            var msg = StringHelpers.AllocString(\"plugin panicked\");\n");
-        out.push_str("            return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = msg };\n");
+        out.push_str("            return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n");
         out.push_str("        }\n");
         out.push_str("    }\n\n");
     }
@@ -541,7 +543,7 @@ fn generate_cs_guest_plugin_vtables(
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "    public static PluginInterface {upper}_VTABLE;\n\n",
+        "    public static GuestContractInterface {upper}_INTERFACE;\n\n",
         upper = plugin_upper
     ));
     // Instance lifecycle stubs
@@ -567,7 +569,7 @@ fn generate_cs_guest_plugin_vtables(
 
     // Static constructor instead of Init method
     out.push_str(&format!(
-        "    static {class_name}Vtables() {{\n",
+        "    static {class_name}Interfaces() {{\n",
         class_name = class_name_pascal
     ));
     out.push_str("        unsafe {\n");
@@ -589,7 +591,7 @@ fn generate_cs_guest_plugin_vtables(
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "        {upper}_VTABLE = new PluginInterface {{\n",
+        "        {upper}_INTERFACE = new GuestContractInterface {{\n",
         upper = plugin_upper
     ));
     out.push_str(&format!(
@@ -597,7 +599,7 @@ fn generate_cs_guest_plugin_vtables(
         upper = plugin_upper
     ));
     out.push_str(&format!(
-        "            ContractVersion = {minor}u << 16 | {patch}u,\n"
+        "            ContractVersion = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"
     ));
     let dispatch_type_str: &str = if is_native {
         "DispatchType.Native"
@@ -613,7 +615,7 @@ fn generate_cs_guest_plugin_vtables(
         "            DestroyInstance = (delegate* unmanaged[Cdecl]<IntPtr, GuestContractInstance, void>)&{upper}_DestroyInstanceStub,\n",
         upper = plugin_upper
     ));
-    out.push_str("            Dispatch = new PluginDispatch {\n");
+    out.push_str("            Dispatch = new DispatchMechanisms {\n");
     out.push_str("                Native = new NativeDispatch {\n");
     out.push_str(&format!("                    FunctionCount = {fn_count}u,\n"));
     out.push_str(&format!(
@@ -649,7 +651,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str(
         "    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n",
     );
-    out.push_str("        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiConstants.ABI_ERROR_GENERIC;\n");
+    out.push_str("        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
     out.push_str("        HostVTableStorage.StoreHostVTable(hostPtr);\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
@@ -711,7 +713,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                         "            var contractHandle_{plugin_lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{plugin_lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
                     ));
                     out.push_str("            try {\n");
-                    out.push_str(&format!("            fixed (PluginInterface* vtablePtr_{plugin_lower} = &{}Vtables.{plugin_upper}_VTABLE) {{\n", plugin_pascal));
+                    out.push_str(&format!("            fixed (GuestContractInterface* vtablePtr_{plugin_lower} = &{}Interfaces.{plugin_upper}_INTERFACE) {{\n", plugin_pascal));
                     out.push_str(&format!(
                         "                var desc_{plugin_lower} = new PluginDescriptor {{\n"
                     ));
@@ -721,16 +723,14 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     out.push_str(&format!(
                         "                    ContractName = new StringView {{ Ptr = contractHandle_{plugin_lower}.AddrOfPinnedObject(), Len = (nuint)contract_name_{plugin_lower}.Length }},\n"
                     ));
-                    out.push_str(&format!("                    VersionMajor = {major}u,\n"));
-                    out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
-                    out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
+                    out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
                     out.push_str("                };\n");
-                    out.push_str("                var host = (HostVTable*)hostPtr;\n");
-                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;\n");
+                    out.push_str("                var abi = (RuntimeAbi*)hostPtr;\n");
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)abi->RegisterContract;\n");
                     out.push_str(&format!(
                         "                var err_{plugin_lower} = registerFn(rtCtx, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
                     ));
-                    out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiConstants.ABI_OK) return err_{plugin_lower}.Code;\n"));
+                    out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiErrorCode.Ok) return err_{plugin_lower}.Code;\n"));
                     out.push_str("            }\n");
                     out.push_str("            } finally {\n");
                     out.push_str(&format!(
@@ -770,7 +770,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                 "            var contractHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
             out.push_str("            try {\n");
-            out.push_str(&format!("            fixed (PluginInterface* vtablePtr_{lower} = &{class_name}Vtables.{upper}_VTABLE) {{\n"));
+            out.push_str(&format!("            fixed (GuestContractInterface* vtablePtr_{lower} = &{class_name}Interfaces.{upper}_INTERFACE) {{\n"));
             out.push_str(&format!(
                 "                var desc_{lower} = new PluginDescriptor {{\n"
             ));
@@ -780,16 +780,14 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "                    ContractName = new StringView {{ Ptr = contractHandle_{lower}.AddrOfPinnedObject(), Len = (nuint)contract_name_{lower}.Length }},\n"
             ));
-            out.push_str(&format!("                    VersionMajor = {major}u,\n"));
-            out.push_str(&format!("                    VersionMinor = {minor}u,\n"));
-            out.push_str(&format!("                    VersionPatch = {patch}u,\n"));
+            out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
             out.push_str("                };\n");
-            out.push_str("                var host = (HostVTable*)hostPtr;\n");
-            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, PluginInterface*, AbiError>)host->RegisterPlugin;\n");
+            out.push_str("                var abi = (RuntimeAbi*)hostPtr;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)abi->RegisterContract;\n");
             out.push_str(&format!(
                 "                var err_{lower} = registerFn(rtCtx, &desc_{lower}, vtablePtr_{lower});\n"
             ));
-            out.push_str(&format!("                if (err_{lower}.Code != AbiConstants.ABI_OK) return err_{lower}.Code;\n"));
+            out.push_str(&format!("                if (err_{lower}.Code != AbiErrorCode.Ok) return err_{lower}.Code;\n"));
             out.push_str("            }\n");
             out.push_str("            } finally {\n");
             out.push_str(&format!("                nameHandle_{lower}.Free();\n"));
@@ -798,10 +796,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
         }
     }
 
-    out.push_str("            return AbiConstants.ABI_OK;\n");
+    out.push_str("            return AbiErrorCode.Ok;\n");
     out.push_str("        } // unsafe\n");
     out.push_str("        } catch {\n");
-    out.push_str("            return AbiConstants.ABI_ERROR_PANIC;\n");
+    out.push_str("            return AbiErrorCode.Panic;\n");
     out.push_str("        } finally {\n");
     out.push_str("            System.Threading.Thread.EndThreadAffinity();\n");
     out.push_str("        }\n");
@@ -914,9 +912,9 @@ fn generate_host_fn_caller(
     out.push_str("        }\n\n");
 
     out.push_str("        unsafe {\n");
-    out.push_str("            var pluginInterface = *(PluginInterface*)vtablePtr;\n");
+    out.push_str("            var pluginInterface = *(GuestContractInterface*)vtablePtr;\n");
     out.push_str(&format!(
-        "            if ({fn_id}u >= pluginInterface.FunctionCount) {{\n"
+        "            if ({fn_id}u >= pluginInterface.Dispatch.Native.FunctionCount) {{\n"
     ));
     out.push_str(
         "                throw new InvalidOperationException(\"function not available\");\n",
@@ -1225,7 +1223,7 @@ fn generate_cs_guest_host_contract_method(
     out.push_str("            }\n\n");
 
     // Error handling
-    out.push_str("            if (err.Code != AbiConstants.ABI_OK) {\n");
+    out.push_str("            if (err.Code != AbiErrorCode.Ok) {\n");
     if has_return {
         out.push_str(&format!(
             "                return default({});\n",
@@ -1654,10 +1652,10 @@ fn generate_cs_host_contracts_file(ir: &ValidatedIr) -> String {
     out
 }
 
-// ─── Host VTable Factories Generation ───────────────────────────────────────────
+// ─── Host Interface Factories Generation ───────────────────────────────────────────
 
-/// Generate all host-side vtable factories into a single file.
-fn generate_cs_host_vtable_factories_file(ir: &ValidatedIr) -> String {
+/// Generate all host-side interface factories into a single file.
+fn generate_cs_host_interface_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
     out.push_str("using Polyplug.Host;\n");
@@ -1666,21 +1664,21 @@ fn generate_cs_host_vtable_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("using System.Runtime.CompilerServices;\n");
     out.push_str("using System.Runtime.InteropServices;\n\n");
     out.push_str("namespace Polyplug.Generated;\n\n");
-    out.push_str("public static class VTableFactories {\n");
+    out.push_str("public static class InterfaceFactories {\n");
 
     for contract in &ir.host_contracts {
-        generate_cs_host_vtable_factory(&mut out, contract);
+        generate_cs_host_interface_factory(&mut out, contract);
     }
 
     out.push_str("}\n");
     out
 }
 
-/// Generate vtable factories for one host contract.
-fn generate_cs_host_vtable_factory(out: &mut String, contract: &ResolvedHostContract) {
+/// Generate interface factories for one host contract.
+fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
     let iface_name: String = host_contract_name_to_cs_interface(&contract.name);
-    let factory_name: String = format!("Create{}VTable", iface_name.trim_start_matches('I'));
-    let factory_vm_name: String = format!("Create{}VTableVm", iface_name.trim_start_matches('I'));
+    let factory_name: String = format!("Create{}Interface", iface_name.trim_start_matches('I'));
+    let factory_vm_name: String = format!("Create{}InterfaceVm", iface_name.trim_start_matches('I'));
     let fn_count: usize = contract.functions.len();
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
@@ -1845,11 +1843,11 @@ fn generate_cs_host_thunk(
         out.push_str("        _ = outPtr;\n");
     }
 
-    out.push_str("        return new AbiError { Code = AbiConstants.ABI_OK };\n");
+    out.push_str("        return new AbiError { Code = AbiErrorCode.Ok };\n");
     out.push_str("    } catch (Exception ex) {\n");
     out.push_str("        var msg = StringHelpers.AllocString(ex.Message);\n");
     out.push_str(
-        "        return new AbiError { Code = AbiConstants.ABI_ERROR_PANIC, Message = msg };\n",
+        "        return new AbiError { Code = AbiErrorCode.Panic, Message = msg };\n",
     );
     out.push_str("    }\n");
     out.push_str("}\n\n");
@@ -2018,11 +2016,11 @@ impl CodeGenerator for CSharpGenerator {
                 force_regenerate: false,
             });
         }
-        // Emit vtable_factories.cs if there are host contracts
+        // Emit interface_factories.cs if there are host contracts
         if !ir.host_contracts.is_empty() {
             files.files.push(GeneratedFile {
-                path: PathBuf::from("host/VTableFactories.cs"),
-                content: generate_cs_host_vtable_factories_file(ir),
+                path: PathBuf::from("host/InterfaceFactories.cs"),
+                content: generate_cs_host_interface_factories_file(ir),
                 force_regenerate: false,
             });
         }
@@ -2045,8 +2043,8 @@ impl CodeGenerator for CSharpGenerator {
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
-            path: PathBuf::from("guest/Vtables.cs"),
-            content: generate_cs_guest_vtables(ir),
+            path: PathBuf::from("guest/Interfaces.cs"),
+            content: generate_cs_guest_interfaces(ir),
             force_regenerate: false,
         });
         files.files.push(GeneratedFile {
@@ -2174,7 +2172,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_cs_guest_vtables_no_unsafe_struct() {
+    fn generate_cs_guest_interfaces_no_unsafe_struct() {
         let ir: ValidatedIr = ValidatedIr {
             contracts: vec![ResolvedContract {
                 name: "test.check".to_owned(),
@@ -2191,10 +2189,10 @@ mod tests {
             enums: vec![],
             bundle: None,
         };
-        let out: String = generate_cs_guest_vtables(&ir);
+        let out: String = generate_cs_guest_interfaces(&ir);
         assert!(
             !out.contains("unsafe struct"),
-            "Vtables.cs must not contain 'unsafe struct': {out}"
+            "Interfaces.cs must not contain 'unsafe struct': {out}"
         );
     }
 
@@ -2618,7 +2616,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_host_with_host_contracts_produces_vtable_factories_file() {
+    fn generate_host_with_host_contracts_produces_interface_factories_file() {
         let generator: CSharpGenerator = CSharpGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -2651,13 +2649,13 @@ mod tests {
             .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
             .collect();
         assert!(
-            names.contains(&"host/VTableFactories.cs".to_owned()),
-            "missing host/VTableFactories.cs: {names:?}"
+            names.contains(&"host/InterfaceFactories.cs".to_owned()),
+            "missing host/InterfaceFactories.cs: {names:?}"
         );
     }
 
     #[test]
-    fn generate_host_without_host_contracts_no_vtable_factories_file() {
+    fn generate_host_without_host_contracts_no_interface_factories_file() {
         let generator: CSharpGenerator = CSharpGenerator;
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
@@ -2676,13 +2674,13 @@ mod tests {
             .map(|f: &GeneratedFile| f.path.to_string_lossy().to_string())
             .collect();
         assert!(
-            !names.contains(&"host/VTableFactories.cs".to_owned()),
-            "unexpected host/VTableFactories.cs: {names:?}"
+            !names.contains(&"host/InterfaceFactories.cs".to_owned()),
+            "unexpected host/InterfaceFactories.cs: {names:?}"
         );
     }
 
     #[test]
-    fn generate_cs_host_vtable_factories_file_produces_file() {
+    fn generate_cs_host_interface_factories_file_produces_file() {
         let ir: ValidatedIr = ValidatedIr {
             types: vec![],
             enums: vec![],
@@ -2707,14 +2705,14 @@ mod tests {
             }],
             bundle: None,
         };
-        let out: String = generate_cs_host_vtable_factories_file(&ir);
+        let out: String = generate_cs_host_interface_factories_file(&ir);
         assert!(out.contains("AUTO-GENERATED"), "missing header: {out}");
         assert!(
-            out.contains("CreateHostLoggerVTable<T>"),
+            out.contains("CreateHostLoggerInterface<T>"),
             "missing NATIVE factory: {out}"
         );
         assert!(
-            out.contains("CreateHostLoggerVTableVm"),
+            out.contains("CreateHostLoggerInterfaceVm"),
             "missing VM factory: {out}"
         );
         assert!(
@@ -2728,7 +2726,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_cs_host_vtable_factory_produces_native_and_vm_factories() {
+    fn generate_cs_host_interface_factory_produces_native_and_vm_factories() {
         let contract = ResolvedHostContract {
             name: "host.logger".to_owned(),
             contract_id: 0x1234_5678_9ABC_DEF0_u64,
@@ -2748,13 +2746,13 @@ mod tests {
             }],
         };
         let mut out: String = String::new();
-        generate_cs_host_vtable_factory(&mut out, &contract);
+        generate_cs_host_interface_factory(&mut out, &contract);
         assert!(
-            out.contains("CreateHostLoggerVTable<T>"),
+            out.contains("CreateHostLoggerInterface<T>"),
             "missing NATIVE factory: {out}"
         );
         assert!(
-            out.contains("CreateHostLoggerVTableVm"),
+            out.contains("CreateHostLoggerInterfaceVm"),
             "missing VM factory: {out}"
         );
         assert!(

@@ -77,6 +77,7 @@ def create_host_logger_vtable(impl: HostLogger) -> HostContractVTable:
             contract_major=1,
             contract_minor=0,
             function_count=2,
+            singleton=false,
             dispatch_type=DispatchType.Native,
         ),
         dispatch=HostContractDispatch(
@@ -112,6 +113,7 @@ def create_host_logger_vtable_vm(
             contract_major=1,
             contract_minor=0,
             function_count=2,
+            singleton=false,
             dispatch_type=DispatchType.VirtualMachine,
         ),
         dispatch=HostContractDispatch(

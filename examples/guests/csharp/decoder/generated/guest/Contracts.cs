@@ -4,27 +4,27 @@
 using Polyplug.Guest;
 using Polyplug.Abi;
 
-/// Guest interface for contract `pipeline.Decoder` (id=0x12F3C106B0C3DC1E)
+/// Guest interface for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
 public interface IPipelineDecoderPlugin {
     Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input);
 }
 
-/// Guest interface for contract `data.Transformer` (id=0x3D53C682F3F5A9EF)
+/// Guest interface for contract `data.Transformer` (id=0x4775991362CD68EE)
 public interface IDataTransformerPlugin {
     Polyplug.Abi.StringView Transform(Polyplug.Abi.StringView input);
 }
 
-/// Guest interface for contract `pipeline.Encoder` (id=0x127D1703C6EFB432)
+/// Guest interface for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
 public interface IPipelineEncoderPlugin {
     Polyplug.Abi.StringView Encode(Polyplug.Abi.StringView input);
 }
 
-/// Guest interface for contract `data.Reporter` (id=0x81D41D43E511D297)
+/// Guest interface for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
 public interface IDataReporterPlugin {
     Polyplug.Abi.StringView Report(Polyplug.Abi.StringView input);
 }
 
-/// Guest interface for contract `pipeline.Validator` (id=0xA553FAB5D11C7AF0)
+/// Guest interface for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
 public interface IPipelineValidatorPlugin {
     Polyplug.Abi.StringView Validate(Polyplug.Abi.StringView input);
 }

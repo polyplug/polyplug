@@ -5,3 +5,10 @@ using Polyplug.Guest;
 using Polyplug.Abi;
 using System.Runtime.InteropServices;
 
+public enum LogLevel : uint {
+    Debug = 0,
+    Info = 1,
+    Warn = 2,
+    Error = 3,
+}
+

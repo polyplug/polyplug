@@ -53,11 +53,11 @@ impl CodeGenerator for LuaGenerator {
                 content: contracts_lua,
                 force_regenerate: false,
             });
-            // Emit host/vtable_factories.lua if there are host contracts
-            let vtable_factories_lua: String = generate_lua_host_vtable_factories_file(ir);
+            // Emit host/interface_factories.lua if there are host contracts
+            let interface_factories_lua: String = generate_lua_host_interface_factories_file(ir);
             files.files.push(GeneratedFile {
-                path: PathBuf::from("host/vtable_factories.lua"),
-                content: vtable_factories_lua,
+                path: PathBuf::from("host/interface_factories.lua"),
+                content: interface_factories_lua,
                 force_regenerate: false,
             });
         }
@@ -315,7 +315,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> Result<String, PolyplugcEr
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    generate_guest_plugin_vtable(&mut out, &plugin.name, contract)?;
+                    generate_guest_plugin_interface(&mut out, &plugin.name, contract)?;
                 }
             }
         }
@@ -520,7 +520,7 @@ fn generate_host_caller_method(
 
     out.push_str("        local interface = ffi.cast(\"GuestContractInterface*\", vtable)\n");
     out.push_str(&format!(
-        "        if {fn_id} >= interface.function_count then\n"
+        "        if {fn_id} >= interface.dispatch.native.function_count then\n"
     ));
     out.push_str("            error(\"function not available in vtable\", 2)\n");
     out.push_str("        end\n");
@@ -569,7 +569,7 @@ fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, pref
     out.push_str("end\n");
 }
 
-fn generate_guest_plugin_vtable(
+fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
@@ -606,8 +606,16 @@ fn generate_guest_plugin_vtable(
         contract.contract_id
     ));
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.contract_version = {}\n",
-        contract.version.minor_patch_encoded()
+        "{plugin_var}_VTABLE.contract_version.major = {}\n",
+        contract.version.major
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_VTABLE.contract_version.minor = {}\n",
+        contract.version.minor
+    ));
+    out.push_str(&format!(
+        "{plugin_var}_VTABLE.contract_version.patch = {}\n",
+        contract.version.patch
     ));
     let dispatch_type_str: &str = if true {
         "polyplug_guest.DispatchType.VirtualMachine"
@@ -652,15 +660,15 @@ fn generate_guest_plugin_vtable(
         "{plugin_var}_DESCRIPTOR.contract_name = polyplug_guest.string_view(\"{contract_name_full}\")\n"
     ));
     out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.version_major = {}\n",
+        "{plugin_var}_DESCRIPTOR.version.major = {}\n",
         contract.version.major
     ));
     out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.version_minor = {}\n",
+        "{plugin_var}_DESCRIPTOR.version.minor = {}\n",
         contract.version.minor
     ));
     out.push_str(&format!(
-        "{plugin_var}_DESCRIPTOR.version_patch = {}\n\n",
+        "{plugin_var}_DESCRIPTOR.version.patch = {}\n\n",
         contract.version.patch
     ));
 
@@ -1516,37 +1524,37 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out
 }
 
-// ─── Host VTable Factories Generation ─────────────────────────────────────────
+// ─── Host Interface Factories Generation ─────────────────────────────────────────
 
-/// Generate all host-side vtable factories into a single file.
-fn generate_lua_host_vtable_factories_file(ir: &ValidatedIr) -> String {
+/// Generate all host-side interface factories into a single file.
+fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(file_header());
     out.push_str("local ffi = require(\"ffi\")\n\n");
 
-    out.push_str("-- ABI types for host contract vtables\n");
+    out.push_str("-- ABI types for host contract interfaces\n");
     out.push_str("local ABI_OK = 0\n");
     out.push_str("local ABI_ERROR_PANIC = 5\n\n");
 
     out.push_str("local M = {}\n\n");
 
     for contract in &ir.host_contracts {
-        generate_lua_host_vtable_factory(&mut out, contract);
+        generate_lua_host_interface_factory(&mut out, contract);
     }
 
     out.push_str("return M\n");
     out
 }
 
-/// Generate vtable factories for one host contract.
-fn generate_lua_host_vtable_factory(out: &mut String, contract: &ResolvedHostContract) {
+/// Generate interface factories for one host contract.
+fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
     let class_name: String = host_contract_name_to_lua_class(&contract.name);
     let factory_name: String = format!(
-        "create_{}_vtable",
+        "create_{}_interface",
         contract.name.replace('.', "_").to_lowercase()
     );
     let factory_vm_name: String = format!(
-        "create_{}_vtable_vm",
+        "create_{}_interface_vm",
         contract.name.replace('.', "_").to_lowercase()
     );
     let fn_count: usize = contract.functions.len();

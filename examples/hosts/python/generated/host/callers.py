@@ -7,7 +7,7 @@ import ctypes
 from typing import Callable, Optional, TypeAlias
 
 from polyplug import PluginGuard, Runtime
-from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, ABI_FUNCTION_NOT_AVAIL, NULL_HANDLE, PluginInterface, StringView
+from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, AbiErrorCode::FunctionNotAvailable, NULL_HANDLE, PluginInterface, StringView
 
 class ContractError(Exception):
     def __init__(self, message: str, code: int = ABI_ERROR_GENERIC) -> None:
@@ -15,11 +15,11 @@ class ContractError(Exception):
         self.code: int = code
 
 # Contract ID constants
-PIPELINE_DECODER_CONTRACT_ID: int = 0x12F3C106B0C3DC1E
-DATA_TRANSFORMER_CONTRACT_ID: int = 0x3D53C682F3F5A9EF
-PIPELINE_ENCODER_CONTRACT_ID: int = 0x127D1703C6EFB432
-DATA_REPORTER_CONTRACT_ID: int = 0x81D41D43E511D297
-PIPELINE_VALIDATOR_CONTRACT_ID: int = 0xA553FAB5D11C7AF0
+PIPELINE_DECODER_CONTRACT_ID: int = 0xE1D7DE773BE6E7F7
+DATA_TRANSFORMER_CONTRACT_ID: int = 0x4775991362CD68EE
+PIPELINE_ENCODER_CONTRACT_ID: int = 0xFC50F9D1D3DB629F
+DATA_REPORTER_CONTRACT_ID: int = 0x76BB4643A9F5AD68
+PIPELINE_VALIDATOR_CONTRACT_ID: int = 0x45173A959EEC57C5
 
 POLYPLUG_ABI_VERSION: int = 1
 class _AbiError(ctypes.Structure):

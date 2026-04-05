@@ -146,6 +146,9 @@ pub use polyplug_abi::types::Buffer;
 /// `polyplug_host_free(message.ptr, message.len, 1)` after reading.
 pub use polyplug_abi::types::AbiError;
 
+/// Semantic version (major.minor.patch).
+pub use polyplug_abi::types::Version;
+
 /// Opaque handle to a guest contract instance.
 ///
 /// Created by `GuestContractInterface::create_instance`, destroyed by `destroy_instance`.
@@ -192,6 +195,12 @@ pub type VmHostContractDispatch = VmDispatch;
 
 /// Legacy alias for HostContractInterface.
 pub type HostContractVTable = polyplug_abi::HostContractInterface;
+
+/// Host contract interface (same as HostContractVTable).
+pub use polyplug_abi::HostContractInterface;
+
+/// Host contract instance - opaque handle to a host contract.
+pub use polyplug_abi::HostContractInstance;
 
 /// Legacy alias for host contract vtable header.
 /// The header portion of HostContractInterface.

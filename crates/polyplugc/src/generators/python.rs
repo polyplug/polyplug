@@ -77,11 +77,11 @@ impl CodeGenerator for PythonGenerator {
                 content: contracts_pyi,
                 force_regenerate: false,
             });
-            // Emit host/vtable_factories.py if there are host contracts
-            let vtable_factories_py: String = generate_python_host_vtable_factories_file(ir);
+            // Emit host/interface_factories.py if there are host contracts
+            let interface_factories_py: String = generate_python_host_interface_factories_file(ir);
             files.files.push(GeneratedFile {
-                path: PathBuf::from("host/vtable_factories.py"),
-                content: vtable_factories_py,
+                path: PathBuf::from("host/interface_factories.py"),
+                content: interface_factories_py,
                 force_regenerate: false,
             });
         }
@@ -296,11 +296,11 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, AbiErrorCode::FunctionNotAvailable, NULL_HANDLE, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView\n\n");
 
     // ContractError class for host-side error handling
     out.push_str("class ContractError(Exception):\n");
-    out.push_str("    def __init__(self, message: str, code: int = ABI_ERROR_GENERIC) -> None:\n");
+    out.push_str("    def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:\n");
     out.push_str("        super().__init__(message)\n");
     out.push_str("        self.code: int = code\n\n");
 
@@ -350,7 +350,7 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional\n\n");
     out.push_str("from polyplug import PluginGuard, Runtime\n");
-    out.push_str("from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, NULL_HANDLE, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
     // Contract ID constants in stub
@@ -399,7 +399,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import ABI_ERROR_GENERIC, ABI_ERROR_INVALID_POINTER, ABI_OK, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView\n");
+    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
     out.push_str("from polyplug_guest import store_host_vtable\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
@@ -472,7 +472,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
             ));
             out.push_str(&format!("        rt_ctx, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_VTABLE)\n"));
             out.push_str("    )\n");
-            out.push_str(&format!("    if err_{plugin_upper}.code != ABI_OK:\n"));
+            out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode.Ok:\n"));
             out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
         }
     } else {
@@ -485,7 +485,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                 "        rt_ctx, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"
             ));
             out.push_str("    )\n");
-            out.push_str(&format!("    if err_{upper}.code != ABI_OK:\n"));
+            out.push_str(&format!("    if err_{upper}.code != AbiErrorCode.Ok:\n"));
             out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
         }
     }
@@ -660,7 +660,7 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
         "        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );
     out.push_str("        err: _AbiError = dispatch_fn(args_ptr, out_ptr)\n");
-    out.push_str("        if err.code != ABI_OK:\n");
+    out.push_str("        if err.code != AbiErrorCode.Ok:\n");
     out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
     if has_return_value(&func.returns) {
         out.push_str("        return out_val\n\n");
@@ -876,9 +876,7 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
         "    name=StringView(ptr={upper}_PLUGIN_NAME_C, len=len({upper}_PLUGIN_NAME_BYTES)),\n"
     ));
     out.push_str(&format!("    contract_name=StringView(ptr={upper}_CONTRACT_NAME_C, len=len({upper}_CONTRACT_NAME_BYTES)),\n"));
-    out.push_str(&format!("    version_major={version_major},\n"));
-    out.push_str(&format!("    version_minor={version_minor},\n"));
-    out.push_str(&format!("    version_patch={version_patch},\n"));
+    out.push_str(&format!("    version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"));
     out.push_str(")\n\n");
 
     for func in &contract.functions {
@@ -892,14 +890,14 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
         out.push_str("    # For stateful plugins, users override create_instance and use instance.data.\n");
         out.push_str(&format!("    impl: {trait_name} | None = _{upper}_IMPL\n"));
         out.push_str("    if impl is None:\n");
-        out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
+        out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
         if has_params {
             out.push_str("    if args_ptr.value is None or args_ptr.value == 0:\n");
-            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         if has_return {
             out.push_str("    if out_ptr.value is None or out_ptr.value == 0:\n");
-            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         emit_guest_abi_args_unpack(out, func, &struct_name);
         emit_guest_abi_call(out, func);
@@ -1008,9 +1006,7 @@ fn generate_guest_plugin_vtable(
         "    name=StringView(ptr={plugin_upper}_PLUGIN_NAME_C, len=len({plugin_upper}_PLUGIN_NAME_BYTES)),\n"
     ));
     out.push_str(&format!("    contract_name=StringView(ptr={plugin_upper}_CONTRACT_NAME_C, len=len({plugin_upper}_CONTRACT_NAME_BYTES)),\n"));
-    out.push_str(&format!("    version_major={version_major},\n"));
-    out.push_str(&format!("    version_minor={version_minor},\n"));
-    out.push_str(&format!("    version_patch={version_patch},\n"));
+    out.push_str(&format!("    version=Version(major={version_major}, minor={version_minor}, patch={version_patch}),\n"));
     out.push_str(")\n\n");
 
     for func in &contract.functions {
@@ -1026,14 +1022,14 @@ fn generate_guest_plugin_vtable(
             "    impl: {plugin_upper}{trait_name} | None = _{plugin_lower}_IMPL\n"
         ));
         out.push_str("    if impl is None:\n");
-        out.push_str("        return _AbiError(code=ABI_ERROR_GENERIC, _pad=0, message_ptr=0, message_len=0)\n");
+        out.push_str("        return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)\n");
         if has_params {
             out.push_str("    if args_ptr.value is None or args_ptr.value == 0:\n");
-            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         if has_return {
             out.push_str("    if out_ptr.value is None or out_ptr.value == 0:\n");
-            out.push_str("        return _AbiError(code=ABI_ERROR_INVALID_POINTER, _pad=0, message_ptr=0, message_len=0)\n");
+            out.push_str("        return _AbiError(code=AbiErrorCode.InvalidPointer, _pad=0, message_ptr=0, message_len=0)\n");
         }
         emit_guest_abi_args_unpack(out, func, &struct_name);
         emit_guest_abi_call(out, func);
@@ -1167,7 +1163,7 @@ fn emit_guest_abi_call(out: &mut String, func: &ResolvedFunction) {
 
 fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
     if !has_return_value(&func.returns) {
-        out.push_str("    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)\n");
+        out.push_str("    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n");
         return;
     }
     let ret_ty: String = python_return_type(&func.returns);
@@ -1175,7 +1171,7 @@ fn emit_guest_abi_return(out: &mut String, func: &ResolvedFunction) {
         "    out_ptr_t: Any = ctypes.cast(out_ptr, ctypes.POINTER({ret_ty}))\n"
     ));
     out.push_str("    out_ptr_t[0] = result\n");
-    out.push_str("    return _AbiError(code=ABI_OK, _pad=0, message_ptr=0, message_len=0)\n");
+    out.push_str("    return _AbiError(code=AbiErrorCode.Ok, _pad=0, message_ptr=0, message_len=0)\n");
 }
 
 fn needs_arg_pack(params: &[ResolvedParam]) -> bool {
@@ -1658,7 +1654,7 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
     } else {
         out.push_str("            return\n");
     }
-    out.push_str("        if err.code != ABI_OK:\n");
+    out.push_str("        if err.code != AbiErrorCode.Ok:\n");
     if has_return {
         out.push_str("            return None\n");
     } else {
@@ -1789,7 +1785,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_guest.abi import ABI_OK, AbiError, Buffer, DispatchType, HostContractVTable, RuntimeAbi, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractVTable, RuntimeAbi, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {
@@ -2060,8 +2056,8 @@ fn generate_python_enum(out: &mut String, e: &EnumDef) {
 
 // ─── Host VTable Factories Generation ─────────────────────────────────────────
 
-/// Generate all host-side vtable factories into a single file.
-fn generate_python_host_vtable_factories_file(ir: &ValidatedIr) -> String {
+/// Generate all host-side interface factories into a single file.
+fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(PY_HEADER);
     out.push_str("from __future__ import annotations\n");
@@ -2077,27 +2073,26 @@ fn generate_python_host_vtable_factories_file(ir: &ValidatedIr) -> String {
     out.push_str("    StringView,\n");
     out.push_str("    Buffer,\n");
     out.push_str("    AbiError,\n");
-    out.push_str("    ABI_OK,\n");
-    out.push_str("    ABI_ERROR_PANIC,\n");
+    out.push_str("    AbiErrorCode,\n");
     out.push_str(")\n");
     out.push_str("from host.contracts import *\n\n");
 
     for contract in &ir.host_contracts {
-        generate_python_host_vtable_factory(&mut out, contract);
+        generate_python_host_interface_factory(&mut out, contract);
     }
 
     out
 }
 
-/// Generate vtable factories for one host contract.
-fn generate_python_host_vtable_factory(out: &mut String, contract: &ResolvedHostContract) {
+/// Generate interface factories for one host contract.
+fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedHostContract) {
     let class_name: String = host_contract_name_to_python_class(&contract.name);
     let factory_name: String = format!(
-        "create_{}_vtable",
+        "create_{}_interface",
         contract.name.replace('.', "_").to_lowercase()
     );
     let factory_vm_name: String = format!(
-        "create_{}_vtable_vm",
+        "create_{}_interface_vm",
         contract.name.replace('.', "_").to_lowercase()
     );
     let fn_count: usize = contract.functions.len();
@@ -2230,7 +2225,7 @@ fn generate_python_host_thunk(
     out.push_str(&format!("            impl = _{class_name}_impl\n"));
     out.push_str("            if impl is None:\n");
     out.push_str(
-        "                return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))\n",
+        "                return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))\n",
     );
 
     // Generate argument extraction
@@ -2260,10 +2255,10 @@ fn generate_python_host_thunk(
         out.push_str("            _ = out\n");
     }
 
-    out.push_str("            return AbiError(code=ABI_OK, message=StringView(ptr=0, len=0))\n");
+    out.push_str("            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))\n");
     out.push_str("        except Exception:\n");
     out.push_str(
-        "            return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))\n",
+        "            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))\n",
     );
     out.push('\n');
 }
