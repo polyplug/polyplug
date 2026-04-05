@@ -7,10 +7,10 @@ import ctypes
 from typing import Callable, Optional, TypeAlias
 
 from polyplug import PluginGuard, Runtime
-from polyplug.abi import ABI_OK, ABI_ERROR_GENERIC, AbiErrorCode::FunctionNotAvailable, NULL_HANDLE, PluginInterface, StringView
+from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView
 
 class ContractError(Exception):
-    def __init__(self, message: str, code: int = ABI_ERROR_GENERIC) -> None:
+    def __init__(self, message: str, code: int = AbiErrorCode.Generic) -> None:
         super().__init__(message)
         self.code: int = code
 
@@ -66,14 +66,14 @@ class PipelineDecoderContractCaller:
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
         if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
         functions_ptr: int = vtable.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
@@ -111,14 +111,14 @@ class DataTransformerContractCaller:
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
         if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
         functions_ptr: int = vtable.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
@@ -156,14 +156,14 @@ class PipelineEncoderContractCaller:
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
         if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
         functions_ptr: int = vtable.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
@@ -201,14 +201,14 @@ class DataReporterContractCaller:
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
         if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
         functions_ptr: int = vtable.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
@@ -246,14 +246,14 @@ class PipelineValidatorContractCaller:
         vtable_ptr: int = self._guard.vtable
         if vtable_ptr == 0:
             raise RuntimeError("invalid caller: guard is null")
-        vtable: PluginInterface = PluginInterface.from_address(vtable_ptr)
+        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
         if 0 >= vtable.function_count:
             raise RuntimeError("function not available in vtable")
         functions_ptr: int = vtable.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
         err: _AbiError = dispatch_fn(args_ptr, out_ptr)
-        if err.code != ABI_OK:
+        if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 

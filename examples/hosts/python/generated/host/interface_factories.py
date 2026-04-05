@@ -15,8 +15,7 @@ from polyplug.abi import (
     StringView,
     Buffer,
     AbiError,
-    ABI_OK,
-    ABI_ERROR_PANIC,
+    AbiErrorCode,
 )
 from host.contracts import *
 
@@ -27,7 +26,7 @@ from host.contracts import *
 #
 # Memory:
 # The returned vtable is cached and lives for the lifetime of the program.
-def create_host_logger_vtable(impl: HostLogger) -> HostContractVTable:
+def create_host_logger_interface(impl: HostLogger) -> HostContractVTable:
     global _HostLogger_impl
     _HostLogger_impl = impl
 
@@ -36,21 +35,21 @@ def create_host_logger_vtable(impl: HostLogger) -> HostContractVTable:
         try:
             impl = _HostLogger_impl
             if impl is None:
-                return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))
+                return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
             message_sv: StringView = ctypes.cast(args, ctypes.POINTER(StringView)).contents
             message: str = ctypes.string_at(message_sv.ptr, message_sv.len).decode('utf-8')
             impl.log(message)
             _ = out
-            return AbiError(code=ABI_OK, message=StringView(ptr=0, len=0))
+            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))
         except Exception:
-            return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))
+            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
 
     @ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
     def _host_logger_log_with_level_thunk(impl_ptr: int, args: int, out: int) -> AbiError:
         try:
             impl = _HostLogger_impl
             if impl is None:
-                return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))
+                return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
             class LOG_WITH_LEVELArgs(ctypes.Structure):
                 _fields_ = [
                     ("level", LogLevel),
@@ -61,9 +60,9 @@ def create_host_logger_vtable(impl: HostLogger) -> HostContractVTable:
             message: str = ctypes.string_at(packed.message.ptr, packed.message.len).decode('utf-8')
             impl.log_with_level(level, message)
             _ = out
-            return AbiError(code=ABI_OK, message=StringView(ptr=0, len=0))
+            return AbiError(code=AbiErrorCode.Ok, message=StringView(ptr=0, len=0))
         except Exception:
-            return AbiError(code=ABI_ERROR_PANIC, message=StringView(ptr=0, len=0))
+            return AbiError(code=AbiErrorCode.Panic, message=StringView(ptr=0, len=0))
 
     functions = [
         ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_host_logger_log_thunk), ctypes.c_void_p),
@@ -102,7 +101,7 @@ _HostLogger_impl: HostLogger | None = None
 #
 # Memory:
 # The returned vtable is cached and lives for the lifetime of the program.
-def create_host_logger_vtable_vm(
+def create_host_logger_interface_vm(
     bridge_data: int,
     dispatch_fn: Callable[[int, int, int, int], AbiError],
 ) -> HostContractVTable:
