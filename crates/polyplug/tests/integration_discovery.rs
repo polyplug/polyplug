@@ -293,7 +293,7 @@ fn unknown_runtime_fails_build() {
     );
 
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .build();
 
     match result {

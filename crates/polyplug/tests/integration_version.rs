@@ -138,7 +138,7 @@ fn compatible_exact_version_strict_loads_ok() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
@@ -167,7 +167,7 @@ fn compatible_superset_version_strict_loads_ok() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
@@ -195,7 +195,7 @@ fn compatible_superset_version_relaxed_loads_ok() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
         .build();
@@ -223,7 +223,7 @@ fn compatible_superset_version_yolo_loads_ok() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
@@ -256,7 +256,7 @@ fn too_old_strict_returns_version_mismatch() {
         &[("test.contract", cid, "1.2")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
@@ -294,7 +294,7 @@ fn too_old_relaxed_warns_and_loads() {
     );
     let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
         .on_warning(move |msg: &str| {
@@ -332,7 +332,7 @@ fn too_old_yolo_loads_silently() {
         &[("test.contract", cid, "1.2")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
@@ -365,7 +365,7 @@ fn major_mismatch_strict_returns_version_mismatch() {
         &[("test.contract", cid, "2.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
@@ -403,7 +403,7 @@ fn major_mismatch_relaxed_warns_and_loads() {
     );
     let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
         .on_warning(move |msg: &str| {
@@ -441,7 +441,7 @@ fn major_mismatch_yolo_loads_silently() {
         &[("test.contract", cid, "2.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
@@ -475,7 +475,7 @@ fn function_count_mismatch_strict_returns_error() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();
@@ -515,7 +515,7 @@ fn function_count_mismatch_relaxed_warns_and_loads() {
     );
     let sink_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&sink);
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Relaxed)
         .loader(NoopLoader)
         .on_warning(move |msg: &str| {
@@ -551,7 +551,7 @@ fn function_count_mismatch_yolo_ignored() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Yolo)
         .loader(NoopLoader)
         .build();
@@ -587,7 +587,7 @@ fn malformed_version_returns_manifest_parse_error() {
         &[("test.contract", cid, "1.0")],
     );
     let result: Result<Runtime, RuntimeError> = Runtime::builder()
-        .plugin_dirs(vec![tmp.path().to_path_buf()])
+        .plugin_dir(tmp.path().to_path_buf())
         .compatibility(Compatibility::Strict)
         .loader(NoopLoader)
         .build();

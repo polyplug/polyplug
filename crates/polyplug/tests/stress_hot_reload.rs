@@ -22,6 +22,7 @@ use polyplug::error::RuntimeError;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{DispatchType, GuestContractInterface, RuntimeContext, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
+use polyplug_utils::BundleId;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
 
@@ -48,7 +49,7 @@ unsafe extern "C" fn noop_destroy_instance(
 }
 
 static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
-    contract_id: 0xDEAD_BEEF_0000_0001_u64.into(),
+    contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
@@ -56,12 +57,13 @@ static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
+            function_count: 0,
         },
     },
 };
 
 static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
-    contract_id: 0xDEAD_BEEF_0000_0001_u64.into(),
+    contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
@@ -69,12 +71,13 @@ static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
+            function_count: 0,
         },
     },
 };
 
 static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
-    contract_id: 0xCAFE_BABE_0000_0001_u64.into(),
+    contract_id: GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
@@ -82,12 +85,13 @@ static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
+            function_count: 0,
         },
     },
 };
 
 static VTABLE_QU_B: GuestContractInterface = GuestContractInterface {
-    contract_id: 0xCAFE_BABE_0000_0001_u64.into(),
+    contract_id: GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
     contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
     create_instance: noop_create_instance,
@@ -95,6 +99,7 @@ static VTABLE_QU_B: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: MOCK_FNS_EMPTY.as_ptr(),
+            function_count: 0,
         },
     },
 };
@@ -208,7 +213,7 @@ fn stress_memory_interface_swap_cycles() {
                 descriptor,
                 &VTABLE_MEM_A,
                 "stress.mem.contract".to_owned(),
-                0xDEAD_BEEF_0000_0001_u64,
+                BundleId::from_u64(0xDEAD_BEEF_0000_0001_u64),
             )
             .expect("register must succeed")
     };
@@ -220,7 +225,7 @@ fn stress_memory_interface_swap_cycles() {
             &VTABLE_MEM_A
         };
 
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable);
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable.clone());
         registry
             .swap_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at cycle {cycle}: {e}"));
@@ -249,7 +254,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                 descriptor,
                 &VTABLE_QU_A,
                 "swap.load.contract".to_owned(),
-                0xCAFE_BABE_0000_0001_u64,
+                BundleId::from_u64(0xCAFE_BABE_0000_0001_u64),
             )
             .expect("register must succeed")
     };
@@ -268,7 +273,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                 let find_result: Result<
                     polyplug_abi::PluginHandle,
                     polyplug::error::RegistryError,
-                > = reg_clone.find_by_contract(0xCAFE_BABE_0000_0001_u64.into(), 0_u32);
+                > = reg_clone.find_by_contract(GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64), 0_u32);
                 if let Ok(resolved_handle) = find_result {
                     let resolve_result: Result<
                         *const GuestContractInterface,
@@ -299,7 +304,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
             &VTABLE_QU_A
         };
 
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable);
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable.clone());
         registry
             .swap_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at round {round}: {e}"));
