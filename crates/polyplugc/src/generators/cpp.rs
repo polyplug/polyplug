@@ -339,7 +339,7 @@ fn generate_cpp_guest_plugin_interface(
         plugin_name
     ));
     out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(void* rt_ctx, const void* args) noexcept {{\n",
+        "static GuestContractInstance {0}_create_instance_stub(RuntimeContext rt_ctx, const void* args) noexcept {{\n",
         plugin_upper
     ));
     out.push_str("    (void)rt_ctx; (void)args;  // Unused in default stub.\n");
@@ -350,7 +350,7 @@ fn generate_cpp_guest_plugin_interface(
         plugin_name
     ));
     out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(void* rt_ctx, GuestContractInstance instance) noexcept {{\n",
+        "static void {0}_destroy_instance_stub(RuntimeContext rt_ctx, GuestContractInstance instance) noexcept {{\n",
         plugin_upper
     ));
     out.push_str("    (void)rt_ctx; (void)instance;  // Unused in default stub.\n");
@@ -424,7 +424,7 @@ fn generate_cpp_guest_contract_interface(
         contract.name
     ));
     out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(void* rt_ctx, const void* args) noexcept {{\n",
+        "static GuestContractInstance {0}_create_instance_stub(RuntimeContext rt_ctx, const void* args) noexcept {{\n",
         upper
     ));
     out.push_str("    (void)rt_ctx; (void)args;  // Unused in default stub.\n");
@@ -435,7 +435,7 @@ fn generate_cpp_guest_contract_interface(
         contract.name
     ));
     out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(void* rt_ctx, GuestContractInstance instance) noexcept {{\n",
+        "static void {0}_destroy_instance_stub(RuntimeContext rt_ctx, GuestContractInstance instance) noexcept {{\n",
         upper
     ));
     out.push_str("    (void)rt_ctx; (void)instance;  // Unused in default stub.\n");
@@ -671,8 +671,8 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(void* rt_ctx, const RuntimeAbi* host, const PluginContext* ctx) {\n");
-    out.push_str("    if (!rt_ctx || !host || !ctx) {\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(RuntimeContext rt_ctx, const RuntimeAbi* host, const PluginContext* ctx) {\n");
+    out.push_str("    if (rt_ctx.data == nullptr || !host || !ctx) {\n");
     out.push_str(
         "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
     );
