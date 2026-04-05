@@ -140,13 +140,13 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("#[derive(Debug)]\n");
         callers_out.push_str("pub struct ContractError {\n");
         callers_out.push_str("    /// ABI error code (non-zero).\n");
-        callers_out.push_str("    pub code: u32,\n");
+        callers_out.push_str("    pub code: AbiErrorCode,\n");
         callers_out.push_str("    /// Human-readable error message (may be empty).\n");
         callers_out.push_str("    pub message: String,\n");
         callers_out.push_str("}\n\n");
         callers_out.push_str("impl ContractError {\n");
         callers_out.push_str("    /// Create a new error with the given code.\n");
-        callers_out.push_str("    pub fn new(code: u32) -> Self {\n");
+        callers_out.push_str("    pub fn new(code: AbiErrorCode) -> Self {\n");
         callers_out.push_str("        Self { code, message: String::new() }\n");
         callers_out.push_str("    }\n");
         callers_out.push_str("}\n\n");
@@ -1298,7 +1298,7 @@ fn generate_host_contract_caller(
     out.push_str("    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {\n");
     out.push_str("        // Resolve the interface from the handle via FFI\n");
     out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
-    out.push_str("            polyplug_runtime_resolve_plugin(rt_ctx, handle.pack())\n");
+    out.push_str("            polyplug_runtime_resolve_plugin(rt_ctx as *const _, handle.pack())\n");
     out.push_str("        };\n");
     out.push_str("        if interface.is_null() {\n");
     out.push_str("            return None;\n");
@@ -1413,7 +1413,7 @@ fn generate_host_fn_caller(
     out.push_str(&format!(
         "            if {fn_id}_u32 >= vtable.dispatch.native.function_count {{\n"
     ));
-    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable as u32, message: polyplug_abi::string_view_from_static(b\"function not available in vtable\") }\n");
+    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b\"function not available in vtable\") }\n");
     out.push_str("            } else {\n");
     out.push_str("                match vtable.dispatch_type {\n");
     out.push_str("                    DispatchType::Native => {\n");
@@ -1441,7 +1441,7 @@ fn generate_host_fn_caller(
     out.push_str("                }\n");
     out.push_str("            }\n");
     out.push_str("        };\n");
-    out.push_str("        if err.code != AbiErrorCode::Ok as u32 {\n");
+    out.push_str("        if err.code != AbiErrorCode::Ok {\n");
     out.push_str("            let message: String = if err.message.ptr.is_null() || err.message.len == 0 {\n");
     out.push_str("                String::new()\n");
     out.push_str("            } else {\n");
@@ -2370,13 +2370,13 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("#[derive(Debug)]\n");
     out.push_str("pub struct HostContractError {\n");
     out.push_str("    /// ABI error code (non-zero).\n");
-    out.push_str("    pub code: u32,\n");
+    out.push_str("    pub code: AbiErrorCode,\n");
     out.push_str("    /// Human-readable error message (may be empty).\n");
     out.push_str("    pub message: String,\n");
     out.push_str("}\n\n");
     out.push_str("impl HostContractError {\n");
     out.push_str("    /// Create a new error with the given code.\n");
-    out.push_str("    pub fn new(code: u32) -> Self {\n");
+    out.push_str("    pub fn new(code: AbiErrorCode) -> Self {\n");
     out.push_str("        Self { code, message: String::new() }\n");
     out.push_str("    }\n");
     out.push_str("}\n\n");
@@ -2484,7 +2484,7 @@ fn generate_guest_host_contract_method(
     ));
 
     out.push_str("        if self.instance.data.is_null() {\n");
-    out.push_str("            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound as u32));\n");
+    out.push_str("            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));\n");
     out.push_str("        }\n");
 
     out.push_str("        // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.\n");
@@ -2497,7 +2497,7 @@ fn generate_guest_host_contract_method(
         "\n        if {fn_id}_u32 >= fn_count {{\n"
     ));
     out.push_str(
-        "            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));\n",
+        "            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));\n",
     );
     out.push_str("        }\n\n");
 
@@ -2545,7 +2545,7 @@ fn generate_guest_host_contract_method(
     out.push_str("                unsafe { polyplug_guest::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };\n");
     out.push_str("                s\n");
     out.push_str("            };\n");
-    out.push_str("            return Err(HostContractError { code: err.code as u32, message });\n");
+    out.push_str("            return Err(HostContractError { code: err.code, message });\n");
     out.push_str("        }\n\n");
 
     if func.returns.is_some() {
