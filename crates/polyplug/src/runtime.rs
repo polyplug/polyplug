@@ -1635,4 +1635,237 @@ mod tests {
             "callback should return null instance for unregistered contract"
         );
     }
+
+    // ─── Instance Lifecycle Tests (HC-02, HC-03) ───────────────────────────────
+
+    /// Create instance callback that returns a unique "magic" pointer per call.
+    /// Uses a thread-local counter to ensure unique values per call within a test.
+    std::thread_local! {
+        static LOCAL_INSTANCE_COUNTER: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    /// Create instance callback that returns a unique instance per call.
+    /// Each call increments a thread-local counter and returns a unique pointer.
+    unsafe extern "C" fn counting_create_instance(
+        _rt_ctx: RuntimeContext,
+        _args: *const (),
+    ) -> HostContractInstance {
+        LOCAL_INSTANCE_COUNTER.with(|counter| {
+            let count: usize = counter.get();
+            counter.set(count + 1);
+            // Use the count as a "unique" pointer value - we don't actually allocate
+            // since these are just test instances
+            HostContractInstance {
+                data: (count + 1) as *mut core::ffi::c_void,  // +1 to avoid null for count=0
+            }
+        })
+    }
+
+    /// No-op destroy for counting instances.
+    unsafe extern "C" fn counting_destroy_instance(
+        _rt_ctx: RuntimeContext,
+        _instance: HostContractInstance,
+    ) {
+        // No cleanup needed - we're just using integer values as pointers
+    }
+
+    /// Create a counting host contract interface with configurable singleton mode.
+    fn create_counting_host_contract_vtable(
+        contract_id: u64,
+        major: u32,
+        singleton: bool,
+    ) -> &'static HostContractInterface {
+        use polyplug_abi::{DispatchMechanisms, NativeDispatch, DispatchType};
+
+        Box::leak(Box::new(HostContractInterface {
+            contract_id: polyplug_utils::HostContractId::from(contract_id),
+            contract_version: polyplug_abi::types::Version { major, minor: 0, patch: 0 },
+            singleton,
+            dispatch_type: DispatchType::Native,
+            create_instance: counting_create_instance,
+            destroy_instance: counting_destroy_instance,
+            dispatch: DispatchMechanisms {
+                native: NativeDispatch {
+                    function_count: 0,
+                    functions: core::ptr::null(),
+                },
+            },
+        }))
+    }
+
+    #[test]
+    fn singleton_contract_returns_cached_instance_on_multiple_calls() {
+        // Reset thread-local counter before test
+        LOCAL_INSTANCE_COUNTER.with(|counter| counter.set(0));
+
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_utils::host_contract_id("singleton.test", 1);
+        let interface: &'static HostContractInterface =
+            create_counting_host_contract_vtable(contract_id, 1, true);  // singleton=true
+
+        runtime
+            .register_host_contract(contract_id, interface)
+            .expect("registration should succeed");
+
+        let host_ctx: HostContext = HostContext {
+            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            bundle_id: 0,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        };
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+        };
+
+        // First call - creates instance
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let instance1: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+        assert!(!instance1.data.is_null(), "first call should return non-null instance");
+
+        // Second call - should return SAME cached instance
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let instance2: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+        assert!(!instance2.data.is_null(), "second call should return non-null instance");
+
+        // HC-02: Verify same instance pointer is returned
+        assert_eq!(
+            instance1.data, instance2.data,
+            "singleton contract should return cached instance (same pointer)"
+        );
+
+        // Counter should have been incremented only once (single create)
+        let counter_value: usize = LOCAL_INSTANCE_COUNTER.with(|counter| counter.get());
+        assert_eq!(counter_value, 1, "singleton should only call create_instance once");
+
+        // Third call - still same instance
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let instance3: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+        assert_eq!(
+            instance1.data, instance3.data,
+            "third call should still return same cached instance"
+        );
+        assert_eq!(
+            LOCAL_INSTANCE_COUNTER.with(|counter| counter.get()), 1,
+            "counter still at 1 - no additional create calls"
+        );
+    }
+
+    #[test]
+    fn multi_instance_contract_creates_new_instance_on_each_call() {
+        // Reset thread-local counter before test
+        LOCAL_INSTANCE_COUNTER.with(|counter| counter.set(100));  // Start at 100 for unique values
+
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let contract_id: u64 = polyplug_utils::host_contract_id("multi.test", 1);
+        let interface: &'static HostContractInterface =
+            create_counting_host_contract_vtable(contract_id, 1, false);  // singleton=false
+
+        runtime
+            .register_host_contract(contract_id, interface)
+            .expect("registration should succeed");
+
+        let host_ctx: HostContext = HostContext {
+            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            bundle_id: 0,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        };
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+        };
+
+        // First call - creates instance (counter becomes 101)
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let instance1: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+        assert!(!instance1.data.is_null(), "first call should return non-null instance");
+
+        // Second call - creates NEW instance (counter becomes 102)
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let instance2: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+        assert!(!instance2.data.is_null(), "second call should return non-null instance");
+
+        // HC-03: Verify different instance pointers are returned
+        assert_ne!(
+            instance1.data, instance2.data,
+            "multi-instance contract should create new instance each call (different pointers)"
+        );
+
+        // Counter should have been incremented twice
+        let counter_value: usize = LOCAL_INSTANCE_COUNTER.with(|counter| counter.get());
+        assert_eq!(counter_value, 102, "multi-instance should call create_instance twice");
+
+        // Third call - creates yet another instance (counter becomes 103)
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let instance3: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+        assert_ne!(instance1.data, instance3.data, "third instance differs from first");
+        assert_ne!(instance2.data, instance3.data, "third instance differs from second");
+        assert_eq!(
+            LOCAL_INSTANCE_COUNTER.with(|counter| counter.get()), 103,
+            "counter at 103 - three create calls"
+        );
+    }
+
+    #[test]
+    fn singleton_and_multi_instance_contracts_coexist() {
+        // Reset thread-local counter
+        LOCAL_INSTANCE_COUNTER.with(|counter| counter.set(0));
+
+        let runtime: Runtime = Runtime::builder()
+            .build()
+            .expect("runtime build should succeed");
+
+        let singleton_id: u64 = polyplug_utils::host_contract_id("singleton.mixed", 1);
+        let multi_id: u64 = polyplug_utils::host_contract_id("multi.mixed", 1);
+
+        let singleton_interface: &'static HostContractInterface =
+            create_counting_host_contract_vtable(singleton_id, 1, true);
+        let multi_interface: &'static HostContractInterface =
+            create_counting_host_contract_vtable(multi_id, 1, false);
+
+        runtime
+            .register_host_contract(singleton_id, singleton_interface)
+            .expect("singleton registration should succeed");
+        runtime
+            .register_host_contract(multi_id, multi_interface)
+            .expect("multi-instance registration should succeed");
+
+        let host_ctx: HostContext = HostContext {
+            runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
+            bundle_id: 0,
+            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
+        };
+        let rt_ctx: RuntimeContext = RuntimeContext {
+            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+        };
+
+        // Call singleton twice - should get same instance
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let s1: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, singleton_id, 0) };
+        let s2: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, singleton_id, 0) };
+        assert_eq!(s1.data, s2.data, "singleton returns cached instance");
+
+        // Call multi-instance twice - should get different instances
+        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        let m1: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, multi_id, 0) };
+        let m2: HostContractInstance =
+            unsafe { host_get_host_contract(rt_ctx, multi_id, 0) };
+        assert_ne!(m1.data, m2.data, "multi-instance returns new instances");
+
+        // Singleton instance should differ from multi instances
+        assert_ne!(s1.data, m1.data, "singleton and multi instances are different");
+        assert_ne!(s1.data, m2.data, "singleton and multi instances are different");
+    }
 }
