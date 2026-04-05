@@ -1,88 +1,49 @@
 ---
 phase: 06-cleanup
-verified: 2026-04-05T08:00:00Z
+verified: 2026-04-05T12:00:00Z
 status: gaps_found
 score: 2/4 requirements verified
 gaps:
   - truth: "No 'vtable' naming remains in codebase (search: vtable, VTable, VTABLE)"
     status: failed
-    reason: "28.4KB of vtable matches across generators, SDKs, and tests"
+    reason: "Generator templates still produce vtable-named functions and files"
     breakdown:
-      generators:
-        - file: "crates/polyplugc/src/generators/lua.rs"
-          count: 85 matches
-          issues:
-            - "File names: vtable_factories.lua, vtables.hpp"
-            - "Functions: generate_guest_plugin_vtable, generate_lua_host_vtable_factory"
-            - "Generated code: store_host_vtable, _vtable, vtable.dispatch"
-        - file: "crates/polyplugc/src/generators/python.rs"
-          count: 72 matches
-          issues:
-            - "File names: vtable_factories.py"
-            - "Functions: generate_guest_plugin_vtable, generate_guest_contract_vtable"
-            - "Generated code: HostContractVTable, _vtable"
-        - file: "crates/polyplugc/src/generators/cpp.rs"
-          count: 68 matches
-          issues:
-            - "File names: vtable_factories.hpp, vtables.hpp"
-            - "Functions: generate_vtables_hpp, generate_cpp_guest_plugin_vtable"
-            - "Generated code: store_host_vtable, vtable_, vtable->dispatch"
-        - file: "crates/polyplugc/src/generators/js_quickjs.rs"
-          count: 45 matches
-          issues:
-            - "File names: vtable_factories.ts, vtable.ts"
-            - "Functions: generate_js_host_vtable_factories_ts, render_plugin_vtable_quickjs"
-            - "Generated code: this.vtable, vtable.dispatch"
-        - file: "crates/polyplugc/src/generators/rust.rs"
-          count: 22 matches
-          issues:
-            - "File names: vtable_factories.rs"
-            - "Functions: generate_guest_plugin_vtable"
-            - "Generated code: store_host_vtable"
-      sdks:
-        - file: "sdks/python/host/polyplug/runtime.py"
-          issues: ["HostContractVTable", "vtable parameter"]
-        - file: "sdks/lua/host/polyplug/runtime.lua"
-          issues: ["HostContractVTable", "vtable variable"]
-        - file: "sdks/cpp/host/polyplug/runtime.hpp"
-          issues: ["HostContractVTable", "vtable parameter"]
-        - file: "sdks/csharp/host/Runtime.cs"
-          issues: ["HostContractVTable usage"]
-        - file: "sdks/js/host/polyplug/mod.js"
-          issues: ["vtable references"]
-      tests:
-        - file: "crates/polyplugc/tests/vtable_factories_tests.rs"
-          issue: "Test file not renamed to interface_factories_tests.rs"
-        - file: "crates/polyplugc/tests/integration_codegen_rust.rs"
-          issue: "Uses PluginInterface, HostVTable"
-        - file: "crates/polyplugc/tests/smoke.rs"
-          issue: "Uses PluginInterface, HostVTable"
-        - file: "crates/polyplug/tests/*.rs"
-          issue: "Multiple test files use removed aliases"
+      rust_generator:
+        - file: "crates/polyplugc/src/generators/rust.rs:1888"
+          issue: "Function name uses create_{}_vtable instead of create_{}_interface"
+        - file: "crates/polyplugc/src/generators/rust.rs:1892"
+          issue: "VM factory function name uses create_{}_vtable_vm"
+        - file: "crates/polyplugc/src/generators/rust.rs:2006-2008"
+          issue: "NativeDispatch missing function_count field in host interface factory"
+        - file: "crates/polyplugc/src/generators/rust.rs:2082"
+          issue: "HostContractId should be used instead of raw u64 for contract_id"
+      missing_exports:
+        - file: "crates/polyplug_abi/src/lib.rs:28"
+          issue: "VmDispatch not exported, but generator imports it from polyplug_abi"
+      missing_imports_in_generated_code:
+        - file: "Generated interface_factories.rs"
+          issue: "Missing: AbiErrorCode, abi_error_ok, string_view_from_static"
   - truth: "All tests pass with new instance model and naming"
     status: failed
-    reason: "Generated guest code uses outdated ABI structure causing 195+ compilation errors"
+    reason: "Generated code has type mismatches and missing fields"
     breakdown:
-      abi_mismatches:
-        - issue: "PluginDescriptor fields"
-          expected: "version: Version"
-          generated: "version_major/minor/patch: u32"
-        - issue: "Error code types"
-          expected: "AbiErrorCode enum"
-          generated: "u32 constants (ABI_ERROR_GENERIC)"
-        - issue: "Registration function"
-          expected: "register_contract"
-          generated: "register_plugin"
-        - issue: "Type names"
-          expected: "RuntimeAbi, GuestContractInterface"
-          generated: "HostVTable, PluginInterface"
+      type_mismatches:
+        - issue: "HostContractId vs u64"
+          files: ["Generated host interface factories", "Test files"]
+        - issue: "AbiErrorCode vs u32"
+          files: ["Generated host_callers.rs", "Test files"]
+        - issue: "NativeDispatch missing function_count"
+          file: "crates/polyplugc/src/generators/rust.rs:2006-2008"
+      missing_exports:
+        - issue: "VmDispatch not exported from polyplug_abi"
+          impact: "Host interface factories fail to compile"
 ---
 # Phase 6: Cleanup Verification Report
 
 **Phase Goal:** Remove all vtable/legacy naming and update to Guest/Host terminology consistently
-**Verified:** 2026-04-04T19:30:00Z
+**Verified:** 2026-04-05T12:00:00Z
 **Status:** gaps_found
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — after gap closure plans 06-05 through 06-09
 
 ## Goal Achievement
 
@@ -90,104 +51,160 @@ gaps:
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | No "vtable" naming remains in codebase (search: vtable, VTable, VTABLE) | FAILED | 24.6KB of vtable matches found across generators, SDKs, tests |
-| 2 | No *C suffix types in FFI (all types from polyplug_abi are canonical) | VERIFIED | RuntimeConfigC intentional (FFI param struct), others renamed |
-| 3 | Documentation uses Guest Contract / Host Contract terminology consistently | VERIFIED | All docs updated with terminology notes |
-| 4 | All tests pass with new instance model and naming | FAILED | cargo test --workspace fails with 195+ compilation errors |
+| 1 | No "vtable" naming remains in codebase | FAILED | Generator function names still use `_vtable` suffix |
+| 2 | No *C suffix types in FFI | VERIFIED | RuntimeConfigC intentional, others renamed |
+| 3 | Documentation uses Guest/Host terminology | VERIFIED | All docs updated with terminology notes |
+| 4 | All tests pass with new naming | FAILED | Build fails with type mismatches, missing fields |
 
 **Score:** 2/4 truths verified
 
-### Detailed Gap Breakdown
+## Root Cause Analysis
 
-**CLN-01 (vtable naming):** 28.4KB of vtable matches across codebase:
+### Issue 1: Generator Function Names Still Use "vtable"
 
-| Category | Files | Match Count | Key Issues |
-|----------|-------|-------------|------------|
-| Generators | lua.rs, python.rs, cpp.rs, js_quickjs.rs, rust.rs, csharp.rs | 292 | File names (vtable_factories.*), function names, generated variable names |
-| SDKs | python/host, lua/host, cpp/host, csharp/host, js/host | 50+ | HostContractVTable type, vtable parameters |
-| Tests | vtable_factories_tests.rs, smoke.rs, integration_*.rs | 40+ | Removed alias imports |
+**Location:** `crates/polyplugc/src/generators/rust.rs:1888`
 
-**CLN-04 (tests pass):** Generated code ABI mismatches:
+```rust
+let factory_name: String = format!(
+    "create_{}_vtable",  // <-- Should be "create_{}_interface"
+    contract.name.replace('.', "_").to_lowercase()
+);
+```
 
-### Requirements Coverage
+**Impact:** Generated host interface factories have function names like `create_host_logger_vtable` instead of `create_host_logger_interface`.
 
-| Requirement | Description | Status | Evidence |
-|-------------|-------------|--------|----------|
-| CLN-01 | Remove all "vtable" naming from codebase | FAILED | Extensive vtable terminology in generators, SDKs, tests |
-| CLN-02 | Remove *C suffix types from FFI | VERIFIED | RuntimeConfigC intentional, HostVTableStorage renamed, ReloadPhaseC renamed to ReloadPhaseFfi |
-| CLN-03 | Update documentation to use Guest/Host terminology | VERIFIED | All docs updated with terminology notes, only historical references to old names |
-| CLN-04 | Update tests to use new instance model and naming | FAILED | Tests don't compile, generated code uses wrong ABI structure |
-
-### Required Artifacts (from PLAN frontmatter)
-
-| Artifact | Expected | Status | Details |
-|----------|----------|--------|---------|
-| `crates/polyplug_abi/src/lib.rs` | No legacy aliases | VERIFIED | PluginInterface, HostVTable, PluginDispatch aliases removed |
-| `crates/polyplug/benches/contract_dispatch.rs` | Renamed benchmark file | VERIFIED | File exists, uses GuestContractInterface/RuntimeAbi imports |
-| `sdks/csharp/guest/RuntimeAbiStorage.cs` | Renamed C# storage class | VERIFIED | HostVTableStorage renamed to RuntimeAbiStorage |
-| `sdks/cpp/guest/polyplug/contract.hpp` | interface() method | VERIFIED | vtable() renamed to interface() |
-| `crates/polyplugc/tests/interface_factories_tests.rs` | Renamed test file | MISSING | vtable_factories_tests.rs still exists |
-| `examples/guests/rust/*/generated/` | Updated generated code | FAILED | Uses old ABI: version_major/minor/patch, u32 error codes, register_plugin |
-| `crates/polyplug/tests/*.rs` | Updated test imports | FAILED | Many files still use PluginInterface, HostVTable imports |
-
-### Key Link Verification
-
-| From | To | Via | Status | Details |
-|------|----|----|--------|---------|
-| `polyplug_abi/src/lib.rs` | All crate imports | pub use GuestContractInterface, RuntimeAbi | VERIFIED | Aliases removed, correct exports |
-| `polyplugc generators` | Generated code | Template strings | FAILED | Templates use vtable terminology, old ABI structure |
-| `examples/guests/` | polyplugc generate | regeneration | FAILED | Generated code outdated, causes compilation failures |
-
-### Data-Flow Trace (Level 4)
-
-| Artifact | Data Variable | Source | Produces Real Data | Status |
-|----------|---------------|--------|-------------------|--------|
-| `contract_dispatch.rs` benchmark | LAST_INTERFACE | thread_local static | Yes | VERIFIED |
-| `integration_load.rs` tests | CAPTURED_VTABLE | thread_local static | Yes | HOLLOW — uses old type names |
-
-### Anti-Patterns Found
-
-| File | Line | Pattern | Severity | Impact |
-|------|------|---------|----------|--------|
-| `crates/polyplugc/src/generators/rust.rs` | 5 | "vtable stubs" comment | Blocker | Generated code uses old terminology |
-| `crates/polyplugc/src/generators/*.rs` | multiple | `vtable_factories` file names | Blocker | Generates vtable-named files |
-| `examples/guests/rust/*/init.rs` | 66-68 | `version_major/minor/patch` fields | Blocker | ABI mismatch, tests fail |
-| `examples/guests/rust/*/init.rs` | 43 | `ABI_ERROR_GENERIC` u32 constant | Blocker | ABI mismatch, tests fail |
-| `examples/guests/rust/*/init.rs` | 72 | `register_plugin` function | Blocker | Old ABI function name |
-| `crates/polyplug/tests/*.rs` | multiple | `use polyplug_abi::PluginInterface` | Blocker | Tests use removed type alias |
-
-### Gaps Summary
-
-**CLN-01 (vtable naming):** Despite SUMMARY.md claiming "Removed all legacy vtable terminology", significant vtable terminology remains:
-
-1. **Generators produce vtable-named files:**
-   - `host/vtable_factories.lua/py/hpp/cs/rs`
-   - `guest/vtables.hpp/cs/rs`
-
-2. **Generators use vtable terminology internally:**
-   - Functions: `generate_guest_plugin_vtable`, `generate_vtables_hpp`, `generate_vtable_factories`
-   - Generated code: `store_host_vtable`, `get_host_vtable`, `HostContractVTable`
-   - Variables: `_vtable`, `vtable_ptr`, `vtable`
-
-3. **Test file not renamed:** `vtable_factories_tests.rs` still exists
-
-4. **SDK files use vtable terminology:** Python, Lua, C++ SDK host contract code
-
-5. **Test imports use removed aliases:** Multiple test files import `PluginInterface`, `HostVTable`
-
-**CLN-04 (tests pass):** Tests fail with 195+ compilation errors due to:
-
-1. Generated guest code uses wrong PluginDescriptor fields (version_major/minor/patch instead of version: Version)
-2. Generated guest code uses u32 error codes instead of AbiErrorCode enum
-3. Generated guest code uses register_plugin instead of register_contract
-4. Generated guest code uses HostVTable/PluginInterface instead of RuntimeAbi/GuestContractInterface
-5. Test imports use removed type aliases
-
-### Human Verification Required
-
-None — all failures are programatically detectable compilation errors and grep patterns.
+**Fix:** Rename to `create_{}_interface` and `create_{}_interface_vm`.
 
 ---
 
-_Verified: 2026-04-04T19:30:00Z_
+### Issue 2: Missing `function_count` in NativeDispatch
+
+**Location:** `crates/polyplugc/src/generators/rust.rs:2006-2008`
+
+```rust
+out.push_str("            native: NativeDispatch {\n");
+out.push_str("                functions: FUNCTIONS.as_ptr() as *const *const (),\n");
+out.push_str("            },\n");  // <-- Missing function_count field!
+```
+
+**Compare to working code at line 741:**
+```rust
+out.push_str("        native: NativeDispatch {\n");
+out.push_str(&format!("            function_count: {fn_count}_u32,\n"));
+out.push_str(&format!("            functions: {upper}_FNS.as_ptr() as *const *const (),\n"));
+out.push_str("        },\n");
+```
+
+**Impact:** Generated host interface factories fail to compile with "missing field `function_count`".
+
+**Fix:** Add `function_count` field generation to match the working pattern.
+
+---
+
+### Issue 3: VmDispatch Not Exported
+
+**Location:** `crates/polyplug_abi/src/lib.rs:28`
+
+**Current:**
+```rust
+pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch};
+```
+
+**Needed:**
+```rust
+pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch, VmDispatch};
+```
+
+**Impact:** Generated code that imports `use polyplug_abi::VmDispatch;` fails to compile.
+
+---
+
+### Issue 4: Missing Imports in Generated Code
+
+**Location:** `crates/polyplugc/src/generators/rust.rs:1864-1872`
+
+**Current imports:**
+```rust
+out.push_str("use polyplug_abi::HostContractInterface;\n");
+out.push_str("use polyplug_abi::HostContractInstance;\n");
+out.push_str("use polyplug_abi::DispatchMechanisms;\n");
+out.push_str("use polyplug_abi::NativeDispatch;\n");
+out.push_str("use polyplug_abi::VmDispatch;\n");
+out.push_str("use polyplug_abi::DispatchType;\n");
+out.push_str("use polyplug_abi::StringView;\n");
+out.push_str("use polyplug_abi::AbiError;\n");
+out.push_str("use polyplug_abi::Version;\n");
+```
+
+**Missing:**
+```rust
+out.push_str("use polyplug_abi::AbiErrorCode;\n");
+out.push_str("use polyplug_abi::abi_error_ok;\n");
+out.push_str("use polyplug_abi::string_view_from_static;\n");
+```
+
+---
+
+### Issue 5: HostContractId Type Mismatch
+
+**Location:** `crates/polyplugc/src/generators/rust.rs:2082`
+
+**Current:**
+```rust
+out.push_str(&format!("        contract_id: 0x{contract_id:016X}_u64,\n"));
+```
+
+**Needed:**
+```rust
+out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
+```
+
+**Impact:** Type mismatch between `HostContractId` and `u64`.
+
+---
+
+### Issue 6: AbiErrorCode vs u32 in Error Construction
+
+**Location:** `crates/polyplugc/src/generators/rust.rs:2169`
+
+**Current:**
+```rust
+out.push_str("                code: AbiErrorCode::Panic as u32,\n");
+```
+
+**Needed:**
+```rust
+out.push_str("                code: AbiErrorCode::Panic,\n");
+```
+
+**Impact:** `AbiError.code` is `AbiErrorCode`, not `u32`.
+
+---
+
+## Required Fixes Summary
+
+| # | File | Line | Issue | Fix |
+|---|------|------|-------|-----|
+| 1 | `rust.rs` | 1888 | Function name `create_{}_vtable` | Rename to `create_{}_interface` |
+| 2 | `rust.rs` | 1892 | VM function name `create_{}_vtable_vm` | Rename to `create_{}_interface_vm` |
+| 3 | `rust.rs` | 2006 | Missing `function_count` field | Add `function_count: {fn_count}_u32,` |
+| 4 | `polyplug_abi/src/lib.rs` | 28 | VmDispatch not exported | Add to exports |
+| 5 | `rust.rs` | 1864-1872 | Missing imports | Add AbiErrorCode, abi_error_ok, string_view_from_static |
+| 6 | `rust.rs` | 2082 | Raw u64 for contract_id | Wrap in HostContractId::from() |
+| 7 | `rust.rs` | 2169 | `as u32` cast | Remove cast, AbiError.code is AbiErrorCode |
+
+---
+
+## Requirements Coverage
+
+| Requirement | Description | Status | Evidence |
+|-------------|-------------|--------|----------|
+| CLN-01 | Remove all "vtable" naming | FAILED | Generator functions still use `_vtable` suffix |
+| CLN-02 | Remove *C suffix types | VERIFIED | RuntimeConfigC intentional, others renamed |
+| CLN-03 | Update documentation | VERIFIED | All docs updated |
+| CLN-04 | Tests pass | FAILED | Build fails with type errors |
+
+---
+
+_Verified: 2026-04-05T12:00:00Z_
 _Verifier: Claude (gsd-verifier)_
