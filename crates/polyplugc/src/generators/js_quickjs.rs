@@ -595,6 +595,11 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("    message: { ptr: number; len: number };\n");
     out.push_str("}\n\n");
 
+    out.push_str("/**\n");
+    out.push_str(" * Initialize plugin with host runtime.\n");
+    out.push_str(" * @param rt_ctx_lo - RuntimeContext handle (low 32 bits)\n");
+    out.push_str(" * @param rt_ctx_hi - RuntimeContext handle (high 32 bits)\n");
+    out.push_str(" */\n");
     out.push_str("export function polyplug_init(\n");
     out.push_str("    rt_ctx_lo: number, rt_ctx_hi: number,\n");
     out.push_str("    host_lo: number, host_hi: number,\n");

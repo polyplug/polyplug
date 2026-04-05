@@ -454,6 +454,13 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("def polyplug_abi_version() -> int:\n");
     out.push_str("    return 1\n\n");
     out.push_str("def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:\n");
+    out.push_str("    \"\"\"Initialize plugin with runtime context.\n");
+    out.push_str("\n");
+    out.push_str("    Args:\n");
+    out.push_str("        rt_ctx: RuntimeContext handle (opaque pointer as int)\n");
+    out.push_str("        host_ptr: Pointer to RuntimeAbi\n");
+    out.push_str("        ctx_ptr: Pointer to PluginContext\n");
+    out.push_str("    \"\"\"\n");
     out.push_str("    if rt_ctx == 0:\n");
     out.push_str("        return\n");
     out.push_str("    if host_ptr == 0:\n");
@@ -528,7 +535,9 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("def polyplug_abi_version() -> int: ...\n");
-    out.push_str("def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None: ...\n");
+    out.push_str("def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:\n");
+    out.push_str("    \"\"\"Initialize plugin with RuntimeContext handle.\"\"\"\n");
+    out.push_str("    ...\n");
 
     out
 }

@@ -352,7 +352,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("--- Register all plugin vtables with the host.\n");
-    out.push_str("--- @param rt_ctx userdata Runtime context pointer from host.\n");
+    out.push_str("--- @param rt_ctx userdata RuntimeContext handle (opaque pointer from host).\n");
     out.push_str("--- @param host_ptr userdata RuntimeAbi pointer from host.\n");
     out.push_str("--- @param ctx_ptr userdata PluginContext pointer from host.\n");
     out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
