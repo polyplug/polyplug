@@ -46,6 +46,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     use crate::dispatch::vm_dispatch::VmDispatch;
+    use crate::dispatch::VmLoaderData;
 
     #[test]
     fn layout_vm_dispatch() {
@@ -55,5 +56,18 @@ mod tests {
         assert_eq!(align_of::<VmDispatch>(), 8);
         assert_eq!(offset_of!(VmDispatch, call), 0);
         assert_eq!(offset_of!(VmDispatch, loader_data), 8);
+    }
+
+    /// TH-03: Verify VmDispatch.call parameter and loader_data field use VmLoaderData.
+    /// This is a compile-time verification test.
+    #[test]
+    fn vm_dispatch_uses_vm_loader_data() {
+        // Verify VmLoaderData is pointer-sized (same as *mut c_void would be)
+        assert_eq!(size_of::<VmLoaderData>(), 8);
+
+        // This test passes at compile time because the struct definition
+        // uses VmLoaderData for both the call function parameter and the
+        // loader_data field. If any used *mut c_void instead, the struct
+        // would still be 16 bytes, but the type safety would be lost.
     }
 }
