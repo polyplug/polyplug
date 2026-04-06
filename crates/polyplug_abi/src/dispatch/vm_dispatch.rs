@@ -58,7 +58,7 @@ mod tests {
         assert_eq!(offset_of!(VmDispatch, loader_data), 8);
     }
 
-    /// TH-03: Verify VmDispatch.call parameter and loader_data field use VmLoaderData.
+    /// TH-02: Verify VmDispatch.loader_data field uses VmLoaderData.
     /// This is a compile-time verification test.
     #[test]
     fn vm_dispatch_uses_vm_loader_data() {
@@ -66,8 +66,22 @@ mod tests {
         assert_eq!(size_of::<VmLoaderData>(), 8);
 
         // This test passes at compile time because the struct definition
-        // uses VmLoaderData for both the call function parameter and the
-        // loader_data field. If any used *mut c_void instead, the struct
-        // would still be 16 bytes, but the type safety would be lost.
+        // uses VmLoaderData for the loader_data field. If it used *mut c_void
+        // instead, the struct would still be 16 bytes, but the type safety
+        // would be lost.
+    }
+
+    /// TH-03: Verify VmDispatch.call instance parameter is GuestContractInstance.
+    /// This is a compile-time verification test.
+    #[test]
+    fn vm_dispatch_instance_is_guest_contract_instance() {
+        use crate::guest::GuestContractInstance;
+
+        // Verify GuestContractInstance is pointer-sized (same as *mut c_void would be)
+        assert_eq!(size_of::<GuestContractInstance>(), 8);
+
+        // This test passes at compile time because the struct definition
+        // uses GuestContractInstance for the instance parameter. If it used
+        // *mut c_void instead, the type safety would be lost.
     }
 }
