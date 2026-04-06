@@ -107,7 +107,7 @@ fn write_plugin_lib_rs(src_dir: &Path) {
 mod guest {
     pub mod types;
     pub mod contracts;
-    pub mod vtables;
+    pub mod interfaces;
 }
 
 #[allow(unused_imports)]
@@ -122,8 +122,8 @@ use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
-use guest::vtables::TEST_ADDER_VTABLE;
-use guest::vtables::set_test_adder_impl;
+use guest::interfaces::TEST_ADDER_VTABLE;
+use guest::interfaces::set_test_adder_impl;
 
 struct MyPlugin;
 
@@ -460,7 +460,7 @@ fn smoke_cpp_codegen_dispatch() {
     let guest_dir: PathBuf = out_dir.join("guest");
 
     // ── 3. Assert all 5 expected guest files exist ──────────────────────────
-    let expected_guest_files: [&str; 4] = ["types.hpp", "contracts.hpp", "vtables.hpp", "init.hpp"];
+    let expected_guest_files: [&str; 4] = ["types.hpp", "contracts.hpp", "interfaces.hpp", "init.hpp"];
     for filename in expected_guest_files {
         let file_path: PathBuf = guest_dir.join(filename);
         assert!(
@@ -487,7 +487,7 @@ fn smoke_cpp_codegen_dispatch() {
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
             let host_libs_cpp: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
-            let vtables_hpp: PathBuf = guest_dir.join("vtables.hpp");
+            let interfaces_hpp: PathBuf = guest_dir.join("interfaces.hpp");
             let out_obj: PathBuf =
                 PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_vtables.o");
 
@@ -495,7 +495,7 @@ fn smoke_cpp_codegen_dispatch() {
                 .arg("-std=c++20")
                 .arg(format!("-I{}", host_libs_cpp.display()))
                 .arg(format!("-I{}", guest_dir.display()))
-                .arg(&vtables_hpp)
+                .arg(&interfaces_hpp)
                 .arg("-c")
                 .arg("-o")
                 .arg(&out_obj)
@@ -504,12 +504,12 @@ fn smoke_cpp_codegen_dispatch() {
 
             assert!(
                 compile_result.status.success(),
-                "vtables.hpp did not compile:\nstdout: {}\nstderr: {}",
+                "interfaces.hpp did not compile:\nstdout: {}\nstderr: {}",
                 String::from_utf8_lossy(&compile_result.stdout),
                 String::from_utf8_lossy(&compile_result.stderr),
             );
 
-            println!("smoke_cpp_codegen_dispatch: vtables.hpp compiled successfully ✓");
+            println!("smoke_cpp_codegen_dispatch: interfaces.hpp compiled successfully ✓");
         } else {
             eprintln!("skipping g++ compile check: g++ --version returned non-zero");
         }

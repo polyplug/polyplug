@@ -220,7 +220,7 @@ fn test_cpp_codegen_files_exist() {
     let expected_files: [&str; 5] = [
         "guest/types.hpp",
         "guest/contracts.hpp",
-        "guest/vtables.hpp",
+        "guest/interfaces.hpp",
         "guest/init.hpp",
         "manifest.toml",
     ];
@@ -245,16 +245,16 @@ fn test_cpp_codegen_files_exist() {
     if let Ok(version_out) = gpp_version_result {
         if version_out.status.success() {
             let sdks_cpp_abi: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
-            let vtables_hpp: PathBuf = out_dir.join("guest").join("vtables.hpp");
+            let interfaces_hpp: PathBuf = out_dir.join("guest").join("interfaces.hpp");
             let out_obj: PathBuf =
-                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_vtables.o");
+                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("test_cpp_codegen_interfaces.o");
 
             let compile_result: std::process::Output = Command::new("g++")
                 .arg("-std=c++20")
                 .arg(format!("-I{}", out_dir.join("guest").display()))
                 .arg(format!("-I{}", out_dir.join("host").display()))
                 .arg(format!("-I{}", sdks_cpp_abi.display()))
-                .arg(&vtables_hpp)
+                .arg(&interfaces_hpp)
                 .arg("-c")
                 .arg("-o")
                 .arg(&out_obj)
@@ -263,12 +263,12 @@ fn test_cpp_codegen_files_exist() {
 
             assert!(
                 compile_result.status.success(),
-                "vtables.hpp did not compile:\nstdout: {}\nstderr: {}",
+                "interfaces.hpp did not compile:\nstdout: {}\nstderr: {}",
                 String::from_utf8_lossy(&compile_result.stdout),
                 String::from_utf8_lossy(&compile_result.stderr),
             );
 
-            println!("test_cpp_codegen_files_exist: vtables.hpp compiled successfully ✓");
+            println!("test_cpp_codegen_files_exist: interfaces.hpp compiled successfully ✓");
         } else {
             eprintln!("skipping g++ compile check: g++ --version returned non-zero");
         }
