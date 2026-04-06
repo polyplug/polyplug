@@ -83,6 +83,22 @@ Existing infrastructure covers all phase requirements.
 
 ---
 
+## Validation Audit 2026-04-06
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 1 |
+| Resolved | 1 |
+| Escalated | 0 |
+
+### Gap Details
+
+1. **generator_correctness.rs**: Test file expected `vtables.rs` but generator produces `interfaces.rs` (instance model renaming)
+   - Fixed: Updated all references from "vtables.rs" to "interfaces.rs" in test file
+   - 7 tests now pass: single_function_contract_has_exactly_one_fns_entry, fns_array_size_equals_declared_function_count, vtable_slots_are_sequential, all_contract_functions_appear_in_vtable, multiple_contracts_have_independent_fns_arrays, and 2 more
+
+---
+
 ## Validation Sign-Off
 
 - [x] All tasks have `<automated>` verify or Wave 0 dependencies
