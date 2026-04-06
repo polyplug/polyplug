@@ -1,10 +1,11 @@
 ---
 phase: 09
 slug: codegen-test-cleanup
-status: draft
-nyquist_compliant: false
+status: complete
+nyquist_compliant: true
 wave_0_complete: true
 created: 2026-04-06
+updated: 2026-04-06
 ---
 
 # Phase 09 — Validation Strategy
@@ -38,12 +39,12 @@ created: 2026-04-06
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 09-01-01 | 01 | 1 | CLN-01 | N/A | N/A | file search | `grep -r "vtables\." --include="*.rs" --include="*.hpp" crates/polyplugc/tests/` | ✅ W0 | ⬜ pending |
-| 09-01-02 | 01 | 1 | CLN-04 | N/A | N/A | unit | `cargo test -p polyplugc --test smoke` | ✅ W0 | ⬜ pending |
-| 09-02-01 | 02 | 1 | CLN-01 | N/A | N/A | integration | `cargo test -p polyplug --test integration_codegen_cpp` | ✅ W0 | ⬜ pending |
-| 09-02-02 | 02 | 1 | SDK-05 | N/A | N/A | file delete | `test ! -f examples/guests/js/*/generated/guest/vtable.ts` | ✅ W0 | ⬜ pending |
-| 09-03-01 | 03 | 2 | CLN-01 | N/A | N/A | e2e | `cargo test -p polyplugc --test smoke -- --test cpp_codegen_e2e` | ✅ W0 | ⬜ pending |
-| 09-03-02 | 03 | 2 | CLN-04 | N/A | N/A | e2e | `cargo test -p polyplugc --test smoke -- --test rust_codegen_e2e` | ✅ W0 | ⬜ pending |
+| 09-01-01 | 01 | 1 | CLN-01 | N/A | N/A | file search | `grep -r "vtables\." --include="*.rs" --include="*.hpp" crates/polyplugc/tests/` | ✅ W0 | ✅ green |
+| 09-01-02 | 01 | 1 | CLN-04 | N/A | N/A | unit | `cargo test -p polyplugc --test smoke` | ✅ W0 | ✅ green |
+| 09-02-01 | 02 | 1 | CLN-01 | N/A | N/A | integration | `cargo test -p polyplug --test integration_codegen_cpp` | ✅ W0 | ✅ green |
+| 09-02-02 | 02 | 1 | SDK-05 | N/A | N/A | file delete | `test ! -f examples/guests/js/*/generated/guest/vtable.ts` | ✅ W0 | ✅ green |
+| 09-03-01 | 03 | 2 | CLN-01 | N/A | N/A | e2e | `cargo test -p polyplugc --test smoke -- --test cpp_codegen_e2e` | ✅ W0 | ✅ green |
+| 09-03-02 | 03 | 2 | CLN-04 | N/A | N/A | e2e | `cargo test -p polyplugc --test smoke -- --test rust_codegen_e2e` | ✅ W0 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -80,4 +81,4 @@ Existing infrastructure covers all phase requirements:
 - [x] Feedback latency < 60s
 - [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** ✅ COMPLETE — All tasks verified green
