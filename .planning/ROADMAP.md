@@ -182,9 +182,9 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — Create Phase 02 VERIFICATION.md for REG-01 through REG-06
-- [ ] 08-02-PLAN.md — Create Phase 03 VERIFICATION.md for INST, HC, CG requirements
-- [ ] 08-03-PLAN.md — Create Phase 04 VERIFICATION.md for HR-01 through HR-06
+- [x] 08-01-PLAN.md — Create Phase 02 VERIFICATION.md for REG-01 through REG-06
+- [x] 08-02-PLAN.md — Create Phase 03 VERIFICATION.md for INST, HC, CG requirements
+- [x] 08-03-PLAN.md — Create Phase 04 VERIFICATION.md for HR-01 through HR-06
 - [ ] 08-04-PLAN.md — Create Phase 07 VERIFICATION.md for TH-01 through TH-08
 
 ### Phase 9: Codegen Test Cleanup
