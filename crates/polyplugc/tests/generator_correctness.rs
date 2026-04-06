@@ -69,9 +69,9 @@ fn prim_param(name: &str, prim: PrimitiveType) -> ResolvedParam {
 }
 
 /// Run the Rust guest generator on `ir` using a unique `test_tag` directory
-/// and return the content of `guest/vtables.rs`.
+/// and return the content of `guest/interfaces.rs`.
 fn generate_guest_vtables(ir: ValidatedIr, test_tag: &str) -> String {
-    run_guest_generator(ir, test_tag, "vtables.rs")
+    run_guest_generator(ir, test_tag, "interfaces.rs")
 }
 
 /// Run the Rust guest generator on `ir` using a unique `test_tag` directory
@@ -278,7 +278,7 @@ fn vtable_function_count_matches_contract() {
     let expected_line: String = format!("function_count: {expected_count}_u32");
     assert!(
         vtables.contains(&expected_line),
-        "expected `{expected_line}` in vtables.rs:\n{vtables}"
+        "expected `{expected_line}` in interfaces.rs:\n{vtables}"
     );
 }
 
@@ -445,14 +445,14 @@ fn all_contract_functions_appear_in_vtable() {
         let wrapper: String = format!("file_ops_{name}_abi");
         assert!(
             vtables.contains(&wrapper),
-            "ABI wrapper `{wrapper}` missing from vtables.rs:\n{vtables}"
+            "ABI wrapper `{wrapper}` missing from interfaces.rs:\n{vtables}"
         );
 
         // Each function must appear in the FNS array.
         let fns_entry: String = format!("FnPtr(file_ops_{name}_abi as *const ())");
         assert!(
             vtables.contains(&fns_entry),
-            "FNS entry `{fns_entry}` missing from vtables.rs:\n{vtables}"
+            "FNS entry `{fns_entry}` missing from interfaces.rs:\n{vtables}"
         );
     }
 }
@@ -474,7 +474,7 @@ fn fns_array_size_equals_declared_function_count() {
         let expected: String = format!("[FnPtr; {n}_usize]");
         assert!(
             vtables.contains(&expected),
-            "for n={n}: expected `{expected}` in vtables.rs:\n{vtables}"
+            "for n={n}: expected `{expected}` in interfaces.rs:\n{vtables}"
         );
     }
 }
@@ -538,7 +538,7 @@ fn multiple_contracts_have_independent_fns_arrays() {
         host_contracts: vec![],
         bundle: None,
     };
-    let vtables: String = run_guest_generator(ir, "multi_contracts_independent", "vtables.rs");
+    let vtables: String = run_guest_generator(ir, "multi_contracts_independent", "interfaces.rs");
 
     // Contract A's wrapper and FNS entry must be present.
     assert!(
