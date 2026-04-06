@@ -18,6 +18,9 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - [x] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
 - [x] **Phase 6: Cleanup** - Naming consistency and documentation updates
 - [x] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
+- [ ] **Phase 8: Retroactive Verification** - VERIFICATION.md files for orphaned requirements
+- [ ] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable→interface test mismatches
+- [ ] **Phase 10: SDK Cleanup Completion** - Remaining SDK naming and cleanup items
 
 ## Phase Details
 
@@ -165,6 +168,40 @@ Plans:
 - [x] 07-03-PLAN.md — Update GuestContractInterface, HostContractInterface, VmDispatch to use typed handles
 - [x] 07-04-PLAN.md — Update codegen and loaders for typed handles, final verification
 
+### Phase 8: Retroactive Verification
+**Goal:** Create VERIFICATION.md files for phases 02, 03, 04, 07 to close orphaned requirement gaps
+**Depends on:** Phase 7
+**Requirements:** REG-01, REG-02, REG-03, REG-04, REG-05, REG-06, INST-01, INST-02, INST-03, INST-04, INST-05, INST-06, HC-02, HC-03, HC-04, CG-02, CG-03, CG-04, CG-05, HR-01, HR-02, HR-03, HR-04, HR-05, HR-06, TH-01, TH-02, TH-03, TH-04, TH-05, TH-06, TH-07, TH-08
+**Gap Closure:** Closes 35 orphaned requirements from audit
+**Success Criteria** (what must be TRUE):
+1. Phase 02 VERIFICATION.md exists with REG-01 through REG-06 verified
+2. Phase 03 VERIFICATION.md exists with INST, HC, CG requirements verified
+3. Phase 04 VERIFICATION.md exists with HR-01 through HR-06 verified
+4. Phase 07 VERIFICATION.md exists with TH-01 through TH-08 verified
+5. All 35 orphaned requirements have VERIFICATION.md evidence
+
+### Phase 9: Codegen Test Cleanup
+**Goal:** Fix smoke.rs test expectations for vtable→interface naming transition
+**Depends on:** Phase 8
+**Requirements:** CLN-01, CLN-04, SDK-05
+**Gap Closure:** Closes test/integration/flow gaps from audit
+**Success Criteria** (what must be TRUE):
+1. smoke.rs references interfaces.* not vtables.*
+2. Handwritten lib.rs imports guest::interfaces
+3. C++ codegen E2E flow passes
+4. Rust codegen E2E flow passes
+
+### Phase 10: SDK Cleanup Completion
+**Goal:** Complete remaining SDK naming and cleanup items
+**Depends on:** Phase 9
+**Requirements:** SDK-02, SDK-03, SDK-04, SDK-06, CLN-02
+**Gap Closure:** Closes partial/unsatisfied SDK requirements from audit
+**Success Criteria** (what must be TRUE):
+1. RuntimeConfigC renamed to RuntimeConfig in Python, C#, Lua, C++ SDKs
+2. C++ SDK PluginGuard removed
+3. C++ guest.hpp uses RuntimeAbi not HostVTable
+4. All SDK naming consistent with polyplug_abi types
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -176,6 +213,9 @@ Plans:
 | 5. SDK Updates | 8/8 | Complete | 2026-04-04 |
 | 6. Cleanup | 13/13 | Complete | 2026-04-05 |
 | 7. Typed Handles | 4/4 | Complete | 2026-04-05 |
+| 8. Retroactive Verification | 0/4 | Pending | — |
+| 9. Codegen Test Cleanup | 0/4 | Pending | — |
+| 10. SDK Cleanup Completion | 0/4 | Pending | — |
 
 ## Dependencies
 
@@ -199,6 +239,15 @@ Phase 6 (Cleanup)
     |
     v
 Phase 7 (Typed Handles)
+    |
+    v
+Phase 8 (Retroactive Verification)
+    |
+    v
+Phase 9 (Codegen Test Cleanup)
+    |
+    v
+Phase 10 (SDK Cleanup Completion)
 ```
 
 ---

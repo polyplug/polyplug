@@ -133,14 +133,20 @@
 |-------------|-------|
 | ABI-01 through ABI-14 | Phase 1: ABI Types |
 | RTABI-01 through RTABI-05 | Phase 1: ABI Types |
-| REG-01 through REG-06 | Phase 2: Registry |
-| INST-01 through INST-06 | Phase 3: Instance Model |
-| HC-01 through HC-04 | Phase 3: Instance Model |
-| CG-01 through CG-06 | Phase 3: Instance Model |
-| HR-01 through HR-06 | Phase 4: Hot-Reload |
-| SDK-01 through SDK-07 | Phase 5: SDK Updates |
-| CLN-01 through CLN-04 | Phase 6: Cleanup |
-| TH-01 through TH-08 | Phase 7: Typed Handles |
+| REG-01 through REG-06 | Phase 8: Retroactive Verification |
+| INST-01 through INST-06 | Phase 8: Retroactive Verification |
+| HC-01 | Phase 3: Instance Model |
+| HC-02 through HC-04 | Phase 8: Retroactive Verification |
+| CG-01, CG-06 | Phase 3: Instance Model |
+| CG-02 through CG-05 | Phase 8: Retroactive Verification |
+| HR-01 through HR-06 | Phase 8: Retroactive Verification |
+| SDK-01, SDK-07 | Phase 5: SDK Updates |
+| SDK-02 through SDK-04, SDK-06 | Phase 10: SDK Cleanup Completion |
+| SDK-05 | Phase 9: Codegen Test Cleanup |
+| CLN-01, CLN-04 | Phase 9: Codegen Test Cleanup |
+| CLN-02 | Phase 10: SDK Cleanup Completion |
+| CLN-03 | Phase 6: Cleanup |
+| TH-01 through TH-08 | Phase 8: Retroactive Verification |
 
 **Coverage:**
 - v1.1 requirements: 58 total
@@ -149,4 +155,4 @@
 
 ---
 *Requirements defined: 2026-04-03*
-*Last updated: 2026-04-03 for v1.1 Architecture Refactor*
+*Last updated: 2026-04-06 for gap closure phase assignments*
