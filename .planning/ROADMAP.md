@@ -19,7 +19,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - [x] **Phase 6: Cleanup** - Naming consistency and documentation updates
 - [x] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
 - [x] **Phase 8: Retroactive Verification** - VERIFICATION.md files for orphaned requirements
-- [ ] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable→interface test mismatches
+- [x] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable→interface test mismatches
 - [ ] **Phase 10: SDK Cleanup Completion** - Remaining SDK naming and cleanup items
 
 ## Phase Details
@@ -200,9 +200,9 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — Update smoke.rs lib.rs template and C++ expected files to use interfaces naming
-- [ ] 09-02-PLAN.md — Update integration_codegen_cpp.rs expected files and variable names
-- [ ] 09-03-PLAN.md — Delete stale vtables.* files from examples (C++, JS, host factories)
+- [x] 09-01-PLAN.md — Update smoke.rs lib.rs template and C++ expected files to use interfaces naming
+- [x] 09-02-PLAN.md — Update integration_codegen_cpp.rs expected files and variable names
+- [x] 09-03-PLAN.md — Delete stale vtables.* files from examples (C++, JS, host factories)
 
 ### Phase 10: SDK Cleanup Completion
 **Goal:** Complete remaining SDK naming and cleanup items
@@ -214,6 +214,11 @@ Plans:
 2. C++ SDK PluginGuard removed
 3. C++ guest.hpp uses RuntimeAbi not HostVTable
 4. All SDK naming consistent with polyplug_abi types
+**Plans:** 2 plans
+
+Plans:
+- [ ] 10-01-PLAN.md — Create VERIFICATION.md for SDK-02, SDK-03, SDK-04, SDK-06, CLN-02 (already satisfied)
+- [ ] 10-02-PLAN.md — Fix HostVTable → RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
 
 ## Progress
 
@@ -227,8 +232,8 @@ Plans:
 | 6. Cleanup | 13/13 | Complete | 2026-04-05 |
 | 7. Typed Handles | 4/4 | Complete | 2026-04-05 |
 | 8. Retroactive Verification | 4/4 | Complete | 2026-04-06 |
-| 9. Codegen Test Cleanup | 0/3 | Pending | — |
-| 10. SDK Cleanup Completion | 0/4 | Pending | — |
+| 9. Codegen Test Cleanup | 3/3 | Complete | 2026-04-06 |
+| 10. SDK Cleanup Completion | 0/2 | Pending | — |
 
 ## Dependencies
 
@@ -276,3 +281,4 @@ Phase 10 (SDK Cleanup Completion)
 *Phase 6 gap closure plans added: 2026-04-04*
 *Phase 7 plans added: 2026-04-05*
 *Phase 8 plans added: 2026-04-06*
+*Phase 10 plans added: 2026-04-06*
