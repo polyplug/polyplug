@@ -25,12 +25,12 @@
 
 ### Category: Registry
 
-- [ ] **REG-01**: Remove `VTableSlot` wrapper - store `GuestContractInterface` directly
-- [ ] **REG-02**: Remove `PluginGuard` - replaced by instance model
-- [ ] **REG-03**: Remove generation counter from handles (`ContractHandle`)
-- [ ] **REG-04**: Remove `ArcSwap` pattern - hot-reload uses callback instead
-- [ ] **REG-05**: Simplify `RegistrySlot` to store interface directly
-- [ ] **REG-06**: Update `find_contract` to return `ContractHandle` without generation
+- [x] **REG-01**: Remove `VTableSlot` wrapper - store `GuestContractInterface` directly
+- [x] **REG-02**: Remove `PluginGuard` - replaced by instance model
+- [x] **REG-03**: Remove generation counter from handles (`ContractHandle`)
+- [x] **REG-04**: Remove `ArcSwap` pattern - hot-reload uses callback instead
+- [x] **REG-05**: Simplify `RegistrySlot` to store interface directly
+- [x] **REG-06**: Update `find_contract` to return `ContractHandle` without generation
 
 ### Category: Instance Model
 
