@@ -179,6 +179,13 @@ Plans:
 3. Phase 04 VERIFICATION.md exists with HR-01 through HR-06 verified
 4. Phase 07 VERIFICATION.md exists with TH-01 through TH-08 verified
 5. All 35 orphaned requirements have VERIFICATION.md evidence
+**Plans:** 4 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Create Phase 02 VERIFICATION.md for REG-01 through REG-06
+- [ ] 08-02-PLAN.md — Create Phase 03 VERIFICATION.md for INST, HC, CG requirements
+- [ ] 08-03-PLAN.md — Create Phase 04 VERIFICATION.md for HR-01 through HR-06
+- [ ] 08-04-PLAN.md — Create Phase 07 VERIFICATION.md for TH-01 through TH-08
 
 ### Phase 9: Codegen Test Cleanup
 **Goal:** Fix smoke.rs test expectations for vtable→interface naming transition
@@ -262,3 +269,4 @@ Phase 10 (SDK Cleanup Completion)
 *Phase 5 gap closure plans added: 2026-04-04*
 *Phase 6 gap closure plans added: 2026-04-04*
 *Phase 7 plans added: 2026-04-05*
+*Phase 8 plans added: 2026-04-06*
