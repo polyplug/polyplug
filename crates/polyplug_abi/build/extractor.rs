@@ -30,7 +30,7 @@ const ABI_TYPES: &[&str] = &[
     "VmDispatch",
     "PluginDispatch",
     "PluginInterface",
-    "HostVTable",
+    "RuntimeAbi",
     "PluginDescriptor",
     "PluginContext",
     "ExtensionEntry",

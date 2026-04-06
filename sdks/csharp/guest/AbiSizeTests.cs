@@ -43,9 +43,9 @@ internal static class AbiSizeAssertions
         Debug.Assert(Marshal.SizeOf<VmDispatch>() == 16,
             $"VmDispatch size mismatch: {Marshal.SizeOf<VmDispatch>()} != 16");
 
-        // HostVTable: 8 x IntPtr(8) = 64 bytes
-        Debug.Assert(Marshal.SizeOf<HostVTable>() == 64,
-            $"HostVTable size mismatch: {Marshal.SizeOf<HostVTable>()} != 64");
+        // RuntimeAbi: 8 x IntPtr(8) = 64 bytes
+        Debug.Assert(Marshal.SizeOf<RuntimeAbi>() == 64,
+            $"RuntimeAbi size mismatch: {Marshal.SizeOf<RuntimeAbi>()} != 64");
 
         // PluginDescriptor: StringView(16) + StringView(16) + uint(4)*3 + _pad(4) = 48 bytes
         Debug.Assert(Marshal.SizeOf<PluginDescriptor>() == 48,
