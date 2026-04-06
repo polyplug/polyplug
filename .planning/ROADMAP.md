@@ -20,7 +20,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - [x] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
 - [x] **Phase 8: Retroactive Verification** - VERIFICATION.md files for orphaned requirements
 - [x] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable→interface test mismatches
-- [ ] **Phase 10: SDK Cleanup Completion** - Remaining SDK naming and cleanup items
+- [x] **Phase 10: SDK Cleanup Completion** - Remaining SDK naming and cleanup items (completed 2026-04-06)
 
 ## Phase Details
 
@@ -214,11 +214,11 @@ Plans:
 2. C++ SDK PluginGuard removed
 3. C++ guest.hpp uses RuntimeAbi not HostVTable
 4. All SDK naming consistent with polyplug_abi types
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 10-01-PLAN.md — Create VERIFICATION.md for SDK-02, SDK-03, SDK-04, SDK-06, CLN-02 (already satisfied)
-- [ ] 10-02-PLAN.md — Fix HostVTable → RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
+- [x] 10-01-PLAN.md — Create VERIFICATION.md for SDK-02, SDK-03, SDK-04, SDK-06, CLN-02 (already satisfied)
+- [x] 10-02-PLAN.md — Fix HostVTable → RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
 
 ## Progress
 
@@ -233,7 +233,7 @@ Plans:
 | 7. Typed Handles | 4/4 | Complete | 2026-04-05 |
 | 8. Retroactive Verification | 4/4 | Complete | 2026-04-06 |
 | 9. Codegen Test Cleanup | 3/3 | Complete | 2026-04-06 |
-| 10. SDK Cleanup Completion | 0/2 | Pending | — |
+| 10. SDK Cleanup Completion | 2/2 | Complete    | 2026-04-06 |
 
 ## Dependencies
 

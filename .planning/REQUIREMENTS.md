@@ -68,11 +68,11 @@
 ### Category: SDK Updates
 
 - [ ] **SDK-01**: Update Rust host SDK to use `polyplug_abi` types
-- [ ] **SDK-02**: Update Python SDK - remove `RuntimeConfigC` duplicate
-- [ ] **SDK-03**: Update C# SDK - remove `RuntimeConfigC` duplicate
-- [ ] **SDK-04**: Update Lua SDK - use types from `polyplug_abi`
+- [x] **SDK-02**: Update Python SDK - remove `RuntimeConfigC` duplicate
+- [x] **SDK-03**: Update C# SDK - remove `RuntimeConfigC` duplicate
+- [x] **SDK-04**: Update Lua SDK - use types from `polyplug_abi`
 - [ ] **SDK-05**: Update JS SDK - use types from `polyplug_abi`
-- [ ] **SDK-06**: Remove `PluginGuard` from all SDKs
+- [x] **SDK-06**: Remove `PluginGuard` from all SDKs
 - [ ] **SDK-07**: Add instance-based wrappers to all SDKs (codegen)
 
 ### Category: Codegen
@@ -87,7 +87,7 @@
 ### Category: Cleanup
 
 - [ ] **CLN-01**: Remove all "vtable" naming from codebase
-- [ ] **CLN-02**: Remove `*C` suffix types from FFI
+- [x] **CLN-02**: Remove `*C` suffix types from FFI
 - [ ] **CLN-03**: Update documentation to use Guest/Host terminology
 - [ ] **CLN-04**: Update tests to use new instance model
 
