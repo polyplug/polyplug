@@ -18,7 +18,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - [x] **Phase 5: SDK Updates** - All five SDKs updated to use polyplug_abi types
 - [x] **Phase 6: Cleanup** - Naming consistency and documentation updates
 - [x] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
-- [ ] **Phase 8: Retroactive Verification** - VERIFICATION.md files for orphaned requirements
+- [x] **Phase 8: Retroactive Verification** - VERIFICATION.md files for orphaned requirements
 - [ ] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable→interface test mismatches
 - [ ] **Phase 10: SDK Cleanup Completion** - Remaining SDK naming and cleanup items
 
@@ -197,6 +197,12 @@ Plans:
 2. Handwritten lib.rs imports guest::interfaces
 3. C++ codegen E2E flow passes
 4. Rust codegen E2E flow passes
+**Plans:** 3 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — Update smoke.rs lib.rs template and C++ expected files to use interfaces naming
+- [ ] 09-02-PLAN.md — Update integration_codegen_cpp.rs expected files and variable names
+- [ ] 09-03-PLAN.md — Delete stale vtables.* files from examples (C++, JS, host factories)
 
 ### Phase 10: SDK Cleanup Completion
 **Goal:** Complete remaining SDK naming and cleanup items
@@ -220,8 +226,8 @@ Plans:
 | 5. SDK Updates | 8/8 | Complete | 2026-04-04 |
 | 6. Cleanup | 13/13 | Complete | 2026-04-05 |
 | 7. Typed Handles | 4/4 | Complete | 2026-04-05 |
-| 8. Retroactive Verification | 0/4 | Pending | — |
-| 9. Codegen Test Cleanup | 0/4 | Pending | — |
+| 8. Retroactive Verification | 4/4 | Complete | 2026-04-06 |
+| 9. Codegen Test Cleanup | 0/3 | Pending | — |
 | 10. SDK Cleanup Completion | 0/4 | Pending | — |
 
 ## Dependencies
