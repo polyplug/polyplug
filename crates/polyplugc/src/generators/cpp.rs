@@ -723,7 +723,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             out.push_str("    };\n");
 
             out.push_str(&format!(
-                "    AbiError err_{upper} = host->register_contract(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+                "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
                 upper = plugin_upper
             ));
             out.push_str(&format!(
@@ -782,7 +782,7 @@ fn generate_init_hpp_register_contract(
     out.push_str("    };\n");
 
     out.push_str(&format!(
-        "    AbiError err_{upper} = host->register_contract(rt_ctx, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+        "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
         upper = upper
     ));
     out.push_str(&format!(
