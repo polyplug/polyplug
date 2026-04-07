@@ -63,7 +63,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_TRANSFORMER: AbiError = unsafe {
-        (host.register_contract)(rt_ctx, &desc_TRANSFORMER as *const PluginDescriptor, &TRANSFORMER_VTABLE as *const GuestContractInterface)
+        (host.register_contract)(host, &desc_TRANSFORMER as *const PluginDescriptor, &TRANSFORMER_VTABLE as *const GuestContractInterface)
     };
     if err_TRANSFORMER.code != AbiErrorCode::Ok {
         return err_TRANSFORMER;

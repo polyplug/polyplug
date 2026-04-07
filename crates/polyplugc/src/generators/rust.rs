@@ -548,6 +548,7 @@ fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<
     out.push_str("use polyplug_guest::GuestContractId;\n");
     out.push_str("use polyplug_guest::GuestContractInterface;\n");
     out.push_str("use polyplug_guest::GuestContractInstance;\n");
+    out.push_str("use polyplug_guest::HostInterface;\n");
     out.push_str("use polyplug_guest::DispatchType;\n");
     out.push_str("use polyplug_guest::NativeDispatch;\n");
     out.push_str("use polyplug_guest::DispatchMechanisms;\n");
@@ -1136,7 +1137,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
             out.push_str(&format!(
-                "        (host.register_contract)(rt_ctx, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const GuestContractInterface)\n"
+                "        (host.register_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode::Ok {{\n"));

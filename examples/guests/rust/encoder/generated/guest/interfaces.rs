@@ -12,6 +12,7 @@ use polyplug_guest::AbiErrorCode;
 use polyplug_guest::GuestContractId;
 use polyplug_guest::GuestContractInterface;
 use polyplug_guest::GuestContractInstance;
+use polyplug_guest::HostInterface;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::DispatchMechanisms;
