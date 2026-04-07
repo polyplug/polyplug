@@ -266,27 +266,38 @@ Phase 9 (Codegen Test Cleanup)
     |
     v
 Phase 10 (SDK Cleanup Completion)
+    |
+    v
+Phase 11 (Guest Calling Convention & Missing Introspection)
 ```
 
 ### Phase 11: Guest Calling Convention & Missing Introspection
 
-**Goal:** Rename `RuntimeAbi` → `HostInterface`, create `RuntimeInterface` for symmetric API, delete `RuntimeContext`/`HostContext` wrappers, rename `call_method` → `call_guest_method`, implement guest-to-guest calls, add introspection ABIs, create `Array<T>`/`Vector<T>` types, update all SDKs and codegen.
-**Requirements**: 
-- Rename `RuntimeAbi` → `HostInterface` (consistent naming)
-- Create `RuntimeInterface` struct returned from `polyplug_runtime_create()`
-- Delete `RuntimeContext` and `HostContext` wrapper types
-- Functions take `self: *const Interface` instead of `rt_ctx`
-- Rename `call_method` → `call_guest_method` in HostInterface
-- Add `contract_id` field to `GuestContractInstance` for dispatch
-- Add `list_bundles` and `get_dependencies` introspection ABIs
-- Create `Array<T>` and `Vector<T>` ABI types
-- Update codegen to support Array/Vector in contract signatures
-- Update all 5 SDKs with new interfaces and types
+**Goal:** Rename `RuntimeAbi` to `HostInterface`, create `RuntimeInterface` for symmetric API, delete `RuntimeContext`/`HostContext` wrappers, rename `call_method` to `call_guest_method`, implement guest-to-guest calls, add introspection ABIs, create `Array<T>` type, update all SDKs and codegen.
+**Requirements**: D-01 through D-14 from CONTEXT.md
 **Depends on:** Phase 10
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 11 to break down)
+- [ ] 11-01-PLAN.md — Rename RuntimeAbi to HostInterface, create RuntimeInterface (D-01, D-02)
+- [ ] 11-02-PLAN.md — Delete RuntimeContext and HostContext wrapper types (D-03)
+- [ ] 11-03-PLAN.md — Enhance Array<T>, add contract_id to GuestContractInstance, create DependencyInfo (D-05, D-06, D-10)
+- [ ] 11-04-PLAN.md — Update GuestContractInterface/HostContractInterface signatures (D-12, D-13)
+- [ ] 11-05-PLAN.md — Add introspection ABIs (list_bundles, get_dependencies, find_all_by_contract) (D-07, D-08, D-11)
+- [ ] 11-06-PLAN.md — First-class documentation for all interface types (D-14)
+
+**Success Criteria** (what must be TRUE):
+1. HostInterface struct exists (renamed from RuntimeAbi) with self-passing pattern
+2. RuntimeInterface struct exists with destroy() function for host API
+3. RuntimeContext and HostContext deleted from codebase
+4. GuestContractInstance has contract_id field (16 bytes)
+5. Array<T> has align field for caller-frees semantics (24 bytes)
+6. DependencyInfo struct exists for introspection
+7. list_bundles and get_dependencies ABIs work
+8. find_all_by_contract returns Array<ContractHandle>
+9. GuestContractInterface create/destroy take *const HostInterface
+10. HostContractInterface has runtime field and self-passing pattern
+11. All interface types have first-class documentation
 
 ---
 *Roadmap created: 2026-04-03*
@@ -302,3 +313,4 @@ Plans:
 *Phase 7 plans added: 2026-04-05*
 *Phase 8 plans added: 2026-04-06*
 *Phase 10 plans added: 2026-04-06*
+*Phase 11 plans added: 2026-04-07*
