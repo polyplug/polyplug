@@ -268,6 +268,24 @@ Phase 9 (Codegen Test Cleanup)
 Phase 10 (SDK Cleanup Completion)
 ```
 
+### Phase 11: Guest Calling Convention & Missing Introspection
+
+**Goal:** Rename call_method → call_guest_method, implement guest-to-guest calls, add introspection ABIs (list_bundles, get_dependencies), create Array/Vector ABI types for FFI, update all SDKs and codegen.
+**Requirements**: 
+- Rename `call_method` → `call_guest_method` in RuntimeAbi
+- Implement instance-to-contract mapping for guest-to-guest dispatch
+- Add `list_bundles` ABI to enumerate loaded bundles
+- Add `get_dependencies` ABI to query declared dependencies
+- Create `Array<T>` and `Vector<T>` ABI types in polyplug_abi
+- Replace out-param patterns with Array returns where applicable
+- Update codegen to support Array/Vector in contract signatures
+- Update all 5 SDKs with new ABIs and types
+**Depends on:** Phase 10
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
+
 ---
 *Roadmap created: 2026-04-03*
 *Phase 1 plans added: 2026-04-03*

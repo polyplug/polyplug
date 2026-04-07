@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: completed
-last_updated: "2026-04-06T21:13:48.677Z"
+status: in_progress
+last_updated: "2026-04-07T00:00:00.000Z"
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 9
   total_plans: 57
   completed_plans: 57
-  percent: 100
+  percent: 82
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -32,10 +32,10 @@ progress:
 
 ## Current Position
 
-Phase: 10
+Phase: 11
 Plan: Not started
-**Status:** Milestone complete
-**Progress:** [█████████░] 96%
+**Status:** Phase 11 added
+**Progress:** [████████░░] 82%
 
 ## Phase Completion Summary
 
@@ -50,7 +50,12 @@ Plan: Not started
 | 07 | Typed Handles | Complete | 2026-04-05 |
 | 08 | Retroactive Verification | Complete | 2026-04-06 |
 | 09 | Codegen Test Cleanup | Complete | 2026-04-06 |
-| 10 | SDK Cleanup Completion | Pending | — |
+| 10 | SDK Cleanup Completion | Complete | 2026-04-06 |
+| 11 | Guest Calling Convention & Missing Introspection | Not started | — |
+
+## Roadmap Evolution
+
+- Phase 11 added: Guest Calling Convention & Missing Introspection
 
 ## Session Continuity
 
@@ -67,4 +72,4 @@ Next: Phase 10 - SDK Cleanup Completion
 - All 35 orphaned requirements now have VERIFICATION.md evidence
 
 ---
-*State updated: 2026-04-06*
+*State updated: 2026-04-07*
