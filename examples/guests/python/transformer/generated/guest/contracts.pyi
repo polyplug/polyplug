@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any
-from polyplug_guest.abi import RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView
+from polyplug_guest.abi import HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView
 
 POLYPLUG_ABI_VERSION: int
 _DISPATCH_FN_TYPE: Any
@@ -36,6 +36,6 @@ class PipelineValidatorPlugin:
 def set_PIPELINE_VALIDATOR_impl(impl: PipelineValidatorPlugin) -> None: ...
 
 def polyplug_abi_version() -> int: ...
-def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
-    """Initialize plugin with RuntimeContext handle."""
+def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
+    """Initialize plugin with HostInterface pointer."""
     ...

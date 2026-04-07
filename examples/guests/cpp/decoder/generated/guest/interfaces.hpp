@@ -55,14 +55,14 @@ static void* const DECODER_FNS[] = {
 };
 
 // Default create_instance stub for decoder - returns null instance.
-static GuestContractInstance DECODER_create_instance_stub(RuntimeContext rt_ctx, const void* args) noexcept {
-    (void)rt_ctx; (void)args;  // Unused in default stub.
+static GuestContractInstance DECODER_create_instance_stub(const HostInterface* host, const void* args) noexcept {
+    (void)host; (void)args;  // Unused in default stub.
     return GuestContractInstance{nullptr};  // Null instance for stateless plugins.
 }
 
 // Default destroy_instance stub for decoder - no-op.
-static void DECODER_destroy_instance_stub(RuntimeContext rt_ctx, GuestContractInstance instance) noexcept {
-    (void)rt_ctx; (void)instance;  // Unused in default stub.
+static void DECODER_destroy_instance_stub(const HostInterface* host, GuestContractInstance instance) noexcept {
+    (void)host; (void)instance;  // Unused in default stub.
     // No-op - stateless plugins don't need cleanup.
 }
 

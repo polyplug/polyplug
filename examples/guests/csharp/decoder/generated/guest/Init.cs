@@ -8,9 +8,9 @@ using Polyplug.Abi;
 
 public static class Plugin {
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = "polyplug_init")]
-    public static uint PolyplugInit(IntPtr rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {
-        if (rtCtx == IntPtr.Zero || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;
-        HostVTableStorage.StoreHostVTable(hostPtr);
+    public static uint PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {
+        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;
+        HostInterfaceStorage.StoreHostInterface(hostPtr);
         System.Threading.Thread.BeginThreadAffinity();
         try {
         unsafe {
@@ -26,9 +26,9 @@ public static class Plugin {
                     ContractName = new StringView { Ptr = contractHandle_decoder.AddrOfPinnedObject(), Len = (nuint)contract_name_decoder.Length },
                     Version = new Version { Major = 1u, Minor = 0u, Patch = 0u },
                 };
-                var abi = (RuntimeAbi*)hostPtr;
-                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)abi->RegisterContract;
-                var err_decoder = registerFn(rtCtx, &desc_decoder, vtablePtr_decoder);
+                var host = (HostInterface*)hostPtr;
+                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;
+                var err_decoder = registerFn(hostPtr, &desc_decoder, vtablePtr_decoder);
                 if (err_decoder.Code != AbiErrorCode.Ok) return err_decoder.Code;
             }
             } finally {

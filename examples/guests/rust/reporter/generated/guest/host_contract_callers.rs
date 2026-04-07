@@ -6,8 +6,7 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::RuntimeAbi;
-use polyplug_guest::RuntimeContext;
+use polyplug_guest::HostInterface;
 use polyplug_guest::HostContractInterface;
 use polyplug_guest::HostContractInstance;
 use polyplug_guest::GuestContractInstance;
@@ -42,18 +41,18 @@ pub struct HostLoggerCaller {
 }
 
 impl HostLoggerCaller {
-    /// Factory method - creates caller from RuntimeAbi or None if not found.
+    /// Factory method - creates caller from HostInterface or None if not found.
     ///
     /// # Safety
     /// The `host` pointer must be valid and non-null.
-    pub unsafe fn from_host(host: *const RuntimeAbi, min_version: u32) -> Option<Self> {
+    pub unsafe fn from_host(host: *const HostInterface, min_version: u32) -> Option<Self> {
         if host.is_null() {
             return None;
         }
         // SAFETY: host is non-null and valid per ABI contract.
-        let host: &RuntimeAbi = unsafe { &*host };
+        let host: &HostInterface = unsafe { &*host };
         let instance: HostContractInstance = unsafe {
-            (host.get_host_contract)(RuntimeContext::null(), 0xF53EB5F2845853BB_u64, min_version)
+            (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version)
         };
         if instance.data.is_null() {
             return None;

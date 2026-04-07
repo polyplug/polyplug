@@ -12,14 +12,10 @@ local ABI_ERROR_INVALID_POINTER = 8
 -- No optional extensions requested.
 
 --- Register all plugin vtables with the host.
---- @param rt_ctx userdata RuntimeContext handle (opaque pointer from host).
---- @param host_ptr userdata RuntimeAbi pointer from host.
+--- @param host_ptr userdata HostInterface pointer from host.
 --- @param ctx_ptr userdata PluginContext pointer from host.
 --- @return number error_code 0 on success, non-zero on failure.
-function polyplug_init(rt_ctx, host_ptr, ctx_ptr)
-    if rt_ctx == nil then
-        return ABI_ERROR_GENERIC
-    end
+function polyplug_init(host_ptr, ctx_ptr)
     if host_ptr == nil then
         return ABI_ERROR_GENERIC
     end
@@ -28,9 +24,9 @@ function polyplug_init(rt_ctx, host_ptr, ctx_ptr)
     end
     polyplug_guest.store_host_vtable(host_ptr)
     local ctx = polyplug_guest.cast_context(ctx_ptr)
-    local host = ffi.cast("RuntimeAbi*", host_ptr)
+    local host = ffi.cast("HostInterface*", host_ptr)
 
-    local err_DECODER = host.register_contract(rt_ctx, DECODER_DESCRIPTOR, DECODER_VTABLE)
+    local err_DECODER = host.register_contract(host_ptr, DECODER_DESCRIPTOR, DECODER_VTABLE)
     if err_DECODER.code ~= ABI_OK then
         return err_DECODER.code
     end

@@ -15,14 +15,14 @@ public sealed class HostLoggerContract {
 
     private HostLoggerContract(IntPtr vtable) { _vtable = vtable; }
 
-    /// <summary>Factory method - creates caller from HostVTable or null if not found.</summary>
+    /// <summary>Factory method - creates caller from HostInterface or null if not found.</summary>
     public static HostLoggerContract? FromHost(IntPtr host, uint minVersion = 0) {
         if (host == IntPtr.Zero) {
             return null;
         }
         unsafe {
-            var hostVtable = (HostVTable*)host;
-            var vtable = hostVtable->GetHostContract(IntPtr.Zero, 0xF53EB5F2845853BBUL, minVersion);
+            var hostInterface = (HostInterface*)host;
+            var vtable = hostInterface->GetHostContract(host, 0xF53EB5F2845853BBUL, minVersion);
             if (vtable == IntPtr.Zero) {
                 return null;
             }

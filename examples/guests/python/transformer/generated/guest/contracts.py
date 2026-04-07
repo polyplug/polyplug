@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version
+from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version
 from polyplug_guest import store_host_vtable
 
 if TYPE_CHECKING:
@@ -95,25 +95,22 @@ TRANSFORMER_VTABLE: GuestContractInterface = GuestContractInterface(
 def polyplug_abi_version() -> int:
     return 1
 
-def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:
-    """Initialize plugin with runtime context.
+def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
+    """Initialize plugin with host interface.
 
     Args:
-        rt_ctx: RuntimeContext handle (opaque pointer as int)
-        host_ptr: Pointer to RuntimeAbi
+        host_ptr: Pointer to HostInterface
         ctx_ptr: Pointer to PluginContext
     """
-    if rt_ctx == 0:
-        return
     if host_ptr == 0:
         return
     if ctx_ptr == 0:
         return
     store_host_vtable(host_ptr)
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
-    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))
+    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_TRANSFORMER: AbiError = host.contents.register_contract(
-        rt_ctx, ctypes.byref(TRANSFORMER_DESCRIPTOR), ctypes.byref(TRANSFORMER_VTABLE)
+        host_ptr, ctypes.byref(TRANSFORMER_DESCRIPTOR), ctypes.byref(TRANSFORMER_VTABLE)
     )
     if err_TRANSFORMER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")

@@ -19,18 +19,16 @@ interface AbiError {
 
 /**
  * Initialize plugin with host runtime.
- * @param rt_ctx_lo - RuntimeContext handle (low 32 bits)
- * @param rt_ctx_hi - RuntimeContext handle (high 32 bits)
+ * @param host_lo - HostInterface pointer (low 32 bits)
+ * @param host_hi - HostInterface pointer (high 32 bits)
+ * @param ctx_lo - PluginContext pointer (low 32 bits)
+ * @param ctx_hi - PluginContext pointer (high 32 bits)
  */
 export function polyplug_init(
-    rt_ctx_lo: number, rt_ctx_hi: number,
     host_lo: number, host_hi: number,
     ctx_lo: number, ctx_hi: number
 ): AbiError {
     // Validate parameters
-    if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {
-        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
-    }
     if (host_lo === 0 && host_hi === 0) {
         return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }

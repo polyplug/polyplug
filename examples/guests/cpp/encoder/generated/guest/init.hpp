@@ -15,8 +15,8 @@ PipelineEncoderPlugin* g_encoder_impl = nullptr;
 
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
-extern "C" AbiError polyplug_init(RuntimeContext rt_ctx, const RuntimeAbi* host, const PluginContext* ctx) {
-    if (rt_ctx.data == nullptr || !host || !ctx) {
+extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx) {
+    if (!host || !ctx) {
         static constexpr const char* err_msg = "null parameter in polyplug_init";
         return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
     }

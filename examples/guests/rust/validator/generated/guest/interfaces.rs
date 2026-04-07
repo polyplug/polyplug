@@ -12,7 +12,6 @@ use polyplug_guest::AbiErrorCode;
 use polyplug_guest::GuestContractId;
 use polyplug_guest::GuestContractInterface;
 use polyplug_guest::GuestContractInstance;
-use polyplug_guest::RuntimeContext;
 use polyplug_guest::DispatchType;
 use polyplug_guest::NativeDispatch;
 use polyplug_guest::DispatchMechanisms;
@@ -101,7 +100,7 @@ static VALIDATOR_FNS: [FnPtr; 1_usize] = [
 /// Returns null instance - users should override for stateful plugins.
 #[allow(clippy::unnecessary_cast)]
 unsafe extern "C" fn VALIDATOR_create_instance_stub(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -110,7 +109,7 @@ unsafe extern "C" fn VALIDATOR_create_instance_stub(
 /// Default destroy_instance stub for validator.
 /// No-op - users should override for state cleanup before hot-reload.
 unsafe extern "C" fn VALIDATOR_destroy_instance_stub(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _instance: GuestContractInstance,
 ) {
     // No-op - stateless plugins don't need cleanup
