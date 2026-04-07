@@ -114,6 +114,48 @@ ContractHandle handle = host.find_by_contract(contract_id, version);  // SDK pas
 - `list_bundles(self) -> Array<BundleId>` — NEW
 - `get_dependencies(self) -> Array<DependencyInfo>` — NEW
 
+### GuestContractInterface Changes
+- **D-12:** `create_instance` and `destroy_instance` now take `*const HostInterface` instead of `RuntimeContext`
+```rust
+pub struct GuestContractInterface {
+    pub contract_id: u64,
+    pub contract_version: u32,
+    pub create_instance: Option<unsafe extern "C" fn(
+        host: *const HostInterface,  // Changed from RuntimeContext
+        ...
+    ) -> GuestContractInstance>,
+    pub destroy_instance: Option<unsafe extern "C" fn(
+        host: *const HostInterface,  // Changed from RuntimeContext
+        instance: GuestContractInstance,
+    )>,
+    pub dispatch: DispatchType,
+}
+```
+- Guest can call `host->alloc(host, ...)` during instance creation
+- No global/thread-local state allowed (multi-runtime support)
+
+### HostContractInterface Changes
+- **D-13:** Add `runtime: *mut c_void` field, `create_instance` and `destroy_instance` take `self` pointer
+```rust
+#[repr(C)]
+pub struct HostContractInterface {
+    pub contract_id: u64,
+    pub contract_version: u32,
+    pub singleton: bool,
+    pub runtime: *mut c_void,  // NEW: embedded runtime pointer
+    pub create_instance: Option<unsafe extern "C" fn(
+        self: *const HostContractInterface,  // Changed from RuntimeContext
+        ...
+    ) -> HostContractInstance>,
+    pub destroy_instance: Option<unsafe extern "C" fn(
+        self: *const HostContractInterface,  // Changed from RuntimeContext
+        instance: HostContractInstance,
+    )>,
+}
+```
+- Host can extract `self->runtime` for runtime-specific operations
+- Consistent with RuntimeInterface/HostInterface self-passing pattern
+
 ### Instance Naming
 - **D-04:** Keep `GuestContractInstance`/`HostContractInstance` naming — Contract prefix clarifies what kind of instance. No change needed.
 
