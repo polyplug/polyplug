@@ -270,16 +270,18 @@ Phase 10 (SDK Cleanup Completion)
 
 ### Phase 11: Guest Calling Convention & Missing Introspection
 
-**Goal:** Rename call_method → call_guest_method, implement guest-to-guest calls, add introspection ABIs (list_bundles, get_dependencies), create Array/Vector ABI types for FFI, update all SDKs and codegen.
+**Goal:** Rename `RuntimeAbi` → `HostInterface`, create `RuntimeInterface` for symmetric API, delete `RuntimeContext`/`HostContext` wrappers, rename `call_method` → `call_guest_method`, implement guest-to-guest calls, add introspection ABIs, create `Array<T>`/`Vector<T>` types, update all SDKs and codegen.
 **Requirements**: 
-- Rename `call_method` → `call_guest_method` in RuntimeAbi
-- Implement instance-to-contract mapping for guest-to-guest dispatch
-- Add `list_bundles` ABI to enumerate loaded bundles
-- Add `get_dependencies` ABI to query declared dependencies
-- Create `Array<T>` and `Vector<T>` ABI types in polyplug_abi
-- Replace out-param patterns with Array returns where applicable
+- Rename `RuntimeAbi` → `HostInterface` (consistent naming)
+- Create `RuntimeInterface` struct returned from `polyplug_runtime_create()`
+- Delete `RuntimeContext` and `HostContext` wrapper types
+- Functions take `self: *const Interface` instead of `rt_ctx`
+- Rename `call_method` → `call_guest_method` in HostInterface
+- Add `contract_id` field to `GuestContractInstance` for dispatch
+- Add `list_bundles` and `get_dependencies` introspection ABIs
+- Create `Array<T>` and `Vector<T>` ABI types
 - Update codegen to support Array/Vector in contract signatures
-- Update all 5 SDKs with new ABIs and types
+- Update all 5 SDKs with new interfaces and types
 **Depends on:** Phase 10
 **Plans:** 0 plans
 
