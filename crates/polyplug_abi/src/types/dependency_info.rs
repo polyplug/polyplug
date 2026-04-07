@@ -1,21 +1,59 @@
 //! Dependency info for introspection API.
 //!
-//! Mirrors the [[dependency]] table structure from manifest.toml.
+//! This module defines `DependencyInfo`, the type returned by `get_dependencies`
+//! for plugins to query their own declared dependencies at runtime.
+//!
+//! # Who provides
+//! Runtime returns this from `HostInterface::get_dependencies`.
+//!
+//! # Who calls
+//! Guest (plugin) code calls `get_dependencies` during initialization.
+//!
+//! # Ownership
+//! Caller owns the returned Array and must free via `host->free`.
+//!
+//! # Manifest Relationship
+//! Mirrors the `[[dependency]]` table structure from `manifest.toml`.
 
 use polyplug_utils::{BundleId, GuestContractId};
 
 /// Dependency information returned by get_dependencies introspection API.
 ///
-/// Mirrors manifest.toml [[dependency]] structure for plugins to query
+/// Mirrors `manifest.toml` `\[dependency\]` table structure for plugins to query
 /// their own declared dependencies at runtime.
+///
+/// # Who provides
+/// Runtime returns this from `HostInterface::get_dependencies`.
+///
+/// # Who calls
+/// Guest (plugin) code calls `get_dependencies` during initialization
+/// to discover available dependencies.
+///
+/// # Ownership
+/// Returned in an Array that caller owns and must free via `host->free`.
+///
+/// # Fields
+/// - `contract_id`: The contract being depended upon
+/// - `min_version`: Minimum version required
+/// - `bundle_id`: Specific bundle if ByBundle, 0 if ByContract
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DependencyInfo {
     /// Contract ID of the dependency.
+    ///
+    /// FNV-1a hash of the contract name and major version.
+    /// Use this to find matching contracts via `find_by_contract`.
     pub contract_id: GuestContractId,
     /// Minimum version required.
+    ///
+    /// Used for version compatibility checks during contract lookup.
+    /// Contracts with version >= min_version will match.
     pub min_version: u32,
     /// Bundle ID if dependency is ByBundle, 0 if ByContract.
+    ///
+    /// # ByBundle vs ByContract
+    /// - `bundle_id != 0`: Dependency is on a specific bundle
+    /// - `bundle_id == 0`: Dependency is on any bundle providing the contract
     pub bundle_id: BundleId,
 }
 

@@ -1,25 +1,61 @@
 //! FFI-safe array with caller-frees ownership model.
 //!
+//! This module defines `Array<T>`, the FFI-safe array type used for
+//! returning collections from runtime functions.
+//!
+//! # Memory Management
 //! Allocated via `host->alloc(self, len * sizeof(T), align)`.
 //! Freed via `host->free(self, items, len * sizeof(T), align)`.
 //!
-//! # OWNERSHIP
+//! # Ownership
 //! Caller owns the memory and must free via host allocator.
-//! CodeGen generates RAII wrappers in each language SDK.
+//! CodeGen generates RAII wrappers in each language SDK:
+//! - Rust: `Drop` impl calls `host->free`
+//! - Python: `__del__` calls free
+//! - C#: `IDisposable.Dispose` calls free
+//!
+//! # Safety
+//! The `align` field is required for proper freeing. Generic code must
+//! track alignment of `T` to free correctly.
 
 use core::marker::PhantomData;
 
 /// FFI-safe array with caller-frees ownership model.
 ///
-/// Allocated via `host->alloc(self, len * sizeof(T), align)`.
-/// Freed via `host->free(self, items, len * sizeof(T), align)`.
+/// # Memory Management
+/// - Allocated via `host->alloc(self, len * sizeof(T), align)`
+/// - Freed via `host->free(self, items, len * sizeof(T), align)`
+///
+/// # Ownership
+/// Caller owns the memory and must free via host allocator.
+/// CodeGen generates RAII wrappers in each language SDK:
+/// - Rust: `Drop` impl calls `host->free`
+/// - Python: `__del__` calls free
+/// - C#: `IDisposable.Dispose` calls free
+///
+/// # Safety
+/// The `align` field is required for proper freeing. Generic code must
+/// track alignment of `T` to free correctly.
+///
+/// # Thread Safety
+/// Safe to read from multiple threads if underlying data is immutable.
+/// Send/Sync implemented for T: Send/Sync.
 #[repr(C)]
 pub struct Array<T: Sized> {
     /// Pointer to elements, allocated via host allocator.
+    ///
+    /// # Ownership
+    /// Caller owns. Must be freed via `host->free` with same size/align.
     pub items: *mut T,
     /// Number of elements.
+    ///
+    /// Used to calculate total size for freeing: `len * sizeof(T)`.
     pub len: usize,
     /// Alignment of T, for proper freeing.
+    ///
+    /// # Purpose
+    /// Required because generic code may not know T's alignment at runtime.
+    /// Must match `align_of::<T>()` used during allocation.
     pub align: usize,
     /// Marker to track generic type.
     _marker: PhantomData<T>,

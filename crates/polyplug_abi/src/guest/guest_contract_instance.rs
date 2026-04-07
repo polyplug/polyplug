@@ -1,7 +1,21 @@
 //! Opaque handle to a guest contract instance.
 //!
-//! Created by `GuestContractInterface::create_instance`, destroyed by `destroy_instance`.
-//! The contract_id field enables zero-overhead dispatch in call_guest_method.
+//! This module defines `GuestContractInstance`, the handle returned from
+//! `GuestContractInterface::create_instance` and passed to dispatch calls.
+//!
+//! # Who provides
+//! Created by `GuestContractInterface::create_instance`, owned by guest.
+//!
+//! # Who calls
+//! Host code passes instances to dispatch functions for method calls.
+//!
+//! # Ownership
+//! This is an owned handle - the instance must be destroyed via
+//! `GuestContractInterface::destroy_instance` before hot-reload.
+//!
+//! # Layout
+//! - `data`: Opaque instance pointer (owned by guest)
+//! - `contract_id`: Contract ID for zero-overhead dispatch
 
 use core::ffi::c_void;
 
@@ -9,19 +23,47 @@ use polyplug_utils::GuestContractId;
 
 /// Opaque handle to a guest contract instance.
 ///
+/// Created by `GuestContractInterface::create_instance`, destroyed by `destroy_instance`.
+///
+/// # Who provides
+/// Guest code creates instances via create_instance factory.
+/// The guest owns the underlying data.
+///
+/// # Who calls
+/// Host code passes instances to dispatch functions and destroy_instance.
+///
+/// # Ownership
 /// This is an owned handle - the instance must be destroyed via
 /// `GuestContractInterface::destroy_instance` before hot-reload.
+/// Failure to destroy causes memory leaks and prevents safe hot-reload.
 ///
-/// The contract_id field enables zero-overhead dispatch in call_guest_method
-/// by eliminating the need to look up which contract an instance belongs to.
+/// # Lifetime
+/// Lives until `destroy_instance` is called. Must be destroyed before
+/// the bundle is unloaded or hot-reloaded.
+///
+/// # Layout
+/// - `data`: Opaque instance pointer (owned by guest)
+/// - `contract_id`: Contract ID for zero-overhead dispatch
+///
+/// # Dispatch
+/// The `contract_id` field enables `call_guest_method` to dispatch without
+/// looking up the contract in a map. This is zero-overhead dispatch.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct GuestContractInstance {
     /// Opaque instance data pointer.
-    /// The actual data is owned by the plugin/guest.
+    /// The actual data is owned by the guest plugin.
+    ///
+    /// # Ownership
+    /// Guest owns the memory. Host must not free or modify.
+    /// Must be freed via GuestContractInterface::destroy_instance.
     pub data: *mut c_void,
     /// Contract ID for zero-overhead dispatch.
     /// Enables call_guest_method to dispatch without lookup.
+    ///
+    /// # Purpose
+    /// Eliminates the need to look up which contract an instance belongs to.
+    /// The contract_id is set by create_instance and used for direct dispatch.
     pub contract_id: GuestContractId,
 }
 
