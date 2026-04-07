@@ -6,7 +6,7 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::RuntimeAbi;
+use polyplug_guest::HostInterface;
 use polyplug_guest::HostContractInterface;
 use polyplug_guest::HostContractInstance;
 use polyplug_guest::GuestContractInstance;
@@ -23,14 +23,14 @@ use super::types::*;
 #[derive(Debug)]
 pub struct HostContractError {
     /// ABI error code (non-zero).
-    pub code: u32,
+    pub code: AbiErrorCode,
     /// Human-readable error message (may be empty).
     pub message: String,
 }
 
 impl HostContractError {
     /// Create a new error with the given code.
-    pub fn new(code: u32) -> Self {
+    pub fn new(code: AbiErrorCode) -> Self {
         Self { code, message: String::new() }
     }
 }
@@ -41,18 +41,18 @@ pub struct HostLoggerCaller {
 }
 
 impl HostLoggerCaller {
-    /// Factory method - creates caller from RuntimeAbi or None if not found.
+    /// Factory method - creates caller from HostInterface or None if not found.
     ///
     /// # Safety
     /// The `host` pointer must be valid and non-null.
-    pub unsafe fn from_host(host: *const RuntimeAbi, min_version: u32) -> Option<Self> {
+    pub unsafe fn from_host(host: *const HostInterface, min_version: u32) -> Option<Self> {
         if host.is_null() {
             return None;
         }
         // SAFETY: host is non-null and valid per ABI contract.
-        let host: &RuntimeAbi = unsafe { &*host };
+        let host: &HostInterface = unsafe { &*host };
         let instance: HostContractInstance = unsafe {
-            (host.get_host_contract)(core::ptr::null_mut(), 0xF53EB5F2845853BB_u64, min_version)
+            (host.get_host_contract)(host, 0xF53EB5F2845853BB_u64, min_version)
         };
         if instance.data.is_null() {
             return None;
@@ -68,14 +68,14 @@ impl HostLoggerCaller {
     /// Call host contract function `log` (function_id=0)
     pub fn log(&self, message: String) -> Result<(), HostContractError> {
         if self.instance.data.is_null() {
-            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound as u32));
+            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
         }
         // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
         let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
         if 0_u32 >= fn_count {
-            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));
+            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
         }
 
         let message_view: StringView = alloc_string(&message).unwrap_or_else(|_| string_view_null());
@@ -113,7 +113,7 @@ impl HostLoggerCaller {
                 unsafe { polyplug_guest::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
                 s
             };
-            return Err(HostContractError { code: err.code as u32, message });
+            return Err(HostContractError { code: err.code, message });
         }
 
         Ok(())
@@ -122,14 +122,14 @@ impl HostLoggerCaller {
     /// Call host contract function `log_with_level` (function_id=1)
     pub fn log_with_level(&self, level: LogLevel, message: String) -> Result<(), HostContractError> {
         if self.instance.data.is_null() {
-            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound as u32));
+            return Err(HostContractError::new(AbiErrorCode::HostContractNotFound));
         }
         // SAFETY: instance.data is non-null and points to HostContractInterface per ABI contract.
         let interface: &HostContractInterface = unsafe { &*(self.instance.data as *const HostContractInterface) };
 
         let fn_count: u32 = unsafe { interface.dispatch.native.function_count };
         if 1_u32 >= fn_count {
-            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed as u32));
+            return Err(HostContractError::new(AbiErrorCode::HostContractCallFailed));
         }
 
         let args_val: HostLoggerLogWithLevelArgs = HostLoggerLogWithLevelArgs {
@@ -170,7 +170,7 @@ impl HostLoggerCaller {
                 unsafe { polyplug_guest::ffi::polyplug_host_free(err.message.ptr as *mut u8, err.message.len, 1) };
                 s
             };
-            return Err(HostContractError { code: err.code as u32, message });
+            return Err(HostContractError { code: err.code, message });
         }
 
         Ok(())

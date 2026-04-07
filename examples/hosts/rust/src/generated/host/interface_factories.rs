@@ -9,7 +9,6 @@
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::HostContractInstance;
 use polyplug_abi::GuestContractInstance;
-use polyplug_abi::RuntimeContext;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::NativeDispatch;
@@ -104,7 +103,7 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
     /// For host contracts, the instance is the implementation object.
     /// This stub returns the impl_ptr as the instance data.
     unsafe extern "C" fn host_logger_create_instance_stub(
-        _rt_ctx: RuntimeContext,
+        _host: *const HostInterface,
         _args: *const (),
     ) -> HostContractInstance {
         HostContractInstance { data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst) }
@@ -114,7 +113,7 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
     /// For singleton contracts, this is a no-op.
     /// For multi-instance contracts, the host must provide a custom destructor.
     unsafe extern "C" fn host_logger_destroy_instance_stub(
-        _rt_ctx: RuntimeContext,
+        _host: *const HostInterface,
         _instance: HostContractInstance,
     ) {
         // Multi-instance: host should provide custom destroy_instance
@@ -164,7 +163,7 @@ pub fn create_host_logger_interface_vm(
     /// Create instance stub for `host.logger` host contract (VM dispatch).
     /// Returns bridge_data as instance for VM-based implementations.
     unsafe extern "C" fn host_logger_vm_create_instance_stub(
-        _rt_ctx: RuntimeContext,
+        _host: *const HostInterface,
         _args: *const (),
     ) -> HostContractInstance {
         HostContractInstance { data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst) }
@@ -172,7 +171,7 @@ pub fn create_host_logger_interface_vm(
 
     /// Destroy instance stub for `host.logger` host contract (VM dispatch).
     unsafe extern "C" fn host_logger_vm_destroy_instance_stub(
-        _rt_ctx: RuntimeContext,
+        _host: *const HostInterface,
         _instance: HostContractInstance,
     ) {
         // Multi-instance: host should provide custom destroy_instance

@@ -11,7 +11,7 @@ use polyplug_guest::AbiErrorCode;
 use polyplug_guest::string_view_from_static;
 use polyplug_guest::abi_error_ok;
 use polyplug_guest::PluginDescriptor;
-use polyplug_guest::RuntimeAbi;
+use polyplug_guest::HostInterface;
 use polyplug_guest::GuestContractInterface;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
@@ -29,16 +29,12 @@ use super::interfaces::VALIDATOR_VTABLE;
 /// Register all plugin vtables with the host.
 ///
 /// # Safety
-/// `rt_ctx` and `host` must be valid non-null pointers provided by the host.
+/// `host` and `ctx` must be valid non-null pointers provided by the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: *mut c_void,
-    host: *const RuntimeAbi,
+    host: *const HostInterface,
     ctx: *const PluginContext,
 ) -> AbiError {
-    if rt_ctx.is_null() {
-        return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"rt_ctx is null") };
-    }
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"host is null") };
     }
@@ -49,9 +45,9 @@ pub unsafe extern "C" fn polyplug_init(
     let ctx: &PluginContext = unsafe { &*ctx };
     let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated
     // SAFETY: host is non-null and valid per ABI contract.
-    let host: &RuntimeAbi = unsafe { &*host };
+    let host: &HostInterface = unsafe { &*host };
     // SAFETY: Called once during plugin init, before any host contract access.
-    unsafe { store_host_vtable(host as *const RuntimeAbi); }
+    unsafe { store_host_vtable(host as *const HostInterface); }
 
     // Call user initialization to register plugin implementations
     unsafe extern "C" {
@@ -67,7 +63,7 @@ pub unsafe extern "C" fn polyplug_init(
     };
     // SAFETY: desc and vtable are 'static.
     let err_VALIDATOR: AbiError = unsafe {
-        (host.register_contract)(rt_ctx, &desc_VALIDATOR as *const PluginDescriptor, &VALIDATOR_VTABLE as *const GuestContractInterface)
+        (host.register_contract)(host, &desc_VALIDATOR as *const PluginDescriptor, &VALIDATOR_VTABLE as *const GuestContractInterface)
     };
     if err_VALIDATOR.code != AbiErrorCode::Ok {
         return err_VALIDATOR;

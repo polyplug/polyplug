@@ -9,7 +9,6 @@
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::RuntimeContext;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
 use polyplug_abi::PluginHandle;
@@ -44,8 +43,8 @@ pub struct PipelineDecoderContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context (needed for destroy_instance).
-    rt_ctx: RuntimeContext,
+    /// Host interface pointer (needed for create/destroy_instance).
+    host: *const HostInterface,
 }
 
 impl PipelineDecoderContract {
@@ -54,27 +53,27 @@ impl PipelineDecoderContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context handle
+    /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
+    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
         let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(rt_ctx, core::ptr::null())
+            ((*interface).create_instance)(host, core::ptr::null())
         };
         if instance.data.is_null() {
             return None;
         }
-        Some(PipelineDecoderContract { interface, instance, rt_ctx })
+        Some(PipelineDecoderContract { interface, instance, host })
     }
 
     /// Check if instance is valid (non-null data).
@@ -87,11 +86,11 @@ impl PipelineDecoderContract {
     pub fn reset(&mut self) {
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
         self.instance = unsafe {
-            ((*self.interface).create_instance)(self.rt_ctx, core::ptr::null())
+            ((*self.interface).create_instance)(self.host, core::ptr::null())
         };
     }
 
@@ -162,7 +161,7 @@ impl Drop for PipelineDecoderContract {
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
     }
@@ -179,8 +178,8 @@ pub struct DataTransformerContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context (needed for destroy_instance).
-    rt_ctx: RuntimeContext,
+    /// Host interface pointer (needed for create/destroy_instance).
+    host: *const HostInterface,
 }
 
 impl DataTransformerContract {
@@ -189,27 +188,27 @@ impl DataTransformerContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context handle
+    /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
+    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
         let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(rt_ctx, core::ptr::null())
+            ((*interface).create_instance)(host, core::ptr::null())
         };
         if instance.data.is_null() {
             return None;
         }
-        Some(DataTransformerContract { interface, instance, rt_ctx })
+        Some(DataTransformerContract { interface, instance, host })
     }
 
     /// Check if instance is valid (non-null data).
@@ -222,11 +221,11 @@ impl DataTransformerContract {
     pub fn reset(&mut self) {
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
         self.instance = unsafe {
-            ((*self.interface).create_instance)(self.rt_ctx, core::ptr::null())
+            ((*self.interface).create_instance)(self.host, core::ptr::null())
         };
     }
 
@@ -297,7 +296,7 @@ impl Drop for DataTransformerContract {
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
     }
@@ -314,8 +313,8 @@ pub struct PipelineEncoderContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context (needed for destroy_instance).
-    rt_ctx: RuntimeContext,
+    /// Host interface pointer (needed for create/destroy_instance).
+    host: *const HostInterface,
 }
 
 impl PipelineEncoderContract {
@@ -324,27 +323,27 @@ impl PipelineEncoderContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context handle
+    /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
+    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
         let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(rt_ctx, core::ptr::null())
+            ((*interface).create_instance)(host, core::ptr::null())
         };
         if instance.data.is_null() {
             return None;
         }
-        Some(PipelineEncoderContract { interface, instance, rt_ctx })
+        Some(PipelineEncoderContract { interface, instance, host })
     }
 
     /// Check if instance is valid (non-null data).
@@ -357,11 +356,11 @@ impl PipelineEncoderContract {
     pub fn reset(&mut self) {
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
         self.instance = unsafe {
-            ((*self.interface).create_instance)(self.rt_ctx, core::ptr::null())
+            ((*self.interface).create_instance)(self.host, core::ptr::null())
         };
     }
 
@@ -432,7 +431,7 @@ impl Drop for PipelineEncoderContract {
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
     }
@@ -449,8 +448,8 @@ pub struct DataReporterContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context (needed for destroy_instance).
-    rt_ctx: RuntimeContext,
+    /// Host interface pointer (needed for create/destroy_instance).
+    host: *const HostInterface,
 }
 
 impl DataReporterContract {
@@ -459,27 +458,27 @@ impl DataReporterContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context handle
+    /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
+    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
         let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(rt_ctx, core::ptr::null())
+            ((*interface).create_instance)(host, core::ptr::null())
         };
         if instance.data.is_null() {
             return None;
         }
-        Some(DataReporterContract { interface, instance, rt_ctx })
+        Some(DataReporterContract { interface, instance, host })
     }
 
     /// Check if instance is valid (non-null data).
@@ -492,11 +491,11 @@ impl DataReporterContract {
     pub fn reset(&mut self) {
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
         self.instance = unsafe {
-            ((*self.interface).create_instance)(self.rt_ctx, core::ptr::null())
+            ((*self.interface).create_instance)(self.host, core::ptr::null())
         };
     }
 
@@ -567,7 +566,7 @@ impl Drop for DataReporterContract {
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
     }
@@ -584,8 +583,8 @@ pub struct PipelineValidatorContract {
     interface: *const GuestContractInterface,
     /// Instance handle created by `create_instance`.
     instance: GuestContractInstance,
-    /// Runtime context (needed for destroy_instance).
-    rt_ctx: RuntimeContext,
+    /// Host interface pointer (needed for create/destroy_instance).
+    host: *const HostInterface,
 }
 
 impl PipelineValidatorContract {
@@ -594,27 +593,27 @@ impl PipelineValidatorContract {
     ///
     /// # Arguments
     /// - `handle`: Contract handle from `find_by_contract`
-    /// - `rt_ctx`: Runtime context handle
+    /// - `host`: Host interface pointer
     ///
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, rt_ctx: RuntimeContext) -> Option<Self> {
+    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
-            polyplug_runtime_resolve_plugin(rt_ctx.data as *const _, handle.pack())
+            polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
         };
         if interface.is_null() {
             return None;
         }
         // Create instance via factory function
         let instance: GuestContractInstance = unsafe {
-            ((*interface).create_instance)(rt_ctx, core::ptr::null())
+            ((*interface).create_instance)(host, core::ptr::null())
         };
         if instance.data.is_null() {
             return None;
         }
-        Some(PipelineValidatorContract { interface, instance, rt_ctx })
+        Some(PipelineValidatorContract { interface, instance, host })
     }
 
     /// Check if instance is valid (non-null data).
@@ -627,11 +626,11 @@ impl PipelineValidatorContract {
     pub fn reset(&mut self) {
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
         self.instance = unsafe {
-            ((*self.interface).create_instance)(self.rt_ctx, core::ptr::null())
+            ((*self.interface).create_instance)(self.host, core::ptr::null())
         };
     }
 
@@ -702,7 +701,7 @@ impl Drop for PipelineValidatorContract {
         // The interface pointer is stored for the lifetime of this wrapper.
         if !self.instance.data.is_null() {
             unsafe {
-                ((*self.interface).destroy_instance)(self.rt_ctx, self.instance);
+                ((*self.interface).destroy_instance)(self.host, self.instance);
             }
         }
     }
