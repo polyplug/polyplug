@@ -9,6 +9,7 @@
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
 use polyplug_abi::PluginHandle;
