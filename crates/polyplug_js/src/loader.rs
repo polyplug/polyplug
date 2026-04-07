@@ -27,7 +27,6 @@ use polyplug::Runtime as PolyplugRuntime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
-use polyplug_abi::RuntimeContext;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
@@ -100,7 +99,7 @@ pub struct JsLoaderData {
 /// # Safety
 /// JS plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn js_create_instance(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -111,7 +110,7 @@ unsafe extern "C" fn js_create_instance(
 /// # Safety
 /// JS plugins don't own instance data.
 unsafe extern "C" fn js_destroy_instance(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _instance: GuestContractInstance,
 ) {
 }
@@ -191,16 +190,16 @@ fn pack_handle(h: PluginHandle) -> Option<u64> {
     }
 }
 
-/// Helper to get host context pointers from JS globals.
-fn get_host_ctx_from_globals<'js>(
+/// Helper to get HostInterface pointer from JS globals.
+fn get_host_interface_from_globals<'js>(
     ctx: &Ctx<'js>,
-) -> Option<(*const polyplug_abi::RuntimeAbi, RuntimeContext)> {
+) -> Option<*const HostInterface> {
     let polyplug_obj: Object<'js> = ctx
         .globals()
         .get::<&str, Object<'js>>("polyplug")
         .map_err(|e| {
             eprintln!(
-                "[polyplug_js] get_host_ctx_from_globals: failed to get 'polyplug' global: {}",
+                "[polyplug_js] get_host_interface_from_globals: failed to get 'polyplug' global: {}",
                 e
             );
             e
@@ -211,7 +210,7 @@ fn get_host_ctx_from_globals<'js>(
         .get::<&str, u32>("_hostVtableLo")
         .map_err(|e| {
             eprintln!(
-                "[polyplug_js] get_host_ctx_from_globals: failed to get '_hostVtableLo': {}",
+                "[polyplug_js] get_host_interface_from_globals: failed to get '_hostVtableLo': {}",
                 e
             );
             e
@@ -221,59 +220,34 @@ fn get_host_ctx_from_globals<'js>(
         .get::<&str, u32>("_hostVtableHi")
         .map_err(|e| {
             eprintln!(
-                "[polyplug_js] get_host_ctx_from_globals: failed to get '_hostVtableHi': {}",
-                e
-            );
-            e
-        })
-        .ok()?;
-    let rt_ctx_lo: u32 = polyplug_obj
-        .get::<&str, u32>("_rtCtxLo")
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_js] get_host_ctx_from_globals: failed to get '_rtCtxLo': {}",
-                e
-            );
-            e
-        })
-        .ok()?;
-    let rt_ctx_hi: u32 = polyplug_obj
-        .get::<&str, u32>("_rtCtxHi")
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_js] get_host_ctx_from_globals: failed to get '_rtCtxHi': {}",
+                "[polyplug_js] get_host_interface_from_globals: failed to get '_hostVtableHi': {}",
                 e
             );
             e
         })
         .ok()?;
 
-    let vtable_ptr: *const polyplug_abi::RuntimeAbi =
-        ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const polyplug_abi::RuntimeAbi;
-    let rt_ctx_data: *mut core::ffi::c_void =
-        ((rt_ctx_hi as u64) << 32 | rt_ctx_lo as u64) as usize as *mut core::ffi::c_void;
-    let rt_ctx: RuntimeContext = RuntimeContext { data: rt_ctx_data };
+    let host_interface_ptr: *const HostInterface =
+        ((vtable_hi as u64) << 32 | vtable_lo as u64) as usize as *const HostInterface;
 
-    if vtable_ptr.is_null() || rt_ctx.is_null() {
+    if host_interface_ptr.is_null() {
         None
     } else {
-        Some((vtable_ptr, rt_ctx))
+        Some(host_interface_ptr)
     }
 }
 
 fn register_host_functions<'js>(
     ctx: &Ctx<'js>,
     polyplug_obj: &Object<'js>,
-    host_abi: *const polyplug_abi::RuntimeAbi,
-    rt_ctx: RuntimeContext,
+    host_interface: *const HostInterface,
     bundle_name: &str,
 ) -> Result<(), RuntimeError> {
-    // Store host context pointers as JS globals on the polyplug object
-    let vtable_usize: usize = host_abi as usize;
-    let rt_ctx_usize: usize = rt_ctx.data as usize;
+    // Store host interface pointer as JS globals on the polyplug object
+    let host_interface_usize: usize = host_interface as usize;
 
     polyplug_obj
-        .set("_hostVtableLo", vtable_usize as u32)
+        .set("_hostVtableLo", host_interface_usize as u32)
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
@@ -281,27 +255,11 @@ fn register_host_functions<'js>(
             })
         })?;
     polyplug_obj
-        .set("_hostVtableHi", (vtable_usize >> 32) as u32)
+        .set("_hostVtableHi", (host_interface_usize >> 32) as u32)
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
                 error: format!("JS runtime js-quickjs error: _hostVtableHi set failed: {e}"),
-            })
-        })?;
-    polyplug_obj
-        .set("_rtCtxLo", rt_ctx_usize as u32)
-        .map_err(|e: rquickjs::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: _rtCtxLo set failed: {e}"),
-            })
-        })?;
-    polyplug_obj
-        .set("_rtCtxHi", (rt_ctx_usize >> 32) as u32)
-        .map_err(|e: rquickjs::Error| {
-            RuntimeError::Loader(LoaderError::InitFailed {
-                bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: _rtCtxHi set failed: {e}"),
             })
         })?;
 
@@ -309,10 +267,10 @@ fn register_host_functions<'js>(
         ctx.clone(),
         |ctx: Ctx<'js>, lo: u32, hi: u32, min_ver: u32| -> Option<u64> {
             let contract_id: u64 = (hi as u64) << 32 | lo as u64;
-            let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
-            // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
+            let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
+            // SAFETY: hvt points to 'static HostInterface data.
             let handle: PluginHandle =
-                unsafe { ((*hvt).find_by_contract)(rt_ctx, contract_id, min_ver) };
+                unsafe { ((*hvt).find_by_contract)(hvt, contract_id, min_ver) };
             pack_handle(handle)
         },
     )
@@ -335,7 +293,7 @@ fn register_host_functions<'js>(
     let find_by_bundle_fn: Function<'js> = Function::new(
         ctx.clone(),
         |_ctx: Ctx<'js>, _blo: u32, _bhi: u32, _clo: u32, _chi: u32, _min_ver: u32| -> Option<u64> {
-            // Note: find_by_bundle was removed from RuntimeAbi in the instance-based model.
+            // Note: find_by_bundle was removed from HostInterface in the instance-based model.
             // Use find_by_contract instead.
             None
         },
@@ -360,21 +318,15 @@ fn register_host_functions<'js>(
         ctx.clone(),
         |ctx: Ctx<'js>, lo: u32, hi: u32, min_ver: u32| -> u32 {
             let contract_id: u64 = (hi as u64) << 32 | lo as u64;
-            let (hvt, rt_ctx) = match get_host_ctx_from_globals(&ctx) {
-                Some(pair) => pair,
+            let hvt: *const HostInterface = match get_host_interface_from_globals(&ctx) {
+                Some(ptr) => ptr,
                 None => return 0_u32,
             };
-            // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-            let count: usize = unsafe {
-                ((*hvt).find_all_by_contract)(
-                    rt_ctx,
-                    contract_id,
-                    min_ver,
-                    core::ptr::null_mut(),
-                    0,
-                )
-            };
-            count as u32
+            // SAFETY: hvt points to 'static HostInterface data.
+            // find_all_by_contract returns Array<ContractHandle>.
+            let handles: polyplug_abi::types::Array<PluginHandle> =
+                unsafe { ((*hvt).find_all_by_contract)(hvt, contract_id, min_ver) };
+            handles.len as u32
         },
     )
     .map_err(|e: rquickjs::Error| {
@@ -397,10 +349,10 @@ fn register_host_functions<'js>(
         Function::new(ctx.clone(), |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
             let index: u32 = packed as u32;
             let handle: PluginHandle = PluginHandle { index };
-            let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
-            // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
+            let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
+            // SAFETY: hvt points to 'static HostInterface data.
             let vtable_ptr: *const GuestContractInterface =
-                unsafe { ((*hvt).resolve_contract)(rt_ctx, handle) };
+                unsafe { ((*hvt).resolve_contract)(hvt, handle) };
             if vtable_ptr.is_null() {
                 None
             } else {
@@ -426,10 +378,10 @@ fn register_host_functions<'js>(
     let get_host_contract_fn: Function<'js> = Function::new(
         ctx.clone(),
         |ctx: Ctx<'js>, contract_id: u64, min_version: u32| -> Option<u64> {
-            let (hvt, rt_ctx) = get_host_ctx_from_globals(&ctx)?;
-            // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
+            let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
+            // SAFETY: hvt points to 'static HostInterface data.
             let instance: polyplug_abi::HostContractInstance =
-                unsafe { ((*hvt).get_host_contract)(rt_ctx, contract_id, min_version) };
+                unsafe { ((*hvt).get_host_contract)(hvt, contract_id, min_version) };
             if instance.data.is_null() {
                 None
             } else {
@@ -517,8 +469,8 @@ fn register_host_functions<'js>(
     let alloc_fn: Function<'js> = Function::new(
         ctx.clone(),
         |ctx: Ctx<'js>, size: u32| -> Result<Array<'js>, rquickjs::Error> {
-            let (hvt, rt_ctx) = match get_host_ctx_from_globals(&ctx) {
-                Some(pair) => pair,
+            let hvt: *const HostInterface = match get_host_interface_from_globals(&ctx) {
+                Some(ptr) => ptr,
                 None => {
                     let arr: Array<'js> = Array::new(ctx.clone()).map_err(|_| {
                         rquickjs::Exception::throw_message(&ctx, "array creation failed")
@@ -528,8 +480,8 @@ fn register_host_functions<'js>(
                     return Ok(arr);
                 }
             };
-            // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-            let ptr: *mut u8 = unsafe { ((*hvt).alloc)(rt_ctx, size as usize, 1) };
+            // SAFETY: hvt points to 'static HostInterface data.
+            let ptr: *mut u8 = unsafe { ((*hvt).alloc)(hvt, size as usize, 1) };
             let ptr_usize: usize = ptr as usize;
             let arr: Array<'js> = Array::new(ctx.clone())
                 .map_err(|_| rquickjs::Exception::throw_message(&ctx, "array creation failed"))?;
@@ -555,16 +507,16 @@ fn register_host_functions<'js>(
         })?;
 
     let free_fn: Function<'js> = Function::new(ctx.clone(), |ctx: Ctx<'js>, lo: u32, hi: u32| {
-        let (hvt, rt_ctx) = match get_host_ctx_from_globals(&ctx) {
-            Some(pair) => pair,
+        let hvt: *const HostInterface = match get_host_interface_from_globals(&ctx) {
+            Some(ptr) => ptr,
             None => return,
         };
         let ptr: *mut u8 = ((hi as u64) << 32 | lo as u64) as usize as *mut u8;
         if ptr.is_null() {
             return;
         }
-        // SAFETY: hvt points to 'static data; rt_ctx is valid during bundle eval.
-        unsafe { ((*hvt).free)(rt_ctx, ptr, 0, 1) };
+        // SAFETY: hvt points to 'static HostInterface data.
+        unsafe { ((*hvt).free)(hvt, ptr, 0, 1) };
     })
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {
@@ -837,7 +789,6 @@ impl BundleLoader for JsLoader {
         manifest: &ManifestData,
         runtime: &PolyplugRuntime,
     ) -> Result<(), RuntimeError> {
-        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
         let bundle_id: u64 = manifest.id;
 
         let bundle_path: PathBuf = if !manifest.file.is_empty() {
@@ -869,15 +820,12 @@ impl BundleLoader for JsLoader {
             })
         })?;
 
-        let mut host_ctx: HostContext = HostContext {
-            runtime: runtime as *const PolyplugRuntime as *mut core::ffi::c_void,
-            bundle_id,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        // Wrap in RuntimeContext for type-safe handle.
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &mut host_ctx as *mut HostContext as *mut core::ffi::c_void,
-        };
+        // Get the HostInterface pointer from the runtime.
+        // This interface already has the runtime pointer set internally.
+        let host_interface: *const HostInterface = runtime.as_context_ptr();
+
+        // Set bundle_id in TLS for dependency enforcement during init.
+        polyplug::runtime::set_init_bundle_id(bundle_id);
 
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
 
@@ -906,8 +854,7 @@ impl BundleLoader for JsLoader {
             register_host_functions(
                 &ctx_ref,
                 &polyplug_obj,
-                host_abi as *const polyplug_abi::RuntimeAbi,
-                rt_ctx,
+                host_interface,
                 &manifest.name,
             )?;
             globals
@@ -950,7 +897,7 @@ impl BundleLoader for JsLoader {
             // SAFETY: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =
                 Box::leak(bundle_dir_str.clone().into_boxed_str());
-            let ctx: PluginContext = PluginContext {
+            let plugin_ctx: PluginContext = PluginContext {
                 bundle_path: StringView {
                     ptr: bundle_path_static.as_ptr(),
                     len: bundle_path_static.len(),
@@ -958,25 +905,18 @@ impl BundleLoader for JsLoader {
                 bundle_id,
             };
 
-            let rt_ctx_i64: i64 = rt_ctx.data as usize as i64;
-            let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
-            let ctx_ptr_i64: i64 = &ctx as *const PluginContext as i64;
+            // Pass HostInterface pointer and PluginContext pointer to JS.
+            // The HostInterface uses self-passing pattern - JS guest code will pass it back
+            // as the first parameter to each HostInterface function call.
+            let host_interface_i64: i64 = host_interface as usize as i64;
+            let ctx_ptr_i64: i64 = &plugin_ctx as *const PluginContext as i64;
 
-            let rt_ctx_bigint: rquickjs::BigInt<'_> =
-                rquickjs::BigInt::from_i64(ctx_ref.clone(), rt_ctx_i64).map_err(
+            let host_interface_bigint: rquickjs::BigInt<'_> =
+                rquickjs::BigInt::from_i64(ctx_ref.clone(), host_interface_i64).map_err(
                     |e: rquickjs::Error| {
                         RuntimeError::Loader(LoaderError::InitFailed {
                             bundle: manifest.name.clone(),
-                            error: format!("JS runtime js-quickjs error: rt_ctx BigInt creation failed: {e}"),
-                        })
-                    },
-                )?;
-            let host_abi_bigint: rquickjs::BigInt<'_> =
-                rquickjs::BigInt::from_i64(ctx_ref.clone(), host_abi_i64).map_err(
-                    |e: rquickjs::Error| {
-                        RuntimeError::Loader(LoaderError::InitFailed {
-                            bundle: manifest.name.clone(),
-                            error: format!("JS runtime js-quickjs error: host_abi BigInt creation failed: {e}"),
+                            error: format!("JS runtime js-quickjs error: host_interface BigInt creation failed: {e}"),
                         })
                     },
                 )?;
@@ -991,11 +931,7 @@ impl BundleLoader for JsLoader {
                 )?;
 
             init_fn
-                .call::<(
-                    rquickjs::BigInt<'_>,
-                    rquickjs::BigInt<'_>,
-                    rquickjs::BigInt<'_>,
-                ), ()>((rt_ctx_bigint, host_abi_bigint, ctx_ptr_bigint))
+                .call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), ()>((host_interface_bigint, ctx_ptr_bigint))
                 .map_err(|e: rquickjs::Error| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: manifest.name.clone(),
@@ -1005,6 +941,9 @@ impl BundleLoader for JsLoader {
 
             Ok::<(), RuntimeError>(())
         })?;
+
+        // Clear bundle_id TLS after init completes.
+        polyplug::runtime::clear_init_bundle_id();
 
         let registration_data: JsRegistrationData =
             registration_slot.borrow_mut().take().ok_or_else(|| {
@@ -1052,9 +991,10 @@ impl BundleLoader for JsLoader {
             version: Version { major: major_version, minor: 0, patch: 0 },
         };
 
-        // SAFETY: rt_ctx, descriptor, and static_interface are valid for this call.
+        // SAFETY: host_interface, descriptor, and static_interface are valid for this call.
+        // The register_contract function uses self-passing pattern.
         let abi_result: AbiError =
-            unsafe { (host_abi.register_contract)(rt_ctx, &descriptor, static_interface) };
+            unsafe { ((*host_interface).register_contract)(host_interface, &descriptor, static_interface) };
 
         if !abi_result.is_ok() {
             return Err(RuntimeError::Loader(LoaderError::InitFailed {

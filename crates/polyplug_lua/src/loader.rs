@@ -25,7 +25,6 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
-use polyplug_abi::RuntimeContext;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::StringView;
 use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
@@ -57,7 +56,7 @@ pub struct LuaLoaderData {
 /// # Safety
 /// Lua plugins use VM dispatch with global state; instances are not used.
 unsafe extern "C" fn lua_create_instance(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -68,7 +67,7 @@ unsafe extern "C" fn lua_create_instance(
 /// # Safety
 /// Lua plugins don't own instance data.
 unsafe extern "C" fn lua_destroy_instance(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _instance: GuestContractInstance,
 ) {
 }
@@ -262,22 +261,18 @@ impl BundleLoader for LuaLoader {
                     })
                 })?;
 
-        // Create HostContext for rt_ctx parameter.
-        let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        // Wrap in RuntimeContext for type-safe handle.
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
-        };
+        // Get HostInterface pointer from runtime.
+        // The interface already has the runtime pointer set.
+        let host_interface: *const HostInterface = runtime.as_context_ptr();
 
-        // Get host_abi from runtime.
-        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
+        // Set bundle_id in TLS for dependency enforcement during init.
+        polyplug::runtime::set_init_bundle_id(bundle_id);
+
+        // Get host_abi from runtime (alias for HostInterface).
+        let host_abi: &'static polyplug_abi::HostInterface = runtime.host_abi();
 
         // Call polyplug_init — it populates _G._polyplug_handlers.
-        // Pass rt_ctx, host_abi pointer, and PluginContext pointer.
+        // Pass HostInterface pointer, host_abi pointer, and PluginContext pointer.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
         let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
@@ -287,17 +282,21 @@ impl BundleLoader for LuaLoader {
             },
             bundle_id,
         };
-        let rt_ctx_i64: i64 = rt_ctx.data as usize as i64;
-        let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
+        // Pass HostInterface pointer (self-passing pattern) to Lua.
+        let host_interface_i64: i64 = host_interface as usize as i64;
+        let host_abi_i64: i64 = host_abi as *const polyplug_abi::HostInterface as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
-            .call::<()>((rt_ctx_i64, host_abi_i64, ctx_ptr))
+            .call::<()>((host_interface_i64, host_abi_i64, ctx_ptr))
             .map_err(|e: mlua::Error| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
                     error: format!("Lua polyplug_init raised error: {}", e),
                 })
             })?;
+
+        // Clear bundle_id TLS after init completes.
+        polyplug::runtime::clear_init_bundle_id();
 
         // Read the handler table that polyplug_init populated.
         let handlers: Table =
@@ -409,14 +408,14 @@ impl BundleLoader for LuaLoader {
             version: Version { major: contract_version, minor: 0, patch: 0 },
         };
 
-        // Call register_contract via the RuntimeAbi.
-        // SAFETY: `rt_ctx` is a valid HostContext pointer for this call.
+        // Call register_contract via the HostInterface self-passing pattern.
+        // SAFETY: `host_interface` is a valid HostInterface pointer for this call.
         // `descriptor` is stack-allocated and valid for this call (register_contract must copy
         // any data it needs to retain — the contract is that descriptor is borrowed for the call only).
         // `static_interface` is a leaked Box — valid for 'static lifetime.
         let reg_result: AbiError = unsafe {
-            (host_abi.register_contract)(
-                rt_ctx,
+            ((*host_interface).register_contract)(
+                host_interface,
                 &descriptor as *const PluginDescriptor,
                 static_interface,
             )

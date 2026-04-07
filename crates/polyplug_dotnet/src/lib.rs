@@ -18,8 +18,6 @@ use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug_abi::HostInterface;
 use polyplug::Runtime;
-use polyplug_abi::RuntimeContext;
-use polyplug_abi::POLYPLUG_ABI_VERSION;
 
 use crate::context::init_context;
 use crate::context::InitFn;
@@ -171,25 +169,30 @@ impl BundleLoader for DotnetLoader {
             },
         };
 
-        let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id,
-            host_abi_version: POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
-        };
-        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
+        // Get HostInterface pointer from runtime (self-passing pattern).
+        // This pointer is passed to the managed PolyplugInit as the first parameter.
+        let host_interface: *const HostInterface = runtime.as_context_ptr();
 
-        // SAFETY: managed_init is a valid fn ptr from CLR. rt_ctx, host_abi, and ctx are non-null and valid.
+        // Set bundle_id in TLS for dependency enforcement during init.
+        polyplug::runtime::set_init_bundle_id(bundle_id);
+
+        // SAFETY: managed_init is a valid fn ptr from CLR. host_interface, host_abi, and ctx are non-null and valid.
+        // InitFn signature: (rt_ctx as opaque pointer, host_vtable as RuntimeAbi pointer, ctx) -> u32
+        // The first parameter is the HostInterface pointer cast to opaque for compatibility.
+        // The second parameter is the HostInterface pointer (RuntimeAbi alias).
         let result: u32 =
-            unsafe { (*managed_init)(rt_ctx.data, host_abi as *const polyplug_abi::RuntimeAbi, &ctx) };
+            unsafe { (*managed_init)(host_interface as *mut core::ffi::c_void, host_interface, &ctx) };
         if result != 0 {
+            // Clear bundle_id TLS on error.
+            polyplug::runtime::clear_init_bundle_id();
             return Err(RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name,
                 error: format!("PolyplugInit returned {result}"),
             }));
         }
+
+        // Clear bundle_id TLS after init completes.
+        polyplug::runtime::clear_init_bundle_id();
 
         Ok(())
     }
