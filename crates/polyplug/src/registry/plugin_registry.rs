@@ -382,6 +382,41 @@ impl PluginRegistry {
         write_count
     }
 
+    /// Count plugins satisfying the given contract_id and minimum version.
+    pub fn count_by_contract(&self, contract_id: GuestContractId, min_version: u32) -> usize {
+        let data = self.data.read().unwrap_or_else(|e| {
+            eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+            e.into_inner()
+        });
+
+        let indices = match data.contract_index.get(&contract_id) {
+            Some(v) => v,
+            None => return 0,
+        };
+
+        let mut count = 0;
+        for &slot_idx in indices.iter() {
+            let slot = &data.slots[slot_idx as usize];
+            if slot.entry.is_some() && let Some(ref interface) = slot.interface {
+                if interface.contract_version.major >= min_version {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// Find all plugins and write handles into the provided slice.
+    /// Returns the number of handles written.
+    pub fn find_all_by_contract_into(
+        &self,
+        contract_id: GuestContractId,
+        min_version: u32,
+        out: &mut [PluginHandle],
+    ) -> usize {
+        self.find_all_by_contract(contract_id, min_version, out)
+    }
+
     /// Find a plugin by contract_id and minimum version.
     //
     //  Delegates to find_by_contract(). Kept for API compatibility.

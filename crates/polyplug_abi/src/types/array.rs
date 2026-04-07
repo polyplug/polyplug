@@ -36,6 +36,16 @@ impl<T: Sized> Array<T> {
         }
     }
 
+    /// Create a new array from pointer, length, and alignment.
+    pub fn new(items: *mut T, len: usize) -> Self {
+        Self {
+            items,
+            len,
+            align: core::mem::align_of::<T>(),
+            _marker: PhantomData,
+        }
+    }
+
     /// Check if this is an empty array.
     pub fn is_empty(&self) -> bool {
         self.items.is_null() || self.len == 0

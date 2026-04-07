@@ -19,10 +19,12 @@
 
 use core::ffi::c_void;
 
+use polyplug_utils::BundleId;
+
 use crate::{
     guest::{GuestContractInterface, GuestContractInstance},
     plugin::{PluginDescriptor, PluginHandle},
-    types::AbiError,
+    types::{AbiError, Array, DependencyInfo},
 };
 
 /// Type alias for backward compatibility during transition.
@@ -67,15 +69,12 @@ pub struct HostInterface {
     ) -> ContractHandle,
     /// Find all guest contracts matching contract_id and minimum version.
     ///
-    /// Returns the number of handles written to the output buffer.
-    /// Wave 5 will change this to return `Array<ContractHandle>`.
+    /// Returns an Array of ContractHandle. Caller must free via host->free.
     pub find_all_by_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
         min_version: u32,
-        out: *mut ContractHandle,
-        out_cap: usize,
-    ) -> usize,
+    ) -> Array<ContractHandle>,
     /// Resolve a ContractHandle to a GuestContractInterface pointer.
     ///
     /// Returns null if the handle is invalid or stale.
@@ -110,6 +109,19 @@ pub struct HostInterface {
         contract_id: u64,
         min_version: u32,
     ) -> crate::host::HostContractInstance,
+    /// List all loaded bundles.
+    ///
+    /// Returns an Array of BundleId values. Caller must free via host->free.
+    pub list_bundles: unsafe extern "C" fn(
+        this: *const HostInterface,
+    ) -> Array<BundleId>,
+    /// Get dependencies for the calling bundle.
+    ///
+    /// Uses bundle_id from current PluginContext (TLS) to look up declared deps.
+    /// Returns an Array of DependencyInfo. Caller must free via host->free.
+    pub get_dependencies: unsafe extern "C" fn(
+        this: *const HostInterface,
+    ) -> Array<DependencyInfo>,
 }
 
 // SAFETY: HostInterface contains an opaque pointer and function pointers.
@@ -131,8 +143,10 @@ mod tests {
 
     #[test]
     fn layout_host_interface() {
-        // HostInterface: runtime pointer (8 bytes) + 8 extern "C" fn pointers (64 bytes).
-        assert_eq!(size_of::<HostInterface>(), 72);
+        // HostInterface: runtime pointer (8 bytes) + 10 extern "C" fn pointers (80 bytes).
+        // Fields: register_contract, alloc, free, find_by_contract, find_all_by_contract,
+        //         resolve_contract, call_guest_method, get_host_contract, list_bundles, get_dependencies
+        assert_eq!(size_of::<HostInterface>(), 88);
         assert_eq!(align_of::<HostInterface>(), 8);
         assert_eq!(offset_of!(HostInterface, runtime), 0);
         assert_eq!(offset_of!(HostInterface, register_contract), 8);
@@ -143,6 +157,8 @@ mod tests {
         assert_eq!(offset_of!(HostInterface, resolve_contract), 48);
         assert_eq!(offset_of!(HostInterface, call_guest_method), 56);
         assert_eq!(offset_of!(HostInterface, get_host_contract), 64);
+        assert_eq!(offset_of!(HostInterface, list_bundles), 72);
+        assert_eq!(offset_of!(HostInterface, get_dependencies), 80);
     }
 
     /// Verify HostInterface has runtime: *mut c_void field at offset 0.
@@ -152,11 +168,15 @@ mod tests {
         assert_eq!(size_of::<*mut core::ffi::c_void>(), 8);
     }
 
-    /// Verify call_guest_method exists (renamed from call_method).
+    /// Verify list_bundles field exists.
     #[test]
-    fn call_guest_method_field_exists() {
-        // This is a compile-time verification - the struct must have call_guest_method.
-        // offset_of! will fail to compile if the field doesn't exist.
-        assert_eq!(offset_of!(HostInterface, call_guest_method), 56);
+    fn list_bundles_field_exists() {
+        assert_eq!(offset_of!(HostInterface, list_bundles), 72);
+    }
+
+    /// Verify get_dependencies field exists.
+    #[test]
+    fn get_dependencies_field_exists() {
+        assert_eq!(offset_of!(HostInterface, get_dependencies), 80);
     }
 }

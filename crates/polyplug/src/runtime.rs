@@ -262,6 +262,8 @@ impl Runtime {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         });
         // SAFETY: We leak this HostInterface for the lifetime of the runtime.
         // This is acceptable because the pointer is used by guest contract instances
@@ -716,32 +718,47 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     }
 }
 
-/// HostInterface.find_all_by_contract callback — fills out buffer, NO dependency enforcement.
+/// HostInterface.find_all_by_contract callback — returns Array<ContractHandle>.
 ///
 /// # Safety
 /// - this must be a valid HostInterface pointer with valid runtime field
-/// - out must point to a valid buffer of at least out_cap PluginHandle elements
 pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
-    out: *mut PluginHandle,
-    out_cap: usize,
-) -> usize {
+) -> polyplug_abi::Array<PluginHandle> {
+    use polyplug_abi::Array;
+
     if this.is_null() {
-        return 0usize;
+        return Array::empty();
     }
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
 
-    if out_cap == 0usize {
-        return 0usize;
+    // First, count matching contracts
+    let count = registry.count_by_contract(GuestContractId::from_u64(contract_id), min_version);
+
+    if count == 0 {
+        return Array::empty();
     }
-    // SAFETY: out is valid for out_cap PluginHandle elements per ABI contract
-    let out_slice: &mut [PluginHandle] = unsafe { core::slice::from_raw_parts_mut(out, out_cap) };
-    registry.find_all_by_contract(GuestContractId::from_u64(contract_id), min_version, out_slice)
+
+    // Allocate via host allocator
+    let size = count * core::mem::size_of::<PluginHandle>();
+    let align = core::mem::align_of::<PluginHandle>();
+    // SAFETY: host_alloc is safe to call from unsafe context
+    let ptr = unsafe { host_alloc(this, size, align) as *mut PluginHandle };
+
+    if ptr.is_null() {
+        return Array::empty();
+    }
+
+    // Fill array with matching handles
+    let slice = unsafe { core::slice::from_raw_parts_mut(ptr, count) };
+    let actual = registry.find_all_by_contract_into(GuestContractId::from_u64(contract_id), min_version, slice);
+
+    Array::new(ptr, actual)
 }
 
 /// HostInterface.resolve_contract callback — returns interface pointer for a handle.
@@ -905,6 +922,112 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     }
 }
 
+/// HostInterface.list_bundles callback — returns Array<BundleId>.
+///
+/// # Safety
+/// this must be a valid HostInterface pointer with valid runtime field.
+pub(crate) unsafe extern "C" fn host_list_bundles(
+    this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_utils::BundleId> {
+    use polyplug_abi::Array;
+    use polyplug_utils::BundleId;
+
+    if this.is_null() {
+        return Array::empty();
+    }
+    // SAFETY: this is a valid HostInterface pointer.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    let manifests = runtime.bundle_manifests.lock().unwrap_or_else(|e| {
+        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+        e.into_inner()
+    });
+
+    let count = manifests.len();
+    if count == 0 {
+        return Array::empty();
+    }
+
+    // Allocate via host allocator
+    let size = count * core::mem::size_of::<BundleId>();
+    let align = core::mem::align_of::<BundleId>();
+    // SAFETY: host_alloc is safe to call
+    let ptr = unsafe { host_alloc(this, size, align) as *mut BundleId };
+
+    if ptr.is_null() {
+        return Array::empty();
+    }
+
+    // Fill array
+    for (i, (_, manifest)) in manifests.iter().enumerate() {
+        unsafe { *ptr.add(i) = BundleId::from_u64(manifest.id); }
+    }
+
+    Array::new(ptr, count)
+}
+
+/// HostInterface.get_dependencies callback — returns Array<DependencyInfo>.
+///
+/// Uses TLS bundle_id to look up the calling bundle's dependencies.
+///
+/// # Safety
+/// this must be a valid HostInterface pointer with valid runtime field.
+pub(crate) unsafe extern "C" fn host_get_dependencies(
+    this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
+    use polyplug_abi::{Array, DependencyInfo};
+
+    if this.is_null() {
+        return Array::empty();
+    }
+    // SAFETY: this is a valid HostInterface pointer.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    // Get bundle_id from TLS
+    let caller_bundle_id = get_init_bundle_id();
+    if caller_bundle_id == 0 {
+        return Array::empty();
+    }
+
+    let manifests = runtime.bundle_manifests.lock().unwrap_or_else(|e| {
+        eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
+        e.into_inner()
+    });
+
+    // Find manifest by ID
+    let manifest = match manifests.values().find(|m| m.id == caller_bundle_id) {
+        Some(m) => m,
+        None => return Array::empty(),
+    };
+
+    let deps = &manifest.dependencies;
+    if deps.is_empty() {
+        return Array::empty();
+    }
+
+    let count = deps.len();
+    let size = count * core::mem::size_of::<DependencyInfo>();
+    let align = core::mem::align_of::<DependencyInfo>();
+    // SAFETY: host_alloc is safe to call
+    let ptr = unsafe { host_alloc(this, size, align) as *mut DependencyInfo };
+
+    if ptr.is_null() {
+        return Array::empty();
+    }
+
+    // Fill array with DependencyInfo
+    for (i, dep) in deps.iter().enumerate() {
+        let info = DependencyInfo {
+            contract_id: dep.contract_id,
+            min_version: dep.min_version.parse().unwrap_or(0),
+            bundle_id: dep.bundle_id.unwrap_or_else(|| polyplug_utils::BundleId::from_u64(0)),
+        };
+        unsafe { *ptr.add(i) = info; }
+    }
+
+    Array::new(ptr, count)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -971,6 +1094,8 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
@@ -1636,6 +1761,8 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -1666,6 +1793,8 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -1763,6 +1892,8 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         };
 
         // First call - creates instance
@@ -1829,6 +1960,8 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         };
 
         // First call - creates instance (counter becomes 101)
@@ -1900,6 +2033,8 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            list_bundles: host_list_bundles,
+            get_dependencies: host_get_dependencies,
         };
 
         // Call singleton twice - should get same instance

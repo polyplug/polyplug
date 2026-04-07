@@ -23,7 +23,7 @@ use crate::{
     guest::GuestContractInterface,
     host::HostContractInstance,
     plugin::PluginHandle,
-    types::{AbiError, StringView},
+    types::{AbiError, Array, DependencyInfo, StringView},
 };
 
 use polyplug_utils::BundleId;
@@ -89,20 +89,12 @@ pub struct RuntimeInterface {
     ) -> ContractHandle,
     /// Find all guest contracts matching contract_id and minimum version.
     ///
-    /// Wave 5 will change this to return `Array<ContractHandle>`.
-    ///
-    /// # Arguments
-    /// - `this`: RuntimeInterface pointer
-    /// - `contract_id`: Contract identifier
-    /// - `min_version`: Minimum version required
-    ///
-    /// # Returns
-    /// Array of ContractHandles (Wave 5: will return Array<ContractHandle>).
+    /// Returns an Array of ContractHandle. Caller must free via host->free.
     pub find_all_by_contract: unsafe extern "C" fn(
         this: *const RuntimeInterface,
         contract_id: u64,
         min_version: u32,
-    ) -> usize, // Placeholder - Wave 5 will change to Array<ContractHandle>
+    ) -> Array<ContractHandle>,
     /// Resolve a ContractHandle to a GuestContractInterface pointer.
     ///
     /// # Arguments
@@ -137,6 +129,18 @@ pub struct RuntimeInterface {
     /// # Returns
     /// StringView containing the error message, or empty string if no error.
     pub get_last_error: unsafe extern "C" fn(this: *const RuntimeInterface) -> StringView,
+    /// List all loaded bundles.
+    ///
+    /// Returns an Array of BundleId values. Caller must free via host->free.
+    pub list_bundles: unsafe extern "C" fn(
+        this: *const RuntimeInterface,
+    ) -> Array<BundleId>,
+    /// Get dependencies (returns empty array for host context).
+    ///
+    /// Returns an Array of DependencyInfo. Caller must free via host->free.
+    pub get_dependencies: unsafe extern "C" fn(
+        this: *const RuntimeInterface,
+    ) -> Array<DependencyInfo>,
     /// Destroy the runtime and free this interface.
     ///
     /// # Arguments
@@ -166,8 +170,10 @@ mod tests {
 
     #[test]
     fn layout_runtime_interface() {
-        // RuntimeInterface: runtime pointer (8 bytes) + 9 extern "C" fn pointers (72 bytes).
-        assert_eq!(size_of::<RuntimeInterface>(), 80);
+        // RuntimeInterface: runtime pointer (8 bytes) + 11 extern "C" fn pointers (88 bytes).
+        // Fields: load_bundle, reload_bundle, unload_bundle, find_by_contract, find_all_by_contract,
+        //         resolve_contract, get_host_contract, get_last_error, list_bundles, get_dependencies, destroy
+        assert_eq!(size_of::<RuntimeInterface>(), 96);
         assert_eq!(align_of::<RuntimeInterface>(), 8);
         assert_eq!(offset_of!(RuntimeInterface, runtime), 0);
         assert_eq!(offset_of!(RuntimeInterface, load_bundle), 8);
@@ -178,7 +184,9 @@ mod tests {
         assert_eq!(offset_of!(RuntimeInterface, resolve_contract), 48);
         assert_eq!(offset_of!(RuntimeInterface, get_host_contract), 56);
         assert_eq!(offset_of!(RuntimeInterface, get_last_error), 64);
-        assert_eq!(offset_of!(RuntimeInterface, destroy), 72);
+        assert_eq!(offset_of!(RuntimeInterface, list_bundles), 72);
+        assert_eq!(offset_of!(RuntimeInterface, get_dependencies), 80);
+        assert_eq!(offset_of!(RuntimeInterface, destroy), 88);
     }
 
     /// Verify RuntimeInterface has runtime: *mut c_void field at offset 0.
@@ -188,9 +196,15 @@ mod tests {
         assert_eq!(size_of::<*mut core::ffi::c_void>(), 8);
     }
 
-    /// Verify destroy field exists.
+    /// Verify list_bundles field exists.
     #[test]
-    fn destroy_field_exists() {
-        assert_eq!(offset_of!(RuntimeInterface, destroy), 72);
+    fn list_bundles_field_exists() {
+        assert_eq!(offset_of!(RuntimeInterface, list_bundles), 72);
+    }
+
+    /// Verify get_dependencies field exists.
+    #[test]
+    fn get_dependencies_field_exists() {
+        assert_eq!(offset_of!(RuntimeInterface, get_dependencies), 80);
     }
 }
