@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, PluginDescriptor, PluginHandle, RuntimeAbi, RuntimeContext, RuntimeLanguage};
+use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, HostInterface, PluginDescriptor, PluginHandle, RuntimeContext, RuntimeLanguage};
 use polyplug_abi::host::host_context::HostContext;
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
@@ -60,8 +60,8 @@ pub struct Runtime {
     pub(crate) registry: Arc<PluginRegistry>,
     /// Loaded bundles, never dropped.
     pub(crate) _bundles: Vec<LoadedBundle>,
-    /// The static RuntimeAbi given to plugins. Must be 'static.
-    pub(crate) host_abi: &'static RuntimeAbi,
+    /// The static HostInterface given to plugins. Must be 'static.
+    pub(crate) host_abi: &'static HostInterface,
     /// All registered loaders, keyed by runtime_name. Immutable after build().
     pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
@@ -207,9 +207,9 @@ impl Runtime {
         self.warning_cb.as_ref()
     }
 
-    /// Get the RuntimeAbi for use in plugin registrars.
+    /// Get the HostInterface for use in plugin registrars.
     #[inline(always)]
-    pub fn host_abi(&self) -> &'static RuntimeAbi {
+    pub fn host_abi(&self) -> &'static HostInterface {
         self.host_abi
     }
 

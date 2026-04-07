@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use polyplug_abi::{RuntimeAbi, RuntimeLanguage};
+use polyplug_abi::{HostInterface, RuntimeLanguage};
 
 use crate::{
     compatibility::{CapabilityGraph, Compatibility},
@@ -99,15 +99,18 @@ impl RuntimeBuilder {
     pub fn build(self) -> Result<Runtime, RuntimeError> {
         let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
 
-        // Build the static RuntimeAbi. This must be 'static.
-        let host_abi: &'static RuntimeAbi = Box::leak(Box::new(RuntimeAbi {
+        // Build the static HostInterface. This must be 'static.
+        // The runtime field will be set when Runtime is created.
+        // For now, it's null - the callbacks extract runtime from RuntimeContext.
+        let host_abi: &'static HostInterface = Box::leak(Box::new(HostInterface {
+            runtime: std::ptr::null_mut(),
             register_contract: crate::runtime::host_register_contract,
             alloc: crate::runtime::host_alloc,
             free: crate::runtime::host_free,
             find_by_contract: crate::runtime::host_find_by_contract,
             find_all_by_contract: crate::runtime::host_find_all_by_contract,
             resolve_contract: crate::runtime::host_resolve_contract,
-            call_method: crate::runtime::host_call_method,
+            call_guest_method: crate::runtime::host_call_method,
             get_host_contract: crate::runtime::host_get_host_contract,
         }));
 

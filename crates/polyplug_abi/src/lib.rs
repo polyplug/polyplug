@@ -41,7 +41,7 @@ pub use polyplug_utils::{GuestContractId, HostContractId};
 
 // ─── New exports from host module ────────────────────────────────────────────
 
-pub use host::{HostContractInterface, HostContractInstance, RuntimeAbi, RuntimeContext};
+pub use host::{HostContractInterface, HostContractInstance, HostInterface, RuntimeContext};
 
 pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
 
