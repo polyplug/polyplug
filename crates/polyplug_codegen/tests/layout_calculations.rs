@@ -70,7 +70,6 @@ fn layout_bool_size_align() {
 // ─── Category 2: ABI Built-in Types (5 tests) ───────────────────────────────────
 
 use polyplug_abi::{AbiError, Buffer, PluginHandle, StringView};
-use polyplug_abi::host::host_context::HostContext;
 
 /// StringView: size=16, align=8, ptr@0, len@8
 #[test]
@@ -157,36 +156,6 @@ fn layout_plugin_handle_fields_and_size() {
         offset_of!(PluginHandle, index),
         0,
         "PluginHandle.index must be at offset 0"
-    );
-}
-
-/// HostContext: size=24, align=8, runtime@0, bundle_id@8, host_abi_version@16
-#[test]
-fn layout_hostcontext_fields_and_size() {
-    assert_eq!(
-        size_of::<HostContext>(),
-        24,
-        "HostContext size must be 24 bytes (runtime + bundle_id + host_abi_version + padding)"
-    );
-    assert_eq!(
-        align_of::<HostContext>(),
-        8,
-        "HostContext alignment must be 8 bytes"
-    );
-    assert_eq!(
-        offset_of!(HostContext, runtime),
-        0,
-        "HostContext.runtime must be at offset 0"
-    );
-    assert_eq!(
-        offset_of!(HostContext, bundle_id),
-        8,
-        "HostContext.bundle_id must be at offset 8"
-    );
-    assert_eq!(
-        offset_of!(HostContext, host_abi_version),
-        16,
-        "HostContext.host_abi_version must be at offset 16"
     );
 }
 
@@ -993,16 +962,15 @@ struct AllAbiTypesStruct {
     buf: Buffer,          // 24 bytes @ 16
     err: AbiError,        // 24 bytes @ 40
     handle: PluginHandle, // 4 bytes @ 64
-    ctx: HostContext,     // 24 bytes @ 72 (after 4 bytes padding)
 }
 
 #[test]
 fn layout_all_abi_types_struct() {
-    // sv(16) + buf(24) + err(24) + handle(4) + padding(4) + ctx(24) = 96 bytes
+    // sv(16) + buf(24) + err(24) + handle(4) = 68 bytes, aligned to 8 = 72 bytes
     assert_eq!(
         size_of::<AllAbiTypesStruct>(),
-        96,
-        "AllAbiTypesStruct size must be 96 bytes"
+        72,
+        "AllAbiTypesStruct size must be 72 bytes"
     );
     assert_eq!(
         align_of::<AllAbiTypesStruct>(),
@@ -1028,10 +996,5 @@ fn layout_all_abi_types_struct() {
         offset_of!(AllAbiTypesStruct, handle),
         64,
         "handle must be at offset 64"
-    );
-    assert_eq!(
-        offset_of!(AllAbiTypesStruct, ctx),
-        72,
-        "ctx must be at offset 72 (after 4 bytes padding for alignment)"
     );
 }

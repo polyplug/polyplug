@@ -161,7 +161,7 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
-    _host: *const core::ffi::c_void,
+    _host: *const HostInterface,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -172,7 +172,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
-    _host: *const core::ffi::c_void,
+    _host: *const HostInterface,
     _instance: GuestContractInstance,
 ) {}
 
