@@ -626,7 +626,7 @@ fn generate_guest_plugin_interface(
         "-- Default create_instance stub for {plugin_name} - returns null instance.\n"
     ));
     out.push_str(&format!(
-        "function {plugin_var}_create_instance_stub(rt_ctx, args)\n"
+        "function {plugin_var}_create_instance_stub(host, args)\n"
     ));
     out.push_str("    -- Default stub returns null instance - users override for stateful plugins.\n");
     out.push_str("    return ffi.new(\"GuestContractInstance\", nil)\n");
@@ -638,7 +638,7 @@ fn generate_guest_plugin_interface(
         "-- Default destroy_instance stub for {plugin_name} - no-op.\n"
     ));
     out.push_str(&format!(
-        "function {plugin_var}_destroy_instance_stub(rt_ctx, instance)\n"
+        "function {plugin_var}_destroy_instance_stub(host, instance)\n"
     ));
     out.push_str("    -- Default stub is no-op - users override for cleanup before hot-reload.\n");
     out.push_str("end\n");
