@@ -510,17 +510,19 @@ pub struct HostContractInterface {
 
 **Most claims are VERIFIED via codebase reading.**
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Error handling for Array allocation failures**
+1. **Error handling for Array allocation failures** — RESOLVED
    - What we know: Host allocator can fail, returning null
    - What's unclear: Should `list_bundles` return empty array or error?
    - Recommendation: Return `Array { items: null, len: 0, align: 0 }` for allocation failure; caller checks `items.is_null()`
+   - **Resolution:** Return null-items array for allocation failure; caller checks `items.is_null()` before use.
 
-2. **polyplug_init signature in existing plugins**
+2. **polyplug_init signature in existing plugins** — RESOLVED
    - What we know: Old signature takes `RuntimeContext` as first param
    - What's unclear: How to handle existing plugins compiled against old SDK
    - Recommendation: Breaking changes are acceptable per project constraints; document migration path
+   - **Resolution:** Breaking changes acceptable per PROJECT.md constraints. Document migration: plugins must recompile against new SDK with updated `polyplug_init` signature.
 
 ## Environment Availability
 
