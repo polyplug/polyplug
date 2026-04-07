@@ -217,6 +217,35 @@ pub struct HostContractInterface {
 - Exact layout of `Array<T>` and `Vector<T>` structs
 - Whether to add helper methods to Array/Vector types
 - Error handling for allocation failures
+
+### Documentation Requirements
+- **D-14:** First-class documentation for all interface types
+  - Every struct has `//!` module doc and `///` item docs
+  - Each interface documents: purpose, who provides it, who calls it, ownership, lifetime
+  - Every function pointer field has `///` doc explaining parameters, return value, and semantics
+  - Example doc structure:
+    ```rust
+    /// Function table passed to plugins during initialization.
+    ///
+    /// # Who provides
+    /// The runtime creates this struct and passes it to `polyplug_init()`.
+    ///
+    /// # Who calls
+    /// Guest (plugin) code calls these functions to interact with the runtime.
+    ///
+    /// # Ownership
+    /// The struct is statically allocated by the runtime. The pointer is valid
+    /// until the runtime is destroyed. Guest must NOT free this pointer.
+    ///
+    /// # Lifetime
+    /// Lives as long as the runtime that created it.
+    ///
+    /// # Thread Safety
+    /// All functions are safe to call from any thread. The runtime handles
+    /// internal synchronization.
+    #[repr(C)]
+    pub struct HostInterface { ... }
+    ```
 - Exact function list in RuntimeInterface
 
 </decisions>
