@@ -26,13 +26,11 @@ use crate::config::HostfxrLocation;
 /// Uses `extern "system"` because `netcorehost::ManagedFunction<F>` requires `F: ManagedFnPtr`
 /// which requires `<F as FnPtr>::Abi == System`. On Linux/macOS `"system"` is identical to `"C"`.
 ///
-/// New ABI signature: (rt_ctx, host_vtable, ctx) -> u32
-/// - rt_ctx: opaque pointer to HostContext (runtime + bundle_id)
-/// - host_vtable: host capabilities including register_plugin
-/// - ctx: PluginContext with bundle_path, host_abi_version, bundle_id
+/// New ABI signature: (host, ctx) -> u32
+/// - host: HostInterface pointer (self-passing pattern)
+/// - ctx: PluginContext with bundle_path, bundle_id
 pub(crate) type InitFn = unsafe extern "system" fn(
-    *mut core::ffi::c_void,
-    *const polyplug_abi::RuntimeAbi,
+    *const polyplug_abi::HostInterface,
     *const polyplug_abi::PluginContext,
 ) -> u32;
 

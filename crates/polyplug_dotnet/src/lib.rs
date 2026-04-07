@@ -176,12 +176,11 @@ impl BundleLoader for DotnetLoader {
         // Set bundle_id in TLS for dependency enforcement during init.
         polyplug::runtime::set_init_bundle_id(bundle_id);
 
-        // SAFETY: managed_init is a valid fn ptr from CLR. host_interface, host_abi, and ctx are non-null and valid.
-        // InitFn signature: (rt_ctx as opaque pointer, host_vtable as RuntimeAbi pointer, ctx) -> u32
-        // The first parameter is the HostInterface pointer cast to opaque for compatibility.
-        // The second parameter is the HostInterface pointer (RuntimeAbi alias).
+        // SAFETY: managed_init is a valid fn ptr from CLR. host_interface and ctx are non-null and valid.
+        // InitFn signature: (host, ctx) -> u32
+        // The HostInterface pointer is passed directly (self-passing pattern).
         let result: u32 =
-            unsafe { (*managed_init)(host_interface as *mut core::ffi::c_void, host_interface, &ctx) };
+            unsafe { (*managed_init)(host_interface, &ctx) };
         if result != 0 {
             // Clear bundle_id TLS on error.
             polyplug::runtime::clear_init_bundle_id();
