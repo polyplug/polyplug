@@ -268,11 +268,8 @@ impl BundleLoader for LuaLoader {
         // Set bundle_id in TLS for dependency enforcement during init.
         polyplug::runtime::set_init_bundle_id(bundle_id);
 
-        // Get host_abi from runtime (alias for HostInterface).
-        let host_abi: &'static polyplug_abi::HostInterface = runtime.host_abi();
-
         // Call polyplug_init — it populates _G._polyplug_handlers.
-        // Pass HostInterface pointer, host_abi pointer, and PluginContext pointer.
+        // New signature: polyplug_init(host, ctx) - self-passing pattern.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
         let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
@@ -282,12 +279,13 @@ impl BundleLoader for LuaLoader {
             },
             bundle_id,
         };
-        // Pass HostInterface pointer (self-passing pattern) to Lua.
+        // Pass HostInterface pointer and PluginContext pointer to Lua.
+        // The HostInterface uses self-passing pattern - Lua guest code will pass it back
+        // as the first parameter to each HostInterface function call.
         let host_interface_i64: i64 = host_interface as usize as i64;
-        let host_abi_i64: i64 = host_abi as *const polyplug_abi::HostInterface as usize as i64;
         let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
         init_fn
-            .call::<()>((host_interface_i64, host_abi_i64, ctx_ptr))
+            .call::<()>((host_interface_i64, ctx_ptr))
             .map_err(|e: mlua::Error| {
                 RuntimeError::Loader(LoaderError::InitFailed {
                     bundle: bundle_name.clone(),
