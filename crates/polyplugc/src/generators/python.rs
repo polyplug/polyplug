@@ -931,12 +931,12 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
     out.push_str("def _guest_contract_instance_null() -> _GuestContractInstance:\n");
     out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
     out.push_str(&format!(
-        "def {upper}_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
+        "def {upper}_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
     ));
     out.push_str("    # Default stub returns null instance - users override for stateful plugins.\n");
     out.push_str("    return _guest_contract_instance_null()\n\n");
     out.push_str(&format!(
-        "def {upper}_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
+        "def {upper}_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
     ));
     out.push_str("    # Default stub is no-op - users override for cleanup before hot-reload.\n");
     out.push_str("    pass\n\n");
@@ -1063,12 +1063,12 @@ fn generate_guest_plugin_vtable(
         plugin_name
     ));
     out.push_str(&format!(
-        "def {plugin_upper}_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
+        "def {plugin_upper}_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:\n"
     ));
     out.push_str("    # Default stub returns null instance - users override for stateful plugins.\n");
     out.push_str("    return _GuestContractInstance(data=ctypes.c_void_p(0))\n\n");
     out.push_str(&format!(
-        "def {plugin_upper}_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
+        "def {plugin_upper}_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:\n"
     ));
     out.push_str("    # Default stub is no-op - users override for cleanup before hot-reload.\n");
     out.push_str("    pass\n\n");
