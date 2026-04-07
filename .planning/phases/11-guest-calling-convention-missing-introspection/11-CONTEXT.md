@@ -40,6 +40,24 @@ Rename `call_method` to `call_guest_method`, implement guest-to-guest calls with
   - No more `rt_ctx` parameter — functions take `self_ptr: *const Interface` instead
   - SDKs hide the `self_ptr` passing from users
 
+### Types That Stay Unchanged
+- **VmLoaderData** — KEEP. Wraps VM-specific state for loaders (Python, Lua, JS). Used in `VmDispatch`. Independent of RuntimeContext.
+- **PluginContext** — KEEP. Still passed to `polyplug_init`, contains `bundle_id` used by `get_dependencies`.
+- **VmDispatch** — KEEP. Used for VM-based dispatch, still takes `VmLoaderData`.
+
+### polyplug_init Signature Change
+```c
+// Old (with RuntimeContext):
+void polyplug_init(RuntimeContext rt_ctx, const HostInterface* host, const PluginContext* ctx);
+
+// New (rt_ctx removed - redundant since HostInterface contains runtime pointer):
+void polyplug_init(const HostInterface* host, const PluginContext* ctx);
+```
+
+### Interface Lifetime
+- **RuntimeInterface** — Allocated by `polyplug_runtime_create()`, freed by calling `destroy()`. Host owns the pointer.
+- **HostInterface** — Static allocation by runtime. Lives as long as the runtime. Pointer is valid until runtime destroyed.
+
 ### Interface Structures
 ```rust
 // RuntimeInterface - returned to host from polyplug_runtime_create()
@@ -148,6 +166,10 @@ ContractHandle handle = host.find_by_contract(contract_id, version);  // SDK pas
 ### Files to Delete
 - `crates/polyplug_abi/src/host/runtime_context.rs`
 - `crates/polyplug/src/host/host_context.rs`
+
+### Files That Stay
+- `crates/polyplug_abi/src/host/vm_loader_data.rs` — VmLoaderData stays
+- `crates/polyplug_abi/src/plugin/plugin_context.rs` — PluginContext stays
 
 ### Claude's Discretion
 - Exact layout of `Array<T>` and `Vector<T>` structs
