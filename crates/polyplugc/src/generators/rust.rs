@@ -2772,7 +2772,7 @@ mod tests {
         generator
             .generate_host(&ir, &mut files)
             .expect("generate_host");
-        assert_eq!(files.files.len(), 3);
+        assert_eq!(files.files.len(), 5); // types.rs, host_callers.rs, mod.rs (x2 for generated/ and generated/host/), manifest.toml
         assert!(files.files[0].content.contains("AUTO-GENERATED"));
         assert!(files.files[1].content.contains("AUTO-GENERATED"));
         assert!(files.files[2].content.contains("AUTO-GENERATED"));
