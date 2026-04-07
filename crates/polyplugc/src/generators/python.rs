@@ -399,7 +399,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
+    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
     out.push_str("from polyplug_guest import store_host_vtable\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
@@ -453,23 +453,20 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
 
     out.push_str("def polyplug_abi_version() -> int:\n");
     out.push_str("    return 1\n\n");
-    out.push_str("def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:\n");
-    out.push_str("    \"\"\"Initialize plugin with runtime context.\n");
+    out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
+    out.push_str("    \"\"\"Initialize plugin with host interface.\n");
     out.push_str("\n");
     out.push_str("    Args:\n");
-    out.push_str("        rt_ctx: RuntimeContext handle (opaque pointer as int)\n");
-    out.push_str("        host_ptr: Pointer to RuntimeAbi\n");
+    out.push_str("        host_ptr: Pointer to HostInterface\n");
     out.push_str("        ctx_ptr: Pointer to PluginContext\n");
     out.push_str("    \"\"\"\n");
-    out.push_str("    if rt_ctx == 0:\n");
-    out.push_str("        return\n");
     out.push_str("    if host_ptr == 0:\n");
     out.push_str("        return\n");
     out.push_str("    if ctx_ptr == 0:\n");
     out.push_str("        return\n");
     out.push_str("    store_host_vtable(host_ptr)\n");
     out.push_str("    ctx: PluginContext = PluginContext.from_address(ctx_ptr)\n");
-    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))\n");
+    out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
 
     if let Some(bundle) = &ir.bundle {
         for plugin in &bundle.plugins {
@@ -477,7 +474,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    err_{plugin_upper}: AbiError = host.contents.register_contract(\n"
             ));
-            out.push_str(&format!("        rt_ctx, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_VTABLE)\n"));
+            out.push_str(&format!("        host_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_VTABLE)\n"));
             out.push_str("    )\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode.Ok:\n"));
             out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
@@ -489,7 +486,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                 "    err_{upper}: AbiError = host.contents.register_contract(\n"
             ));
             out.push_str(&format!(
-                "        rt_ctx, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"
+                "        host_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"
             ));
             out.push_str("    )\n");
             out.push_str(&format!("    if err_{upper}.code != AbiErrorCode.Ok:\n"));
@@ -506,7 +503,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import RuntimeAbi, PluginContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -535,8 +532,8 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     }
 
     out.push_str("def polyplug_abi_version() -> int: ...\n");
-    out.push_str("def polyplug_init(rt_ctx: int, host_ptr: int, ctx_ptr: int) -> None:\n");
-    out.push_str("    \"\"\"Initialize plugin with RuntimeContext handle.\"\"\"\n");
+    out.push_str("def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:\n");
+    out.push_str("    \"\"\"Initialize plugin with HostInterface pointer.\"\"\"\n");
     out.push_str("    ...\n");
 
     out
@@ -1577,9 +1574,9 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
     out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
     out.push_str("        if host_ptr == 0:\n");
     out.push_str("            return None\n");
-    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(RuntimeAbi))\n");
+    out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
     out.push_str(&format!(
-        "        vtable: int = host.contents.get_host_contract(0, 0x{:016X}, min_version)\n",
+        "        vtable: int = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
         contract.contract_id
     ));
     out.push_str("        if vtable == 0:\n");
@@ -1794,7 +1791,7 @@ fn generate_guest_host_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Self\n");
-    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractVTable, RuntimeAbi, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, Buffer, DispatchType, HostContractVTable, HostInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_guest_host_contract_type_imports(ir);
     if !type_imports.is_empty() {

@@ -339,10 +339,10 @@ fn generate_cpp_guest_plugin_interface(
         plugin_name
     ));
     out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(RuntimeContext rt_ctx, const void* args) noexcept {{\n",
+        "static GuestContractInstance {0}_create_instance_stub(const HostInterface* host, const void* args) noexcept {{\n",
         plugin_upper
     ));
-    out.push_str("    (void)rt_ctx; (void)args;  // Unused in default stub.\n");
+    out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
     out.push_str("    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n");
     out.push_str("}\n\n");
     out.push_str(&format!(
@@ -350,10 +350,10 @@ fn generate_cpp_guest_plugin_interface(
         plugin_name
     ));
     out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(RuntimeContext rt_ctx, GuestContractInstance instance) noexcept {{\n",
+        "static void {0}_destroy_instance_stub(const HostInterface* host, GuestContractInstance instance) noexcept {{\n",
         plugin_upper
     ));
-    out.push_str("    (void)rt_ctx; (void)instance;  // Unused in default stub.\n");
+    out.push_str("    (void)host; (void)instance;  // Unused in default stub.\n");
     out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
     out.push_str("}\n\n");
 
@@ -424,10 +424,10 @@ fn generate_cpp_guest_contract_interface(
         contract.name
     ));
     out.push_str(&format!(
-        "static GuestContractInstance {0}_create_instance_stub(RuntimeContext rt_ctx, const void* args) noexcept {{\n",
+        "static GuestContractInstance {0}_create_instance_stub(const HostInterface* host, const void* args) noexcept {{\n",
         upper
     ));
-    out.push_str("    (void)rt_ctx; (void)args;  // Unused in default stub.\n");
+    out.push_str("    (void)host; (void)args;  // Unused in default stub.\n");
     out.push_str("    return GuestContractInstance{nullptr};  // Null instance for stateless plugins.\n");
     out.push_str("}\n\n");
     out.push_str(&format!(
@@ -435,10 +435,10 @@ fn generate_cpp_guest_contract_interface(
         contract.name
     ));
     out.push_str(&format!(
-        "static void {0}_destroy_instance_stub(RuntimeContext rt_ctx, GuestContractInstance instance) noexcept {{\n",
+        "static void {0}_destroy_instance_stub(const HostInterface* host, GuestContractInstance instance) noexcept {{\n",
         upper
     ));
-    out.push_str("    (void)rt_ctx; (void)instance;  // Unused in default stub.\n");
+    out.push_str("    (void)host; (void)instance;  // Unused in default stub.\n");
     out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
     out.push_str("}\n\n");
 
@@ -671,8 +671,8 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(RuntimeContext rt_ctx, const RuntimeAbi* host, const PluginContext* ctx) {\n");
-    out.push_str("    if (rt_ctx.data == nullptr || !host || !ctx) {\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx) {\n");
+    out.push_str("    if (!host || !ctx) {\n");
     out.push_str(
         "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
     );
@@ -1442,17 +1442,17 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
 
     // Factory method - from_host
     out.push_str(
-        "    /// Factory method - creates caller from RuntimeAbi or nullopt if not found.\n",
+        "    /// Factory method - creates caller from HostInterface or nullopt if not found.\n",
     );
     out.push_str(&format!(
-        "    static std::optional<{}> from_host(const RuntimeAbi* host, uint32_t min_version = 0) noexcept {{\n",
+        "    static std::optional<{}> from_host(const HostInterface* host, uint32_t min_version = 0) noexcept {{\n",
         class_name
     ));
     out.push_str("        if (host == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        const HostContractVTable* vtable = host->get_host_contract(nullptr, 0x{:016X}ULL, min_version);\n",
+        "        const HostContractVTable* vtable = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
     out.push_str("        if (vtable == nullptr) {\n");

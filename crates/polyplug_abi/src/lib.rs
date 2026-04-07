@@ -45,15 +45,6 @@ pub use host::{HostContractInterface, HostContractInstance, HostInterface, Runti
 
 pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
 
-// ─── Backward compatibility aliases ────────────────────────────────────────────
-
-/// Legacy alias for HostInterface (backward compatibility).
-pub type RuntimeAbi = HostInterface;
-
-/// Legacy alias for opaque runtime context pointer (backward compatibility).
-/// This type was removed in a refactoring but generated code may still reference it.
-pub type RuntimeContext = *mut core::ffi::c_void;
-
 // ─── ABI version sentinel ────────────────────────────────────────────────────
 
 /// ABI version sentinel — all bundles must export a function returning this value.

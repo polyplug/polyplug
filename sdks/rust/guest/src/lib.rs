@@ -211,16 +211,6 @@ pub use polyplug_abi::HostContractInstance;
 /// and extension vtable retrieval.
 pub use polyplug_abi::HostInterface;
 
-/// Legacy alias for HostInterface (backward compatibility).
-pub type HostVTable = HostInterface;
-
-/// Legacy alias for HostInterface (backward compatibility).
-pub type RuntimeAbi = HostInterface;
-
-/// Legacy alias for opaque runtime context pointer (backward compatibility).
-/// This type was removed in a refactoring but generated code may still reference it.
-pub type RuntimeContext = *mut core::ffi::c_void;
-
 /// Metadata about a plugin within a bundle.
 ///
 /// OWNERSHIP: value type passed by pointer during init. The `name` and

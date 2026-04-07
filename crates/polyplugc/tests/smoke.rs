@@ -12,14 +12,16 @@
 
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
+use polyplug_abi::Array;
+use polyplug_utils::BundleId;
+use polyplug_abi::host::host_interface::ContractHandle;
+use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractInstance;
-use polyplug_abi::RuntimeAbi;
+use polyplug_abi::HostInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
-use polyplug_abi::RuntimeContext;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -115,9 +117,8 @@ use polyplug_guest::ABI_ERROR_GENERIC;
 use polyplug_guest::AbiError;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginError;
-use polyplug_guest::RuntimeAbi;
+use polyplug_guest::HostInterface;
 use polyplug_guest::PluginContext;
-use polyplug_guest::RuntimeContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use guest::contracts::TestAddPlugin;
@@ -146,11 +147,10 @@ impl TestAddPlugin for MyPlugin {
 }
 
 /// # Safety
-/// `rt_ctx` and `host` must be valid non-null pointers provided by the host.
+/// `host` must be a valid non-null pointer provided by the host.
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: RuntimeContext,
-    host: *const RuntimeAbi,
+    host: *const HostInterface,
     _ctx: *const PluginContext,
 ) -> AbiError {
     if host.is_null() {
@@ -161,7 +161,7 @@ pub unsafe extern "C" fn polyplug_init(
     let _ = set_test_adder_impl(Box::new(MyPlugin));
 
     // SAFETY: host is non-null and valid per ABI contract.
-    let host: &RuntimeAbi = unsafe { &*host };
+    let host: &HostInterface = unsafe { &*host };
 
     let desc: PluginDescriptor = PluginDescriptor {
         name: StringView { ptr: b"smoke_test_plugin".as_ptr(), len: 17_usize },
@@ -172,7 +172,7 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: desc and TEST_ADDER_VTABLE are 'static; host is valid.
     unsafe {
         (host.register_contract)(
-            rt_ctx,
+            host as *const _,
             &desc as *const PluginDescriptor,
             &TEST_ADDER_VTABLE as *const _,
         )
@@ -183,7 +183,7 @@ pub unsafe extern "C" fn polyplug_init(
     std::fs::write(&lib_rs_path, content).expect("failed to write plugin src/lib.rs");
 }
 
-// ─── RuntimeAbi callback capturing the interface pointer ─────────────────────────
+// ─── HostInterface callback capturing the interface pointer ───────────────────────
 
 // Captured interface pointer from the register_contract callback, stored in a thread-local.
 std::thread_local! {
@@ -196,7 +196,7 @@ std::thread_local! {
 /// # Safety
 /// `descriptor` and `interface` must be valid for the duration of the call.
 unsafe extern "C" fn capture_interface_callback(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -214,10 +214,10 @@ struct AddArgs {
     b: u32,
 }
 
-// ─── HostVTable stub functions ─────────────────────────────────────────────────
+// ─── HostInterface stub functions ─────────────────────────────────────────────────
 
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -225,7 +225,7 @@ unsafe extern "C" fn stub_alloc(
 }
 
 unsafe extern "C" fn stub_free(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -237,34 +237,30 @@ unsafe extern "C" fn stub_free(
 }
 
 unsafe extern "C" fn stub_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle {
-        index: u32::MAX,
-    }
+) -> ContractHandle {
+    ContractHandle { index: u32::MAX }
 }
 
 unsafe extern "C" fn stub_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> Array<ContractHandle> {
+    Array::empty()
 }
 
 unsafe extern "C" fn stub_resolve_contract(
-    _rt_ctx: RuntimeContext,
-    _handle: PluginHandle,
+    _host: *const HostInterface,
+    _handle: ContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-unsafe extern "C" fn stub_call_method(
-    _rt_ctx: RuntimeContext,
+unsafe extern "C" fn stub_call_guest_method(
+    _host: *const HostInterface,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -277,11 +273,23 @@ unsafe extern "C" fn stub_call_method(
 }
 
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance { data: core::ptr::null_mut() }
+}
+
+unsafe extern "C" fn stub_list_bundles(
+    _host: *const HostInterface,
+) -> Array<BundleId> {
+    Array::empty()
+}
+
+unsafe extern "C" fn stub_get_dependencies(
+    _host: *const HostInterface,
+) -> Array<DependencyInfo> {
+    Array::empty()
 }
 
 // ─── Test 1: Rust codegen round-trip ─────────────────────────────────────────
@@ -350,8 +358,7 @@ fn smoke_rust_codegen_dispatch() {
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -360,18 +367,21 @@ fn smoke_rust_codegen_dispatch() {
             .expect("polyplug_init symbol not found")
     };
 
-    // ── 8. Build RuntimeAbi + call polyplug_init ───────────────────────────────
+    // ── 8. Build HostInterface + call polyplug_init ───────────────────────────────
     CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
 
-    let host_abi: RuntimeAbi = RuntimeAbi {
+    let host_abi: HostInterface = HostInterface {
+        runtime: core::ptr::null_mut(),
         register_contract: capture_interface_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_contract: stub_resolve_contract,
-        call_method: stub_call_method,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.
@@ -382,8 +392,7 @@ fn smoke_rust_codegen_dispatch() {
     // SAFETY: init_fn is valid; host_abi and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &host_abi as *const RuntimeAbi,
+            &host_abi as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
@@ -459,7 +468,7 @@ fn smoke_cpp_codegen_dispatch() {
 
     let guest_dir: PathBuf = out_dir.join("guest");
 
-    // ── 3. Assert all 5 expected guest files exist ──────────────────────────
+    // ── 3. Assert all 4 expected guest files exist ──────────────────────────
     let expected_guest_files: [&str; 4] = ["types.hpp", "contracts.hpp", "interfaces.hpp", "init.hpp"];
     for filename in expected_guest_files {
         let file_path: PathBuf = guest_dir.join(filename);

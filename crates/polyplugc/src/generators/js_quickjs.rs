@@ -597,18 +597,16 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
 
     out.push_str("/**\n");
     out.push_str(" * Initialize plugin with host runtime.\n");
-    out.push_str(" * @param rt_ctx_lo - RuntimeContext handle (low 32 bits)\n");
-    out.push_str(" * @param rt_ctx_hi - RuntimeContext handle (high 32 bits)\n");
+    out.push_str(" * @param host_lo - HostInterface pointer (low 32 bits)\n");
+    out.push_str(" * @param host_hi - HostInterface pointer (high 32 bits)\n");
+    out.push_str(" * @param ctx_lo - PluginContext pointer (low 32 bits)\n");
+    out.push_str(" * @param ctx_hi - PluginContext pointer (high 32 bits)\n");
     out.push_str(" */\n");
     out.push_str("export function polyplug_init(\n");
-    out.push_str("    rt_ctx_lo: number, rt_ctx_hi: number,\n");
     out.push_str("    host_lo: number, host_hi: number,\n");
     out.push_str("    ctx_lo: number, ctx_hi: number\n");
     out.push_str("): AbiError {\n");
     out.push_str("    // Validate parameters\n");
-    out.push_str("    if (rt_ctx_lo === 0 && rt_ctx_hi === 0) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
-    out.push_str("    }\n");
     out.push_str("    if (host_lo === 0 && host_hi === 0) {\n");
     out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n");

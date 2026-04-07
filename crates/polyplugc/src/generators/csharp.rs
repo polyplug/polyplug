@@ -646,23 +646,11 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out.push_str("using Polyplug.Guest;\n");
     out.push_str("using Polyplug.Abi;\n\n");
 
-    // Add RuntimeContext struct definition
-    out.push_str("namespace Polyplug.Abi {\n");
-    out.push_str("/// Opaque handle to the runtime context passed to plugin functions.\n");
-    out.push_str("/// Wraps a HostContext pointer passed during polyplug_init.\n");
-    out.push_str("public readonly struct RuntimeContext {\n");
-    out.push_str("    public readonly IntPtr Data;\n");
-    out.push_str("    public RuntimeContext(IntPtr data) => Data = data;\n");
-    out.push_str("    public static RuntimeContext Null => new RuntimeContext(IntPtr.Zero);\n");
-    out.push_str("    public bool IsNull => Data == IntPtr.Zero;\n");
-    out.push_str("}\n");
-    out.push_str("}\n\n");
-
     out.push_str("public static class Plugin {\n");
     out.push_str("    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) }, EntryPoint = \"polyplug_init\")]\n");
-    out.push_str("    public static uint PolyplugInit(RuntimeContext rtCtx, IntPtr hostPtr, IntPtr ctxPtr) {\n");
-    out.push_str("        if (rtCtx.IsNull || hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
-    out.push_str("        HostVTableStorage.StoreHostVTable(hostPtr);\n");
+    out.push_str("    public static uint PolyplugInit(IntPtr hostPtr, IntPtr ctxPtr) {\n");
+    out.push_str("        if (hostPtr == IntPtr.Zero || ctxPtr == IntPtr.Zero) return AbiErrorCode.Generic;\n");
+    out.push_str("        HostInterfaceStorage.StoreHostInterface(hostPtr);\n");
     out.push_str("        System.Threading.Thread.BeginThreadAffinity();\n");
     out.push_str("        try {\n");
     out.push_str("        unsafe {\n");
@@ -735,10 +723,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     ));
                     out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
                     out.push_str("                };\n");
-                    out.push_str("                var abi = (RuntimeAbi*)hostPtr;\n");
-                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)abi->RegisterContract;\n");
+                    out.push_str("                var host = (HostInterface*)hostPtr;\n");
+                    out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;\n");
                     out.push_str(&format!(
-                        "                var err_{plugin_lower} = registerFn(rtCtx, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
+                        "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
                     ));
                     out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiErrorCode.Ok) return err_{plugin_lower}.Code;\n"));
                     out.push_str("            }\n");
@@ -792,10 +780,10 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             ));
             out.push_str(&format!("                    Version = new Version {{ Major = {major}u, Minor = {minor}u, Patch = {patch}u }},\n"));
             out.push_str("                };\n");
-            out.push_str("                var abi = (RuntimeAbi*)hostPtr;\n");
-            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)abi->RegisterContract;\n");
+            out.push_str("                var host = (HostInterface*)hostPtr;\n");
+            out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;\n");
             out.push_str(&format!(
-                "                var err_{lower} = registerFn(rtCtx, &desc_{lower}, vtablePtr_{lower});\n"
+                "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, vtablePtr_{lower});\n"
             ));
             out.push_str(&format!("                if (err_{lower}.Code != AbiErrorCode.Ok) return err_{lower}.Code;\n"));
             out.push_str("            }\n");
@@ -1102,7 +1090,7 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     ));
 
     // Factory method - FromHost
-    out.push_str("    /// <summary>Factory method - creates caller from HostVTable or null if not found.</summary>\n");
+    out.push_str("    /// <summary>Factory method - creates caller from HostInterface or null if not found.</summary>\n");
     out.push_str(&format!(
         "    public static {}? FromHost(IntPtr host, uint minVersion = 0) {{\n",
         class_name
@@ -1111,9 +1099,9 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("            return null;\n");
     out.push_str("        }\n");
     out.push_str("        unsafe {\n");
-    out.push_str("            var hostVtable = (HostVTable*)host;\n");
+    out.push_str("            var hostInterface = (HostInterface*)host;\n");
     out.push_str(&format!(
-        "            var vtable = hostVtable->GetHostContract(IntPtr.Zero, 0x{:016X}UL, minVersion);\n",
+        "            var vtable = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
     out.push_str("            if (vtable == IntPtr.Zero) {\n");
