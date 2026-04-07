@@ -67,11 +67,11 @@ ENCODER_FNS = (ctypes.c_void_p * 1) (
 )
 
 # Default create_instance stub for encoder - returns null instance.
-def ENCODER_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
+def ENCODER_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
     # Default stub returns null instance - users override for stateful plugins.
     return _GuestContractInstance(data=ctypes.c_void_p(0))
 
-def ENCODER_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
+def ENCODER_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
     # Default stub is no-op - users override for cleanup before hot-reload.
     pass
 

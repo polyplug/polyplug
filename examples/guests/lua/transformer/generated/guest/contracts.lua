@@ -16,13 +16,13 @@ TRANSFORMER_VTABLE.contract_version.minor = 0
 TRANSFORMER_VTABLE.contract_version.patch = 0
 TRANSFORMER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for transformer - returns null instance.
-function TRANSFORMER_create_instance_stub(rt_ctx, args)
+function TRANSFORMER_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
 TRANSFORMER_VTABLE.create_instance = TRANSFORMER_create_instance_stub
 -- Default destroy_instance stub for transformer - no-op.
-function TRANSFORMER_destroy_instance_stub(rt_ctx, instance)
+function TRANSFORMER_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
 TRANSFORMER_VTABLE.destroy_instance = TRANSFORMER_destroy_instance_stub

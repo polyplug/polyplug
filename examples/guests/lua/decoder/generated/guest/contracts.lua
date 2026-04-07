@@ -16,13 +16,13 @@ DECODER_VTABLE.contract_version.minor = 0
 DECODER_VTABLE.contract_version.patch = 0
 DECODER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for decoder - returns null instance.
-function DECODER_create_instance_stub(rt_ctx, args)
+function DECODER_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
 DECODER_VTABLE.create_instance = DECODER_create_instance_stub
 -- Default destroy_instance stub for decoder - no-op.
-function DECODER_destroy_instance_stub(rt_ctx, instance)
+function DECODER_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
 DECODER_VTABLE.destroy_instance = DECODER_destroy_instance_stub

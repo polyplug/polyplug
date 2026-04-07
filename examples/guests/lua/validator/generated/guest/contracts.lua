@@ -16,13 +16,13 @@ VALIDATOR_VTABLE.contract_version.minor = 0
 VALIDATOR_VTABLE.contract_version.patch = 0
 VALIDATOR_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for validator - returns null instance.
-function VALIDATOR_create_instance_stub(rt_ctx, args)
+function VALIDATOR_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
 VALIDATOR_VTABLE.create_instance = VALIDATOR_create_instance_stub
 -- Default destroy_instance stub for validator - no-op.
-function VALIDATOR_destroy_instance_stub(rt_ctx, instance)
+function VALIDATOR_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
 VALIDATOR_VTABLE.destroy_instance = VALIDATOR_destroy_instance_stub

@@ -16,13 +16,13 @@ REPORTER_VTABLE.contract_version.minor = 0
 REPORTER_VTABLE.contract_version.patch = 0
 REPORTER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for reporter - returns null instance.
-function REPORTER_create_instance_stub(rt_ctx, args)
+function REPORTER_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
 REPORTER_VTABLE.create_instance = REPORTER_create_instance_stub
 -- Default destroy_instance stub for reporter - no-op.
-function REPORTER_destroy_instance_stub(rt_ctx, instance)
+function REPORTER_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
 REPORTER_VTABLE.destroy_instance = REPORTER_destroy_instance_stub

@@ -16,13 +16,13 @@ ENCODER_VTABLE.contract_version.minor = 0
 ENCODER_VTABLE.contract_version.patch = 0
 ENCODER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for encoder - returns null instance.
-function ENCODER_create_instance_stub(rt_ctx, args)
+function ENCODER_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
 ENCODER_VTABLE.create_instance = ENCODER_create_instance_stub
 -- Default destroy_instance stub for encoder - no-op.
-function ENCODER_destroy_instance_stub(rt_ctx, instance)
+function ENCODER_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
 ENCODER_VTABLE.destroy_instance = ENCODER_destroy_instance_stub

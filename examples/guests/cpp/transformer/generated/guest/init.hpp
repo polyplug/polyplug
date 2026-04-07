@@ -31,7 +31,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext
         { (const uint8_t*)"data.Transformer@1", 18U },  // contract_name (StringView)
         { 1U, 0U, 0U }  // version (Version)
     };
-    AbiError err_TRANSFORMER = host->register_contract(rt_ctx, &desc_TRANSFORMER, &polyplug_plugin::TRANSFORMER_VTABLE);
+    AbiError err_TRANSFORMER = host->register_contract(host, &desc_TRANSFORMER, &polyplug_plugin::TRANSFORMER_VTABLE);
     if (err_TRANSFORMER.code != 0U) return err_TRANSFORMER;
 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};

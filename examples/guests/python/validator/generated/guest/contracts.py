@@ -67,11 +67,11 @@ VALIDATOR_FNS = (ctypes.c_void_p * 1) (
 )
 
 # Default create_instance stub for validator - returns null instance.
-def VALIDATOR_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
+def VALIDATOR_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
     # Default stub returns null instance - users override for stateful plugins.
     return _GuestContractInstance(data=ctypes.c_void_p(0))
 
-def VALIDATOR_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
+def VALIDATOR_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
     # Default stub is no-op - users override for cleanup before hot-reload.
     pass
 

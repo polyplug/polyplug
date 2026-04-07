@@ -67,11 +67,11 @@ DECODER_FNS = (ctypes.c_void_p * 1) (
 )
 
 # Default create_instance stub for decoder - returns null instance.
-def DECODER_create_instance_stub(rt_ctx: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
+def DECODER_create_instance_stub(host: ctypes.c_void_p, args: ctypes.c_void_p) -> _GuestContractInstance:
     # Default stub returns null instance - users override for stateful plugins.
     return _GuestContractInstance(data=ctypes.c_void_p(0))
 
-def DECODER_destroy_instance_stub(rt_ctx: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
+def DECODER_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContractInstance) -> None:
     # Default stub is no-op - users override for cleanup before hot-reload.
     pass
 
