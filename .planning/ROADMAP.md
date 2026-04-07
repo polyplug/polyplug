@@ -234,7 +234,7 @@ Plans:
 | 8. Retroactive Verification | 4/4 | Complete | 2026-04-06 |
 | 9. Codegen Test Cleanup | 3/3 | Complete | 2026-04-06 |
 | 10. SDK Cleanup Completion | 2/2 | Complete    | 2026-04-06 |
-| 11. Guest Calling Convention | 10/10 | Complete    | 2026-04-07 |
+| 11. Guest Calling Convention | 10/10 | Complete   | 2026-04-07 |
 
 ## Dependencies
 
@@ -277,7 +277,7 @@ Phase 11 (Guest Calling Convention & Missing Introspection)
 **Goal:** Rename `RuntimeAbi` to `HostInterface`, create `RuntimeInterface` for symmetric API, delete `RuntimeContext`/`HostContext` wrappers, rename `call_method` to `call_guest_method`, implement guest-to-guest calls, add introspection ABIs, create `Array<T>` type, update all SDKs and codegen.
 **Requirements**: D-01 through D-14 from CONTEXT.md
 **Depends on:** Phase 10
-**Plans:** 10/10 complete
+**Plans:** 10/10 plans complete
 
 Plans:
 - [x] 11-01-PLAN.md — Rename RuntimeAbi to HostInterface, create RuntimeInterface (D-01, D-02)
