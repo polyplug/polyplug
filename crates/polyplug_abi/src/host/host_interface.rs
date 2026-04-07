@@ -1,5 +1,8 @@
 //! Host Interface — function table passed to guests during initialization.
 //!
+//! This module defines `HostInterface`, the primary interface guests use to
+//! interact with the runtime. Guests receive this interface in `polyplug_init()`.
+//!
 //! # Who provides
 //! The runtime creates this struct and passes it to `polyplug_init()`.
 //!
@@ -16,6 +19,10 @@
 //! # Thread Safety
 //! All functions are safe to call from any thread. The runtime handles
 //! internal synchronization.
+//!
+//! # Self-Passing Pattern
+//! All functions take `self: *const HostInterface` as the first parameter.
+//! SDKs hide this detail from users, automatically passing the interface pointer.
 
 use core::ffi::c_void;
 
@@ -36,6 +43,25 @@ pub type ContractHandle = PluginHandle;
 /// Contains an opaque runtime pointer and function pointers for guest calls.
 /// All functions use self-passing pattern (receive HostInterface pointer as first parameter).
 ///
+/// # Who provides
+/// The runtime creates this struct and passes it to `polyplug_init()`.
+/// The struct is allocated using `Box::leak()` for `'static` lifetime.
+///
+/// # Who calls
+/// Guest (plugin) code calls these functions to interact with the runtime.
+/// SDK-generated wrappers handle the self-passing pattern automatically.
+///
+/// # Ownership
+/// The struct is statically allocated by the runtime. The pointer is valid
+/// until the runtime is destroyed. Guest must NOT free this pointer.
+///
+/// # Lifetime
+/// Lives as long as the runtime that created it.
+///
+/// # Thread Safety
+/// All functions are safe to call from any thread. The runtime uses
+/// internal synchronization (RwLock/Mutex) for shared state.
+///
 /// # Self-passing pattern
 /// Each function receives the interface pointer as its first parameter,
 /// allowing guests to call: `host->find_by_contract(host, id, ver)`
@@ -46,22 +72,62 @@ pub struct HostInterface {
     ///
     /// Set during interface creation. Provides access to runtime state
     /// for dependency enforcement and resource management.
+    ///
+    /// # Ownership
+    /// Owned by the runtime. Guests must NOT free or modify this pointer.
     pub runtime: *mut c_void,
     /// Register a guest contract implementation.
     ///
-    /// Called by plugins during `polyplug_init` to register their contracts.
+    /// Called by plugins during `polyplug_init()` to register their contracts.
+    /// Returns error if contract_id collision detected or ABI version mismatch.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `descriptor`: Plugin descriptor with contract metadata
+    /// - `interface`: GuestContractInterface to register
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
     pub register_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         descriptor: *const PluginDescriptor,
         interface: *const GuestContractInterface,
     ) -> AbiError,
     /// Allocate memory using the host allocator.
+    ///
+    /// Memory allocated here must be freed via `free`.
+    /// Returns null on allocation failure.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `size`: Number of bytes to allocate
+    /// - `align`: Alignment requirement (must be power of 2)
+    ///
+    /// # Returns
+    /// Pointer to allocated memory, or null on failure.
     pub alloc: unsafe extern "C" fn(this: *const HostInterface, size: usize, align: usize) -> *mut u8,
-    /// Free memory using the host allocator.
+    /// Free memory allocated via `alloc`.
+    ///
+    /// Must pass the same size and align used for allocation.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `ptr`: Pointer to memory to free
+    /// - `size`: Size used for allocation
+    /// - `align`: Alignment used for allocation
     pub free: unsafe extern "C" fn(this: *const HostInterface, ptr: *mut u8, size: usize, align: usize),
     /// Find a guest contract by contract_id and minimum version.
     ///
     /// Returns a ContractHandle that can be resolved to an interface.
+    /// Returns null handle if no matching contract found.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `contract_id`: Contract identifier hash
+    /// - `min_version`: Minimum version required
+    ///
+    /// # Returns
+    /// ContractHandle for the first matching contract, or null handle.
     pub find_by_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
@@ -69,7 +135,16 @@ pub struct HostInterface {
     ) -> ContractHandle,
     /// Find all guest contracts matching contract_id and minimum version.
     ///
-    /// Returns an Array of ContractHandle. Caller must free via host->free.
+    /// Returns an Array of ContractHandle. Caller must free via `host->free`.
+    /// Use when multiple implementations of the same contract may exist.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `contract_id`: Contract identifier hash
+    /// - `min_version`: Minimum version required
+    ///
+    /// # Returns
+    /// Array of ContractHandle. Caller owns and must free.
     pub find_all_by_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
@@ -77,7 +152,14 @@ pub struct HostInterface {
     ) -> Array<ContractHandle>,
     /// Resolve a ContractHandle to a GuestContractInterface pointer.
     ///
-    /// Returns null if the handle is invalid or stale.
+    /// Returns null if the handle is invalid or contract was unloaded.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `handle`: ContractHandle from find_by_contract
+    ///
+    /// # Returns
+    /// Pointer to GuestContractInterface, or null if invalid/stale.
     pub resolve_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         handle: ContractHandle,
@@ -88,11 +170,14 @@ pub struct HostInterface {
     /// different dispatch types (Native vs VM).
     ///
     /// # Arguments
-    /// - `this`: HostInterface pointer
-    /// - `instance`: The guest contract instance
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `instance`: GuestContractInstance with contract_id for dispatch
     /// - `method_id`: Method index within the contract
-    /// - `args`: Pointer to packed arguments
+    /// - `args`: Pointer to packed arguments (contract-specific layout)
     /// - `out`: Pointer to output buffer for return value
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
     pub call_guest_method: unsafe extern "C" fn(
         this: *const HostInterface,
         instance: GuestContractInstance,
@@ -104,6 +189,14 @@ pub struct HostInterface {
     ///
     /// For singleton host contracts, returns the same instance every time.
     /// For multi-instance host contracts, returns a new instance each time.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `contract_id`: Host contract identifier hash
+    /// - `min_version`: Minimum version required
+    ///
+    /// # Returns
+    /// HostContractInstance for the contract.
     pub get_host_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
@@ -111,14 +204,28 @@ pub struct HostInterface {
     ) -> crate::host::HostContractInstance,
     /// List all loaded bundles.
     ///
-    /// Returns an Array of BundleId values. Caller must free via host->free.
+    /// Returns an Array of BundleId. Caller must free via `host->free`.
+    /// Bundle IDs are stable for the lifetime of the runtime.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    ///
+    /// # Returns
+    /// Array of BundleId. Caller owns and must free.
     pub list_bundles: unsafe extern "C" fn(
         this: *const HostInterface,
     ) -> Array<BundleId>,
     /// Get dependencies for the calling bundle.
     ///
     /// Uses bundle_id from current PluginContext (TLS) to look up declared deps.
-    /// Returns an Array of DependencyInfo. Caller must free via host->free.
+    /// Returns an Array of DependencyInfo. Caller must free via `host->free`.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    ///
+    /// # Returns
+    /// Array of DependencyInfo. Caller owns and must free.
+    /// Returns empty array if called outside bundle init context.
     pub get_dependencies: unsafe extern "C" fn(
         this: *const HostInterface,
     ) -> Array<DependencyInfo>,
