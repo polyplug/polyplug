@@ -21,7 +21,7 @@ use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug::runtime::Runtime;
-use polyplug_abi::{DispatchType, GuestContractInterface, RuntimeContext, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
+use polyplug_abi::{DispatchType, GuestContractInterface, HostInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
 use polyplug_utils::BundleId;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -35,7 +35,7 @@ const MOCK_FNS_EMPTY: [*const (); 0] = [];
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _args: *const (),
 ) -> polyplug_abi::GuestContractInstance {
     polyplug_abi::GuestContractInstance::null()
@@ -43,7 +43,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _rt_ctx: RuntimeContext,
+    _host: *const HostInterface,
     _instance: polyplug_abi::GuestContractInstance,
 ) {
 }

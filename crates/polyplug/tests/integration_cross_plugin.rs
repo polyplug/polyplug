@@ -11,7 +11,7 @@
 
 use polyplug_abi::{
     DispatchType, NativeDispatch, PluginDescriptor, DispatchMechanisms, GuestContractInterface,
-    GuestContractInstance, RuntimeContext, StringView, Version,
+    GuestContractInstance, HostInterface, StringView, Version,
 };
 use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
@@ -27,8 +27,8 @@ fn make_static_interface(cid: GuestContractId) -> &'static GuestContractInterfac
         contract_id: cid,
         contract_version: Version { major: 1, minor: 0, patch: 0 },
         dispatch_type: DispatchType::Native,
-        create_instance: |_rt_ctx: RuntimeContext| GuestContractInstance::null(),
-        destroy_instance: |_rt_ctx: RuntimeContext, _instance: GuestContractInstance| {},
+        create_instance: |_host: *const HostInterface| GuestContractInstance::null(),
+        destroy_instance: |_host: *const HostInterface, _instance: GuestContractInstance| {},
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,

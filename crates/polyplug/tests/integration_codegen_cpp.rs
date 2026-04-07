@@ -9,8 +9,7 @@
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
-use polyplug_abi::RuntimeAbi;
-use polyplug_abi::RuntimeContext;
+use polyplug_abi::HostInterface;
 use polyplug_abi::types::abi_error_ok;
 use polyplug_abi::types::StringView;
 use polyplug_abi::PluginDescriptor;
@@ -62,9 +61,9 @@ fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
 /// Registry for dispatch testing.
 ///
 /// # Safety
-/// `rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
+/// `this`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -107,7 +106,7 @@ unsafe extern "C" fn registry_register_callback(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -116,7 +115,7 @@ unsafe extern "C" fn noop_alloc(
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -127,7 +126,7 @@ unsafe extern "C" fn noop_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -136,26 +135,24 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> polyplug_abi::Array<PluginHandle> {
+    polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-/// No-op call_method callback.
-unsafe extern "C" fn noop_call_method(
-    _rt_ctx: RuntimeContext,
+/// No-op call_guest_method callback.
+unsafe extern "C" fn noop_call_guest_method(
+    _this: *const HostInterface,
     _instance: polyplug_abi::GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -166,11 +163,42 @@ unsafe extern "C" fn noop_call_method(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance::null()
+}
+
+/// No-op list_bundles callback.
+unsafe extern "C" fn noop_list_bundles(
+    _this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_utils::BundleId> {
+    polyplug_abi::Array::empty()
+}
+
+/// No-op get_dependencies callback.
+unsafe extern "C" fn noop_get_dependencies(
+    _this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
+    polyplug_abi::Array::empty()
+}
+
+/// Build a HostInterface with all callbacks.
+fn make_host_interface() -> HostInterface {
+    HostInterface {
+        runtime: core::ptr::null_mut(),
+        register_contract: registry_register_callback,
+        alloc: noop_alloc,
+        free: noop_free,
+        find_by_contract: noop_find_by_contract,
+        find_all_by_contract: noop_find_all_by_contract,
+        resolve_contract: noop_resolve_contract,
+        call_guest_method: noop_call_guest_method,
+        get_host_contract: noop_get_host_contract,
+        list_bundles: noop_list_bundles,
+        get_dependencies: noop_get_dependencies,
+    }
 }
 
 std::thread_local! {
@@ -296,13 +324,12 @@ fn test_cpp_plugin_dispatch() {
             .expect("failed to load C++ test plugin shared library")
     };
 
-    // ── 2. Resolve polyplug_init ──────────────────────────────────────────────
+    // ── 2. Resolve polyplug_init (2-arg signature) ───────────────────────────
     // SAFETY: symbol matches expected ABI signature.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -316,27 +343,17 @@ fn test_cpp_plugin_dispatch() {
         *cell.borrow_mut() = PluginRegistry::new();
     });
 
-    // ── 4. Build RuntimeAbi + call polyplug_init ─────────────────────────────
-    let runtime_abi: RuntimeAbi = RuntimeAbi {
-        register_contract: registry_register_callback,
-        alloc: noop_alloc,
-        free: noop_free,
-        find_by_contract: noop_find_by_contract,
-        find_all_by_contract: noop_find_all_by_contract,
-        resolve_contract: noop_resolve_contract,
-        call_method: noop_call_method,
-        get_host_contract: noop_get_host_contract,
-    };
+    // ── 4. Build HostInterface + call polyplug_init ──────────────────────────
+    let host_interface: HostInterface = make_host_interface();
 
     let ctx: PluginContext = PluginContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
-    // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &runtime_abi as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
@@ -358,10 +375,7 @@ fn test_cpp_plugin_dispatch() {
     // SAFETY: vtable_ptr is valid — plugin is loaded and library is not yet dropped.
     let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
 
-    // Note: GuestContractInterface doesn't have function_count field directly visible
-    // We check the dispatch mechanism instead
-
-    // ── 6. Get function pointer from vtable.dispatch.native.functions[0] ─────────────────────
+    // ── 6. Get function pointer from vtable.dispatch.native.functions[0] ───────
     // SAFETY: functions[0] is the cpp_test_add ABI wrapper with signature
     //   extern "C" AbiError(const void* args, void* out).
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
@@ -412,12 +426,11 @@ fn test_cpp_host_loads_rust_plugin() {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin")
     };
 
-    // SAFETY: symbol matches expected ABI signature
+    // SAFETY: symbol matches expected ABI signature (2-arg)
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -430,26 +443,16 @@ fn test_cpp_host_loads_rust_plugin() {
         *cell.borrow_mut() = PluginRegistry::new();
     });
 
-    let runtime_abi: RuntimeAbi = RuntimeAbi {
-        register_contract: registry_register_callback,
-        alloc: noop_alloc,
-        free: noop_free,
-        find_by_contract: noop_find_by_contract,
-        find_all_by_contract: noop_find_all_by_contract,
-        resolve_contract: noop_resolve_contract,
-        call_method: noop_call_method,
-        get_host_contract: noop_get_host_contract,
-    };
+    let host_interface: HostInterface = make_host_interface();
 
     let ctx: PluginContext = PluginContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
-    // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &runtime_abi as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
@@ -521,12 +524,11 @@ fn test_exception_isolation_cpp() {
             .expect("failed to load throwing C++ test plugin")
     };
 
-    // SAFETY: symbol matches expected ABI signature.
+    // SAFETY: symbol matches expected ABI signature (2-arg).
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -539,26 +541,16 @@ fn test_exception_isolation_cpp() {
         *cell.borrow_mut() = PluginRegistry::new();
     });
 
-    let runtime_abi: RuntimeAbi = RuntimeAbi {
-        register_contract: registry_register_callback,
-        alloc: noop_alloc,
-        free: noop_free,
-        find_by_contract: noop_find_by_contract,
-        find_all_by_contract: noop_find_all_by_contract,
-        resolve_contract: noop_resolve_contract,
-        call_method: noop_call_method,
-        get_host_contract: noop_get_host_contract,
-    };
+    let host_interface: HostInterface = make_host_interface();
 
     let ctx: PluginContext = PluginContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
-    // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &runtime_abi as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };

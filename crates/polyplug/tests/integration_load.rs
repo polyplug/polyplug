@@ -6,8 +6,7 @@
 
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::RuntimeAbi;
-use polyplug_abi::RuntimeContext;
+use polyplug_abi::HostInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
@@ -20,13 +19,13 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
-/// register_plugin callback that captures the registered vtable pointer for inspection.
+/// register_contract callback that captures the registered vtable pointer for inspection.
 ///
 /// # Safety
-/// `rt_ctx`, `descriptor`, and `vtable` must be valid non-null pointers for
+/// `this`, `descriptor`, and `vtable` must be valid non-null pointers for
 /// the duration of this call (guaranteed by the ABI contract).
 unsafe extern "C" fn capture_register(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     vtable: *const GuestContractInterface,
 ) -> AbiError {
@@ -58,60 +57,64 @@ unsafe extern "C" fn capture_register(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
+    let _ = this;
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
 ) {
+    let _ = this;
     // SAFETY: polyplug_host_free is a safe wrapper around the system allocator.
     unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
 }
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
+    let _ = this;
     PluginHandle::null()
 }
 
-/// No-op find_all_by_contract callback.
+/// No-op find_all_by_contract callback (not used in this test).
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> polyplug_abi::Array<PluginHandle> {
+    let _ = this;
+    polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
+    let _ = this;
     core::ptr::null()
 }
 
-/// No-op call_method callback.
-unsafe extern "C" fn noop_call_method(
-    _rt_ctx: RuntimeContext,
+/// No-op call_guest_method callback.
+unsafe extern "C" fn noop_call_guest_method(
+    this: *const HostInterface,
     _instance: polyplug_abi::GuestContractInstance,
     _method_id: u32,
     _args: *const (),
     _out: *mut (),
 ) -> AbiError {
+    let _ = this;
     AbiError {
         code: polyplug_abi::AbiErrorCode::Generic,
         message: polyplug_abi::StringView::null(),
@@ -120,11 +123,28 @@ unsafe extern "C" fn noop_call_method(
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
+    let _ = this;
     polyplug_abi::HostContractInstance::null()
+}
+
+/// No-op list_bundles callback.
+unsafe extern "C" fn noop_list_bundles(
+    this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_utils::BundleId> {
+    let _ = this;
+    polyplug_abi::Array::empty()
+}
+
+/// No-op get_dependencies callback.
+unsafe extern "C" fn noop_get_dependencies(
+    this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
+    let _ = this;
+    polyplug_abi::Array::empty()
 }
 
 std::thread_local! {
@@ -168,12 +188,11 @@ fn test_init_registers_vtable() {
     };
 
     // Resolve polyplug_init symbol.
-    // SAFETY: polyplug_init is a C function with the RuntimeAbi ABI.
+    // SAFETY: polyplug_init is a C function with the HostInterface ABI (2-arg signature).
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -182,16 +201,19 @@ fn test_init_registers_vtable() {
             .expect("polyplug_init symbol not found")
     };
 
-    // Build a RuntimeAbi that captures registration data.
-    let runtime_abi: RuntimeAbi = RuntimeAbi {
+    // Build a HostInterface that captures registration data.
+    let host_interface: HostInterface = HostInterface {
+        runtime: core::ptr::null_mut(),
         register_contract: capture_register,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_contract: noop_resolve_contract,
-        call_method: noop_call_method,
+        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        list_bundles: noop_list_bundles,
+        get_dependencies: noop_get_dependencies,
     };
 
     // Clear thread-locals before calling init.
@@ -202,11 +224,10 @@ fn test_init_registers_vtable() {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
-    // SAFETY: init_fn is valid; runtime_abi and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &runtime_abi as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };

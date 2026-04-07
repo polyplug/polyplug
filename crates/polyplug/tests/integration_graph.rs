@@ -11,7 +11,7 @@
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, RuntimeAbi, RuntimeContext, GuestContractInterface, GuestContractInstance,
+    AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch,
 };
@@ -28,15 +28,15 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 /// via thread-local state (avoids threading through the opaque host pointer).
 ///
 /// # Safety
-/// `rt_ctx`, `descriptor`, and `interface` must be valid non-null pointers for the call duration.
+/// `this`, `descriptor`, and `interface` must be valid non-null pointers for the call duration.
 unsafe extern "C" fn graph_register_callback(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
+            code: AbiErrorCode::InvalidPointer,
             message: StringView::null(),
         };
     }
@@ -62,11 +62,11 @@ unsafe extern "C" fn graph_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok as u32,
+            code: AbiErrorCode::Ok,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: StringView::null(),
         },
     }
@@ -74,7 +74,7 @@ unsafe extern "C" fn graph_register_callback(
 
 /// No-op alloc callback.
 unsafe extern "C" fn noop_alloc(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -83,7 +83,7 @@ unsafe extern "C" fn noop_alloc(
 
 /// No-op free callback.
 unsafe extern "C" fn noop_free(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -94,7 +94,7 @@ unsafe extern "C" fn noop_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -103,44 +103,56 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> polyplug_abi::Array<PluginHandle> {
+    polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-/// No-op call_method callback.
-unsafe extern "C" fn noop_call_method(
-    _rt_ctx: RuntimeContext,
+/// No-op call_guest_method callback.
+unsafe extern "C" fn noop_call_guest_method(
+    _this: *const HostInterface,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
     _out: *mut (),
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok as u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance::null()
+}
+
+/// No-op list_bundles callback.
+unsafe extern "C" fn noop_list_bundles(
+    _this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_utils::BundleId> {
+    polyplug_abi::Array::empty()
+}
+
+/// No-op get_dependencies callback.
+unsafe extern "C" fn noop_get_dependencies(
+    _this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
+    polyplug_abi::Array::empty()
 }
 
 std::thread_local! {
@@ -156,12 +168,11 @@ fn load_and_init_plugin() -> libloading::Library {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
     };
 
-    // SAFETY: polyplug_init signature is `extern "C" fn(RuntimeContext, *const RuntimeAbi, *const PluginContext) -> AbiError`.
+    // SAFETY: polyplug_init signature is `extern "C" fn(*const HostInterface, *const PluginContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -170,30 +181,32 @@ fn load_and_init_plugin() -> libloading::Library {
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: RuntimeAbi = RuntimeAbi {
+    let host_interface: HostInterface = HostInterface {
+        runtime: core::ptr::null_mut(),
         register_contract: graph_register_callback,
         alloc: noop_alloc,
         free: noop_free,
         find_by_contract: noop_find_by_contract,
         find_all_by_contract: noop_find_all_by_contract,
         resolve_contract: noop_resolve_contract,
-        call_method: noop_call_method,
+        call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        list_bundles: noop_list_bundles,
+        get_dependencies: noop_get_dependencies,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &host_vtable as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
 
     library
 }
