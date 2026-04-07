@@ -1,5 +1,8 @@
 //! Runtime Interface — function table returned to host from polyplug_runtime_create().
 //!
+//! This module defines `RuntimeInterface`, the interface hosts use to interact
+//! with the runtime. Hosts receive this interface when creating a runtime.
+//!
 //! # Who provides
 //! The runtime creates this struct and returns it from `polyplug_runtime_create()`.
 //!
@@ -16,6 +19,10 @@
 //! # Thread Safety
 //! All functions are safe to call from any thread. The runtime handles
 //! internal synchronization.
+//!
+//! # Self-Passing Pattern
+//! All functions take `self: *const RuntimeInterface` as the first parameter.
+//! SDKs hide this detail from users, automatically passing the interface pointer.
 
 use core::ffi::{c_char, c_void};
 
@@ -36,6 +43,25 @@ pub type ContractHandle = PluginHandle;
 /// Contains an opaque runtime pointer and function pointers for host calls.
 /// All functions take `*const RuntimeInterface` as first parameter.
 ///
+/// # Who provides
+/// The runtime creates this struct and returns it from `polyplug_runtime_create()`.
+/// The struct is heap-allocated and owned by the host.
+///
+/// # Who calls
+/// Host application code calls these functions to interact with the runtime.
+/// SDK-generated wrappers handle the self-passing pattern automatically.
+///
+/// # Ownership
+/// The struct is allocated by `polyplug_runtime_create()`. The host owns
+/// the pointer and must call `destroy()` to free the runtime and interface.
+///
+/// # Lifetime
+/// Lives until `destroy()` is called. After destroy, the pointer is invalid.
+///
+/// # Thread Safety
+/// All functions are safe to call from any thread. The runtime uses
+/// internal synchronization for shared state.
+///
 /// # Self-passing pattern
 /// Each function receives the interface pointer as its first parameter,
 /// allowing hosts to call: `rt->load_bundle(rt, path)`
@@ -45,20 +71,34 @@ pub struct RuntimeInterface {
     /// Opaque pointer to Runtime.
     ///
     /// Set during interface creation. Provides access to runtime state.
+    ///
+    /// # Ownership
+    /// Owned by the runtime. Host must call `destroy()` to free.
     pub runtime: *mut c_void,
     /// Load a plugin bundle from the given path.
     ///
+    /// Loads the bundle and initializes all its guest contracts.
+    /// Dependencies are resolved in topological order.
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
-    /// - `path`: Path to the bundle directory or file
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    /// - `path`: Path to the bundle directory or manifest file
     ///
     /// # Returns
     /// AbiError::OK on success, error code on failure.
+    /// Use `get_last_error()` for detailed error message.
     pub load_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, path: *const c_char) -> AbiError,
     /// Reload a bundle (hot-reload).
     ///
+    /// Triggers hot-reload of the specified bundle. The runtime will:
+    /// 1. Call pre-reload callbacks to notify hosts
+    /// 2. Wait for all instances to be destroyed
+    /// 3. Unload the old bundle
+    /// 4. Load the new bundle
+    /// 5. Call post-reload callbacks
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
+    /// - `this`: RuntimeInterface pointer (self-passing)
     /// - `bundle_id`: ID of the bundle to reload
     ///
     /// # Returns
@@ -66,8 +106,11 @@ pub struct RuntimeInterface {
     pub reload_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
     /// Unload a bundle.
     ///
+    /// Removes the bundle and all its guest contracts from the registry.
+    /// Host must destroy all instances before unloading.
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
+    /// - `this`: RuntimeInterface pointer (self-passing)
     /// - `bundle_id`: ID of the bundle to unload
     ///
     /// # Returns
@@ -75,13 +118,16 @@ pub struct RuntimeInterface {
     pub unload_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
     /// Find a guest contract by contract_id and minimum version.
     ///
+    /// Returns a ContractHandle that can be resolved to an interface.
+    /// Returns null handle if no matching contract found.
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
-    /// - `contract_id`: Contract identifier
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    /// - `contract_id`: Contract identifier hash
     /// - `min_version`: Minimum version required
     ///
     /// # Returns
-    /// ContractHandle that can be resolved to an interface.
+    /// ContractHandle for the first matching contract, or null handle.
     pub find_by_contract: unsafe extern "C" fn(
         this: *const RuntimeInterface,
         contract_id: u64,
@@ -90,6 +136,15 @@ pub struct RuntimeInterface {
     /// Find all guest contracts matching contract_id and minimum version.
     ///
     /// Returns an Array of ContractHandle. Caller must free via host->free.
+    /// Use when multiple implementations of the same contract may exist.
+    ///
+    /// # Arguments
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    /// - `contract_id`: Contract identifier hash
+    /// - `min_version`: Minimum version required
+    ///
+    /// # Returns
+    /// Array of ContractHandle. Caller owns and must free.
     pub find_all_by_contract: unsafe extern "C" fn(
         this: *const RuntimeInterface,
         contract_id: u64,
@@ -97,9 +152,11 @@ pub struct RuntimeInterface {
     ) -> Array<ContractHandle>,
     /// Resolve a ContractHandle to a GuestContractInterface pointer.
     ///
+    /// Returns null if the handle is invalid or contract was unloaded.
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
-    /// - `handle`: Handle from find_by_contract
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    /// - `handle`: ContractHandle from find_by_contract
     ///
     /// # Returns
     /// Pointer to GuestContractInterface, or null if invalid/stale.
@@ -109,9 +166,12 @@ pub struct RuntimeInterface {
     ) -> *const GuestContractInterface,
     /// Get a host contract instance by contract_id and minimum version.
     ///
+    /// For singleton host contracts, returns the same instance every time.
+    /// For multi-instance host contracts, returns a new instance each time.
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
-    /// - `contract_id`: Contract identifier
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    /// - `contract_id`: Host contract identifier hash
     /// - `min_version`: Minimum version required
     ///
     /// # Returns
@@ -123,31 +183,49 @@ pub struct RuntimeInterface {
     ) -> HostContractInstance,
     /// Get the last error message.
     ///
+    /// Returns detailed error message for the most recent failed operation.
+    /// Message is valid until the next operation is performed.
+    ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
+    /// - `this`: RuntimeInterface pointer (self-passing)
     ///
     /// # Returns
     /// StringView containing the error message, or empty string if no error.
     pub get_last_error: unsafe extern "C" fn(this: *const RuntimeInterface) -> StringView,
     /// List all loaded bundles.
     ///
-    /// Returns an Array of BundleId values. Caller must free via host->free.
+    /// Returns an Array of BundleId. Caller must free via host->free.
+    /// Bundle IDs are stable for the lifetime of the runtime.
+    ///
+    /// # Arguments
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    ///
+    /// # Returns
+    /// Array of BundleId. Caller owns and must free.
     pub list_bundles: unsafe extern "C" fn(
         this: *const RuntimeInterface,
     ) -> Array<BundleId>,
     /// Get dependencies (returns empty array for host context).
     ///
-    /// Returns an Array of DependencyInfo. Caller must free via host->free.
+    /// Hosts have no bundle dependencies, so this returns an empty array.
+    /// Guests use HostInterface::get_dependencies for their actual deps.
+    ///
+    /// # Arguments
+    /// - `this`: RuntimeInterface pointer (self-passing)
+    ///
+    /// # Returns
+    /// Empty Array of DependencyInfo. Caller owns and must free.
     pub get_dependencies: unsafe extern "C" fn(
         this: *const RuntimeInterface,
     ) -> Array<DependencyInfo>,
     /// Destroy the runtime and free this interface.
     ///
     /// # Arguments
-    /// - `this`: RuntimeInterface pointer
+    /// - `this`: RuntimeInterface pointer (self-passing)
     ///
     /// # Safety
     /// After calling destroy, the pointer is invalid and must not be used.
+    /// All instances must be destroyed before calling this.
     pub destroy: unsafe extern "C" fn(this: *const RuntimeInterface),
 }
 
