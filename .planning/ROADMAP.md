@@ -285,7 +285,7 @@ Plans:
 - [x] 11-04-PLAN.md — Update GuestContractInterface/HostContractInterface signatures (D-12, D-13)
 - [x] 11-05-PLAN.md — Add introspection ABIs (list_bundles, get_dependencies, find_all_by_contract) (D-07, D-08, D-11)
 - [x] 11-06-PLAN.md — First-class documentation for all interface types (D-14)
-- [ ] 11-07-PLAN.md — Update VM loaders to use HostInterface (gap closure)
+- [x] 11-07-PLAN.md — Update VM loaders to use HostInterface (gap closure)
 - [ ] 11-08-PLAN.md — Update polyplugc codegen for new calling convention (gap closure)
 - [ ] 11-09-PLAN.md — Update tests and benchmarks for new patterns (gap closure)
 - [ ] 11-10-PLAN.md — Final verification: workspace compiles and tests pass (gap closure)
