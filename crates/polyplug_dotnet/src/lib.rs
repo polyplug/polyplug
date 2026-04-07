@@ -16,7 +16,7 @@ use netcorehost::pdcstring::PdCString;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::host::host_context::HostContext;
+use polyplug_abi::HostInterface;
 use polyplug::Runtime;
 use polyplug_abi::RuntimeContext;
 use polyplug_abi::POLYPLUG_ABI_VERSION;

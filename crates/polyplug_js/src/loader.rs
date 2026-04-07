@@ -22,7 +22,7 @@ use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::ManifestData;
 use polyplug::loader::BundleLoader;
-use polyplug_abi::host::host_context::HostContext;
+use polyplug_abi::HostInterface;
 use polyplug::Runtime as PolyplugRuntime;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
