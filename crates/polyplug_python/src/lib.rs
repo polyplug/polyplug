@@ -30,10 +30,9 @@ use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
-use polyplug_abi::host::host_context::HostContext;
 use polyplug::runtime::Runtime;
+use polyplug_abi::HostInterface;
 use polyplug_abi::PluginContext;
-use polyplug_abi::RuntimeContext;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
@@ -105,19 +104,12 @@ impl BundleLoader for PythonLoader {
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         let bundle_id: u64 = manifest.id;
 
-        // Create HostContext for rt_ctx parameter.
-        let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        // Wrap in RuntimeContext for type-safe handle.
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
-        };
+        // Get HostInterface pointer from runtime (self-passing pattern).
+        // The interface already has the runtime pointer set internally.
+        let host_interface: *const HostInterface = runtime.as_context_ptr();
 
-        // Get host_abi from runtime.
-        let host_abi: &'static polyplug_abi::RuntimeAbi = runtime.host_abi();
+        // Set bundle_id in TLS for dependency enforcement during init.
+        polyplug::runtime::set_init_bundle_id(bundle_id);
 
         // Step 3: Load the Python module and call polyplug_init.
         Python::attach(|py| {
@@ -225,7 +217,8 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
-            // Step 3c: Locate and call polyplug_init(rt_ctx, host_vtable, ctx).
+            // Step 3c: Locate and call polyplug_init(host, ctx).
+            // New signature: polyplug_init(host_interface, ctx) - self-passing pattern.
             let init_fn: pyo3::Bound<'_, pyo3::PyAny> =
                 module_from_spec.getattr("polyplug_init").map_err(|_| {
                     RuntimeError::Loader(LoaderError::InitSymbolMissing {
@@ -244,12 +237,13 @@ impl BundleLoader for PythonLoader {
                 },
             };
 
-            // Pass pointers as i64 to preserve full 64-bit precision.
-            let rt_ctx_i64: i64 = rt_ctx.data as usize as i64;
-            let host_abi_i64: i64 = host_abi as *const polyplug_abi::RuntimeAbi as usize as i64;
+            // Pass HostInterface pointer and PluginContext pointer to Python.
+            // The HostInterface uses self-passing pattern - Python guest code will pass it back
+            // as the first parameter to each HostInterface function call.
+            let host_interface_i64: i64 = host_interface as usize as i64;
             let ctx_ptr: i64 = &ctx as *const PluginContext as i64;
             init_fn
-                .call((rt_ctx_i64, host_abi_i64, ctx_ptr), None)
+                .call((host_interface_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| {
                     RuntimeError::Loader(LoaderError::InitFailed {
                         bundle: bundle_name.clone(),
@@ -257,8 +251,13 @@ impl BundleLoader for PythonLoader {
                     })
                 })?;
 
-            Ok(())
-        })
+            Ok::<(), RuntimeError>(())
+        })?;
+
+        // Clear bundle_id TLS after init completes.
+        polyplug::runtime::clear_init_bundle_id();
+
+        Ok(())
     }
 
     fn reload(
