@@ -1,11 +1,12 @@
 //! Guest Contract Interface — one per contract implemented by a guest (plugin).
 
+use core::ffi::c_void;
+
 use polyplug_utils::GuestContractId;
 
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
     guest::GuestContractInstance,
-    host::RuntimeContext,
     types::Version,
 };
 
@@ -33,13 +34,13 @@ pub struct GuestContractInterface {
     /// Create a new instance of this contract.
     ///
     /// # Arguments
-    /// - `rt_ctx`: RuntimeContext handle
+    /// - `host`: HostInterface pointer (for memory allocation via host->alloc)
     /// - `args`: Optional initialization arguments (contract-specific)
     ///
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
     pub create_instance: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        host: *const c_void, // *const HostInterface - opaque for ABI stability
         args: *const (),
     ) -> GuestContractInstance,
     /// Destroy an instance of this contract.
@@ -47,10 +48,10 @@ pub struct GuestContractInterface {
     /// MUST be called before hot-reload for all instances.
     ///
     /// # Arguments
-    /// - `rt_ctx`: RuntimeContext handle
+    /// - `host`: HostInterface pointer
     /// - `instance`: Instance handle to destroy
     pub destroy_instance: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        host: *const c_void, // *const HostInterface - opaque for ABI stability
         instance: GuestContractInstance,
     ),
     /// Union of dispatch mechanisms — access based on dispatch_type.
@@ -61,7 +62,6 @@ pub struct GuestContractInterface {
 mod tests {
     use core::mem::{align_of, offset_of, size_of};
     use super::GuestContractInterface;
-    use crate::host::RuntimeContext;
 
     #[test]
     fn layout_guest_contract_interface() {
@@ -82,18 +82,5 @@ mod tests {
         assert_eq!(offset_of!(GuestContractInterface, create_instance), 24);
         assert_eq!(offset_of!(GuestContractInterface, destroy_instance), 32);
         assert_eq!(offset_of!(GuestContractInterface, dispatch), 40);
-    }
-
-    /// TH-02: Verify GuestContractInterface.create_instance/destroy_instance use RuntimeContext.
-    /// This is a compile-time verification test.
-    #[test]
-    fn guest_contract_interface_uses_runtime_context() {
-        // Verify RuntimeContext is pointer-sized (same as *mut c_void would be)
-        assert_eq!(size_of::<RuntimeContext>(), 8);
-
-        // This test passes at compile time because the struct definition
-        // uses RuntimeContext in create_instance and destroy_instance signatures.
-        // If any function used *mut c_void instead, the struct would still be
-        // 56 bytes, but the type safety would be lost.
     }
 }

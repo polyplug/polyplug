@@ -20,8 +20,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, HostInterface, PluginDescriptor, PluginHandle, RuntimeContext, RuntimeLanguage};
-use polyplug_abi::host::host_context::HostContext;
+use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, HostInterface, PluginDescriptor, PluginHandle, RuntimeLanguage};
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -37,6 +36,31 @@ use crate::loader::ManifestDependency;
 use crate::registry::PluginRegistry;
 use crate::runtime_builder::RuntimeBuilder;
 use crate::RuntimeConfig;
+
+// ─── TLS for Init Phase Bundle ID ─────────────────────────────────────────────
+
+// Thread-local storage for bundle_id during init phase.
+// Used by host_register_contract to enforce dependency constraints.
+// Set by loaders before calling polyplug_init, cleared after init completes.
+std::thread_local! {
+    static INIT_BUNDLE_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+/// Set the bundle_id for the current thread init phase.
+/// Call this before plugin init, clear after init completes.
+pub fn set_init_bundle_id(bundle_id: u64) {
+    INIT_BUNDLE_ID.with(|id| id.set(bundle_id));
+}
+
+/// Clear the bundle_id after init phase completes.
+pub fn clear_init_bundle_id() {
+    INIT_BUNDLE_ID.with(|id| id.set(0));
+}
+
+/// Get the current init phase bundle_id.
+pub fn get_init_bundle_id() -> u64 {
+    INIT_BUNDLE_ID.with(|id| id.get())
+}
 
 // ─── Runtime Configuration ───────────────────────────────────────────────────
 
@@ -213,40 +237,36 @@ impl Runtime {
         self.host_abi
     }
 
-    /// Get the raw context pointer for use with generated FFI callers.
+    /// Get the HostInterface pointer for passing to guest contracts.
     ///
-    /// This returns a pointer suitable for passing to generated contract wrapper
-    /// methods like `ContractInstance::new(handle, rt_ctx)`.
+    /// Returns a HostInterface with the runtime pointer set.
+    /// The runtime pointer can be extracted via `(*host_interface).runtime`.
     ///
     /// # Safety
-    /// The returned pointer is only valid while the Runtime is alive.
-    /// This creates a HostContext on the stack and returns a pointer to it,
-    /// so the pointer is only valid for the duration of the call.
+    /// The returned pointer is valid for the lifetime of the Runtime.
+    /// The HostInterface is leaked and lives until the Runtime is dropped.
     #[inline(always)]
-    pub fn as_context_ptr(&self) -> *mut core::ffi::c_void {
-        // Create a HostContext on the stack and return a pointer to it
-        // This is safe because the pointer is used immediately and not stored
-        // (the generated code stores it, but the instance lifetime is bounded by Runtime)
-        let host_ctx: HostContext = HostContext {
+    pub fn as_context_ptr(&self) -> *const HostInterface {
+        // Create a HostInterface with runtime pointer set and leak it.
+        // SAFETY: The pointer is used by guest code and lives for the process lifetime.
+        // This is a small leak (72 bytes per call) but necessary for correctness.
+        // GuestContractInterface functions receive `host: *const c_void` which is
+        // actually this HostInterface pointer.
+        let host_interface: Box<HostInterface> = Box::new(HostInterface {
             runtime: self as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0, // Host-side callers have no bundle context
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        // SAFETY: We're leaking this HostContext for the lifetime of the instance
-        // This is acceptable because instances are destroyed before the Runtime
-        let boxed: Box<HostContext> = Box::new(host_ctx);
-        Box::into_raw(boxed) as *mut core::ffi::c_void
-    }
-
-    /// Get the runtime as a RuntimeContext handle.
-    ///
-    /// # Safety
-    /// The returned RuntimeContext is only valid while the Runtime is alive.
-    /// This creates a HostContext on the stack and wraps it in RuntimeContext,
-    /// so the handle is only valid for the duration of the call.
-    #[inline(always)]
-    pub fn as_context(&self) -> RuntimeContext {
-        RuntimeContext { data: self.as_context_ptr() }
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
+        });
+        // SAFETY: We leak this HostInterface for the lifetime of the runtime.
+        // This is acceptable because the pointer is used by guest contract instances
+        // which are destroyed before the Runtime.
+        Box::into_raw(host_interface)
     }
 
     #[inline(always)]
@@ -584,33 +604,33 @@ fn string_view_to_string_owned(sv: &polyplug_abi::types::StringView) -> String {
     String::from_utf8_lossy(slice).into_owned()
 }
 
-// ─── RuntimeAbi C ABI callbacks ───────────────────────────────────────────────
+// ─── HostInterface C ABI callbacks ───────────────────────────────────────────────
 
-/// RuntimeAbi.register_contract callback — registers a guest contract implementation with the runtime.
+/// HostInterface.register_contract callback — registers a guest contract implementation with the runtime.
+///
+/// Uses TLS for bundle_id during init phase (dependency enforcement).
 ///
 /// # Safety
-/// - rt_ctx must be a valid RuntimeContext with a valid HostContext pointer
+/// - this must be a valid HostInterface pointer with valid runtime field
 /// - descriptor must point to a valid PluginDescriptor
 /// - interface must point to a valid GuestContractInterface that remains valid for the Runtime lifetime
 pub(crate) unsafe extern "C" fn host_register_contract(
-    rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> polyplug_abi::types::AbiError {
-    if rt_ctx.is_null() {
+    if this.is_null() {
         return polyplug_abi::types::AbiError {
             code: polyplug_abi::types::AbiErrorCode::Generic,
             message: polyplug_abi::types::StringView::null(),
         };
     }
-    // SAFETY: rt_ctx is a valid RuntimeContext passed by the host during polyplug_init.
-    // rt_ctx.data contains a valid *mut HostContext pointer.
-    let ctx: &HostContext = unsafe { &*(rt_ctx.data as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
+    // SAFETY: this is a valid HostInterface pointer passed during polyplug_init.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
-    let bundle_id: u64 = ctx.bundle_id;
+    // Get bundle_id from TLS (set by loader before calling polyplug_init)
+    let bundle_id: u64 = get_init_bundle_id();
 
     // SAFETY: descriptor is provided by the plugin's polyplug_init function
     let desc: PluginDescriptor = unsafe { *descriptor };
@@ -625,7 +645,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     }
 
     // SAFETY: desc.contract_name.ptr is non-null, valid UTF-8 for len bytes
-    let contract_name: String = unsafe { string_view_to_string_owned(&desc.contract_name) };
+    let contract_name: String = string_view_to_string_owned(&desc.contract_name);
 
     // SAFETY: interface is a valid 'static GuestContractInterface from the plugin binary
     match unsafe { registry.register(desc, interface, contract_name, BundleId::from_u64(bundle_id)) } {
@@ -640,24 +660,24 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     }
 }
 
-/// RuntimeAbi.alloc callback — allocate memory via the host allocator.
+/// HostInterface.alloc callback — allocate memory via the host allocator.
 ///
 /// # Safety
-/// rt_ctx is ignored (system allocator is global). Standard alloc safety applies.
+/// this is ignored (system allocator is global). Standard alloc safety applies.
 pub(crate) unsafe extern "C" fn host_alloc(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
     polyplug_abi::ffi::polyplug_host_alloc(size, align)
 }
 
-/// RuntimeAbi.free callback — free memory via the host allocator.
+/// HostInterface.free callback — free memory via the host allocator.
 ///
 /// # Safety
-/// rt_ctx is ignored (system allocator is global). Standard free safety applies.
+/// this is ignored (system allocator is global). Standard free safety applies.
 pub(crate) unsafe extern "C" fn host_free(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -666,28 +686,26 @@ pub(crate) unsafe extern "C" fn host_free(
     unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
 }
 
-/// RuntimeAbi.find_by_contract callback — dispatches to runtime's registry with dependency enforcement.
+/// HostInterface.find_by_contract callback — dispatches to runtime's registry with dependency enforcement.
+///
+/// Uses TLS for bundle_id during init phase.
 ///
 /// # Safety
-/// rt_ctx must be a valid RuntimeContext with a valid HostContext pointer.
+/// this must be a valid HostInterface pointer with valid runtime field.
 pub(crate) unsafe extern "C" fn host_find_by_contract(
-    rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
 ) -> PluginHandle {
-    if rt_ctx.is_null() {
+    if this.is_null() {
         return plugin_handle_null();
     }
-    // SAFETY: rt_ctx is a valid RuntimeContext passed by the host.
-    // rt_ctx.data contains a valid *mut HostContext pointer.
-    let ctx: &HostContext = unsafe { &*(rt_ctx.data as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
+    // SAFETY: this is a valid HostInterface pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
-    let caller_bundle_id: u64 = ctx.bundle_id;
+    // Get bundle_id from TLS for dependency enforcement during init phase
+    let caller_bundle_id: u64 = get_init_bundle_id();
 
     if caller_bundle_id != 0 && !registry.is_dependency_declared(BundleId::from_u64(caller_bundle_id), GuestContractId::from_u64(contract_id)) {
         return plugin_handle_null();
@@ -698,29 +716,24 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     }
 }
 
-/// RuntimeAbi.find_all_by_contract callback — fills out buffer, NO dependency enforcement.
+/// HostInterface.find_all_by_contract callback — fills out buffer, NO dependency enforcement.
 ///
 /// # Safety
-/// - rt_ctx must be a valid RuntimeContext with a valid HostContext pointer
+/// - this must be a valid HostInterface pointer with valid runtime field
 /// - out must point to a valid buffer of at least out_cap PluginHandle elements
 pub(crate) unsafe extern "C" fn host_find_all_by_contract(
-    rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
     out: *mut PluginHandle,
     out_cap: usize,
 ) -> usize {
-    if rt_ctx.is_null() {
+    if this.is_null() {
         return 0usize;
     }
-    // SAFETY: rt_ctx is a valid RuntimeContext passed by the host.
-    // rt_ctx.data contains a valid *mut HostContext pointer.
-    let ctx: &HostContext = unsafe { &*(rt_ctx.data as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
+    // SAFETY: this is a valid HostInterface pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
 
     if out_cap == 0usize {
@@ -731,23 +744,20 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     registry.find_all_by_contract(GuestContractId::from_u64(contract_id), min_version, out_slice)
 }
 
-/// RuntimeAbi.resolve_contract callback — returns interface pointer for a handle.
+/// HostInterface.resolve_contract callback — returns interface pointer for a handle.
 ///
 /// # Safety
-/// rt_ctx must be a valid RuntimeContext with a valid HostContext pointer.
+/// this must be a valid HostInterface pointer with valid runtime field.
 pub(crate) unsafe extern "C" fn host_resolve_contract(
-    rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     handle: PluginHandle,
 ) -> *const GuestContractInterface {
-    if rt_ctx.is_null() {
+    if this.is_null() {
         return core::ptr::null();
     }
-    // SAFETY: rt_ctx is a valid RuntimeContext passed by the host.
-    // rt_ctx.data contains a valid *mut HostContext pointer.
-    let ctx: &HostContext = unsafe { &*(rt_ctx.data as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    // during the plugin init call.
-    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
+    // SAFETY: this is a valid HostInterface pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
     let registry: &PluginRegistry = &runtime.registry;
 
     match registry.resolve(handle) {
@@ -756,7 +766,7 @@ pub(crate) unsafe extern "C" fn host_resolve_contract(
     }
 }
 
-/// RuntimeAbi.call_method callback — cross-dispatch method call for guest contracts.
+/// HostInterface.call_guest_method callback — cross-dispatch method call for guest contracts.
 ///
 /// This function enables plugins to call methods on other guest contract instances
 /// across different dispatch types (Native vs VM).
@@ -774,12 +784,12 @@ pub(crate) unsafe extern "C" fn host_resolve_contract(
 /// - VM dispatch: `dispatch.vm.call(loader_data, instance, method_id, args, out)`
 ///
 /// # Safety
-/// - rt_ctx must be a valid RuntimeContext with a valid HostContext pointer.
+/// - this must be a valid HostInterface pointer with valid runtime field.
 /// - instance must be a valid GuestContractInstance (non-null data pointer).
 /// - args must point to valid ABI-packed arguments for the method.
 /// - out must point to a valid output buffer sized for the return type.
 pub(crate) unsafe extern "C" fn host_call_method(
-    rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     instance: polyplug_abi::GuestContractInstance,
     _method_id: u32,
     _args: *const (),
@@ -787,54 +797,50 @@ pub(crate) unsafe extern "C" fn host_call_method(
 ) -> polyplug_abi::types::AbiError {
     use polyplug_abi::types::{AbiError, AbiErrorCode, StringView};
 
-    if rt_ctx.is_null() {
+    if this.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer,
-            message: StringView::from_static(b"null rt_ctx in call_method"),
+            message: StringView::from_static(b"null HostInterface in call_guest_method"),
         };
     }
     if instance.data.is_null() {
         return AbiError {
             code: AbiErrorCode::InvalidPointer,
-            message: StringView::from_static(b"null instance in call_method"),
+            message: StringView::from_static(b"null instance in call_guest_method"),
         };
     }
 
-    // SAFETY: rt_ctx is a valid RuntimeContext passed by the host.
-    // rt_ctx.data contains a valid *mut HostContext pointer.
-    let ctx: &HostContext = unsafe { &*(rt_ctx.data as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime
-    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
+    // SAFETY: this is a valid HostInterface pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     // PLACEHOLDER: Full implementation requires instance -> contract mapping.
     // For now, return an error indicating this is not yet implemented.
-    runtime.set_last_error("call_method requires instance-contract mapping (not yet implemented)");
+    runtime.set_last_error("call_guest_method requires instance-contract mapping (not yet implemented)");
     AbiError {
         code: AbiErrorCode::Generic,
-        message: StringView::from_static(b"call_method placeholder - needs instance-contract mapping"),
+        message: StringView::from_static(b"call_guest_method placeholder - needs instance-contract mapping"),
     }
 }
 
-/// RuntimeAbi.get_host_contract callback — returns an instance for a host contract.
+/// HostInterface.get_host_contract callback — returns an instance for a host contract.
 ///
 /// For singleton contracts: returns cached instance (creates on first call).
 /// For multi-instance contracts: creates new instance each call.
 ///
 /// # Safety
-/// rt_ctx must be a valid RuntimeContext with a valid HostContext pointer.
+/// this must be a valid HostInterface pointer with valid runtime field.
 pub(crate) unsafe extern "C" fn host_get_host_contract(
-    rt_ctx: RuntimeContext,
+    this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
 ) -> HostContractInstance {
-    if rt_ctx.is_null() {
+    if this.is_null() {
         return HostContractInstance::null();
     }
-    // SAFETY: rt_ctx is a valid RuntimeContext passed by the host.
-    // rt_ctx.data contains a valid *mut HostContext pointer.
-    let ctx: &HostContext = unsafe { &*(rt_ctx.data as *const HostContext) };
-    // SAFETY: ctx.runtime is a valid pointer to a Runtime that is guaranteed to be live
-    let runtime: &Runtime = unsafe { &*(ctx.runtime as *const Runtime) };
+    // SAFETY: this is a valid HostInterface pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
 
     // Find the host contract interface
     let host_contracts_guard = runtime.host_contracts.read().unwrap_or_else(|e| {
@@ -874,16 +880,18 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
                     return instance;
                 }
                 // SAFETY: interface.create_instance is a valid function pointer
+                // Pass the HostContractInterface pointer (self-passing pattern)
                 let instance: HostContractInstance = unsafe {
-                    (interface.create_instance)(rt_ctx, core::ptr::null())
+                    (interface.create_instance)(interface as *const HostContractInterface, core::ptr::null())
                 };
                 singleton_guard.insert(contract_id, instance);
                 instance
             } else {
                 // Multi-instance: create new instance each call
                 // SAFETY: interface.create_instance is a valid function pointer
+                // Pass the HostContractInterface pointer (self-passing pattern)
                 unsafe {
-                    (interface.create_instance)(rt_ctx, core::ptr::null())
+                    (interface.create_instance)(interface as *const HostContractInterface, core::ptr::null())
                 }
             }
         }
@@ -917,34 +925,29 @@ mod tests {
         assert_eq!(polyplug_abi::AbiErrorCode::Ok as u32, 0_u32);
     }
 
-    /// TH-06: Verify host callbacks in runtime.rs use RuntimeContext parameter type.
+    /// TH-06: Verify host callbacks in runtime.rs use HostInterface self-passing pattern.
     /// This is a compile-time verification test.
     #[test]
-    fn host_callbacks_use_runtime_context() {
+    fn host_callbacks_use_host_interface_self_passing() {
         // All host callback functions (host_register_contract, host_alloc, host_free,
         // host_find_by_contract, host_find_all_by_contract, host_resolve_contract,
-        // host_call_method, host_get_host_contract) use RuntimeContext as first parameter.
+        // host_call_method, host_get_host_contract) use *const HostInterface as first parameter.
         //
-        // This is verified by the function signatures in this file using RuntimeContext.
-        // If any function used *mut c_void instead, the code would not compile because
-        // RuntimeContext is a struct, not a raw pointer type.
+        // This is verified by the function signatures in this file using HostInterface.
+        // The self-passing pattern allows extracting runtime from (*this).runtime.
         //
-        // RuntimeContext is pointer-sized (8 bytes on x86_64), ensuring ABI compatibility.
-        assert_eq!(std::mem::size_of::<RuntimeContext>(), 8);
-
-        // Additional verification: RuntimeContext has is_null() method used in callbacks.
-        let null_ctx = RuntimeContext::null();
-        assert!(null_ctx.is_null());
+        // HostInterface is pointer-sized (8 bytes on x86_64), ensuring ABI compatibility.
+        assert_eq!(std::mem::size_of::<*const HostInterface>(), 8);
     }
 
     #[test]
-    fn host_find_by_contract_null_rt_ctx_returns_null() {
-        // SAFETY: host_find_by_contract handles null rt_ctx gracefully
+    fn host_find_by_contract_null_this_returns_null() {
+        // SAFETY: host_find_by_contract handles null HostInterface gracefully
         let handle: PluginHandle =
-            unsafe { host_find_by_contract(RuntimeContext::null(), 0_u64, 0_u32) };
+            unsafe { host_find_by_contract(core::ptr::null(), 0_u64, 0_u32) };
         assert!(
             handle.is_null(),
-            "host_find_by_contract must return null when rt_ctx is null"
+            "host_find_by_contract must return null when this is null"
         );
     }
 
@@ -954,23 +957,32 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
 
-        // Create a HostContext with a non-zero bundle_id to simulate init phase
-        let host_ctx: HostContext = HostContext {
+        // Set TLS bundle_id to simulate init phase
+        set_init_bundle_id(0xDEAD_BEEF_u64);
+
+        // Create a HostInterface with runtime pointer
+        let host_interface: HostInterface = HostInterface {
             runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0xDEAD_BEEF_u64,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
         };
 
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer
+        // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
         let handle: PluginHandle =
-            unsafe { host_find_by_contract(rt_ctx, 0x1111_2222_3333_4444_u64, 0_u32) };
+            unsafe { host_find_by_contract(&host_interface as *const HostInterface, 0x1111_2222_3333_4444_u64, 0_u32) };
         assert!(
             handle.is_null(),
             "dep enforcement must return null for undeclared contract during init phase"
         );
+
+        // Clear TLS after test
+        clear_init_bundle_id();
     }
 
     fn create_bundle_dir(temp: &tempfile::TempDir, bundle_name: &str, runtime: &str) -> PathBuf {
@@ -1006,11 +1018,11 @@ mod tests {
             GuestContractInstance,
         };
 
-        unsafe extern "C" fn stub_create_instance(_rt_ctx: RuntimeContext, _args: *const ()) -> GuestContractInstance {
+        unsafe extern "C" fn stub_create_instance(_host: *const core::ffi::c_void, _args: *const ()) -> GuestContractInstance {
             GuestContractInstance::null()
         }
 
-        unsafe extern "C" fn stub_destroy_instance(_rt_ctx: RuntimeContext, _instance: GuestContractInstance) {}
+        unsafe extern "C" fn stub_destroy_instance(_host: *const core::ffi::c_void, _instance: GuestContractInstance) {}
 
         let interface: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
             contract_id: polyplug_utils::GuestContractId::from_u64(contract_id),
@@ -1444,19 +1456,20 @@ mod tests {
     ) -> &'static HostContractInterface {
         use polyplug_abi::{DispatchMechanisms, NativeDispatch, HostContractInstance, DispatchType};
 
-        unsafe extern "C" fn stub_create_instance(_rt_ctx: RuntimeContext, _args: *const ()) -> HostContractInstance {
+        unsafe extern "C" fn stub_create_instance(_this: *const HostContractInterface, _args: *const ()) -> HostContractInstance {
             // Return a non-null dummy pointer for testing
             static mut DUMMY: usize = 0xDEADBEEF;
             HostContractInstance { data: &raw mut DUMMY as *mut core::ffi::c_void }
         }
 
-        unsafe extern "C" fn stub_destroy_instance(_rt_ctx: RuntimeContext, _instance: HostContractInstance) {}
+        unsafe extern "C" fn stub_destroy_instance(_this: *const HostContractInterface, _instance: HostContractInstance) {}
 
         Box::leak(Box::new(HostContractInterface {
             contract_id: polyplug_utils::HostContractId::from(contract_id),
             contract_version: polyplug_abi::types::Version { major, minor, patch: 0 },
             singleton: true,
             dispatch_type: DispatchType::Native,
+            runtime: core::ptr::null_mut(),
             create_instance: stub_create_instance,
             destroy_instance: stub_destroy_instance,
             dispatch: DispatchMechanisms {
@@ -1612,18 +1625,22 @@ mod tests {
             .register_host_contract(contract_id, vtable)
             .expect("registration should succeed");
 
-        let host_ctx: HostContext = HostContext {
+        // Create a HostInterface with runtime pointer
+        let host_interface: HostInterface = HostInterface {
             runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
         };
 
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(
             !instance.data.is_null(),
             "callback should return non-null instance for registered contract"
@@ -1638,18 +1655,22 @@ mod tests {
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.nonexistent", 1);
 
-        let host_ctx: HostContext = HostContext {
+        // Create a HostInterface with runtime pointer
+        let host_interface: HostInterface = HostInterface {
             runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
         };
 
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(
             instance.data.is_null(),
             "callback should return null instance for unregistered contract"
@@ -1658,8 +1679,8 @@ mod tests {
 
     // ─── Instance Lifecycle Tests (HC-02, HC-03) ───────────────────────────────
 
-    /// Create instance callback that returns a unique "magic" pointer per call.
-    /// Uses a thread-local counter to ensure unique values per call within a test.
+    // Create instance callback that returns a unique "magic" pointer per call.
+    // Uses a thread-local counter to ensure unique values per call within a test.
     std::thread_local! {
         static LOCAL_INSTANCE_COUNTER: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     }
@@ -1667,7 +1688,7 @@ mod tests {
     /// Create instance callback that returns a unique instance per call.
     /// Each call increments a thread-local counter and returns a unique pointer.
     unsafe extern "C" fn counting_create_instance(
-        _rt_ctx: RuntimeContext,
+        _this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
         LOCAL_INSTANCE_COUNTER.with(|counter| {
@@ -1683,7 +1704,7 @@ mod tests {
 
     /// No-op destroy for counting instances.
     unsafe extern "C" fn counting_destroy_instance(
-        _rt_ctx: RuntimeContext,
+        _this: *const HostContractInterface,
         _instance: HostContractInstance,
     ) {
         // No cleanup needed - we're just using integer values as pointers
@@ -1702,6 +1723,7 @@ mod tests {
             contract_version: polyplug_abi::types::Version { major, minor: 0, patch: 0 },
             singleton,
             dispatch_type: DispatchType::Native,
+            runtime: core::ptr::null_mut(),
             create_instance: counting_create_instance,
             destroy_instance: counting_destroy_instance,
             dispatch: DispatchMechanisms {
@@ -1730,25 +1752,29 @@ mod tests {
             .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
-        let host_ctx: HostContext = HostContext {
+        // Create a HostInterface with runtime pointer
+        let host_interface: HostInterface = HostInterface {
             runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
         };
 
         // First call - creates instance
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance1: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(!instance1.data.is_null(), "first call should return non-null instance");
 
         // Second call - should return SAME cached instance
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance2: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(!instance2.data.is_null(), "second call should return non-null instance");
 
         // HC-02: Verify same instance pointer is returned
@@ -1762,9 +1788,9 @@ mod tests {
         assert_eq!(counter_value, 1, "singleton should only call create_instance once");
 
         // Third call - still same instance
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance3: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert_eq!(
             instance1.data, instance3.data,
             "third call should still return same cached instance"
@@ -1792,25 +1818,29 @@ mod tests {
             .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
-        let host_ctx: HostContext = HostContext {
+        // Create a HostInterface with runtime pointer
+        let host_interface: HostInterface = HostInterface {
             runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
         };
 
         // First call - creates instance (counter becomes 101)
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance1: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(!instance1.data.is_null(), "first call should return non-null instance");
 
         // Second call - creates NEW instance (counter becomes 102)
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance2: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(!instance2.data.is_null(), "second call should return non-null instance");
 
         // HC-03: Verify different instance pointers are returned
@@ -1824,9 +1854,9 @@ mod tests {
         assert_eq!(counter_value, 102, "multi-instance should call create_instance twice");
 
         // Third call - creates yet another instance (counter becomes 103)
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let instance3: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, contract_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert_ne!(instance1.data, instance3.data, "third instance differs from first");
         assert_ne!(instance2.data, instance3.data, "third instance differs from second");
         assert_eq!(
@@ -1859,29 +1889,33 @@ mod tests {
             .register_host_contract(multi_id, multi_interface)
             .expect("multi-instance registration should succeed");
 
-        let host_ctx: HostContext = HostContext {
+        // Create a HostInterface with runtime pointer
+        let host_interface: HostInterface = HostInterface {
             runtime: &runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: 0,
-            host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
-        };
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
+            register_contract: host_register_contract,
+            alloc: host_alloc,
+            free: host_free,
+            find_by_contract: host_find_by_contract,
+            find_all_by_contract: host_find_all_by_contract,
+            resolve_contract: host_resolve_contract,
+            call_guest_method: host_call_method,
+            get_host_contract: host_get_host_contract,
         };
 
         // Call singleton twice - should get same instance
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let s1: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, singleton_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, singleton_id, 0) };
         let s2: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, singleton_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, singleton_id, 0) };
         assert_eq!(s1.data, s2.data, "singleton returns cached instance");
 
         // Call multi-instance twice - should get different instances
-        // SAFETY: rt_ctx is a valid RuntimeContext with HostContext pointer, runtime is live
+        // SAFETY: host_interface is valid with runtime pointer, runtime is live
         let m1: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, multi_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, multi_id, 0) };
         let m2: HostContractInstance =
-            unsafe { host_get_host_contract(rt_ctx, multi_id, 0) };
+            unsafe { host_get_host_contract(&host_interface as *const HostInterface, multi_id, 0) };
         assert_ne!(m1.data, m2.data, "multi-instance returns new instances");
 
         // Singleton instance should differ from multi instances

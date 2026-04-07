@@ -36,8 +36,7 @@ pub struct FillArgs {
 /// Arguments to `memory_alloc_buffer_via_host` (fn 1).
 #[repr(C)]
 pub struct AllocArgs {
-    pub rt_ctx: RuntimeContext,
-    pub host: *const RuntimeAbi,
+    pub host: *const HostInterface,
     pub size: u64,
     pub fill_byte: u8,
 }
@@ -114,16 +113,16 @@ extern "C" fn memory_fill_preallocated_buffer(args: *const (), out: *mut ()) -> 
 ///
 /// # Safety
 /// `args` must point to a valid `AllocArgs`. `out` must point to a valid `Buffer`.
-/// `alloc_args.host` must be a valid `RuntimeAbi` pointer.
+/// `alloc_args.host` must be a valid `HostInterface` pointer.
 extern "C" fn memory_alloc_buffer_via_host(args: *const (), out: *mut ()) -> AbiError {
     // SAFETY: args points to a valid AllocArgs per the ABI contract.
     let alloc_args: &AllocArgs = unsafe { &*(args as *const AllocArgs) };
-    // SAFETY: host is a valid non-null RuntimeAbi pointer provided by the caller per ABI contract.
-    let host: &RuntimeAbi = unsafe { &*alloc_args.host };
+    // SAFETY: host is a valid non-null HostInterface pointer provided by the caller per ABI contract.
+    let host: &HostInterface = unsafe { &*alloc_args.host };
     let size: usize = alloc_args.size as usize;
     // SAFETY: host.alloc is a valid function pointer set by the host runtime.
     // size and align=1 are valid arguments for the host allocator.
-    let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.rt_ctx, size, 1) };
+    let ptr: *mut u8 = unsafe { (host.alloc)(alloc_args.host, size, 1) };
     if ptr.is_null() {
         return AbiError {
             code: AbiErrorCode::Generic,
@@ -200,7 +199,7 @@ extern "C" fn memory_zero_length_roundtrip(args: *const (), out: *mut ()) -> Abi
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
-    _rt_ctx: RuntimeContext,
+    _host: *const core::ffi::c_void,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -211,7 +210,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
-    _rt_ctx: RuntimeContext,
+    _host: *const core::ffi::c_void,
     _instance: GuestContractInstance,
 ) {}
 
@@ -278,13 +277,11 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
-/// `rt_ctx` must be a valid opaque pointer to the host runtime context.
-/// `host_abi` must be a valid non-null pointer to a RuntimeAbi from the host.
+/// `host_abi` must be a valid non-null pointer to a HostInterface from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: RuntimeContext,
-    host_abi: *const RuntimeAbi,
+    host_abi: *const HostInterface,
     ctx: *const PluginContext,
 ) -> AbiError {
     if host_abi.is_null() {
@@ -301,13 +298,13 @@ pub unsafe extern "C" fn polyplug_init(
     }
 
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
-    let host: &RuntimeAbi = unsafe { &*host_abi };
+    let host: &HostInterface = unsafe { &*host_abi };
 
     // SAFETY: register_contract is a valid function pointer set by the host.
     // MEMORY_TEST_DESCRIPTOR and MEMORY_TEST_INTERFACE are 'static.
     unsafe {
         (host.register_contract)(
-            rt_ctx,
+            host_abi,
             &MEMORY_TEST_DESCRIPTOR as *const PluginDescriptor,
             &MEMORY_TEST_INTERFACE as *const GuestContractInterface,
         )

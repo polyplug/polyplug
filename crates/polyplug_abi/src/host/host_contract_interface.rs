@@ -1,10 +1,12 @@
 //! Host Contract Interface — for host-provided services.
 
+use core::ffi::c_void;
+
 use polyplug_utils::HostContractId;
 
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
-    host::{HostContractInstance, RuntimeContext},
+    host::HostContractInstance,
     types::Version,
 };
 
@@ -15,6 +17,9 @@ use crate::{
 /// # Singleton Mode
 /// - `singleton == true`: Same instance returned for all callers
 /// - `singleton == false`: New instance per caller
+///
+/// # Self-passing pattern
+/// create_instance and destroy_instance receive the interface pointer as first parameter.
 #[repr(C)]
 pub struct HostContractInterface {
     /// FNV-1a hash of "host_contract:name@major_version".
@@ -26,16 +31,20 @@ pub struct HostContractInterface {
     pub singleton: bool,
     /// Dispatch mechanism type (Native or VirtualMachine).
     pub dispatch_type: DispatchType,
+    /// Opaque pointer to Runtime.
+    ///
+    /// Host contracts can use this for runtime-specific operations.
+    pub runtime: *mut c_void,
     /// Create a new instance of this host contract.
     ///
     /// # Arguments
-    /// - `rt_ctx`: RuntimeContext handle
+    /// - `this`: HostContractInterface pointer (self-passing pattern)
     /// - `args`: Optional initialization arguments (contract-specific)
     ///
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
     pub create_instance: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostContractInterface,
         args: *const (),
     ) -> HostContractInstance,
     /// Destroy an instance of this host contract.
@@ -43,7 +52,7 @@ pub struct HostContractInterface {
     /// For singleton contracts, this is typically a no-op.
     /// For multi-instance contracts, caller must destroy after use.
     pub destroy_instance: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostContractInterface,
         instance: HostContractInstance,
     ),
     /// Union of dispatch mechanisms — access based on dispatch_type.
@@ -63,19 +72,21 @@ mod tests {
         //   singleton (bool): 1 byte @ offset 20
         //   [padding 3 bytes for alignment to DispatchType (4-byte align)]
         //   dispatch_type (DispatchType/u32): 4 bytes @ offset 24
-        //   [padding 4 bytes for alignment to fn ptr (8-byte align)]
-        //   create_instance (fn ptr): 8 bytes @ offset 32
-        //   destroy_instance (fn ptr): 8 bytes @ offset 40
-        //   dispatch (union): 16 bytes @ offset 48
-        // Total: 64 bytes
-        assert_eq!(size_of::<HostContractInterface>(), 64);
+        //   [padding 4 bytes for alignment to *mut c_void (8-byte align)]
+        //   runtime (*mut c_void): 8 bytes @ offset 32
+        //   create_instance (fn ptr): 8 bytes @ offset 40
+        //   destroy_instance (fn ptr): 8 bytes @ offset 48
+        //   dispatch (union): 16 bytes @ offset 56
+        // Total: 72 bytes
+        assert_eq!(size_of::<HostContractInterface>(), 72);
         assert_eq!(align_of::<HostContractInterface>(), 8);
         assert_eq!(offset_of!(HostContractInterface, contract_id), 0);
         assert_eq!(offset_of!(HostContractInterface, contract_version), 8);
         assert_eq!(offset_of!(HostContractInterface, singleton), 20);
         assert_eq!(offset_of!(HostContractInterface, dispatch_type), 24);
-        assert_eq!(offset_of!(HostContractInterface, create_instance), 32);
-        assert_eq!(offset_of!(HostContractInterface, destroy_instance), 40);
-        assert_eq!(offset_of!(HostContractInterface, dispatch), 48);
+        assert_eq!(offset_of!(HostContractInterface, runtime), 32);
+        assert_eq!(offset_of!(HostContractInterface, create_instance), 40);
+        assert_eq!(offset_of!(HostContractInterface, destroy_instance), 48);
+        assert_eq!(offset_of!(HostContractInterface, dispatch), 56);
     }
 }

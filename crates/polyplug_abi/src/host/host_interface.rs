@@ -21,7 +21,6 @@ use core::ffi::c_void;
 
 use crate::{
     guest::{GuestContractInterface, GuestContractInstance},
-    host::RuntimeContext,
     plugin::{PluginDescriptor, PluginHandle},
     types::AbiError,
 };
@@ -33,10 +32,10 @@ pub type ContractHandle = PluginHandle;
 /// Host Interface — function table passed to guests during initialization.
 ///
 /// Contains an opaque runtime pointer and function pointers for guest calls.
-/// In Wave 2, function signatures will change from RuntimeContext to *const HostInterface.
+/// All functions use self-passing pattern (receive HostInterface pointer as first parameter).
 ///
-/// # Self-passing pattern (Wave 2)
-/// Each function will receive the interface pointer as its first parameter,
+/// # Self-passing pattern
+/// Each function receives the interface pointer as its first parameter,
 /// allowing guests to call: `host->find_by_contract(host, id, ver)`
 /// SDKs hide this pattern: `host.find_by_contract(id, ver)`
 #[repr(C)]
@@ -50,19 +49,19 @@ pub struct HostInterface {
     ///
     /// Called by plugins during `polyplug_init` to register their contracts.
     pub register_contract: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostInterface,
         descriptor: *const PluginDescriptor,
         interface: *const GuestContractInterface,
     ) -> AbiError,
     /// Allocate memory using the host allocator.
-    pub alloc: unsafe extern "C" fn(rt_ctx: RuntimeContext, size: usize, align: usize) -> *mut u8,
+    pub alloc: unsafe extern "C" fn(this: *const HostInterface, size: usize, align: usize) -> *mut u8,
     /// Free memory using the host allocator.
-    pub free: unsafe extern "C" fn(rt_ctx: RuntimeContext, ptr: *mut u8, size: usize, align: usize),
+    pub free: unsafe extern "C" fn(this: *const HostInterface, ptr: *mut u8, size: usize, align: usize),
     /// Find a guest contract by contract_id and minimum version.
     ///
     /// Returns a ContractHandle that can be resolved to an interface.
     pub find_by_contract: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostInterface,
         contract_id: u64,
         min_version: u32,
     ) -> ContractHandle,
@@ -71,7 +70,7 @@ pub struct HostInterface {
     /// Returns the number of handles written to the output buffer.
     /// Wave 5 will change this to return `Array<ContractHandle>`.
     pub find_all_by_contract: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostInterface,
         contract_id: u64,
         min_version: u32,
         out: *mut ContractHandle,
@@ -81,7 +80,7 @@ pub struct HostInterface {
     ///
     /// Returns null if the handle is invalid or stale.
     pub resolve_contract: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostInterface,
         handle: ContractHandle,
     ) -> *const GuestContractInterface,
     /// Call a method on a guest contract instance.
@@ -90,13 +89,13 @@ pub struct HostInterface {
     /// different dispatch types (Native vs VM).
     ///
     /// # Arguments
-    /// - `rt_ctx`: RuntimeContext handle
+    /// - `this`: HostInterface pointer
     /// - `instance`: The guest contract instance
     /// - `method_id`: Method index within the contract
     /// - `args`: Pointer to packed arguments
     /// - `out`: Pointer to output buffer for return value
     pub call_guest_method: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostInterface,
         instance: GuestContractInstance,
         method_id: u32,
         args: *const (),
@@ -107,7 +106,7 @@ pub struct HostInterface {
     /// For singleton host contracts, returns the same instance every time.
     /// For multi-instance host contracts, returns a new instance each time.
     pub get_host_contract: unsafe extern "C" fn(
-        rt_ctx: RuntimeContext,
+        this: *const HostInterface,
         contract_id: u64,
         min_version: u32,
     ) -> crate::host::HostContractInstance,

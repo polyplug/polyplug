@@ -47,7 +47,7 @@ extern "C" fn plugin_add(args: *const (), out: *mut ()) -> AbiError {
 /// # Safety
 /// Test plugins don't need real instances; dispatch uses global state.
 unsafe extern "C" fn create_instance_stub(
-    _rt_ctx: RuntimeContext,
+    _host: *const core::ffi::c_void,
     _args: *const (),
 ) -> GuestContractInstance {
     GuestContractInstance::null()
@@ -58,7 +58,7 @@ unsafe extern "C" fn create_instance_stub(
 /// # Safety
 /// Test plugins don't own instance data.
 unsafe extern "C" fn destroy_instance_stub(
-    _rt_ctx: RuntimeContext,
+    _host: *const core::ffi::c_void,
     _instance: GuestContractInstance,
 ) {
 }
@@ -118,13 +118,11 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 /// Plugin init — called by the loader to register interfaces.
 ///
 /// # Safety
-/// `rt_ctx` must be a valid opaque pointer to the host runtime context.
-/// `host_abi` must be a valid non-null pointer to a RuntimeAbi from the host.
+/// `host_abi` must be a valid non-null pointer to a HostInterface from the host.
 /// `ctx` must be a valid non-null pointer to a PluginContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
-    rt_ctx: RuntimeContext,
-    host_abi: *const RuntimeAbi,
+    host_abi: *const HostInterface,
     ctx: *const PluginContext,
 ) -> AbiError {
     if host_abi.is_null() {
@@ -146,13 +144,13 @@ pub unsafe extern "C" fn polyplug_init(
     LAST_BUNDLE_PATH_LEN.store(sv.len, Ordering::SeqCst);
 
     // SAFETY: host_abi is non-null and provided by the host runtime per ABI contract.
-    let host: &RuntimeAbi = unsafe { &*host_abi };
+    let host: &HostInterface = unsafe { &*host_abi };
 
     // SAFETY: register_contract is a valid function pointer set by the host.
     // TEST_ADD_DESCRIPTOR and TEST_ADD_INTERFACE are 'static.
     unsafe {
         (host.register_contract)(
-            rt_ctx,
+            host_abi,
             &TEST_ADD_DESCRIPTOR as *const PluginDescriptor,
             &TEST_ADD_INTERFACE as *const GuestContractInterface,
         )

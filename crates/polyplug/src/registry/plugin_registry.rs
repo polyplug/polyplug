@@ -525,7 +525,7 @@ mod tests {
 
     /// No-op create_instance callback.
     unsafe extern "C" fn noop_create_instance(
-        _rt_ctx: polyplug_abi::RuntimeContext,
+        _host: *const core::ffi::c_void,
         _args: *const (),
     ) -> GuestContractInstance {
         GuestContractInstance::null()
@@ -533,7 +533,7 @@ mod tests {
 
     /// No-op destroy_instance callback.
     unsafe extern "C" fn noop_destroy_instance(
-        _rt_ctx: polyplug_abi::RuntimeContext,
+        _host: *const core::ffi::c_void,
         _instance: GuestContractInstance,
     ) {
     }

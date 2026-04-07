@@ -6,13 +6,12 @@ use std::sync::Mutex;
 
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
-use polyplug_abi::host::host_context::HostContext;
 use polyplug::Runtime;
-use polyplug_abi::RuntimeContext;
 use polyplug_abi::plugin::PluginContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
+use polyplug_abi::HostInterface;
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -87,16 +86,15 @@ impl BundleLoader for NativeLoader {
 
         // ─── Step 3: Resolve init symbol ──────────────────────────────────────────────
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
+        // New signature: fn(host_abi: *const HostInterface, ctx: *const PluginContext) -> AbiError
         let init_fn_ptr: unsafe extern "C" fn(
-            RuntimeContext,
-            *const polyplug_abi::RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
-                    RuntimeContext,
-                    *const polyplug_abi::RuntimeAbi,
+                    *const HostInterface,
                     *const PluginContext,
                 ) -> AbiError,
             > = unsafe {
@@ -119,30 +117,17 @@ impl BundleLoader for NativeLoader {
             },
         };
 
-        // ─── Step 5: Create HostContext for dependency enforcement ─────────────────────
+        // ─── Step 5: Set TLS bundle_id for dependency enforcement ─────────────────────
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
-        let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: expected_bundle_id.id(),
-            host_abi_version: POLYPLUG_ABI_VERSION,
-        };
+        polyplug::set_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Call init ────────────────────────────────────────────────────────
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
-        };
+        // ─── Step 6: Get HostInterface and call init ───────────────────────────────────
+        let host_abi: &'static HostInterface = runtime.host_abi();
         let init_result: AbiError =
-            unsafe { init_fn_ptr(rt_ctx, runtime.host_abi() as *const polyplug_abi::RuntimeAbi, &ctx) };
+            unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) };
 
-        // ─── Step 7: Verify bundle_id wasn't tampered ─────────────────────────────────────
-        // Note: host_ctx.bundle_id is modified by init if tampering occurs
-        if host_ctx.bundle_id != expected_bundle_id.id() {
-            return Err(RuntimeError::Loader(LoaderError::BundleTampered {
-                bundle: manifest.name.clone(),
-                expected: expected_bundle_id.id(),
-                found: host_ctx.bundle_id,
-            }));
-        }
+        // ─── Step 7: Clear TLS bundle_id ──────────────────────────────────────────────
+        polyplug::clear_init_bundle_id();
 
         if init_result.code != AbiErrorCode::Ok {
             let error_msg: String = if init_result.message.ptr.is_null() {
@@ -212,15 +197,13 @@ impl BundleLoader for NativeLoader {
         // ─── Step 3: Resolve init symbol ────────────────────────────────────────────────
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
         let init_fn_ptr: unsafe extern "C" fn(
-            RuntimeContext,
-            *const polyplug_abi::RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
-                    RuntimeContext,
-                    *const polyplug_abi::RuntimeAbi,
+                    *const HostInterface,
                     *const PluginContext,
                 ) -> AbiError,
             > = unsafe {
@@ -243,29 +226,17 @@ impl BundleLoader for NativeLoader {
             },
         };
 
-        // ─── Step 5: Create HostContext for dependency enforcement ───────────────────────
+        // ─── Step 5: Set TLS bundle_id for dependency enforcement ───────────────────────
         let expected_bundle_id: BundleId = BundleId::new(&manifest.name);
-        let host_ctx: HostContext = HostContext {
-            runtime: runtime as *const Runtime as *mut core::ffi::c_void,
-            bundle_id: expected_bundle_id.id(),
-            host_abi_version: POLYPLUG_ABI_VERSION,
-        };
+        polyplug::set_init_bundle_id(expected_bundle_id.id());
 
-        // ─── Step 6: Call init ──────────────────────────────────────────────────────────
-        let rt_ctx: RuntimeContext = RuntimeContext {
-            data: &host_ctx as *const HostContext as *mut core::ffi::c_void,
-        };
+        // ─── Step 6: Get HostInterface and call init ─────────────────────────────────────
+        let host_abi: &'static HostInterface = runtime.host_abi();
         let init_result: AbiError =
-            unsafe { init_fn_ptr(rt_ctx, runtime.host_abi() as *const polyplug_abi::RuntimeAbi, &ctx) };
+            unsafe { init_fn_ptr(host_abi as *const HostInterface, &ctx) };
 
-        // ─── Step 7: Verify bundle_id wasn't tampered ─────────────────────────────────────
-        if host_ctx.bundle_id != expected_bundle_id.id() {
-            return Err(RuntimeError::Loader(LoaderError::BundleTampered {
-                bundle: manifest.name.clone(),
-                expected: expected_bundle_id.id(),
-                found: host_ctx.bundle_id,
-            }));
-        }
+        // ─── Step 7: Clear TLS bundle_id ────────────────────────────────────────────────
+        polyplug::clear_init_bundle_id();
 
         if init_result.code != AbiErrorCode::Ok {
             let error_msg: String = if init_result.message.ptr.is_null() {
