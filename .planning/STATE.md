@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: in_progress
-last_updated: "2026-04-07T00:00:00.000Z"
+status: executing
+last_updated: "2026-04-07T16:39:11.512Z"
 progress:
   total_phases: 11
   completed_phases: 9
-  total_plans: 57
-  completed_plans: 57
-  percent: 82
+  total_plans: 63
+  completed_plans: 60
+  percent: 95
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -32,10 +32,10 @@ progress:
 
 ## Current Position
 
-Phase: 11
-Plan: Not started
-**Status:** Phase 11 added
-**Progress:** [████████░░] 82%
+Phase: 11 (guest-calling-convention-missing-introspection) — EXECUTING
+Plan: 1 of 6
+**Status:** Executing Phase 11
+**Progress:** [█████████░] 85%
 
 ## Phase Completion Summary
 
@@ -51,17 +51,27 @@ Plan: Not started
 | 08 | Retroactive Verification | Complete | 2026-04-06 |
 | 09 | Codegen Test Cleanup | Complete | 2026-04-06 |
 | 10 | SDK Cleanup Completion | Complete | 2026-04-06 |
-| 11 | Guest Calling Convention & Missing Introspection | Not started | — |
+| 11 | Guest Calling Convention & Missing Introspection | In Progress | — |
 
-## Roadmap Evolution
+## Phase 11 Progress
 
-- Phase 11 added: Guest Calling Convention & Missing Introspection
+**Completed Waves:**
+
+- 11-01: HostInterface + RuntimeInterface structs
+- 11-02: Deleted RuntimeContext/HostContext, self-passing pattern
+- 11-03: Array<T>, GuestContractInstance.contract_id, DependencyInfo
+
+**Remaining Waves:**
+
+- 11-04: Interface callback updates
+- 11-05: Introspection ABIs (list_bundles, get_dependencies)
+- 11-06: Documentation
 
 ## Session Continuity
 
-Last session: 2026-04-06T15:00:00Z
-Completed: Phase 09 - Codegen Test Cleanup (3 plans, vtable→interface naming cleanup)
-Next: Phase 10 - SDK Cleanup Completion
+Last session: 2026-04-07T16:30:00Z
+Completed: Phase 11 Waves 1-3 (HostInterface, RuntimeInterface, self-passing, ABI types)
+Next: Phase 11 Wave 4 — Interface callback updates
 
 ## Phase 08 Accomplishments
 

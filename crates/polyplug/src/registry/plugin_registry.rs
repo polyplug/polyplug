@@ -519,13 +519,13 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use polyplug_abi::{
-        DispatchType, GuestContractInterface, NativeDispatch, PluginDescriptor, StringView,
+        DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor, StringView,
         Version, DispatchMechanisms, GuestContractInstance,
     };
 
     /// No-op create_instance callback.
     unsafe extern "C" fn noop_create_instance(
-        _host: *const core::ffi::c_void,
+        _host: *const HostInterface,
         _args: *const (),
     ) -> GuestContractInstance {
         GuestContractInstance::null()
@@ -533,7 +533,7 @@ mod tests {
 
     /// No-op destroy_instance callback.
     unsafe extern "C" fn noop_destroy_instance(
-        _host: *const core::ffi::c_void,
+        _host: *const HostInterface,
         _instance: GuestContractInstance,
     ) {
     }

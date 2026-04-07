@@ -1,12 +1,11 @@
 //! Guest Contract Interface — one per contract implemented by a guest (plugin).
 
-use core::ffi::c_void;
-
 use polyplug_utils::GuestContractId;
 
 use crate::{
     dispatch::{dispatch_mechanisms::DispatchMechanisms, dispatch_type::DispatchType},
     guest::GuestContractInstance,
+    host::HostInterface,
     types::Version,
 };
 
@@ -40,7 +39,7 @@ pub struct GuestContractInterface {
     /// # Returns
     /// Opaque instance handle, or null handle on failure.
     pub create_instance: unsafe extern "C" fn(
-        host: *const c_void, // *const HostInterface - opaque for ABI stability
+        host: *const HostInterface,
         args: *const (),
     ) -> GuestContractInstance,
     /// Destroy an instance of this contract.
@@ -51,7 +50,7 @@ pub struct GuestContractInterface {
     /// - `host`: HostInterface pointer
     /// - `instance`: Instance handle to destroy
     pub destroy_instance: unsafe extern "C" fn(
-        host: *const c_void, // *const HostInterface - opaque for ABI stability
+        host: *const HostInterface,
         instance: GuestContractInstance,
     ),
     /// Union of dispatch mechanisms — access based on dispatch_type.
@@ -62,6 +61,7 @@ pub struct GuestContractInterface {
 mod tests {
     use core::mem::{align_of, offset_of, size_of};
     use super::GuestContractInterface;
+    use crate::host::HostInterface;
 
     #[test]
     fn layout_guest_contract_interface() {
@@ -82,5 +82,11 @@ mod tests {
         assert_eq!(offset_of!(GuestContractInterface, create_instance), 24);
         assert_eq!(offset_of!(GuestContractInterface, destroy_instance), 32);
         assert_eq!(offset_of!(GuestContractInterface, dispatch), 40);
+    }
+
+    /// Verify HostInterface is pointer-sized for FFI compatibility.
+    #[test]
+    fn guest_contract_interface_uses_host_interface() {
+        assert_eq!(size_of::<*const HostInterface>(), 8);
     }
 }

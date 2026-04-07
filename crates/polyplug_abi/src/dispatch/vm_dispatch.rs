@@ -77,8 +77,9 @@ mod tests {
     fn vm_dispatch_instance_is_guest_contract_instance() {
         use crate::guest::GuestContractInstance;
 
-        // Verify GuestContractInstance is pointer-sized (same as *mut c_void would be)
-        assert_eq!(size_of::<GuestContractInstance>(), 8);
+        // Verify GuestContractInstance is 16 bytes (data pointer + contract_id).
+        // Changed from 8 bytes in Phase 11 Wave 3 when contract_id was added.
+        assert_eq!(size_of::<GuestContractInstance>(), 16);
 
         // This test passes at compile time because the struct definition
         // uses GuestContractInstance for the instance parameter. If it used

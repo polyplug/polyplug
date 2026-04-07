@@ -1018,11 +1018,11 @@ mod tests {
             GuestContractInstance,
         };
 
-        unsafe extern "C" fn stub_create_instance(_host: *const core::ffi::c_void, _args: *const ()) -> GuestContractInstance {
+        unsafe extern "C" fn stub_create_instance(_host: *const HostInterface, _args: *const ()) -> GuestContractInstance {
             GuestContractInstance::null()
         }
 
-        unsafe extern "C" fn stub_destroy_instance(_host: *const core::ffi::c_void, _instance: GuestContractInstance) {}
+        unsafe extern "C" fn stub_destroy_instance(_host: *const HostInterface, _instance: GuestContractInstance) {}
 
         let interface: &'static GuestContractInterface = Box::leak(Box::new(GuestContractInterface {
             contract_id: polyplug_utils::GuestContractId::from_u64(contract_id),

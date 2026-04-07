@@ -276,12 +276,12 @@ Phase 11 (Guest Calling Convention & Missing Introspection)
 **Goal:** Rename `RuntimeAbi` to `HostInterface`, create `RuntimeInterface` for symmetric API, delete `RuntimeContext`/`HostContext` wrappers, rename `call_method` to `call_guest_method`, implement guest-to-guest calls, add introspection ABIs, create `Array<T>` type, update all SDKs and codegen.
 **Requirements**: D-01 through D-14 from CONTEXT.md
 **Depends on:** Phase 10
-**Plans:** 6 plans
+**Plans:** 3/6 plans executed
 
 Plans:
-- [ ] 11-01-PLAN.md — Rename RuntimeAbi to HostInterface, create RuntimeInterface (D-01, D-02)
-- [ ] 11-02-PLAN.md — Delete RuntimeContext and HostContext wrapper types (D-03)
-- [ ] 11-03-PLAN.md — Enhance Array<T>, add contract_id to GuestContractInstance, create DependencyInfo (D-05, D-06, D-10)
+- [x] 11-01-PLAN.md — Rename RuntimeAbi to HostInterface, create RuntimeInterface (D-01, D-02)
+- [x] 11-02-PLAN.md — Delete RuntimeContext and HostContext wrapper types (D-03)
+- [x] 11-03-PLAN.md — Enhance Array<T>, add contract_id to GuestContractInstance, create DependencyInfo (D-05, D-06, D-10)
 - [ ] 11-04-PLAN.md — Update GuestContractInterface/HostContractInterface signatures (D-12, D-13)
 - [ ] 11-05-PLAN.md — Add introspection ABIs (list_bundles, get_dependencies, find_all_by_contract) (D-07, D-08, D-11)
 - [ ] 11-06-PLAN.md — First-class documentation for all interface types (D-14)
