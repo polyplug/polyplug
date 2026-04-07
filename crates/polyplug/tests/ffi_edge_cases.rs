@@ -233,7 +233,7 @@ fn test_find_all_by_contract_overflow() {
         needs_reinit_on_dep_reload: false,
         path: PathBuf::new(),
     };
-    std::fs::write(cpp_bundle_dir.join("manifest.toml"), manifest.to_toml())
+    std::fs::write(cpp_bundle_dir.join("manifest.toml"), toml::to_string(&manifest).expect("serialize manifest"))
         .expect("failed to write manifest");
 
     // Load the C++ plugin (also provides "test.add@1")

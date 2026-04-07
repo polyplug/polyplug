@@ -11,7 +11,7 @@ use polyplug::loader::ManifestData;
 use polyplug::loader::RawManifestDependency;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_utils::guest_contract_id;
+use polyplug_utils::{guest_contract_id, GuestContractId};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -86,7 +86,7 @@ fn write_bundle_manifest(
         .map(|(contract, cid, min_ver)| RawManifestDependency {
             kind: "contract".to_owned(),
             contract: contract.to_string(),
-            contract_id: *cid,
+            contract_id: GuestContractId::from_raw(*cid),
             min_version: min_ver.to_string(),
             bundle: None,
             bundle_id: None,
@@ -106,7 +106,7 @@ fn write_bundle_manifest(
         path: PathBuf::new(),
     };
 
-    fs::write(bundle_dir.join("manifest.toml"), manifest.to_toml()).expect("write manifest.toml");
+    fs::write(bundle_dir.join("manifest.toml"), toml::to_string(&manifest).expect("serialize manifest")).expect("write manifest.toml");
 
     bundle_dir
 }

@@ -13,7 +13,7 @@ use libloading::os::unix::RTLD_LAZY;
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, RuntimeAbi, RuntimeContext, GuestContractInterface, GuestContractInstance,
+    AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch,
 };
@@ -33,8 +33,7 @@ const ERROR_PLUGIN_SO: &str = env!("ERROR_PLUGIN_SO");
 /// Mirrors the definition in tests/fixtures/error_plugin/src/lib.rs.
 #[repr(C)]
 struct ChainArgs {
-    rt_ctx: *mut core::ffi::c_void,
-    host: *const RuntimeAbi,
+    host: *const HostInterface,
     target_contract_id: u64,
     target_fn_id: u32,
 }
@@ -46,14 +45,14 @@ std::thread_local! {
         core::cell::RefCell::new(PluginRegistry::new());
 }
 
-// --- RuntimeAbi callbacks (for Test 3 chain dispatch) -----------------------
+// --- HostInterface callbacks (for Test 3 chain dispatch) -----------------------
 
 /// find_by_contract that looks up a plugin from the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
 /// Must only be called when ERROR_REGISTRY has been populated on this thread.
 unsafe extern "C" fn chain_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -66,18 +65,16 @@ unsafe extern "C" fn chain_find_by_contract(
     })
 }
 
-/// find_all_by_contract stub -- returns 0 (not needed for error chain tests).
+/// find_all_by_contract stub -- returns empty array.
 ///
 /// # Safety
-/// Always safe to call; no pointer dereferences if out_cap is 0.
+/// Always safe to call.
 unsafe extern "C" fn chain_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> polyplug_abi::Array<PluginHandle> {
+    polyplug_abi::Array::empty()
 }
 
 /// resolve_contract that dispatches through the thread-local ERROR_REGISTRY.
@@ -85,7 +82,7 @@ unsafe extern "C" fn chain_find_all_by_contract(
 /// # Safety
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
 unsafe extern "C" fn chain_resolve_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     handle: PluginHandle,
 ) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
@@ -94,23 +91,23 @@ unsafe extern "C" fn chain_resolve_contract(
     })
 }
 
-/// Stub call_method -- returns Ok.
-unsafe extern "C" fn stub_call_method(
-    _rt_ctx: RuntimeContext,
+/// Stub call_guest_method -- returns Ok.
+unsafe extern "C" fn stub_call_guest_method(
+    _this: *const HostInterface,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
     _out: *mut (),
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok as u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
 
 /// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
@@ -119,7 +116,7 @@ unsafe extern "C" fn stub_get_host_contract(
 
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -128,7 +125,7 @@ unsafe extern "C" fn stub_alloc(
 
 /// Stub free callback.
 unsafe extern "C" fn stub_free(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -139,7 +136,7 @@ unsafe extern "C" fn stub_free(
 
 /// No-op find_by_contract callback.
 unsafe extern "C" fn noop_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
@@ -148,44 +145,56 @@ unsafe extern "C" fn noop_find_by_contract(
 
 /// No-op find_all_by_contract callback.
 unsafe extern "C" fn noop_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> polyplug_abi::Array<PluginHandle> {
+    polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-/// No-op call_method callback.
-unsafe extern "C" fn noop_call_method(
-    _rt_ctx: RuntimeContext,
+/// No-op call_guest_method callback.
+unsafe extern "C" fn noop_call_guest_method(
+    _this: *const HostInterface,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
     _out: *mut (),
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok as u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
 
 /// No-op get_host_contract callback.
 unsafe extern "C" fn noop_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance::null()
+}
+
+/// No-op list_bundles callback.
+unsafe extern "C" fn noop_list_bundles(
+    _this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_utils::BundleId> {
+    polyplug_abi::Array::empty()
+}
+
+/// No-op get_dependencies callback.
+unsafe extern "C" fn noop_get_dependencies(
+    _this: *const HostInterface,
+) -> polyplug_abi::Array<polyplug_abi::DependencyInfo> {
+    polyplug_abi::Array::empty()
 }
 
 // --- Registry callback -------------------------------------------------------
@@ -193,15 +202,15 @@ unsafe extern "C" fn noop_get_host_contract(
 /// A register_contract callback that stores vtable entries into the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
-/// `_rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
+/// `_this`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
+            code: AbiErrorCode::InvalidPointer,
             message: StringView::null(),
         };
     }
@@ -229,13 +238,30 @@ unsafe extern "C" fn registry_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok as u32,
+            code: AbiErrorCode::Ok,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: StringView::null(),
         },
+    }
+}
+
+/// Build a HostInterface with all callbacks.
+fn make_host_interface() -> HostInterface {
+    HostInterface {
+        runtime: core::ptr::null_mut(),
+        register_contract: registry_register_callback,
+        alloc: stub_alloc,
+        free: stub_free,
+        find_by_contract: noop_find_by_contract,
+        find_all_by_contract: noop_find_all_by_contract,
+        resolve_contract: noop_resolve_contract,
+        call_guest_method: noop_call_guest_method,
+        get_host_contract: noop_get_host_contract,
+        list_bundles: noop_list_bundles,
+        get_dependencies: noop_get_dependencies,
     }
 }
 
@@ -273,12 +299,11 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
         *cell.borrow_mut() = PluginRegistry::new();
     });
 
-    // SAFETY: polyplug_init matches the expected ABI signature.
+    // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -287,30 +312,20 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: RuntimeAbi = RuntimeAbi {
-        register_contract: registry_register_callback,
-        alloc: stub_alloc,
-        free: stub_free,
-        find_by_contract: noop_find_by_contract,
-        find_all_by_contract: noop_find_all_by_contract,
-        resolve_contract: noop_resolve_contract,
-        call_method: noop_call_method,
-        get_host_contract: noop_get_host_contract,
-    };
+    let host_interface: HostInterface = make_host_interface();
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &host_vtable as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
 
     let contract_id: GuestContractId = GuestContractId::new("error.test", 1);
     let handle: PluginHandle = ERROR_REGISTRY.with(|cell| {
@@ -356,7 +371,7 @@ fn stress_error_code_and_message_received_correctly() {
 
     // The dispatch wrapper returns ABI_OK (success).
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "dispatch wrapper must return ABI_OK"
     );
 
@@ -407,7 +422,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     let result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
 
     assert_eq!(
-        result.code, AbiErrorCode::Panic as u32,
+        result.code, AbiErrorCode::Panic,
         "error_panic must return ABI_ERROR_PANIC (code={})",
         AbiErrorCode::Panic as u32
     );
@@ -427,7 +442,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     core::mem::forget(library);
 }
 
-/// Test 3: error_chain_propagate (fn 2) calls another plugin via a real RuntimeAbi
+/// Test 3: error_chain_propagate (fn 2) calls another plugin via a real HostInterface
 /// and propagates the error back to the test. The chain target is fn 1 (error_panic)
 /// which returns ABI_ERROR_PANIC via its return value (not via out pointer).
 /// The propagated error code is written to *out by error_chain_propagate.
@@ -439,17 +454,20 @@ fn stress_error_chain_b_errors_a_propagates() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Build a RuntimeAbi that routes find_by_contract and resolve_contract through the
+    // Build a HostInterface that routes find_by_contract and resolve_contract through the
     // thread-local ERROR_REGISTRY that contains error_plugin's vtable.
-    let chain_host_vtable: RuntimeAbi = RuntimeAbi {
+    let chain_host_interface: HostInterface = HostInterface {
+        runtime: core::ptr::null_mut(),
         register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: chain_find_by_contract,
         find_all_by_contract: chain_find_all_by_contract,
         resolve_contract: chain_resolve_contract,
-        call_method: stub_call_method,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        list_bundles: noop_list_bundles,
+        get_dependencies: noop_get_dependencies,
     };
 
     // error.test contract_id is FNV-1a("error.test@1").
@@ -459,8 +477,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // fn 1 returns ABI_ERROR_PANIC via its return value (not via *out),
     // so error_chain_propagate receives it as inner_result and writes it to *out.
     let chain_args: ChainArgs = ChainArgs {
-        rt_ctx: core::ptr::null_mut(),
-        host: &chain_host_vtable as *const RuntimeAbi,
+        host: &chain_host_interface as *const HostInterface,
         target_contract_id: error_contract_id.id(),
         target_fn_id: 1_u32, // fn 1 = error_panic
     };
@@ -477,7 +494,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: chain_args is a valid ChainArgs with a live RuntimeAbi.
+    // SAFETY: chain_args is a valid ChainArgs with a live HostInterface.
     // out is a valid AbiError location. error_chain_propagate calls fn 1 via the host
     // vtable and writes the returned AbiError (ABI_ERROR_PANIC) to *out.
     let call_result: AbiError = unsafe {
@@ -489,13 +506,13 @@ fn stress_error_chain_b_errors_a_propagates() {
 
     // error_chain_propagate itself returns ABI_OK (wrapper success).
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "error_chain_propagate wrapper must return ABI_OK"
     );
 
     // The propagated error from fn 1 (error_panic) is ABI_ERROR_PANIC.
     assert_eq!(
-        out.code, AbiErrorCode::Panic as u32,
+        out.code, AbiErrorCode::Panic,
         "propagated error must be ABI_ERROR_PANIC (={})",
         AbiErrorCode::Panic as u32
     );
@@ -537,7 +554,7 @@ fn stress_error_message_lifetime_valid_during_read() {
         unsafe { dispatch_fn(core::ptr::null(), &mut out as *mut AbiError as *mut ()) };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "dispatch wrapper must return ABI_OK"
     );
     assert_eq!(out.code, 99_u32, "error code must be 99");

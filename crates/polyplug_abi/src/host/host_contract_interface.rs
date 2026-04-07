@@ -118,6 +118,17 @@ pub struct HostContractInterface {
     pub dispatch: DispatchMechanisms,
 }
 
+// SAFETY: HostContractInterface contains an opaque pointer and function pointers.
+// The opaque pointer is managed by the runtime.
+// Function pointers are inherently thread-safe to call from any thread
+// (the functions themselves must handle their own synchronization).
+unsafe impl Send for HostContractInterface {}
+
+// SAFETY: HostContractInterface contains an opaque pointer and function pointers.
+// Concurrent calls to the same interface are safe because the runtime
+// handles internal synchronization.
+unsafe impl Sync for HostContractInterface {}
+
 #[cfg(test)]
 mod tests {
     use core::mem::{align_of, offset_of, size_of};

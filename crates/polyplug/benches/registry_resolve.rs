@@ -17,21 +17,24 @@ use criterion::criterion_main;
 use polyplug::plugin_registry::PluginRegistry;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginDispatch;
+use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::PluginHandle;
 use polyplug_abi::StringView;
+use polyplug_utils::GuestContractId;
+use polyplug_utils::BundleId;
 
 // ─── Mock vtable for benchmarking ────────────────────────────────────────────
 
 static BENCH_VTABLE: GuestContractInterface = GuestContractInterface {
-    rt_ctx: core::ptr::null(),
-    contract_id: 0x0000_0000_0000_0001_u64,
-    contract_version: (1 << 16),
-    function_count: 0,
+    contract_id: GuestContractId::from_raw(0x0000_0000_0000_0001_u64),
+    contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    dispatch: PluginDispatch {
+    create_instance: |_| GuestContractInstance::null(),
+    destroy_instance: |_, _| {},
+    dispatch: DispatchMechanisms {
         native: NativeDispatch {
             functions: core::ptr::null(),
         },
@@ -42,9 +45,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     PluginDescriptor {
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
-        version_major: 1,
-        version_minor: 0,
-        version_patch: 0,
+        version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
     }
 }
 
@@ -57,7 +58,7 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
     // SAFETY: BENCH_VTABLE is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry
-            .register(descriptor, &BENCH_VTABLE, "bench.contract".to_owned(), 0u64)
+            .register(descriptor, &BENCH_VTABLE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 
@@ -85,12 +86,12 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
     let vtables: Vec<Box<GuestContractInterface>> = (0..100_u64)
         .map(|i| {
             Box::new(GuestContractInterface {
-                rt_ctx: core::ptr::null(),
-                contract_id: 0x1000_0000_0000_0000_u64 + i,
-                contract_version: (1 << 16),
-                function_count: 0,
+                contract_id: GuestContractId::from_raw(0x1000_0000_0000_0000_u64 + i),
+                contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
                 dispatch_type: DispatchType::Native,
-                dispatch: PluginDispatch {
+                create_instance: |_| GuestContractInstance::null(),
+                destroy_instance: |_, _| {},
+                dispatch: DispatchMechanisms {
                     native: NativeDispatch {
                         functions: core::ptr::null(),
                     },
@@ -108,22 +109,20 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"plugin"),
             contract_name: StringView::from_static(b"contract"),
-            version_major: 1,
-            version_minor: 0,
-            version_patch: 0,
+            version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
         };
 
         // SAFETY: vtable is 'static (leaked), pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register(descriptor, *vtable, format!("contract.{}", i_u64), i_u64)
+                .register(descriptor, *vtable, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
                 .expect("registration should succeed");
         }
     }
 
     // Get handle for slot 50 (middle of the array)
     let handle: PluginHandle = registry
-        .find_by_contract(0x1000_0000_0000_0032_u64, 0)
+        .find(GuestContractId::from_raw(0x1000_0000_0000_0032_u64), 0)
         .expect("find should succeed");
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
@@ -150,7 +149,7 @@ fn bench_registry_resolve_stale(c: &mut Criterion) {
     // SAFETY: BENCH_VTABLE is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry
-            .register(descriptor, &BENCH_VTABLE, "bench.contract".to_owned(), 0u64)
+            .register(descriptor, &BENCH_VTABLE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 

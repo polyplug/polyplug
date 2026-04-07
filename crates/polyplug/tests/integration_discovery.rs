@@ -22,7 +22,7 @@ fn write_bundle_with_manifest(dir: &Path, manifest: &ManifestData) {
     let bundle_dir: PathBuf = dir.join(&manifest.name);
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
     fs::write(bundle_dir.join(&manifest.file), b"").expect("write stub so");
-    fs::write(bundle_dir.join("manifest.toml"), manifest.to_toml()).expect("write manifest.toml");
+    fs::write(bundle_dir.join("manifest.toml"), toml::to_string(manifest).expect("serialize manifest")).expect("write manifest.toml");
 }
 
 #[test]

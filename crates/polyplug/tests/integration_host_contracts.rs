@@ -20,7 +20,7 @@ use polyplug_utils::HostContractId;
 
 /// No-op create_instance callback.
 unsafe extern "C" fn noop_create_instance(
-    _host: *const HostInterface,
+    _this: *const HostContractInterface,
     _args: *const (),
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance::null()
@@ -28,7 +28,7 @@ unsafe extern "C" fn noop_create_instance(
 
 /// No-op destroy_instance callback.
 unsafe extern "C" fn noop_destroy_instance(
-    _host: *const HostInterface,
+    _this: *const HostContractInterface,
     _instance: polyplug_abi::HostContractInstance,
 ) {
 }
@@ -48,6 +48,7 @@ fn create_static_interface(
         contract_version: Version { major, minor, patch: 0 },
         singleton,
         dispatch_type: DispatchType::Native,
+        runtime: core::ptr::null_mut(),
         create_instance: noop_create_instance,
         destroy_instance: noop_destroy_instance,
         dispatch: DispatchMechanisms {

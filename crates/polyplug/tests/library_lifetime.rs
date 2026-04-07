@@ -9,12 +9,7 @@
 
 use polyplug::loader::ManifestData;
 use polyplug::loader::parse_manifest;
-use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug::runtime::Runtime;
-use polyplug_abi::HostInterface;
-use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::GuestContractInterface;
 use polyplug_utils::bundle_id;
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
@@ -36,10 +31,8 @@ fn library_handle_outlives_load_call() {
         parse_manifest(plugin_dir).expect("parse_manifest for test_plugin_dir");
     manifest.id = bundle_id(&manifest.name);
 
-    // Create a runtime and registry
-    let registry: PluginRegistry = PluginRegistry::new();
+    // Create a runtime with default settings
     let runtime: Runtime = Runtime::builder()
-        .with_registry(registry)
         .build()
         .expect("runtime build should succeed");
 

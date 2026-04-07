@@ -13,9 +13,9 @@ use std::sync::Arc;
 
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
-    AbiErrorCode, AbiError, Buffer, RuntimeAbi, RuntimeContext, GuestContractInterface, GuestContractInstance,
+    AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
     PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch,
+    DispatchType, NativeDispatch, Array,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -49,8 +49,7 @@ struct FillArgs {
 /// Arguments to `memory_alloc_buffer_via_host` (fn 1).
 #[repr(C)]
 struct AllocArgs {
-    rt_ctx: *mut core::ffi::c_void,
-    host: *const RuntimeAbi,
+    host: *const HostInterface,
     size: u64,
     fill_byte: u8,
 }
@@ -69,32 +68,30 @@ struct ZeroResult {
     sv_len: u64,
 }
 
-// --- RuntimeAbi stub functions -----------------------------------------------
+// --- HostInterface stub functions ---------------------------------------------
 
 /// Stub find_by_contract -- returns a null handle (not needed for memory stress tests).
 ///
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
 unsafe extern "C" fn stub_find_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> PluginHandle {
     PluginHandle::null()
 }
 
-/// Stub find_all_by_contract -- returns 0 (not needed for memory stress tests).
+/// Stub find_all_by_contract -- returns empty array (not needed for memory stress tests).
 ///
 /// # Safety
-/// Always safe to call; no pointer dereferences if out_cap is 0.
+/// Always safe to call; returns empty array.
 unsafe extern "C" fn stub_find_all_by_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
-    _out_cap: usize,
-) -> usize {
-    0
+) -> Array<PluginHandle> {
+    Array::empty()
 }
 
 /// Stub resolve_contract -- returns null (not needed for memory stress tests).
@@ -102,38 +99,52 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// # Safety
 /// Always safe to call; returns null pointer.
 unsafe extern "C" fn stub_resolve_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _handle: PluginHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-/// Stub call_method -- returns Ok.
-unsafe extern "C" fn stub_call_method(
-    _rt_ctx: RuntimeContext,
+/// Stub call_guest_method -- returns Ok.
+unsafe extern "C" fn stub_call_guest_method(
+    _this: *const HostInterface,
     _instance: GuestContractInstance,
     _method_id: u32,
     _args: *const (),
     _out: *mut (),
 ) -> AbiError {
     AbiError {
-        code: AbiErrorCode::Ok as u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
 
 /// Stub get_host_contract -- returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> polyplug_abi::HostContractInstance {
     polyplug_abi::HostContractInstance::null()
 }
 
+/// Stub list_bundles -- returns empty array.
+unsafe extern "C" fn stub_list_bundles(
+    _this: *const HostInterface,
+) -> Array<BundleId> {
+    Array::empty()
+}
+
+/// Stub get_dependencies -- returns empty array.
+unsafe extern "C" fn stub_get_dependencies(
+    _this: *const HostInterface,
+) -> Array<polyplug_abi::DependencyInfo> {
+    Array::empty()
+}
+
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -142,7 +153,7 @@ unsafe extern "C" fn stub_alloc(
 
 /// Stub free callback.
 unsafe extern "C" fn stub_free(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -156,15 +167,15 @@ unsafe extern "C" fn stub_free(
 /// A register_contract callback that stores vtable entries into the thread-local Registry.
 ///
 /// # Safety
-/// `_rt_ctx`, `descriptor`, and `interface` must be valid for the call duration.
+/// `this`, `descriptor`, and `interface` must be valid for the call duration.
 unsafe extern "C" fn registry_register_callback(
-    _rt_ctx: RuntimeContext,
+    _this: *const HostInterface,
     descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
     if descriptor.is_null() || interface.is_null() {
         return AbiError {
-            code: AbiErrorCode::InvalidPointer as u32,
+            code: AbiErrorCode::InvalidPointer,
             message: StringView::null(),
         };
     }
@@ -192,11 +203,11 @@ unsafe extern "C" fn registry_register_callback(
 
     match result {
         Ok(_) => AbiError {
-            code: AbiErrorCode::Ok as u32,
+            code: AbiErrorCode::Ok,
             message: StringView::null(),
         },
         Err(_) => AbiError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: StringView::null(),
         },
     }
@@ -228,12 +239,11 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
         *cell.borrow_mut() = PluginRegistry::new();
     });
 
-    // SAFETY: polyplug_init matches the expected ABI signature.
+    // SAFETY: polyplug_init matches the expected 2-arg ABI signature.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
-            RuntimeContext,
-            *const RuntimeAbi,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -242,30 +252,32 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
             .expect("polyplug_init symbol not found")
     };
 
-    let host_vtable: RuntimeAbi = RuntimeAbi {
+    let host_interface: HostInterface = HostInterface {
+        runtime: core::ptr::null_mut(),
         register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_contract: stub_resolve_contract,
-        call_method: stub_call_method,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
     };
 
     let ctx: PluginContext = PluginContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
-            RuntimeContext::null(),
-            &host_vtable as *const RuntimeAbi,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok as u32, "polyplug_init must succeed");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
 
     let contract_id: GuestContractId = GuestContractId::new("memory.test", 1);
     let handle: PluginHandle = STRESS_REGISTRY.with(|cell| {
@@ -326,7 +338,7 @@ fn stress_large_buffer_fill_and_read() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "memory_fill_preallocated_buffer must return ABI_OK"
     );
     assert_eq!(
@@ -386,7 +398,7 @@ fn stress_string_view_non_ascii_utf8() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "memory_echo_string_view must return ABI_OK"
     );
     assert_eq!(
@@ -455,7 +467,7 @@ fn stress_zero_length_buffer_and_string_view() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "memory_zero_length_roundtrip must return ABI_OK"
     );
     assert_eq!(
@@ -528,7 +540,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                     )
                 };
                 assert_eq!(
-                    result.code, AbiErrorCode::Ok as u32,
+                    result.code, AbiErrorCode::Ok,
                     "thread {}: fill must return ABI_OK",
                     thread_idx
                 );
@@ -584,14 +596,14 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // Set up a tracking allocator and build a RuntimeAbi that uses wrapper functions.
+    // Set up a tracking allocator and build a HostInterface that uses wrapper functions.
     let tracker: TrackingAllocator = TrackingAllocator::new();
     let alloc_fn: unsafe extern "C" fn(usize, usize) -> *mut u8 = tracker.alloc_fn();
     let free_fn: unsafe extern "C" fn(*mut u8, usize, usize) = tracker.free_fn();
 
-    // Wrapper functions that take rt_ctx and delegate to tracking functions
+    // Wrapper functions that take HostInterface and delegate to tracking functions
     unsafe extern "C" fn tracking_alloc_wrapper(
-        _rt_ctx: RuntimeContext,
+        _this: *const HostInterface,
         size: usize,
         align: usize,
     ) -> *mut u8 {
@@ -603,7 +615,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     }
 
     unsafe extern "C" fn tracking_free_wrapper(
-        _rt_ctx: RuntimeContext,
+        _this: *const HostInterface,
         ptr: *mut u8,
         size: usize,
         align: usize,
@@ -619,20 +631,22 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     TLS_TRACKING_ALLOC.with(|cell| *cell.borrow_mut() = alloc_fn);
     TLS_TRACKING_FREE.with(|cell| *cell.borrow_mut() = free_fn);
 
-    let host_vtable: RuntimeAbi = RuntimeAbi {
+    let host_interface: HostInterface = HostInterface {
+        runtime: core::ptr::null_mut(),
         register_contract: registry_register_callback,
         alloc: tracking_alloc_wrapper,
         free: tracking_free_wrapper,
         find_by_contract: stub_find_by_contract,
         find_all_by_contract: stub_find_all_by_contract,
         resolve_contract: stub_resolve_contract,
-        call_method: stub_call_method,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
     };
 
     let args: AllocArgs = AllocArgs {
-        rt_ctx: core::ptr::null_mut(),
-        host: &host_vtable as *const RuntimeAbi,
+        host: &host_interface as *const HostInterface,
         size: 4096_u64,
         fill_byte: 0xCC_u8,
     };
@@ -649,7 +663,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         // enforced by the test (AllocArgs/Buffer match what memory_plugin fn 1 expects).
         unsafe { core::mem::transmute(fn_ptr) };
 
-    // SAFETY: args is a valid AllocArgs (host vtable is live), out_buf is a valid Buffer location.
+    // SAFETY: args is a valid AllocArgs (host interface is live), out_buf is a valid Buffer location.
     let call_result: AbiError = unsafe {
         dispatch_fn(
             &args as *const AllocArgs as *const (),
@@ -658,7 +672,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "memory_alloc_buffer_via_host must return ABI_OK"
     );
     assert!(
@@ -750,7 +764,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "memory_fill_preallocated_buffer must return ABI_OK"
     );
     assert_eq!(out, 64_u32, "written byte count must be 64");

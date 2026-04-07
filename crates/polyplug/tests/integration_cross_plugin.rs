@@ -17,6 +17,21 @@ use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
 // --- Helpers -----------------------------------------------------------------
 
+/// Create a null instance (stub for tests).
+unsafe extern "C" fn null_create_instance(
+    _host: *const HostInterface,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Destroy instance (stub for tests).
+unsafe extern "C" fn null_destroy_instance(
+    _host: *const HostInterface,
+    _instance: GuestContractInstance,
+) {
+}
+
 /// Allocate a `'static` `GuestContractInterface` with the given contract_id.
 ///
 /// Intentional leak -- test vtables are pointer-sized and tests are short-lived.
@@ -27,8 +42,8 @@ fn make_static_interface(cid: GuestContractId) -> &'static GuestContractInterfac
         contract_id: cid,
         contract_version: Version { major: 1, minor: 0, patch: 0 },
         dispatch_type: DispatchType::Native,
-        create_instance: |_host: *const HostInterface| GuestContractInstance::null(),
-        destroy_instance: |_host: *const HostInterface, _instance: GuestContractInstance| {},
+        create_instance: null_create_instance,
+        destroy_instance: null_destroy_instance,
         dispatch: DispatchMechanisms {
             native: NativeDispatch {
                 function_count: 0,

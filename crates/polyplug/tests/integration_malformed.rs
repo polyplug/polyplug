@@ -43,7 +43,7 @@ fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
         needs_reinit_on_dep_reload: false,
         path: PathBuf::new(),
     };
-    fs::write(dir.join("manifest.toml"), manifest.to_toml()).expect("write manifest");
+    fs::write(dir.join("manifest.toml"), toml::to_string(&manifest).expect("serialize manifest")).expect("write manifest");
 }
 
 #[test]
