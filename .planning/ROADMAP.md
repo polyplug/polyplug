@@ -236,7 +236,7 @@ Plans:
 | 10. SDK Cleanup Completion | 2/2 | Complete    | 2026-04-06 |
 | 11. Guest Calling Convention | 10/10 | Complete   | 2026-04-07 |
 | 12. SDK Instance Model | 4/4 | Complete | 2026-04-08 |
-| 13. C++ Codegen Modernization | 0/0 | Pending | — |
+| 13. C++ Codegen Modernization | 0/2 | Pending | — |
 | 14. Hot-Reload Documentation | 0/0 | Pending | — |
 | 15. Final Cleanup | 0/0 | Pending | — |
 
@@ -318,7 +318,11 @@ Plans:
 3. Generated wrappers call destroy_instance on drop
 4. Instance passed as first argument to all dispatch calls
 5. C++ SDK uses HostInterface terminology
-**Plans:** 0 plans (pending)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 13-01-PLAN.md — Rename vtable terminology to interface in C++ codegen (Wave 1)
+- [ ] 13-02-PLAN.md — Create integration test and verify SDK consistency (Wave 2)
 
 ### Phase 14: Hot-Reload Documentation
 
@@ -359,3 +363,4 @@ Plans:
 *Phase 11 plans added: 2026-04-07*
 *Phase 12 plans added: 2026-04-08*
 *Phase 12 plan 03 split into 03a/03b per checker feedback: 2026-04-08*
+*Phase 13 plans added: 2026-04-08*
