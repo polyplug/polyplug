@@ -280,6 +280,14 @@ unsafe extern "C" fn stub_get_host_contract(
     polyplug_abi::HostContractInstance { data: core::ptr::null_mut() }
 }
 
+unsafe extern "C" fn stub_resolve_host_contract_interface(
+    _host: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractInterface {
+    core::ptr::null()
+}
+
 unsafe extern "C" fn stub_list_bundles(
     _host: *const HostInterface,
 ) -> Array<BundleId> {
@@ -374,6 +382,7 @@ fn test_rust_codegen_compile_and_run() {
         resolve_contract: stub_resolve_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
         get_dependencies: stub_get_dependencies,
     };
