@@ -16,15 +16,16 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
-use polyplug_abi::HostContractVTable;
-use polyplug_abi::HostVTable;
+use polyplug_abi::HostContractInterface;
+use polyplug_abi::HostInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
+use polyplug_utils::guest_contract_id;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -93,7 +94,7 @@ struct AddArgs {
 // ─── Thread-local for native .so tests ────────────────────────────────────────
 
 std::thread_local! {
-    static CAPTURED_VT: core::cell::Cell<*const PluginInterface> =
+    static CAPTURED_VT: core::cell::Cell<*const GuestContractInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
@@ -108,13 +109,10 @@ std::thread_local! {
 unsafe extern "C" fn capture_vtable_cb(
     _rt_ctx: *mut core::ffi::c_void,
     _desc: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    vtable: *const GuestContractInterface,
 ) -> AbiError {
     CAPTURED_VT.with(|cell| cell.set(vtable));
-    AbiError {
-        code: ABI_OK,
-        message: StringView::null(),
-    }
+    AbiError::ok()
 }
 
 // ─── HostVTable stub functions for native .so tests ─────────────────────────────
@@ -187,15 +185,15 @@ unsafe extern "C" fn stub_get_host_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> *const HostContractVTable {
+) -> *const HostContractInterface {
     core::ptr::null()
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Retrieve vtable for `test.add@1` from a Runtime instance.
-fn get_vtable_from_runtime(runtime: &Runtime) -> *const PluginInterface {
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+fn get_vtable_from_runtime(runtime: &Runtime) -> *const GuestContractInterface {
+    let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: PluginHandle = runtime
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
@@ -211,7 +209,7 @@ fn dispatch_add_and_verify(vtable_ptr: *const PluginInterface) {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr is valid for the call.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
 
     let result: AbiError = if vtable.dispatch_type == DispatchType::Native {
         // SAFETY: functions[0] is the add wrapper.
@@ -237,7 +235,7 @@ fn dispatch_add_and_verify(vtable_ptr: *const PluginInterface) {
             )
         }
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 
@@ -266,7 +264,7 @@ fn test_rust_host_rust_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -274,7 +272,7 @@ fn test_rust_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -293,12 +291,12 @@ fn test_rust_host_rust_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -306,7 +304,7 @@ fn test_rust_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper with signature extern "C" fn(*const (), *mut ()) -> AbiError.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to generic dispatch signature; AddArgs matches the add function.
@@ -319,7 +317,7 @@ fn test_rust_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -345,7 +343,7 @@ fn test_cpp_host_rust_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -353,7 +351,7 @@ fn test_cpp_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -372,12 +370,12 @@ fn test_cpp_host_rust_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -385,7 +383,7 @@ fn test_cpp_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -398,7 +396,7 @@ fn test_cpp_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -424,7 +422,7 @@ fn test_csharp_host_rust_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -432,7 +430,7 @@ fn test_csharp_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -451,12 +449,12 @@ fn test_csharp_host_rust_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -464,7 +462,7 @@ fn test_csharp_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -477,7 +475,7 @@ fn test_csharp_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -503,7 +501,7 @@ fn test_python_host_rust_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -511,7 +509,7 @@ fn test_python_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -530,12 +528,12 @@ fn test_python_host_rust_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -543,7 +541,7 @@ fn test_python_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -556,7 +554,7 @@ fn test_python_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -582,7 +580,7 @@ fn test_lua_host_rust_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -590,7 +588,7 @@ fn test_lua_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -609,12 +607,12 @@ fn test_lua_host_rust_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -622,7 +620,7 @@ fn test_lua_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -635,7 +633,7 @@ fn test_lua_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -661,7 +659,7 @@ fn test_js_host_rust_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -669,7 +667,7 @@ fn test_js_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -688,12 +686,12 @@ fn test_js_host_rust_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -701,7 +699,7 @@ fn test_js_host_rust_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -714,7 +712,7 @@ fn test_js_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -746,7 +744,7 @@ fn test_rust_host_cpp_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -754,7 +752,7 @@ fn test_rust_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -773,12 +771,12 @@ fn test_rust_host_cpp_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -786,7 +784,7 @@ fn test_rust_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches cpp_test_add.
@@ -799,7 +797,7 @@ fn test_rust_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -825,7 +823,7 @@ fn test_cpp_host_cpp_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -833,7 +831,7 @@ fn test_cpp_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -852,12 +850,12 @@ fn test_cpp_host_cpp_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -865,7 +863,7 @@ fn test_cpp_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -878,7 +876,7 @@ fn test_cpp_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -904,7 +902,7 @@ fn test_csharp_host_cpp_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -912,7 +910,7 @@ fn test_csharp_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -931,12 +929,12 @@ fn test_csharp_host_cpp_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -944,7 +942,7 @@ fn test_csharp_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -957,7 +955,7 @@ fn test_csharp_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -983,7 +981,7 @@ fn test_python_host_cpp_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -991,7 +989,7 @@ fn test_python_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -1010,12 +1008,12 @@ fn test_python_host_cpp_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -1023,7 +1021,7 @@ fn test_python_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1036,7 +1034,7 @@ fn test_python_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1062,7 +1060,7 @@ fn test_lua_host_cpp_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -1070,7 +1068,7 @@ fn test_lua_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -1089,12 +1087,12 @@ fn test_lua_host_cpp_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -1102,7 +1100,7 @@ fn test_lua_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1115,7 +1113,7 @@ fn test_lua_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1141,7 +1139,7 @@ fn test_js_host_cpp_guest() {
         '_,
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError,
     > = unsafe {
@@ -1149,7 +1147,7 @@ fn test_js_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostVTable = HostVTable {
+    let host_vtable: HostInterface = HostInterface {
         register_plugin: capture_vtable_cb,
         alloc: stub_alloc,
         free: stub_free,
@@ -1168,12 +1166,12 @@ fn test_js_host_cpp_guest() {
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostVTable,
+            &host_vtable as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const PluginInterface = CAPTURED_VT.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
     assert!(
         !vtable_ptr.is_null(),
         "vtable must be non-null after polyplug_init"
@@ -1181,7 +1179,7 @@ fn test_js_host_cpp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1194,7 +1192,7 @@ fn test_js_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1294,7 +1292,7 @@ fn test_csharp_host_csharp_guest() {
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
     // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     // SAFETY: functions[0] is the add wrapper.
     let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
@@ -1307,7 +1305,7 @@ fn test_csharp_host_csharp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 
