@@ -24,6 +24,7 @@ download-nethost = ["netcorehost/nethost-download"]
 
 [dev-dependencies]
 criterion = { workspace = true }
+polyplug_utils = { workspace = true }
 
 [[bench]]
 name = "dispatch_benchmark"

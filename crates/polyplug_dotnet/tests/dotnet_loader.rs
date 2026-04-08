@@ -13,9 +13,9 @@ use tempfile::NamedTempFile;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
-use polyplug::runtime::RuntimeBuilder;
+use polyplug::runtime_builder::RuntimeBuilder;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -52,7 +52,7 @@ fn test_runtime() -> Runtime {
 
 fn make_manifest(path: &Path, name: &str) -> ManifestData {
     ManifestData {
-        id: polyplug_abi::bundle_id(name),
+        id: polyplug_utils::bundle_id(name),
         name: name.to_owned(),
         runtime: "dotnet".to_owned(),
         file: path.file_name().unwrap().to_string_lossy().into_owned(),
