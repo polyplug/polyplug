@@ -1029,7 +1029,7 @@ fn generate_cpp_type(out: &mut String, ty: &ResolvedType) {
     out.push_str("};\n\n");
 }
 
-// ─── Per-contract class emitter ───────────────────────────────────────────────
+// ─── Per-contract class emitter (instance wrapper) ──────────────────────────────
 
 fn generate_cpp_host_contract(
     out: &mut String,
@@ -1042,39 +1042,81 @@ fn generate_cpp_host_contract(
         "/// Host caller for contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
     ));
+    out.push_str("///\n");
+    out.push_str("/// RAII wrapper that manages instance lifecycle:\n");
+    out.push_str("/// - `create()`: resolves handle and calls `create_instance`\n");
+    out.push_str("/// - destructor: calls `destroy_instance` to clean up\n");
+    out.push_str("/// - dispatch: passes `instance_` to all method calls\n");
     out.push_str(&format!("class {} {{\npublic:\n", class_name));
 
+    // Factory method: resolve handle + create_instance
     out.push_str("    /// Factory method - creates instance or nullopt if not found.\n");
+    out.push_str("    /// Calls `create_instance` on the resolved interface.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// # Arguments\n");
+    out.push_str("    /// - `handle`: Contract handle from `find_by_contract`\n");
+    out.push_str("    /// - `host`: Host interface pointer\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// # Returns\n");
+    out.push_str("    /// - `std::optional<Self>` if interface found and instance created\n");
+    out.push_str("    /// - `std::nullopt` if interface not found or `create_instance` failed\n");
     out.push_str(&format!(
-        "    static std::optional<{}> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {{\n",
+        "    static std::optional<{}> create(uint64_t handle, const HostInterface* host) noexcept {{\n",
         class_name
     ));
+    out.push_str("        // Resolve the interface from the handle via FFI\n");
     out.push_str(&format!(
-        "        uint64_t handle = rt.find({}_CONTRACT_ID, min_version);\n",
-        contract_upper
+        "        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);\n"
     ));
-    out.push_str("        if (handle == UINT64_MAX) {\n");
+    out.push_str("        if (!iface) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
-    out.push_str("        polyplug::PluginGuard guard = rt.resolve_plugin(handle);\n");
-    out.push_str("        if (!guard) {\n");
+    out.push_str("        // Create instance via factory function\n");
+    out.push_str("        GuestContractInstance instance = iface->create_instance(host, nullptr);\n");
+    out.push_str("        if (instance.data == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        return {}(std::move(guard));\n",
+        "        return {}(iface, instance, host);\n",
         class_name
     ));
     out.push_str("    }\n\n");
 
-    out.push_str("    // Move-only (guard is not copyable)\n");
+    // Destructor: calls destroy_instance
+    out.push_str("    /// Destructor - calls `destroy_instance` to clean up.\n");
+    out.push_str(&format!("    ~{}() noexcept {{\n", class_name));
+    out.push_str("        // Destroy instance via factory\n");
+    out.push_str("        // SAFETY: instance was created by create_instance and is valid.\n");
+    out.push_str("        if (instance_.data != nullptr) {\n");
+    out.push_str("            interface_->destroy_instance(host_, instance_);\n");
+    out.push_str("            instance_.data = nullptr;  // Prevent reuse after cleanup.\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // Move-only (instance handles are unique)
+    out.push_str("    // Move-only (instance handles are unique)\n");
     out.push_str(&format!(
-        "    {}({}&&) noexcept = default;\n",
+        "    {}({}&& other) noexcept\n",
         class_name, class_name
     ));
+    out.push_str("        : interface_(other.interface_),\n");
+    out.push_str("          instance_(other.instance_),\n");
+    out.push_str("          host_(other.host_) {\n");
+    out.push_str("        other.instance_.data = nullptr;  // Prevent double-destroy.\n");
+    out.push_str("    }\n");
     out.push_str(&format!(
-        "    {}& operator=({}&&) noexcept = default;\n",
+        "    {}& operator=({}&& other) noexcept {{\n",
         class_name, class_name
     ));
+    out.push_str("        if (this != &other) {\n");
+    out.push_str("            // Destroy current instance first\n");
+    out.push_str("            if (instance_.data != nullptr) {\n");
+    out.push_str("                interface_->destroy_instance(host_, instance_);\n");
+    out.push_str("            }\n");
+    out.push_str("            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;\n");
+    out.push_str("        }\n");
+    out.push_str("        return *this;\n");
+    out.push_str("    }\n");
     out.push_str(&format!(
         "    {}(const {}&) = delete;\n",
         class_name, class_name
@@ -1084,31 +1126,46 @@ fn generate_cpp_host_contract(
         class_name, class_name
     ));
 
-    out.push_str("    /// Check if instance is valid.\n");
+    out.push_str("    /// Check if instance is valid (non-null data).\n");
     out.push_str(
-        "    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }\n\n",
+        "    explicit operator bool() const noexcept { return instance_.data != nullptr; }\n\n",
     );
     out.push_str("    /// Check if instance is valid.\n");
-    out.push_str("    bool is_valid() const noexcept { return static_cast<bool>(guard_); }\n\n");
-    out.push_str("    /// Explicitly destroy instance (optional - destructor does this too).\n");
-    out.push_str("    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }\n\n");
+    out.push_str("    bool is_valid() const noexcept { return instance_.data != nullptr; }\n\n");
 
+    // reset() method: destroy and recreate
+    out.push_str("    /// Destroy current instance and create a new one.\n");
+    out.push_str("    /// Useful for recovering from plugin errors.\n");
+    out.push_str("    void reset() noexcept {\n");
+    out.push_str("        if (instance_.data != nullptr) {\n");
+    out.push_str("            interface_->destroy_instance(host_, instance_);\n");
+    out.push_str("        }\n");
+    out.push_str("        instance_ = interface_->create_instance(host_, nullptr);\n");
+    out.push_str("    }\n\n");
+
+    // Generate method callers
     for func in &contract.functions {
         generate_cpp_host_function(out, &class_name, func)?;
     }
 
+    // Private members and constructor
     out.push_str("private:\n");
+    out.push_str("    /// Resolved interface pointer from the registry.\n");
+    out.push_str("    const GuestContractInterface* interface_;\n");
+    out.push_str("    /// Instance handle created by `create_instance`.\n");
+    out.push_str("    GuestContractInstance instance_;\n");
+    out.push_str("    /// Host interface pointer (needed for create/destroy_instance).\n");
+    out.push_str("    const HostInterface* host_;\n\n");
     out.push_str(&format!(
-        "    explicit {}(polyplug::PluginGuard guard) noexcept\n",
+        "    explicit {}(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept\n",
         class_name
     ));
-    out.push_str("        : guard_(std::move(guard)) {}\n\n");
-    out.push_str("    polyplug::PluginGuard guard_;\n");
+    out.push_str("        : interface_(iface), instance_(inst), host_(host) {}\n");
     out.push_str("};\n\n");
     Ok(())
 }
 
-// ─── Per-function method emitter ──────────────────────────────────────────────
+// ─── Per-function method emitter (instance-based dispatch) ─────────────────────
 
 fn generate_cpp_host_function(
     out: &mut String,
@@ -1130,6 +1187,10 @@ fn generate_cpp_host_function(
     let params_str: String = params.join(", ");
 
     out.push_str(&format!(
+        "    /// Call `{}` (function_id={})\n",
+        func.name, func.function_id
+    ));
+    out.push_str(&format!(
         "    {} {}({}) {{\n",
         return_type, func.name, params_str
     ));
@@ -1145,41 +1206,48 @@ fn generate_cpp_host_function(
         None | Some(ResolvedTypeRef::AbiType(AbiBuiltin::Void))
     );
 
-    out.push_str("        const PluginInterface* vtable = guard_.interface();\n");
-    out.push_str("        if (!vtable) {\n");
-    out.push_str("            static constexpr const char* err_msg = \"vtable is null\";\n");
-    out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});\n");
+    // SAFETY: Check interface validity
+    out.push_str("        // SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
+    out.push_str("        if (!interface_) {\n");
+    out.push_str("            static constexpr const char* err_msg = \"interface is null\";\n");
+    out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});\n");
     out.push_str("        }\n");
 
     if is_void_return {
         out.push_str(&format!(
-            "        if ({}_u32 >= vtable->function_count) {{\n",
+            "        if ({}_u32 >= interface_->function_count) {{\n",
             fn_id
         ));
         out.push_str("            static constexpr const char* err_msg = \"function not available in vtable\";\n");
         out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
         out.push_str("        }\n");
+        // Instance-based dispatch: signature is (GuestContractInstance, args, out)
         out.push_str(&format!(
-            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[{}U]);\n",
+            "        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{}U]);\n",
             fn_id
         ));
-        out.push_str("        AbiError err = fn_(args_ptr, nullptr);\n");
+        out.push_str("        // SAFETY: instance_ was created by create_instance and is valid.\n");
+        out.push_str("        // args_ptr points to valid args per ABI contract, out_ptr is null for void returns.\n");
+        out.push_str("        AbiError err = fn_(instance_, args_ptr, nullptr);\n");
         out.push_str("        polyplug::check_abi_error(err);\n");
     } else {
         out.push_str(&format!("        {} out{{}};\n", return_type));
         out.push_str("        void* out_ptr = &out;\n");
         out.push_str(&format!(
-            "        if ({}_u32 >= vtable->function_count) {{\n",
+            "        if ({}_u32 >= interface_->function_count) {{\n",
             fn_id
         ));
         out.push_str("            static constexpr const char* err_msg = \"function not available in vtable\";\n");
         out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
         out.push_str("        }\n");
+        // Instance-based dispatch: signature is (GuestContractInstance, args, out)
         out.push_str(&format!(
-            "        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[{}U]);\n",
+            "        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{}U]);\n",
             fn_id
         ));
-        out.push_str("        AbiError err = fn_(args_ptr, out_ptr);\n");
+        out.push_str("        // SAFETY: instance_ was created by create_instance and is valid.\n");
+        out.push_str("        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.\n");
+        out.push_str("        AbiError err = fn_(instance_, args_ptr, out_ptr);\n");
         out.push_str("        polyplug::check_abi_error(err);\n");
         out.push_str("        return out;\n");
     }
@@ -2302,16 +2370,29 @@ mod tests {
         let mut out: String = String::new();
         generate_cpp_host_contract(&mut out, &contract).unwrap();
 
+        // Check for instance-based factory method
         assert!(
-            out.contains("static std::optional<TestAddContract> create(polyplug::Runtime& rt, uint32_t min_version = 0)"),
+            out.contains("static std::optional<TestAddContract> create(uint64_t handle, const HostInterface* host) noexcept"),
             "missing factory method: {out}"
         );
 
+        // Check for instance member (not PluginGuard)
         assert!(
-            out.contains("polyplug::PluginGuard guard_"),
-            "missing guard member: {out}"
+            out.contains("GuestContractInstance instance_"),
+            "missing instance member: {out}"
         );
 
+        // Check for interface and host members
+        assert!(
+            out.contains("const GuestContractInterface* interface_"),
+            "missing interface member: {out}"
+        );
+        assert!(
+            out.contains("const HostInterface* host_"),
+            "missing host member: {out}"
+        );
+
+        // Check lifecycle methods
         assert!(
             out.contains("bool is_valid() const noexcept"),
             "missing is_valid method: {out}"
@@ -2325,23 +2406,46 @@ mod tests {
             "missing reset method: {out}"
         );
 
+        // Check destructor calls destroy_instance
         assert!(
-            out.contains("TestAddContract(TestAddContract&&) noexcept = default"),
+            out.contains("~TestAddContract() noexcept"),
+            "missing destructor: {out}"
+        );
+        assert!(
+            out.contains("interface_->destroy_instance(host_, instance_)"),
+            "missing destroy_instance call in destructor: {out}"
+        );
+
+        // Check factory calls create_instance
+        assert!(
+            out.contains("iface->create_instance(host, nullptr)"),
+            "missing create_instance call in factory: {out}"
+        );
+
+        // Check move constructor (not default, explicit transfer)
+        assert!(
+            out.contains("TestAddContract(TestAddContract&& other) noexcept"),
             "missing move constructor: {out}"
+        );
+        assert!(
+            out.contains("other.instance_.data = nullptr"),
+            "missing nulling of moved-from instance: {out}"
         );
         assert!(
             out.contains("TestAddContract(const TestAddContract&) = delete"),
             "missing deleted copy constructor: {out}"
         );
 
+        // Check private constructor
         assert!(
-            out.contains("explicit TestAddContract(polyplug::PluginGuard guard) noexcept"),
+            out.contains("explicit TestAddContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept"),
             "missing private constructor: {out}"
         );
 
+        // Check dispatch uses instance_
         assert!(
-            out.contains("guard_.interface()"),
-            "missing guard_.interface() call: {out}"
+            out.contains("fn_(instance_, args_ptr,"),
+            "missing instance_ in dispatch call: {out}"
         );
     }
 
