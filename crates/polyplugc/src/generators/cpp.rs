@@ -1520,22 +1520,22 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        const HostContractVTable* vtable = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
+        "        const HostContractInterface* interface = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
-    out.push_str("        if (vtable == nullptr) {\n");
+    out.push_str("        if (interface == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return {}(vtable);\n", class_name));
+    out.push_str(&format!("        return {}(interface);\n", class_name));
     out.push_str("    }\n\n");
 
     // is_valid method
-    out.push_str("    /// Check if caller is valid (vtable is non-null).\n");
-    out.push_str("    bool is_valid() const noexcept { return vtable_ != nullptr; }\n\n");
+    out.push_str("    /// Check if caller is valid (interface is non-null).\n");
+    out.push_str("    bool is_valid() const noexcept { return interface_ != nullptr; }\n\n");
 
     // Explicit bool conversion
     out.push_str("    /// Explicit bool conversion for validity check.\n");
-    out.push_str("    explicit operator bool() const noexcept { return vtable_ != nullptr; }\n\n");
+    out.push_str("    explicit operator bool() const noexcept { return interface_ != nullptr; }\n\n");
 
     // Methods for each function
     for func in &contract.functions {
@@ -1545,11 +1545,11 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     // Private section
     out.push_str("private:\n");
     out.push_str(&format!(
-        "    explicit {}(const HostContractVTable* vtable) noexcept\n",
+        "    explicit {}(const HostContractInterface* interface) noexcept\n",
         class_name
     ));
-    out.push_str("        : vtable_(vtable) {}\n\n");
-    out.push_str("    const HostContractVTable* vtable_;\n");
+    out.push_str("        : interface_(interface) {}\n\n");
+    out.push_str("    const HostContractInterface* interface_;\n");
     out.push_str("};\n\n");
 }
 
@@ -1584,8 +1584,8 @@ fn generate_cpp_guest_host_contract_method(
         return_type, func.name, params_str
     ));
 
-    // Null vtable check
-    out.push_str("        if (vtable_ == nullptr) {\n");
+    // Null interface check
+    out.push_str("        if (interface_ == nullptr) {\n");
     if func.returns.is_some() {
         out.push_str(&format!("            return {}{{}};\n", return_type));
     } else {
@@ -1593,10 +1593,9 @@ fn generate_cpp_guest_host_contract_method(
     }
     out.push_str("        }\n\n");
 
-    // Get header and check function count
-    out.push_str("        const HostContractVTableHeader* header = &vtable_->header;\n");
+    // Get function count directly from interface (no header wrapper)
     out.push_str(&format!(
-        "        if ({fn_id}_u32 >= header->function_count) {{\n"
+        "        if ({fn_id}_u32 >= interface_->dispatch.native.function_count) {{\n"
     ));
     if func.returns.is_some() {
         out.push_str(&format!("            return {}{{}};\n", return_type));
@@ -1613,19 +1612,28 @@ fn generate_cpp_guest_host_contract_method(
 
     // Dispatch call
     out.push_str("        AbiError err;\n");
-    out.push_str("        switch (header->dispatch_type) {\n");
+    out.push_str("        switch (interface_->dispatch_type) {\n");
     out.push_str("            case DispatchType::Native: {\n");
     out.push_str(&format!(
-        "                auto fn_ = reinterpret_cast<AbiError(*)(const void*, const void*, void*)>(vtable_->dispatch.native.functions[{fn_id}_u32]);\n"
+        "                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{fn_id}_u32]);\n"
     ));
     out.push_str(
-        "                err = fn_(vtable_->dispatch.native.impl_ptr, args_ptr, out_ptr);\n",
+        "                // TODO: Host contract instance support - get_host_contract returns HostContractInstance,\n",
+    );
+    out.push_str(
+        "                // need to store and pass to dispatch. For now, pass nullptr as instance placeholder.\n",
+    );
+    out.push_str(
+        "                // Singleton contracts may work (if impl ignores instance param), multi-instance will fail.\n",
+    );
+    out.push_str(
+        "                err = fn_(HostContractInstance{nullptr}, args_ptr, out_ptr);\n",
     );
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
     out.push_str(&format!(
-        "                err = (vtable_->dispatch.vm.call)(vtable_->dispatch.vm.bridge_data, {fn_id}_u32, args_ptr, out_ptr);\n"
+        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, HostContractInstance{{nullptr}}, {fn_id}_u32, args_ptr, out_ptr);\n"
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");
@@ -2751,8 +2759,8 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
-            out.contains("const HostContractVTable* vtable_"),
-            "missing vtable member: {out}"
+            out.contains("const HostContractInterface* interface_"),
+            "missing interface member: {out}"
         );
         assert!(
             out.contains("static std::optional<HostLoggerContract> from_host"),
