@@ -71,9 +71,9 @@
 - [x] **SDK-02**: Update Python SDK - remove `RuntimeConfigC` duplicate
 - [x] **SDK-03**: Update C# SDK - remove `RuntimeConfigC` duplicate
 - [x] **SDK-04**: Update Lua SDK - use types from `polyplug_abi`
-- [ ] **SDK-05**: Update JS SDK - use types from `polyplug_abi`
+- [x] **SDK-05**: Update JS SDK - use types from `polyplug_abi`
 - [x] **SDK-06**: Remove `PluginGuard` from all SDKs
-- [ ] **SDK-07**: Add instance-based wrappers to all SDKs (codegen)
+- [x] **SDK-07**: Add instance-based wrappers to all SDKs (codegen)
 
 ### Category: Codegen
 
