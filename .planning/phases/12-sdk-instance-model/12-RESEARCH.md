@@ -246,17 +246,11 @@ Note: C++ codegen has stubs but not full RAII wrapper generation like Rust.
 
 **If this table is empty:** All claims in this research were verified or cited.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **JS SDK TypeScript type naming**
-   - What we know: `abi/polyplug_abi.ts` has `PluginInterface` and `HostVTable` interfaces
-   - What's unclear: Should these be renamed to match `GuestContractInterface` and `HostInterface`?
-   - Recommendation: Update TypeScript types to match polyplug_abi naming
+1. **JS SDK TypeScript type naming** — RESOLVED: Update TypeScript types to match polyplug_abi naming (GuestContractInterface, HostInterface, RuntimeInterface)
 
-2. **Instance wrapper generation scope**
-   - What we know: Rust codegen generates full RAII wrappers; other languages have stubs
-   - What's unclear: Do Python/C#/Lua/JS/Cpp SDKs need similar generated wrappers?
-   - Recommendation: Generate instance wrappers for all languages with RAII patterns where applicable
+2. **Instance wrapper generation scope** — RESOLVED: Generate instance wrappers for all languages with RAII patterns where applicable (Python __del__, C# IDisposable, Lua __gc, JS class with destroy method, C++ destructor)
 
 ## Environment Availability
 

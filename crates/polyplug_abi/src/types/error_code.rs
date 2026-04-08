@@ -50,3 +50,35 @@ impl core::fmt::Display for AbiErrorCode {
         }
     }
 }
+
+impl AbiErrorCode {
+    /// Convert from a raw u32 error code.
+    ///
+    /// For known runtime codes (0-255), returns the corresponding enum variant.
+    /// For user-defined codes (256+), the value is preserved but the display
+    /// will show the numeric value.
+    #[inline]
+    pub const fn from_u32(code: u32) -> Self {
+        match code {
+            0 => AbiErrorCode::Ok,
+            1 => AbiErrorCode::Generic,
+            2 => AbiErrorCode::BufferTooSmall,
+            3 => AbiErrorCode::Panic,
+            4 => AbiErrorCode::NotFound,
+            5 => AbiErrorCode::StaleHandle,
+            6 => AbiErrorCode::FunctionNotAvailable,
+            7 => AbiErrorCode::DuplicateProvider,
+            8 => AbiErrorCode::InvalidPointer,
+            100 => AbiErrorCode::HostContractNotFound,
+            101 => AbiErrorCode::HostContractVersionMismatch,
+            102 => AbiErrorCode::HostContractCallFailed,
+            other => unsafe { core::mem::transmute::<u32, AbiErrorCode>(other) },
+        }
+    }
+}
+
+impl From<u32> for AbiErrorCode {
+    fn from(code: u32) -> Self {
+        Self::from_u32(code)
+    }
+}

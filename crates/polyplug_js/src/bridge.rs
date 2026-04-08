@@ -528,10 +528,10 @@ mod tests {
             .register_host_contract(1234, Box::new(persistent))
             .expect("register");
 
-        // Call it - should return error code 42
+        // Call it - should return error code 42 (user-defined error)
         let result: AbiError =
             bridge.call_host_contract(1234, 0, std::ptr::null(), std::ptr::null_mut());
-        assert_eq!(result.code, 42);
+        assert_eq!(result.code, AbiErrorCode::from_u32(42));
     }
 
     #[test]
@@ -576,9 +576,9 @@ mod tests {
             .register_host_contract(1234, Box::new(persistent))
             .expect("register");
 
-        // Call with fn_id=5, expect error code 10
+        // Call with fn_id=5, expect error code 10 (user-defined error)
         let result: AbiError =
             bridge.call_host_contract(1234, 5, std::ptr::null(), std::ptr::null_mut());
-        assert_eq!(result.code, 10);
+        assert_eq!(result.code, AbiErrorCode::from_u32(10));
     }
 }
