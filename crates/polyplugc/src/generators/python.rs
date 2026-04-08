@@ -295,7 +295,6 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional, TypeAlias\n\n");
-    out.push_str("from polyplug import PluginGuard, Runtime\n");
     out.push_str("from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView\n\n");
 
     // ContractError class for host-side error handling
@@ -329,11 +328,21 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("        ('message_ptr', ctypes.c_void_p),\n");
     out.push_str("        ('message_len', ctypes.c_size_t),\n");
     out.push_str("    ]\n\n");
+
+    // Instance type for dispatch calls
+    out.push_str("# GuestContractInstance type for instance-based dispatch\n");
+    out.push_str("class _GuestContractInstance(ctypes.Structure):\n");
+    out.push_str("    _fields_ = [\n");
+    out.push_str("        ('data', ctypes.c_void_p),\n");
+    out.push_str("        ('contract_id', ctypes.c_uint64),\n");
+    out.push_str("    ]\n\n");
+
+    // Instance-based dispatch function type (instance, args, out)
     out.push_str(
-        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)\n",
+        "_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)\n",
     );
     out.push_str(
-        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n"
+        "_DISPATCH_FN_TYPE: TypeAlias = Callable[[_GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], _AbiError]\n\n"
     );
 
     for contract in &ir.contracts {
@@ -349,7 +358,6 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Callable, Optional\n\n");
-    out.push_str("from polyplug import PluginGuard, Runtime\n");
     out.push_str("from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView\n\n");
     out.push_str("class ContractError(Exception): ...\n\n");
 
@@ -366,8 +374,12 @@ fn generate_host_callers_stub(ir: &ValidatedIr) -> String {
         out.push_str(&format!("from host.types import {}\n\n", import_list));
     }
 
+    // Instance type stub
+    out.push_str("class _GuestContractInstance(ctypes.Structure): ...\n\n");
+
     out.push_str("POLYPLUG_ABI_VERSION: int\n");
-    out.push_str("_DISPATCH_FN_TYPE = Callable[[ctypes.c_void_p, ctypes.c_void_p], int]\n\n");
+    // Instance-based dispatch type (instance, args, out)
+    out.push_str("_DISPATCH_FN_TYPE = Callable[[_GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], int]\n\n");
 
     for contract in &ir.contracts {
         generate_host_caller_class_stub(&mut out, contract);
@@ -381,9 +393,10 @@ fn generate_host_caller_class_stub(out: &mut String, contract: &ResolvedContract
     let caller_name: String = format!("{struct_name}Caller");
 
     out.push_str(&format!("class {caller_name}:\n"));
-    out.push_str("    def __init__(self, guard: PluginGuard) -> None: ...\n");
+    out.push_str("    def __init__(self, handle: int, host: ctypes.c_void_p) -> None: ...\n");
+    out.push_str("    def __del__(self) -> None: ...\n");
     out.push_str("    @classmethod\n");
-    out.push_str("    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]: ...\n");
+    out.push_str("    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]: ...\n");
     out.push_str("    def is_valid(self) -> bool: ...\n");
     out.push_str("    def reset(self) -> None: ...\n");
     out.push_str("    def __bool__(self) -> bool: ...\n");
@@ -598,7 +611,7 @@ fn emit_python_arg_pack_stub(out: &mut String, contract_struct: &str, func: &Res
     out.push_str("    _fields_: ClassVar[list[tuple[str, type]]]\n");
 }
 
-/// Generate the host caller class for a contract with factory pattern.
+/// Generate the host caller class for a contract with instance wrapper pattern.
 fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     let struct_name: String = contract_name_to_struct(&contract.name);
     let caller_name: String = format!("{struct_name}Caller");
@@ -607,30 +620,76 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
 
     out.push_str(&format!("class {caller_name}:\n"));
     out.push_str(&format!(
-        "    \"\"\"Host caller for contract `{}` with hot-reload support.\"\"\"\n\n",
+        "    \"\"\"Host caller for contract `{}` with instance lifecycle management.\n\n",
         contract.name
     ));
+    out.push_str("    RAII wrapper that manages instance lifecycle:\n");
+    out.push_str("    - `create()`: resolves handle and calls `create_instance`\n");
+    out.push_str("    - `__del__`: calls `destroy_instance` to clean up\n");
+    out.push_str("    - dispatch: passes `_instance` to all method calls\n");
+    out.push_str("    \"\"\"\n\n");
 
-    out.push_str("    def __init__(self, guard: PluginGuard) -> None:\n");
-    out.push_str("        self._guard: PluginGuard = guard\n\n");
-
-    out.push_str("    @classmethod\n");
-    out.push_str("    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:\n");
+    // Constructor: resolve handle + create_instance
+    out.push_str("    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:\n");
+    out.push_str("        \"\"\"Create instance wrapper from handle and host interface.\n\n");
+    out.push_str("        Args:\n");
+    out.push_str("            handle: Contract handle from find_by_contract\n");
+    out.push_str("            host: Host interface pointer\n\n");
+    out.push_str("        Raises:\n");
+    out.push_str("            ValueError: If interface not found or create_instance failed\n");
+    out.push_str("        \"\"\"\n");
+    out.push_str("        # Resolve the interface from the handle via FFI\n");
     out.push_str(&format!(
-        "        handle: int = rt.find_by_contract({contract_id_const}, min_version)\n"
+        "        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)\n"
     ));
-    out.push_str("        if handle == NULL_HANDLE:\n");
-    out.push_str("            return None\n");
-    out.push_str("        guard: PluginGuard = rt.resolve_plugin(handle)\n");
-    out.push_str("        if guard.is_null():\n");
-    out.push_str("            return None\n");
-    out.push_str("        return cls(guard)\n\n");
+    out.push_str("        if not self._interface:\n");
+    out.push_str("            raise ValueError(\"Contract not found\")\n");
+    out.push_str("        # Cast to GuestContractInterface pointer\n");
+    out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
+    out.push_str("        # Create instance via factory function\n");
+    out.push_str("        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)\n");
+    out.push_str("        if self._instance.data is None:\n");
+    out.push_str("            raise ValueError(\"create_instance failed\")\n");
+    out.push_str("        self._host: ctypes.c_void_p = host\n\n");
 
+    // __del__ destructor: calls destroy_instance
+    out.push_str("    def __del__(self) -> None:\n");
+    out.push_str("        \"\"\"Destroy instance via destroy_instance factory.\"\"\"\n");
+    out.push_str("        # SAFETY: instance was created by create_instance and is valid.\n");
+    out.push_str("        if self._instance.data is not None:\n");
+    out.push_str("            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
+    out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
+    out.push_str("            self._instance.data = None  # Prevent reuse after cleanup.\n\n");
+
+    // Factory method
+    out.push_str("    @classmethod\n");
+    out.push_str(&format!(
+        "    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:\n"
+    ));
+    out.push_str("        \"\"\"Factory method - creates instance or None if failed.\n\n");
+    out.push_str("        Args:\n");
+    out.push_str("            handle: Contract handle from find_by_contract\n");
+    out.push_str("            host: Host interface pointer\n\n");
+    out.push_str("        Returns:\n");
+    out.push_str("            Self if interface found and instance created, None otherwise\n");
+    out.push_str("        \"\"\"\n");
+    out.push_str("        try:\n");
+    out.push_str("            return cls(handle, host)\n");
+    out.push_str("        except ValueError:\n");
+    out.push_str("            return None\n\n");
+
+    // is_valid check
     out.push_str("    def is_valid(self) -> bool:\n");
-    out.push_str("        return not self._guard.is_null()\n\n");
+    out.push_str("        \"\"\"Check if instance is valid (non-null data).\"\"\"\n");
+    out.push_str("        return self._instance.data is not None\n\n");
 
+    // reset method
     out.push_str("    def reset(self) -> None:\n");
-    out.push_str("        self._guard.reset()\n\n");
+    out.push_str("        \"\"\"Destroy current instance and create a new one.\"\"\"\n");
+    out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
+    out.push_str("        if self._instance.data is not None:\n");
+    out.push_str("            iface_ptr.contents.destroy_instance(self._host, self._instance)\n");
+    out.push_str("        self._instance = iface_ptr.contents.create_instance(self._host, None)\n\n");
 
     out.push_str("    def __bool__(self) -> bool:\n");
     out.push_str("        return self.is_valid()\n\n");
@@ -652,10 +711,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     emit_python_host_args_setup(out, func, contract_struct);
     emit_python_host_out_setup(out, &func.returns);
 
-    out.push_str("        vtable_ptr: int = self._guard.vtable\n");
-    out.push_str("        if vtable_ptr == 0:\n");
-    out.push_str("            raise RuntimeError(\"invalid caller: guard is null\")\n");
-    out.push_str("        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)\n");
+    // Instance-based dispatch: use interface_ and instance_
+    out.push_str("        # SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
+    out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
+    out.push_str("        vtable: GuestContractInterface = iface_ptr.contents\n");
     out.push_str(&format!("        if {fn_id} >= vtable.function_count:\n"));
     out.push_str("            raise RuntimeError(\"function not available in vtable\")\n");
     out.push_str("        functions_ptr: int = vtable.dispatch.native.functions\n");
@@ -665,7 +724,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     out.push_str(
         "        dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)\n",
     );
-    out.push_str("        err: _AbiError = dispatch_fn(args_ptr, out_ptr)\n");
+    // Instance-based dispatch: pass instance as first argument
+    out.push_str("        # SAFETY: instance_ was created by create_instance and is valid.\n");
+    out.push_str("        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.\n");
+    out.push_str("        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)\n");
     out.push_str("        if err.code != AbiErrorCode.Ok:\n");
     out.push_str("            raise RuntimeError(\"polyplug call failed\")\n");
     if has_return_value(&func.returns) {
