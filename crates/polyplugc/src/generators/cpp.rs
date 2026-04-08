@@ -1897,23 +1897,24 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     let contract_id: u64 = contract.contract_id;
     let major: u32 = contract.version.major;
     let minor: u32 = contract.version.minor;
+    let patch: u32 = contract.version.patch;
     let singleton: bool = contract.singleton;
 
     // NATIVE dispatch factory
     out.push_str(&format!(
-        "/// Create a host contract vtable for `{}` with NATIVE dispatch.\n",
+        "/// Create a host contract interface for `{}` with NATIVE dispatch.\n",
         contract.name
     ));
     out.push_str("///\n");
-    out.push_str("/// Takes ownership of the implementation and creates a 'static vtable.\n");
+    out.push_str("/// Takes ownership of the implementation and creates a 'static interface.\n");
     out.push_str("/// The implementation must inherit from the abstract class.\n");
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
-    out.push_str("/// The returned vtable pointer is valid for the lifetime of the program.\n");
+    out.push_str("/// The returned interface pointer is valid for the lifetime of the program.\n");
     out.push_str("/// The implementation unique_ptr is released and managed internally.\n");
     out.push_str("template<typename T>\n");
     out.push_str(&format!(
-        "const HostContractVTable* {}(std::unique_ptr<T> impl) noexcept {{\n",
+        "const HostContractInterface* {}(std::unique_ptr<T> impl) noexcept {{\n",
         factory_name
     ));
     out.push_str("    static T* s_impl = nullptr;\n");
@@ -1939,70 +1940,97 @@ fn generate_cpp_host_interface_factory(out: &mut String, contract: &ResolvedHost
     }
     out.push_str("    };\n\n");
 
-    // Static vtable
-    out.push_str("    static HostContractVTable s_vtable = {\n");
-    out.push_str("        HostContractVTableHeader{\n");
-    out.push_str("            1,  // vtable_version\n");
-    out.push_str(&format!(
-        "            0x{contract_id:016X}ULL,  // contract_id\n"
-    ));
-    out.push_str(&format!("            {major}U,  // contract_major\n"));
-    out.push_str(&format!("            {minor}U,  // contract_minor\n"));
+    // create_instance stub for host-side factory
+    out.push_str("    // create_instance stub - host owns the singleton instance lifecycle\n");
+    out.push_str("    static HostContractInstance create_instance_stub(\n");
+    out.push_str("        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {\n");
+    if singleton {
+        out.push_str("        // Singleton: return pointer to static impl as instance data\n");
+        out.push_str("        return HostContractInstance{static_cast<void*>(s_impl)};\n");
+    } else {
+        out.push_str("        // Multi-instance: not supported in host-side factory, use custom factory\n");
+        out.push_str("        return HostContractInstance{nullptr};\n");
+    }
+    out.push_str("    }\n\n");
+
+    // destroy_instance stub for host-side factory
+    out.push_str("    // destroy_instance stub - host owns the singleton instance lifecycle\n");
+    out.push_str("    static void destroy_instance_stub(\n");
+    out.push_str("        const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept {\n");
+    if singleton {
+        out.push_str("        // Singleton: no-op, s_impl lives for program lifetime\n");
+    } else {
+        out.push_str("        // Multi-instance: not supported in host-side factory, use custom factory\n");
+    }
+    out.push_str("    }\n\n");
+
+    // Static interface with inline fields (matches HostContractInterface ABI layout)
+    out.push_str("    static HostContractInterface s_interface = {\n");
+    out.push_str(&format!("        0x{contract_id:016X}ULL,  // contract_id\n"));
+    out.push_str(&format!("        Version{{{major}U, {minor}U, {patch}U}},  // contract_version\n"));
+    out.push_str(&format!("        {},  // singleton\n", singleton));
+    out.push_str("        DispatchType::Native,  // dispatch_type\n");
+    out.push_str("        nullptr,  // runtime (set by polyplug during registration)\n");
+    out.push_str("        create_instance_stub,  // create_instance\n");
+    out.push_str("        destroy_instance_stub,  // destroy_instance\n");
+    out.push_str("        NativeDispatch{\n");
     out.push_str(&format!("            {fn_count}U,  // function_count\n"));
-    out.push_str(&format!("            {},  // singleton\n", singleton));
-    out.push_str("            DispatchType::Native,\n");
-    out.push_str("        },\n");
-    out.push_str("        HostContractDispatch{\n");
-    out.push_str("            NativeHostContractDispatch{\n");
-    out.push_str("                static_cast<const void*>(static_cast<T*>(nullptr)),  // impl_ptr (unused, we use s_impl)\n");
-    out.push_str("                FUNCTIONS,\n");
-    out.push_str("            },\n");
-    out.push_str("        },\n");
-    out.push_str("    };\n\n");
+    out.push_str("            FUNCTIONS,  // functions\n");
+    out.push_str("        },  // dispatch.native\n");
+    out.push_str("    };  // dispatch\n\n");
     out.push_str("    (void)s_impl;  // Suppress unused warning - used by thunks\n");
-    out.push_str("    return &s_vtable;\n");
+    out.push_str("    return &s_interface;\n");
     out.push_str("}\n\n");
 
     // VM dispatch factory
     out.push_str(&format!(
-        "/// Create a host contract vtable for `{}` with VM dispatch.\n",
+        "/// Create a host contract interface for `{}` with VM dispatch.\n",
         contract.name
     ));
     out.push_str("///\n");
     out.push_str("/// Used when the host implementation is in a VM language (Python, Lua, JS).\n");
     out.push_str("///\n");
     out.push_str("/// # Arguments\n");
-    out.push_str("/// * `bridge_data` - Opaque pointer to VM-specific data\n");
+    out.push_str("/// * `loader_data` - Opaque pointer to VM-specific data\n");
     out.push_str("/// * `dispatch_fn` - Function to call for each contract function\n");
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
-    out.push_str("/// The returned vtable pointer is valid for the lifetime of the program.\n");
-    out.push_str(&format!("const HostContractVTable* {}(\n", factory_vm_name));
-    out.push_str("    void* bridge_data,\n");
-    out.push_str("    VmHostContractDispatchFn dispatch_fn\n");
+    out.push_str("/// The returned interface pointer is valid for the lifetime of the program.\n");
+    out.push_str(&format!("const HostContractInterface* {}(\n", factory_vm_name));
+    out.push_str("    void* loader_data,\n");
+    out.push_str("    VmDispatchCallFn dispatch_fn\n");
     out.push_str(") noexcept {\n");
-    out.push_str("    static HostContractVTable s_vtable = {\n");
-    out.push_str("        HostContractVTableHeader{\n");
-    out.push_str("            1,  // vtable_version\n");
-    out.push_str(&format!(
-        "            0x{contract_id:016X}ULL,  // contract_id\n"
-    ));
-    out.push_str(&format!("            {major}U,  // contract_major\n"));
-    out.push_str(&format!("            {minor}U,  // contract_minor\n"));
-    out.push_str(&format!("            {fn_count}U,  // function_count\n"));
-    out.push_str(&format!("            {},  // singleton\n", singleton));
-    out.push_str("            DispatchType::VirtualMachine,\n");
-    out.push_str("        },\n");
-    out.push_str("        HostContractDispatch{\n");
-    out.push_str("            VmHostContractDispatch{\n");
-    out.push_str("                dispatch_fn,\n");
-    out.push_str("                bridge_data,\n");
-    out.push_str("            },\n");
-    out.push_str("        },\n");
-    out.push_str("    };\n");
-    out.push_str("    s_vtable.dispatch.vm.bridge_data = bridge_data;\n");
-    out.push_str("    s_vtable.dispatch.vm.call = dispatch_fn;\n");
-    out.push_str("    return &s_vtable;\n");
+
+    // create_instance stub for VM factory
+    out.push_str("    // create_instance stub - VM loader owns instance lifecycle\n");
+    out.push_str("    static HostContractInstance vm_create_instance_stub(\n");
+    out.push_str("        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {\n");
+    out.push_str("        // VM dispatch: instance managed by VM loader, return placeholder\n");
+    out.push_str("        return HostContractInstance{nullptr};\n");
+    out.push_str("    }\n\n");
+
+    // destroy_instance stub for VM factory
+    out.push_str("    // destroy_instance stub - VM loader owns instance lifecycle\n");
+    out.push_str("    static void vm_destroy_instance_stub(\n");
+    out.push_str("        const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept {\n");
+    out.push_str("        // VM dispatch: instance managed by VM loader, no-op here\n");
+    out.push_str("    }\n\n");
+
+    // Static interface with inline fields (matches HostContractInterface ABI layout)
+    out.push_str("    static HostContractInterface s_interface = {\n");
+    out.push_str(&format!("        0x{contract_id:016X}ULL,  // contract_id\n"));
+    out.push_str(&format!("        Version{{{major}U, {minor}U, {patch}U}},  // contract_version\n"));
+    out.push_str(&format!("        {},  // singleton\n", singleton));
+    out.push_str("        DispatchType::VirtualMachine,  // dispatch_type\n");
+    out.push_str("        nullptr,  // runtime (set by polyplug during registration)\n");
+    out.push_str("        vm_create_instance_stub,  // create_instance\n");
+    out.push_str("        vm_destroy_instance_stub,  // destroy_instance\n");
+    out.push_str("        VmDispatch{\n");
+    out.push_str("            dispatch_fn,  // call\n");
+    out.push_str("            loader_data,  // loader_data\n");
+    out.push_str("        },  // dispatch.vm\n");
+    out.push_str("    };  // dispatch\n");
+    out.push_str("    return &s_interface;\n");
     out.push_str("}\n\n");
 }
 
@@ -2021,10 +2049,10 @@ fn generate_cpp_host_thunk(
     let has_return: bool = func.returns.is_some();
 
     out.push_str(&format!(
-        "    static AbiError {}(const void* impl_ptr, const void* args, void* out) noexcept {{\n",
+        "    static AbiError {}(HostContractInstance instance, const void* args, void* out) noexcept {{\n",
         thunk_name
     ));
-    out.push_str("        (void)impl_ptr;  // We use s_impl directly\n");
+    out.push_str("        (void)instance;  // Instance data passed by caller, we use s_impl directly\n");
     out.push_str("        if (s_impl == nullptr) {\n");
     out.push_str("            return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};\n");
     out.push_str("        }\n");
