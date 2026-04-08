@@ -1,248 +1,209 @@
 # Phase 15: Final Cleanup - Research
 
 **Researched:** 2026-04-08
-**Domain:** Codebase naming cleanup (vtable → interface terminology)
+**Domain:** Codebase naming cleanup (vtable -> interface terminology)
 **Confidence:** HIGH
 
 ## Summary
 
-This phase addresses CLN-01 (remove all "vtable" naming) and CLN-04 (update tests to use new instance model). A comprehensive grep audit found **3123 occurrences** across **250 files**. The key insight is that **generated code should be regenerated**, not hand-edited. The focus must be on updating generators, source code, tests, and documentation - then regenerating all example code.
+This phase addresses CLN-01 (remove all "vtable" naming) and CLN-04 (update tests to use new instance model). A comprehensive grep audit found vtable references across the codebase. The critical insight is that **generated code should be regenerated, not hand-edited**. The focus must be on updating generators, source code, tests, and SDKs - then regenerating all example code.
 
 **Primary recommendation:** Update generators first, then regenerate examples. Manual edits focus on source code, tests, SDK files, and documentation only. Planning artifacts are historical and should NOT be modified.
 
-## User Constraints (from ROADMAP.md)
+<user_constraints>
+## User Constraints (from CONTEXT.md / ROADMAP.md)
 
 ### Locked Decisions (Phase 15 Scope)
-- **CLN-01:** Remove all "vtable" naming from codebase
+- **CLN-01:** Remove all "vtable" naming from codebase (excluding ABI fields and planning artifacts)
 - **CLN-04:** Update tests to use new instance model and naming
 
-### Success Criteria (ROADMAP)
-1. No "vtable" naming remains in codebase (search: vtable, VTable, VTABLE)
-2. All tests pass with new instance model and naming
+### Success Criteria
+1. No "vtable" naming remains in codebase (excluding ABI fields and planning artifacts)
+2. All tests use new instance model and naming
 
 ### Deferred Ideas (OUT OF SCOPE)
 - CLN-02: Remove *C suffix types - completed in Phase 10
 - CLN-03: Update documentation to use Guest/Host terminology - completed in Phase 6
 - HC-02, HC-03, HC-04: Host contract instance model - deferred requirements
+</user_constraints>
 
+<phase_requirements>
 ## Phase Requirements
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
-| CLN-01 | Remove all "vtable" naming from codebase | 3123 occurrences found across 250 files; categorized by type |
-| CLN-04 | Update tests to use new instance model and naming | 48 test files in crates/; 19 fixture files in tests/ |
+| CLN-01 | Remove all "vtable" naming from codebase | Categorized findings: generated code regenerates, source/tests/SDKs need manual updates |
+| CLN-04 | Update tests to use new instance model and naming | Test files identified with specific variable/function name changes |
+</phase_requirements>
 
 ## Findings Summary
 
-### Count by Category
+### Count by Category (Excluding Planning Artifacts)
 
 | Category | Files | Occurrences | Approach |
 |----------|-------|-------------|----------|
-| **Generated code** (examples/*) | 95 | ~800 | REGENERATE after generator updates |
+| **Generated code** (examples/*/generated/) | ~95 | ~800 | REGENERATE after generator updates |
 | **Generator source** (crates/polyplugc/src/generators/*.rs) | 6 | ~110 | Manual edit - string templates |
 | **Tests** (crates/polyplug/tests/*.rs) | 28 | ~150 | Manual edit - comments, variables, function names |
+| **Integration tests** (tests/integration/tests/*.rs) | 8 | ~250 | Manual edit - variable names, comments |
 | **Test fixtures** (tests/fixtures/*) | 19 | ~50 | Manual edit - variable names, comments |
 | **SDK source** (sdks/*) | 21 | ~100 | Manual edit - type names, error messages |
-| **Documentation** (docs/*) | 8 | ~30 | Manual edit - terminology |
-| **Runtime source** (crates/polyplug/src/*.rs) | 2 | ~25 | Manual edit - test helper function names |
+| **Documentation** (*.md in root) | 5 | ~30 | Manual edit - terminology |
+| **C++ SDK/examples** (*.hpp, *.cpp) | 15 | ~100 | Mix of SDK + generated |
 | **Planning artifacts** (.planning/*) | 79 | ~2000 | DO NOT EDIT - historical records |
 
-### Key Insight: Generated Code Strategy
+### Critical Exclusions (Must Remain Unchanged)
 
-The 95 files in `examples/*` are **generated code** from `polyplugc`. These should NEVER be hand-edited. The correct approach is:
+1. **`vtable_version` ABI field** - This is an FFI field name in `HostContractVTableHeader`, not our terminology. DO NOT rename.
 
-1. Update generators in `crates/polyplugc/src/generators/*.rs`
-2. Regenerate all examples using `just generate-examples` or equivalent
-3. Verify regenerated code compiles
+2. **Planning artifacts (.planning/*)** - Historical records documenting the rename process itself. DO NOT EDIT.
 
-This dramatically reduces manual effort from 95 files to 6 generator files.
+3. **FFI function names** - Functions like `store_host_vtable`, `get_host_vtable`, `host_vtable_storage` are FFI boundary names that may need to remain for API compatibility or be renamed consistently across all SDKs.
 
 ## Generator Changes Required
 
-### Files to Edit
+### Files to Edit (Wave 1)
 
-| File | Lines to Change | Pattern |
-|------|-----------------|---------|
-| `crates/polyplugc/src/generators/cpp.rs` | ~20 | Comments, string templates |
-| `crates/polyplugc/src/generators/rust.rs` | ~25 | Comments, string templates, variable names |
-| `crates/polyplugc/src/generators/python.rs` | ~30 | Comments, string templates, type references |
-| `crates/polyplugc/src/generators/lua.rs` | ~35 | Comments, string templates, type references |
-| `crates/polyplugc/src/generators/csharp.rs` | ~25 | Comments, string templates, type references |
-| `crates/polyplugc/src/generators/js_quickjs.rs` | ~30 | Comments, string templates, type references |
+| File | Key Changes |
+|------|-------------|
+| `crates/polyplugc/src/generators/cpp.rs` | Comments: "vtable dispatch" -> "interface dispatch"; string templates |
+| `crates/polyplugc/src/generators/rust.rs` | Variable names, string templates |
+| `crates/polyplugc/src/generators/python.rs` | Type references, string templates |
+| `crates/polyplugc/src/generators/lua.rs` | FFI cdef comments, string templates |
+| `crates/polyplugc/src/generators/csharp.rs` | Type references, string templates |
+| `crates/polyplugc/src/generators/js_quickjs.ts` | Variable names, string templates |
 
-### Specific Pattern Replacements
+### Specific Pattern Replacements in Generators
 
-#### In Comments
-```
-"Create a host contract vtable" → "Create a host contract interface"
-"vtable dispatch" → "interface dispatch" (or keep as "dispatch table")
-"vtable static" → "interface static"
-"function not available in vtable" → "function not available in interface"
-```
+**Comments (change):**
+- "Create a host contract vtable" -> "Create a host contract interface"
+- "function not available in vtable" -> "function not available in interface"
+- "Store host vtable" -> "Store host interface"
 
-#### In String Templates (Generated Code)
-```
-"vtable_version" → keep as-is (this is an ABI field name, not terminology)
-"HostContractVTable" → "HostContractInterface" (in imports/type references)
-"_vtable" member → "_interface" member (in RAII wrappers)
-```
+**String templates (generated code):**
+- `vtable_version` -> KEEP AS-IS (ABI field name)
+- `HostContractVTable` type -> May need to stay (check polyplug_abi definitions)
+- `_vtable` member -> `_interface` member
 
-#### In Function Names (Generated)
-```
-"create{Contract}Vtable" → "create{Contract}Interface"
-"render_plugin_vtable_quickjs" → "render_plugin_interface_quickjs"
-"generate_guest_contract_vtable" → "generate_guest_contract_interface"
-"generate_guest_plugin_vtable" → "generate_guest_plugin_interface"
-```
-
-#### In Factory Function Names
-```
-"create{}Vtable" → "create{}Interface" (JS)
-"CreateHostContractVtable" → "CreateHostContractInterface" (C#)
-```
+**Function names in generators:**
+- `render_plugin_vtable_quickjs` -> `render_plugin_interface_quickjs`
+- Variables named `vtable` -> `interface`
 
 ## Source Code Changes Required
 
-### Runtime Tests (crates/polyplug/src/runtime.rs)
+### Integration Tests (tests/integration/tests/*.rs)
 
-| Location | Current | Replacement |
-|----------|---------|-------------|
-| Line 1617 | `create_host_contract_vtable` | `create_host_contract_interface` |
-| Lines 1656-1790 | `vtable` variable names | `interface` |
-| Line 1885 | `create_counting_host_contract_vtable` | `create_counting_host_contract_interface` |
+**Key file: cross_language.rs (~250 occurrences)**
 
-### Test Files (crates/polyplug/tests/*.rs)
+| Pattern | Lines | Change |
+|---------|-------|--------|
+| `host_vtable: HostInterface` | Multiple | Rename to `host_interface` |
+| `capture_vtable_cb` | ~109 | Rename to `capture_interface_cb` |
+| `CAPTURED_VT` thread-local | ~114 | Rename to `CAPTURED_INTERFACE` |
+| `vtable_ptr` variables | Throughout | Rename to `interface_ptr` |
+| `get_vtable_from_runtime()` | ~195 | Rename to `get_interface_from_runtime()` |
+| `dispatch_add_and_verify(vtable_ptr)` | ~207 | Update parameter name |
+| Comments about "vtable" | Throughout | Update terminology |
 
-**28 files need updates.** Key patterns:
+**Other integration test files:**
+- `integration_reload.rs`: `vtable` variables -> `interface`
+- `integration_hot_reload_notification.rs`: Test names reference "vtable_swap"
+- `integration_dotnet.rs`: `get_vtable()` helper -> `get_interface()`
+- `integration_lua.rs`: `get_vtable()` helper -> `get_interface()`
+- `integration_ffi_native.rs`: Comments about vtable
 
-| Pattern | Files Affected | Change |
-|---------|----------------|--------|
-| `init_*_vtable()` functions | stress_memory.rs, integration_ffi_robustness.rs, integration_codegen_cpp.rs | Rename to `init_*_interface()` |
-| `VTABLE_V1`, `VTABLE_V2` statics | stress_concurrent_registry.rs, hot_reload_safety.rs, registry_edge_cases.rs | Rename to `INTERFACE_V1`, `INTERFACE_V2` |
-| `vtable_ptr` variables | All test files | Rename to `interface_ptr` |
-| "vtable must be resolvable" error messages | Multiple tests | "interface must be resolvable" |
-| "vtable not resolvable" | stress_hot_reload.rs | "interface not resolvable" |
-| Comments referencing "vtable" | All test files | Update to "interface" terminology |
+### Unit Tests (crates/polyplug/tests/*.rs)
 
-### Test Fixture Files (tests/fixtures/*.rs)
+**Files needing updates:**
+- `stress_error.rs`: `init_*_vtable()` functions
+- `stress_memory.rs`: `init_memory_plugin_vtable()` -> `init_memory_plugin_interface()`
+- `stress_hot_reload.rs`: `VTABLE_MEM_A`, `VTABLE_MEM_B` statics -> `INTERFACE_*`
+- `stress_concurrent_registry.rs`: `VTABLES_V1` array -> `INTERFACES_V1`
+- `registry_edge_cases.rs`: `VTABLE_A`, `VTABLE_B`, `VTABLE_C` -> `INTERFACE_*`
+- `integration_panic.rs`: `CAPTURED_VTABLE_PTR` -> `CAPTURED_INTERFACE_PTR`
+- `integration_load.rs`: `test_init_registers_vtable()` -> `test_init_registers_interface()`
 
-**19 files need updates:**
+### Test Fixtures (tests/fixtures/*)
 
 | File | Changes |
 |------|---------|
-| tests/fixtures/test_plugin/src/lib.rs | Comments: "Static VTable" → "Static Interface", variable names |
-| tests/fixtures/memory_plugin/src/lib.rs | Comments: "Static VTable" → "Static Interface" |
-| tests/fixtures/error_plugin/src/lib.rs | Comments about vtable |
-| tests/fixtures/reload_plugin_v1/src/lib.rs | Comments about vtable |
-| tests/fixtures/reload_plugin_v2/src/lib.rs | Comments about vtable |
-| tests/fixtures/depender_plugin/src/lib.rs | Comments about vtable |
-| tests/fixtures/test_plugin_python/test_plugin.py | `HostVTable` class → `HostInterface` (or use polyplug_abi types) |
-| tests/fixtures/csharp_plugin/Plugin.cs | `HostVTable` → `HostInterface` |
-| tests/fixtures/test_plugin_js/bundle.js | `vtable` variable → `interface` |
-| tests/fixtures/deno_host_test.ts | `vtable()` method → `interface()` |
+| `test_plugin/src/lib.rs` | Comments about vtable |
+| `memory_plugin/src/lib.rs` | Comments about vtable |
+| `error_plugin/src/lib.rs` | Comments about vtable |
+| `test_plugin_python/test_plugin.py` | `HostVTable` class, `_VTABLE` variable |
+| `csharp_plugin/Plugin.cs` | `HostVTable` type reference |
+| `deno_host_test.ts` | `vtable()` method call |
 
 ## SDK Changes Required
 
-### 21 files across 5 SDKs
+### C++ SDK (sdks/cpp/)
 
-| SDK | Files | Key Changes |
-|-----|-------|-------------|
-| **C++** | sdks/cpp/guest/polyplug/guest.hpp, sdks/cpp/host/polyplug/error.hpp | Comments, error messages |
-| **Python** | sdks/python/host/polyplug/runtime.py, sdks/python/guest/polyplug_guest/__init__.py | Variable names, comments |
-| **Lua** | sdks/lua/abi/polyplug_abi.lua, sdks/lua/guest/polyplug_guest.lua | Type names in FFI cdef |
-| **JS** | sdks/js/host/polyplug/mod.js, sdks/js/guest/polyplug_guest.js | Variable names, comments |
-| **Rust** | sdks/rust/guest/src/lib.rs | Comments |
+| File | Changes |
+|------|---------|
+| `guest/polyplug/guest.hpp` | `store_host_vtable()` -> `store_host_interface()`, `get_host_vtable()` -> `get_host_interface()` |
+| `host/polyplug/error.hpp` | Comment about "vtable dispatch" |
 
-**Critical SDK Pattern:** `HostContractVTable` type name appears in multiple SDKs:
-- Lua FFI cdef: `HostContractVTable` → already using correct name in polyplug_abi.lua
-- Python: imports from polyplug_abi should already have correct name
-- C#: should use `HostContractInterface` from polyplug_abi namespace
+**Note:** `using HostVTable = RuntimeAbi;` is an alias for backwards compatibility - may keep or remove.
+
+### Python SDK (sdks/python/)
+
+| File | Changes |
+|------|---------|
+| `polyplug_abi/polyplug_abi/abi.py` | `HostVTable` class name (check if this is from polyplug_abi crate) |
+| `guest/polyplug_guest/__init__.py` | `store_host_vtable()`, `get_host_vtable()` functions |
+| `host/polyplug/runtime.py` | Comments about "vtable swap" |
+
+### Lua SDK (sdks/lua/)
+
+| File | Changes |
+|------|---------|
+| `abi/polyplug_abi.lua` | `HostVTable` in FFI cdef |
+| `guest/polyplug_guest.lua` | `store_host_vtable()`, `get_host_vtable()`, `cast_host_vtable()` |
+| `host/polyplug/reload_phase.lua` | Comments about "Before vtable swap" |
+
+### JS SDK (sdks/js/)
+
+| File | Changes |
+|------|---------|
+| Generated code uses `vtable` variables | Will be regenerated |
 
 ## Documentation Changes Required
 
-**8 documentation files:**
+| File | Changes |
+|------|---------|
+| `CLAUDE.md` | Multiple references to vtable in code examples and architecture docs |
+| `TRUST_MODEL.md` | References to "vtable" in security model |
+| `BENCHMARKS.md` | "vtable dispatch" -> "interface dispatch" |
+| `AGENTS.md` | References to HostVTable |
+| `SUMMARY.md` | Historical notes about VTableSlot |
 
-| File | Approach |
-|------|----------|
-| docs/ARCHITECTURE_CLARIFICATIONS.md | Conceptual "vtable" may be acceptable for C++ pattern description |
-| docs/abi_types.md | Update terminology to "interface" |
-| docs/PLUGIN_INTERFACE_DESIGN.md | Update terminology |
-| docs/PERFORMANCE.md | "vtable dispatch" → "interface dispatch" |
-| docs/HOST_CONTRACTS_API.md | Update terminology |
-| docs/HOST_CONTRACTS.md | Update terminology |
-| docs/HOT_RELOAD_DESIGN.md | Update terminology |
-| docs/ABI_ARCHITECTURE.md | Update terminology |
-
-**Note:** Some documentation may legitimately use "vtable" when explaining the C++ virtual table pattern (an established programming concept). The distinction is between "vtable" as a C++ pattern and "VTable" as our specific type naming.
-
-## Planning Artifacts
-
-**79 files in .planning/* should NOT be edited.** These are historical records documenting:
-- Previous phase execution
-- The rename process itself (Phase 1 renamed HostVTable → RuntimeAbi)
-- Verification evidence
-- Audit findings
-
-The ROADMAP.md, REQUIREMENTS.md, and STATE.md already document the vtable→interface transition. They serve as historical reference for what changed.
-
-## Order of Operations
-
-1. **Wave 1: Generator Updates** (crates/polyplugc/src/generators/*.rs)
-   - Update string templates and comments
-   - Rename generator function names
-   - Verify generators compile
-
-2. **Wave 2: Regenerate Examples** (examples/*)
-   - Run `just generate-examples` or equivalent
-   - Verify all regenerated code compiles
-   - This handles 95 files automatically
-
-3. **Wave 3: Source Code** (crates/polyplug/src/*.rs, crates/polyplug/tests/*.rs)
-   - Rename test helper functions
-   - Update variable names in tests
-   - Update comments
-
-4. **Wave 4: SDK Files** (sdks/*)
-   - Update type references
-   - Update error messages
-   - Update comments
-
-5. **Wave 5: Test Fixtures** (tests/fixtures/*)
-   - Update fixture plugin source
-   - Update fixture scripts (Python, JS, C#)
-
-6. **Wave 6: Documentation** (docs/*)
-   - Update terminology
-
-7. **Wave 7: Verification**
-   - Run grep audit to verify no vtable remains
-   - Run full test suite
-   - Verify workspace compiles
+**Note:** Some documentation may legitimately use "vtable" when explaining the C++ virtual table pattern (an established programming concept).
 
 ## Validation Architecture
 
 ### Test Framework
 | Property | Value |
 |----------|-------|
-| Framework | Cargo test (Rust built-in) + criterion for benchmarks |
+| Framework | Cargo test (Rust built-in) |
 | Config file | Cargo.toml (workspace) |
-| Quick run command | `cargo test --workspace -q 2>&1 \| head -50` |
+| Quick run command | `cargo test --workspace -q 2>&1 | head -50` |
 | Full suite command | `cargo test --workspace` |
 
-### Phase Requirements → Test Map
+### Phase Requirements -> Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| CLN-01 | No "vtable" naming in source code | grep audit | `grep -ri "vtable" crates/ sdks/ docs/ tests/fixtures/ --include="*.rs" --include="*.py" --include="*.lua" --include="*.js" --include="*.ts" --include="*.cs" --include="*.hpp" --include="*.md" \| wc -l` | N/A (verification step) |
-| CLN-04 | Tests use new naming | unit/integration | `cargo test --workspace` | Existing tests need update |
+| CLN-01 | No "vtable" naming in source code | grep audit | See verification commands below | N/A |
+| CLN-04 | Tests use new naming | unit/integration | `cargo test --workspace` | Existing tests |
 
 ### Sampling Rate
-- **Per task commit:** `cargo test -p polyplug -q` (affected crate only)
+- **Per task commit:** `cargo test -p <crate> -q` (affected crate only)
 - **Per wave merge:** `cargo test --workspace -q`
-- **Phase gate:** Full suite green + grep audit showing 0 occurrences (excluding planning artifacts)
+- **Phase gate:** Full suite green + grep audit clean
 
 ### Wave 0 Gaps
-- [ ] Generator tests for vtable→interface naming in smoke.rs (uses TEST_ADDER_VTABLE)
-- [ ] Integration tests for generated code naming patterns
+- [ ] Generator test `smoke.rs` uses `TEST_ADDER_VTABLE` - needs update
+- [ ] Integration test `integration_codegen_cpp.rs` has assertions about `_VTABLE` suffix
+- [ ] Generator test `interface_factories_tests.rs` uses "vtable" terminology
 
 ## Verification Commands
 
@@ -250,12 +211,11 @@ The ROADMAP.md, REQUIREMENTS.md, and STATE.md already document the vtable→inte
 
 ```bash
 # 1. Verify no vtable in source code (excluding planning artifacts and generated examples)
-grep -ri "vtable" crates/ sdks/ docs/ tests/fixtures/ \
+grep -ri "vtable" crates/ sdks/ docs/ tests/fixtures/ tests/integration/ \
   --include="*.rs" --include="*.py" --include="*.lua" \
   --include="*.js" --include="*.ts" --include="*.cs" --include="*.hpp" --include="*.md" \
-  | grep -v ".planning/" | grep -v "examples/" | wc -l
-
-# Expected: 0 (or near-zero if "vtable" used conceptually in docs)
+  | grep -v ".planning/" | grep -v "examples/" | grep -v "vtable_version" | wc -l
+# Expected: 0
 
 # 2. Verify workspace compiles
 cargo build --workspace
@@ -263,78 +223,64 @@ cargo build --workspace
 # 3. Verify all tests pass
 cargo test --workspace
 
-# 4. Verify examples regenerate correctly
-just generate-examples  # or equivalent command
-cargo build --workspace  # verify regenerated code compiles
+# 4. Regenerate examples and verify
+cd examples && ./build.sh
 ```
 
 ### Acceptable Exceptions
 
-These patterns may remain (conceptual use, not type naming):
-- Documentation explaining "C++ vtable pattern" (established programming concept)
-- `vtable_version` field name (ABI field, not our terminology)
+These patterns may remain:
+- `vtable_version` field name (ABI field in HostContractVTableHeader)
 - Historical records in .planning/* (DO NOT EDIT)
+- Documentation explaining "C++ vtable pattern" (established concept)
 
 ## Common Pitfalls
 
 ### Pitfall 1: Editing Generated Code
 **What goes wrong:** Hand-editing 95 generated files is time-consuming and errors reappear on regeneration.
-**Why it happens:** Developers edit files without checking if they're generated.
-**How to avoid:** All files in examples/*/generated/* are GENERATED. Edit generators only.
-**Warning signs:** File path contains "generated/" subdirectory.
+**How to avoid:** All files in `examples/*/generated/` are GENERATED. Edit generators only.
 
 ### Pitfall 2: Editing Planning Artifacts
 **What goes wrong:** Historical documentation is corrupted, audit trail lost.
-**Why it happens:** grep finds matches in .planning/* and developer assumes all must be fixed.
-**How to avoid:** Explicitly exclude .planning/* from edits. These document the rename process itself.
-**Warning signs:** File path starts with ".planning/".
+**How to avoid:** Explicitly exclude `.planning/*` from edits.
 
-### Pitfall 3: Missing ABI Field Names
+### Pitfall 3: Renaming ABI Field Names
 **What goes wrong:** Renaming `vtable_version` breaks ABI compatibility.
-**Why it happens:** Automated rename doesn distinguish between our terminology and ABI field names.
-**How to avoid:** `vtable_version` is an ABI field name from polyplug_abi - DO NOT rename it.
-**Warning signs:** Field appears in #[repr(C)] struct definition.
+**How to avoid:** `vtable_version` is an ABI field name - DO NOT rename.
 
-### Pitfall 4: Conceptual vs Type Naming
-**What goes wrong:** Documentation becomes awkward when "interface" replaces every "vtable".
-**Why it happens:** Blind replacement without considering context.
-**How to avoid:** "C++ vtable" is an established pattern name - may remain in docs for clarity.
-**Warning signs:** Documentation explains C++ concepts, not our specific types.
+### Pitfall 4: Inconsistent FFI Function Renames
+**What goes wrong:** Renaming `store_host_vtable` in one SDK but not others causes API inconsistency.
+**How to avoid:** Rename FFI functions consistently across ALL SDKs or keep as-is.
 
 ## Environment Availability
 
 | Dependency | Required By | Available | Version | Fallback |
 |------------|------------|-----------|---------|----------|
-| Rust toolchain | All compilation | ✓ | 1.85 | — |
-| g++ | C++ codegen tests | ? | — | Skip C++ compile test if unavailable |
-| Python 3.10+ | Python fixtures | ✓ | — | Skip Python tests |
-| .NET SDK | C# fixtures | ? | — | Skip .NET tests |
-| Deno | JS fixtures | ? | — | Skip Deno tests |
-| Lua | Lua fixtures | ? | — | Skip Lua tests |
-
-**Missing dependencies with fallback:**
-- g++, .NET, Deno, Lua: Integration tests skip if toolchain unavailable
+| Rust toolchain | All compilation | Yes | 1.85 | - |
+| g++ | C++ codegen tests | Check | - | Skip C++ compile test |
+| Python 3.10+ | Python fixtures | Yes | - | Skip Python tests |
+| .NET SDK | C# fixtures | Check | - | Skip .NET tests |
+| Deno | JS fixtures | Check | - | Skip Deno tests |
+| Lua | Lua fixtures | Check | - | Skip Lua tests |
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Codebase grep audit: 3123 occurrences across 250 files
+- Codebase grep audit: Comprehensive search across all source files
 - ROADMAP.md: Phase 15 scope definition
 - REQUIREMENTS.md: CLN-01, CLN-04 definitions
+- examples/build.sh: Regeneration strategy confirmed
 
 ### Secondary (MEDIUM confidence)
-- Previous phase evidence: Phase 13 successfully renamed HostContractVTable → HostContractInterface in C++ codegen
+- Previous phase evidence: Phase 13 renamed HostContractVTable -> HostContractInterface in C++ codegen
 - Generator source inspection: String templates identified
-
-### Tertiary (LOW confidence)
-- None - all findings verified via codebase search
 
 ## Metadata
 
 **Confidence breakdown:**
-- Standard stack: HIGH - generators are known, patterns identified
+- Standard stack: HIGH - generators known, patterns identified
 - Architecture: HIGH - generated vs source distinction clear
-- Pitfalls: HIGH - common mistakes documented from previous phases
+- Pitfalls: HIGH - documented from previous phases
 
 **Research date:** 2026-04-08
 **Valid until:** 30 days (stable codebase, cleanup phase)
