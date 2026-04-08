@@ -1,12 +1,10 @@
 ---
 phase: 12-sdk-instance-model
-plan: 03
+plan: 03b
 type: execute
-wave: 2
-depends_on: [12-01, 12-02]
+wave: 3
+depends_on: [12-03a]
 files_modified:
-  - crates/polyplugc/src/generators/cpp.rs
-  - crates/polyplugc/src/generators/python.rs
   - crates/polyplugc/src/generators/lua.rs
   - crates/polyplugc/src/generators/csharp.rs
   - crates/polyplugc/src/generators/js_quickjs.rs
@@ -16,41 +14,32 @@ user_setup: []
 
 must_haves:
   truths:
-    - "C++ codegen generates RAII instance wrapper class with constructor/destructor"
-    - "Python codegen generates instance wrapper class with __init__/__del__"
     - "Lua codegen generates instance closure wrapper with create/destroy methods"
     - "C# codegen generates instance wrapper class with constructor/dispose"
     - "JS QuickJS codegen generates instance wrapper class"
     - "All wrappers call create_instance on creation, destroy_instance on cleanup"
   artifacts:
-    - path: "crates/polyplugc/src/generators/cpp.rs"
-      provides: "C++ code generator"
-      contains: "generate_host_instance_wrapper"
-      min_lines: 500
-    - path: "crates/polyplugc/src/generators/python.rs"
-      provides: "Python code generator"
-      contains: "generate_host_instance_wrapper"
     - path: "crates/polyplugc/src/generators/lua.rs"
       provides: "Lua code generator"
-      contains: "generate_host_instance_wrapper"
+      contains: "__gc"
     - path: "crates/polyplugc/src/generators/csharp.rs"
       provides: "C# code generator"
-      contains: "generate_host_instance_wrapper"
+      contains: "IDisposable"
     - path: "crates/polyplugc/src/generators/js_quickjs.rs"
       provides: "JS QuickJS code generator"
-      contains: "generate_host_instance_wrapper"
+      contains: "class.*Contract"
   key_links:
-    - from: "polyplugc generators"
+    - from: "polyplugc Lua/C#/JS generators"
       to: "Rust generator pattern"
       via: "copy pattern from rust.rs"
       pattern: "struct.*instance.*GuestContractInstance"
 ---
 
 <objective>
-Extend instance wrapper codegen to all language generators, satisfying SDK-07.
+Add instance wrapper codegen to Lua, C#, and JS QuickJS generators (Part 2 of SDK-07).
 
-Purpose: Enable host applications in all languages to use RAII instance wrappers for safe lifecycle management.
-Output: Updated generators with instance wrapper generation matching Rust pattern.
+Purpose: Enable host applications in Lua, C#, and JavaScript to use RAII instance wrappers for safe lifecycle management.
+Output: Updated generators with instance wrapper generation matching Rust pattern, plus verification checkpoint.
 </objective>
 
 <execution_context>
@@ -62,9 +51,10 @@ Output: Updated generators with instance wrapper generation matching Rust patter
 @.planning/PROJECT.md
 @.planning/ROADMAP.md
 @.planning/STATE.md
+@.planning/phases/12-sdk-instance-model/12-03a-SUMMARY.md
 
 <interfaces>
-<!-- Rust instance wrapper pattern to replicate in other languages -->
+<!-- Rust instance wrapper pattern to replicate in Lua, C#, and JS -->
 
 From crates/polyplugc/src/generators/rust.rs (lines 1290-1370):
 ```rust
@@ -98,7 +88,7 @@ impl Drop for XxxContract {
 }
 ```
 
-Key components to implement in each language:
+Key components to implement:
 1. Wrapper struct/class holding interface, instance, host pointers
 2. Constructor that resolves handle and calls create_instance
 3. Destructor/dispose that calls destroy_instance
@@ -110,114 +100,7 @@ Key components to implement in each language:
 <tasks>
 
 <task type="auto">
-  <name>Task 1: Add instance wrapper generation to C++ generator</name>
-  <files>crates/polyplugc/src/generators/cpp.rs</files>
-  <read_first>
-    - crates/polyplugc/src/generators/cpp.rs (current C++ generator - has stubs)
-    - crates/polyplugc/src/generators/rust.rs:1290-1400 (Rust wrapper pattern to copy)
-    - crates/polyplug_abi/src/guest/guest_contract_instance.rs (GuestContractInstance struct)
-  </read_first>
-  <action>
-    Add `generate_host_instance_wrapper_cpp` function following Rust pattern:
-    
-    1. Generate RAII wrapper class:
-       ```cpp
-       class XxxContract {
-       private:
-           const GuestContractInterface* interface_;
-           GuestContractInstance instance_;
-           const HostInterface* host_;
-       
-       public:
-           // Constructor: resolve handle + create_instance
-           static std::optional<XxxContract> create(PluginHandle handle, const HostInterface* host) {
-               const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
-               if (!iface) return std::nullopt;
-               GuestContractInstance inst = iface->create_instance(host, nullptr);
-               if (inst.data == nullptr) return std::nullopt;
-               return XxxContract(iface, inst, host);
-           }
-           
-           // Destructor: calls destroy_instance
-           ~XxxContract() {
-               if (instance_.data != nullptr) {
-                   interface_->destroy_instance(host_, instance_);
-               }
-           }
-           
-           bool is_valid() const { return instance_.data != nullptr; }
-           
-           // Method callers...
-       };
-       ```
-    
-    2. Call this function from `generate_host_side_cpp` after interface generation
-    3. Update method caller generation to pass `instance_` as first argument to dispatch calls
-    4. Ensure proper nullptr checks and RAII semantics
-  </action>
-  <verify>
-    <automated>grep -c "class.*Contract" crates/polyplugc/src/generators/cpp.rs | grep -v "^0$"</automated>
-  </verify>
-  <acceptance_criteria>
-    - crates/polyplugc/src/generators/cpp.rs contains function `generate_host_instance_wrapper_cpp` or similar
-    - crates/polyplugc/src/generators/cpp.rs generates class with `GuestContractInstance instance_` member
-    - crates/polyplugc/src/generators/cpp.rs generates destructor calling `destroy_instance`
-    - crates/polyplugc/src/generators/cpp.rs generates constructor calling `create_instance`
-    - cargo test -p polyplugc passes after changes
-  </acceptance_criteria>
-  <done>C++ generator produces RAII instance wrapper classes.</done>
-</task>
-
-<task type="auto">
-  <name>Task 2: Add instance wrapper generation to Python generator</name>
-  <files>crates/polyplugc/src/generators/python.rs</files>
-  <read_first>
-    - crates/polyplugc/src/generators/python.rs (current Python generator - has stubs)
-    - crates/polyplugc/src/generators/rust.rs:1290-1400 (Rust wrapper pattern)
-  </read_first>
-  <action>
-    Add `generate_host_instance_wrapper_python` function:
-    
-    1. Generate wrapper class:
-       ```python
-       class XxxContract:
-           def __init__(self, handle: PluginHandle, host: ctypes.c_void_p):
-               self._interface = polyplug_runtime_resolve_contract(host, handle)
-               if not self._interface:
-                   raise ValueError("Contract not found")
-               self._instance = self._interface.contents.create_instance(host, None)
-               if self._instance.data is None:
-                   raise ValueError("create_instance failed")
-               self._host = host
-           
-           def __del__(self):
-               if self._instance.data is not None:
-                   self._interface.contents.destroy_instance(self._host, self._instance)
-           
-           def is_valid(self) -> bool:
-               return self._instance.data is not None
-           
-           # Method callers...
-       ```
-    
-    2. Call from `generate_host_side_python` after interface generation
-    3. Update method callers to pass `self._instance` as first argument
-    4. Add proper ctypes pointer handling for interface.contents access
-  </action>
-  <verify>
-    <automated>grep -c "def __del__" crates/polyplugc/src/generators/python.rs | grep -v "^0$"</automated>
-  </verify>
-  <acceptance_criteria>
-    - crates/polyplugc/src/generators/python.rs generates class with `__init__` calling `create_instance`
-    - crates/polyplugc/src/generators/python.rs generates `__del__` calling `destroy_instance`
-    - crates/polyplugc/src/generators/python.rs generates `_instance` member
-    - cargo test -p polyplugc passes
-  </acceptance_criteria>
-  <done>Python generator produces instance wrapper classes with __init__/__del__.</done>
-</task>
-
-<task type="auto">
-  <name>Task 3: Add instance wrapper generation to Lua generator</name>
+  <name>Task 1: Add instance wrapper generation to Lua generator</name>
   <files>crates/polyplugc/src/generators/lua.rs</files>
   <read_first>
     - crates/polyplugc/src/generators/lua.rs (current Lua generator - has stubs)
@@ -278,7 +161,7 @@ Key components to implement in each language:
 </task>
 
 <task type="auto">
-  <name>Task 4: Add instance wrapper generation to C# generator</name>
+  <name>Task 2: Add instance wrapper generation to C# generator</name>
   <files>crates/polyplugc/src/generators/csharp.rs</files>
   <read_first>
     - crates/polyplugc/src/generators/csharp.rs (current C# generator)
@@ -337,7 +220,7 @@ Key components to implement in each language:
 </task>
 
 <task type="auto">
-  <name>Task 5: Add instance wrapper generation to JS QuickJS generator</name>
+  <name>Task 3: Add instance wrapper generation to JS QuickJS generator</name>
   <files>crates/polyplugc/src/generators/js_quickjs.rs</files>
   <read_first>
     - crates/polyplugc/src/generators/js_quickjs.rs (current JS QuickJS generator)
@@ -391,7 +274,7 @@ Key components to implement in each language:
 </task>
 
 <task type="checkpoint:human-verify">
-  <name>Task 6: Verify all generators produce instance wrappers</name>
+  <name>Task 4: Verify all generators produce instance wrappers</name>
   <files>N/A - verification only</files>
   <action>Manual verification of codegen tests and generated output correctness.</action>
   <what-built>Instance wrapper generation added to C++, Python, Lua, C#, and JS QuickJS generators</what-built>
@@ -421,9 +304,9 @@ Key components to implement in each language:
 
 | Threat ID | Category | Component | Disposition | Mitigation Plan |
 |-----------|----------|-----------|-------------|-----------------|
-| T-12-03-01 | Tampering | Instance wrapper lifecycle | mitigate | Generated code checks instance.data != null before use, calls destroy on cleanup |
-| T-12-03-02 | Elevation | Instance handle reuse | mitigate | destroy() sets instance.data = null to prevent reuse after cleanup |
-| T-12-03-03 | DoS | Memory leak from missing cleanup | mitigate | RAII patterns (C++, Rust) or __gc/__del__/Dispose ensure cleanup on scope exit |
+| T-12-03b-01 | Tampering | Instance wrapper lifecycle | mitigate | Generated code checks instance.data != null before use, calls destroy on cleanup |
+| T-12-03b-02 | Elevation | Instance handle reuse | mitigate | destroy() sets instance.data = null to prevent reuse after cleanup |
+| T-12-03b-03 | DoS | Memory leak from missing cleanup | mitigate | __gc metamethod (Lua), IDisposable (C#), explicit destroy() (JS) ensure cleanup |
 
 Key security property: Generated wrappers must null-check instance.data before every operation and nullify after destroy.
 </threat_model>
@@ -435,14 +318,13 @@ Key security property: Generated wrappers must null-check instance.data before e
 </verification>
 
 <success_criteria>
-- C++ generator produces RAII class with destructor
-- Python generator produces class with __del__
 - Lua generator produces closure with __gc metamethod
 - C# generator produces IDisposable class
 - JS QuickJS generator produces class with destroy()
 - All tests pass
+- User verifies generated output correctness
 </success_criteria>
 
 <output>
-After completion, create `.planning/phases/12-sdk-instance-model/12-03-SUMMARY.md`
+After completion, create `.planning/phases/12-sdk-instance-model/12-03b-SUMMARY.md`
 </output>
