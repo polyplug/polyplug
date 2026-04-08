@@ -2792,6 +2792,10 @@ mod tests {
             "missing interface member: {out}"
         );
         assert!(
+            out.contains("HostContractInstance instance_"),
+            "missing instance member: {out}"
+        );
+        assert!(
             out.contains("static std::optional<HostLoggerContract> from_host"),
             "missing from_host method: {out}"
         );
@@ -3021,7 +3025,7 @@ mod tests {
             "missing unique_ptr param: {out}"
         );
         assert!(
-            out.contains("VmHostContractDispatchFn dispatch_fn"),
+            out.contains("VmDispatchCallFn dispatch_fn"),
             "missing dispatch_fn param: {out}"
         );
         assert!(
@@ -3058,7 +3062,7 @@ mod tests {
             "missing template: {out}"
         );
         assert!(
-            out.contains("const HostContractVTable* create_host_logger_interface"),
+            out.contains("const HostContractInterface* create_host_logger_interface"),
             "missing NATIVE factory: {out}"
         );
         assert!(
@@ -3082,8 +3086,16 @@ mod tests {
             "missing VM factory: {out}"
         );
         assert!(
-            out.contains("VmHostContractDispatchFn dispatch_fn"),
+            out.contains("VmDispatchCallFn dispatch_fn"),
             "missing dispatch_fn: {out}"
+        );
+        assert!(
+            out.contains("create_instance_stub"),
+            "missing create_instance stub: {out}"
+        );
+        assert!(
+            out.contains("destroy_instance_stub"),
+            "missing destroy_instance stub: {out}"
         );
     }
 }

@@ -150,6 +150,15 @@ unsafe extern "C" fn noop_get_dependencies(
     polyplug_abi::Array::empty()
 }
 
+/// No-op resolve_host_contract_interface callback.
+unsafe extern "C" fn noop_resolve_host_contract_interface(
+    _this: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractInterface {
+    core::ptr::null()
+}
+
 std::thread_local! {
     static DISPATCH_REGISTRY: core::cell::RefCell<PluginRegistry> =
         core::cell::RefCell::new(PluginRegistry::new());
@@ -200,6 +209,7 @@ fn test_dispatch_add_function() {
         resolve_contract: noop_resolve_contract,
         call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
     };
@@ -301,6 +311,7 @@ fn test_dispatch_add_with_zero() {
         resolve_contract: noop_resolve_contract,
         call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
     };
@@ -384,6 +395,7 @@ fn test_dispatch_add_wrapping_overflow() {
         resolve_contract: noop_resolve_contract,
         call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
     };

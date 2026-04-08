@@ -142,6 +142,15 @@ unsafe extern "C" fn stub_get_dependencies(
     Array::empty()
 }
 
+/// Stub resolve_host_contract_interface -- returns null.
+unsafe extern "C" fn stub_resolve_host_contract_interface(
+    _this: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractInterface {
+    core::ptr::null()
+}
+
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
     _this: *const HostInterface,
@@ -262,6 +271,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
         resolve_contract: stub_resolve_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
         get_dependencies: stub_get_dependencies,
     };
@@ -641,6 +651,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         resolve_contract: stub_resolve_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
         get_dependencies: stub_get_dependencies,
     };

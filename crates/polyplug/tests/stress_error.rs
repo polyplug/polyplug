@@ -113,6 +113,15 @@ unsafe extern "C" fn stub_get_host_contract(
     polyplug_abi::HostContractInstance::null()
 }
 
+/// Stub resolve_host_contract_interface -- returns null.
+unsafe extern "C" fn stub_resolve_host_contract_interface(
+    _this: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractInterface {
+    core::ptr::null()
+}
+
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
     _this: *const HostInterface,
@@ -196,6 +205,15 @@ unsafe extern "C" fn noop_get_dependencies(
     polyplug_abi::Array::empty()
 }
 
+/// No-op resolve_host_contract_interface callback.
+unsafe extern "C" fn noop_resolve_host_contract_interface(
+    _this: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractInterface {
+    core::ptr::null()
+}
+
 // --- Registry callback -------------------------------------------------------
 
 /// A register_contract callback that stores vtable entries into the thread-local ERROR_REGISTRY.
@@ -259,6 +277,7 @@ fn make_host_interface() -> HostInterface {
         resolve_contract: noop_resolve_contract,
         call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
     }
@@ -465,6 +484,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         resolve_contract: chain_resolve_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
     };

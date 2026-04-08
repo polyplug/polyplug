@@ -132,6 +132,15 @@ unsafe extern "C" fn noop_get_dependencies(
     polyplug_abi::Array::empty()
 }
 
+/// No-op resolve_host_contract_interface callback.
+unsafe extern "C" fn noop_resolve_host_contract_interface(
+    _this: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> *const polyplug_abi::HostContractInterface {
+    core::ptr::null()
+}
+
 // ─── Test ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -345,6 +354,7 @@ fn test_panic_returns_abi_error_panic() {
         resolve_contract: noop_resolve_contract,
         call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
+        resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
     };
