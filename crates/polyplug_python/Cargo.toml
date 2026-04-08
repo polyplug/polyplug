@@ -19,6 +19,7 @@ pyo3 = { workspace = true }
 [dev-dependencies]
 polyplug = { workspace = true }
 polyplug_abi = { workspace = true }
+polyplug_utils = { workspace = true }
 tempfile = { workspace = true }
 criterion = { workspace = true }
 

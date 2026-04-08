@@ -12,12 +12,14 @@ use tempfile::TempDir;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
-use polyplug::loader::manifest::ManifestData;
+use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
-use polyplug::runtime::RuntimeBuilder;
+use polyplug::runtime_builder::RuntimeBuilder;
 use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractId;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
+use polyplug_utils::bundle_id;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -28,7 +30,7 @@ fn write_bundle(name: &str, content: &str) -> (TempDir, PathBuf) {
     let path: PathBuf = dir.path().join("bundle.py");
     fs::write(&path, content).expect("write bundle.py");
 
-    let bundle_id: u64 = polyplug_abi::bundle_id(name);
+    let bundle_id: u64 = bundle_id(name);
     let manifest: String = format!(
         r#"id = {}
 name = "{}"
@@ -53,7 +55,7 @@ fn make_runtime() -> Runtime {
 /// Create a ManifestData for a Python bundle.
 fn make_manifest(path: &PathBuf, name: &str) -> ManifestData {
     ManifestData {
-        id: polyplug_abi::bundle_id(name),
+        id: bundle_id(name),
         name: name.to_owned(),
         runtime: "python".to_owned(),
         file: path.file_name().unwrap().to_string_lossy().into_owned(),
@@ -288,7 +290,7 @@ fn test_valid_plugin_registers_in_registry() {
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load failed: {result:?}");
     // The plugin registers with contract_id = 0xDEADBEEFCAFEBABE
-    let contract_id: u64 = 0xDEADBEEFCAFEBABE;
+    let contract_id: GuestContractId = GuestContractId::from_u64(0xDEADBEEFCAFEBABE);
     let handle: Result<PluginHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
     assert!(handle.is_ok(), "plugin must be registered in registry");
@@ -519,14 +521,14 @@ name = "imports_helper"
 runtime = "python"
 file = "bundle.py"
 "#,
-        polyplug_abi::bundle_id("imports_helper")
+        bundle_id("imports_helper")
     );
     fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = ManifestData {
-        id: polyplug_abi::bundle_id("imports_helper"),
+        id: bundle_id("imports_helper"),
         name: "imports_helper".to_owned(),
         runtime: "python".to_owned(),
         file: "bundle.py".to_owned(),
@@ -566,14 +568,14 @@ name = "uses_site_pkg"
 runtime = "python"
 file = "bundle.py"
 "#,
-        polyplug_abi::bundle_id("uses_site_pkg")
+        bundle_id("uses_site_pkg")
     );
     fs::write(dir.path().join("manifest.toml"), &manifest_toml).expect("write manifest.toml");
 
     let loader: PythonLoader = PythonLoader::default();
     let runtime: Runtime = make_runtime();
     let manifest: ManifestData = ManifestData {
-        id: polyplug_abi::bundle_id("uses_site_pkg"),
+        id: bundle_id("uses_site_pkg"),
         name: "uses_site_pkg".to_owned(),
         runtime: "python".to_owned(),
         file: "bundle.py".to_owned(),
