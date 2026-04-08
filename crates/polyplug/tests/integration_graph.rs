@@ -12,12 +12,11 @@
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch,
+    PluginContext, PluginDescriptor, PluginHandle, StringView, Version,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
-use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+use polyplug_utils::{GuestContractId, BundleId};
 
 /// Path to the compiled test_plugin shared library -- set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -243,8 +242,9 @@ fn test_single_contract_registration_and_lookup() {
         interface.contract_id, test_add_id,
         "interface contract_id must match"
     );
+    // SAFETY: dispatch.native is valid because dispatch_type is Native
     assert_eq!(
-        interface.dispatch.native.function_count, 1,
+        unsafe { interface.dispatch.native.function_count }, 1,
         "test.add must have 1 function"
     );
 
@@ -284,8 +284,8 @@ fn test_duplicate_registration_allowed() {
         contract_id: test_add_id,
         contract_version: Version { major: 1, minor: 0, patch: 0 },
         dispatch_type: polyplug_abi::DispatchType::Native,
-        create_instance: |_| GuestContractInstance::null(),
-        destroy_instance: |_, _| {},
+        create_instance: unsafe extern "C" fn(_: *const HostInterface, _: *const ()) -> GuestContractInstance { GuestContractInstance::null() },
+        destroy_instance: unsafe extern "C" fn(_: *const HostInterface, _: GuestContractInstance) {},
         dispatch: polyplug_abi::DispatchMechanisms {
             native: polyplug_abi::NativeDispatch {
                 function_count: 0,

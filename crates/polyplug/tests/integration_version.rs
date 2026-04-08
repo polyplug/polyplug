@@ -2,16 +2,12 @@
 
 #![allow(clippy::expect_used)]
 
-use std::collections::HashMap;
-
 use polyplug::compatibility::Compatibility;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
-use polyplug::loader::ManifestData;
-use polyplug::loader::RawManifestDependency;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_utils::{guest_contract_id, GuestContractId};
+use polyplug_utils::guest_contract_id;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,37 +72,39 @@ fn write_bundle_manifest(
     let so_name: String = format!("{bundle_name}.so");
     std::fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
 
-    let function_count: HashMap<String, u32> = function_count_entries
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect();
+    // Build TOML manifest string directly
+    let mut manifest_toml: String = format!(
+        "id = 1\nname = \"{}\"\nruntime = \"test-noop\"\nfile = \"{}\"\nversion = \"{}\"\n",
+        bundle_name, so_name, version
+    );
 
-    let dependencies: Vec<RawManifestDependency> = deps
-        .iter()
-        .map(|(contract, cid, min_ver)| RawManifestDependency {
-            kind: "contract".to_owned(),
-            contract: contract.to_string(),
-            contract_id: GuestContractId::from_raw(*cid),
-            min_version: min_ver.to_string(),
-            bundle: None,
-            bundle_id: None,
-        })
-        .collect();
+    if !provides.is_empty() {
+        manifest_toml.push_str("provides = [\n");
+        for p in provides {
+            manifest_toml.push_str(&format!("  \"{}\",\n", p));
+        }
+        manifest_toml.push_str("]\n");
+    }
 
-    let manifest: ManifestData = ManifestData {
-        id: 1,
-        name: bundle_name.to_owned(),
-        runtime: "test-noop".to_owned(),
-        file: so_name,
-        version: version.to_owned(),
-        provides: provides.iter().map(|s| s.to_string()).collect(),
-        function_count,
-        dependencies,
-        needs_reinit_on_dep_reload: false,
-        path: PathBuf::new(),
-    };
+    if !function_count_entries.is_empty() {
+        manifest_toml.push_str("function_count = {\n");
+        for (k, v) in function_count_entries {
+            manifest_toml.push_str(&format!("  \"{}\" = {},\n", k, v));
+        }
+        manifest_toml.push_str("}\n");
+    }
 
-    fs::write(bundle_dir.join("manifest.toml"), toml::to_string(&manifest).expect("serialize manifest")).expect("write manifest.toml");
+    if !deps.is_empty() {
+        manifest_toml.push_str("[[dependency]]\n");
+        for (contract, cid, min_ver) in deps {
+            manifest_toml.push_str(&format!(
+                "kind = \"contract\"\ncontract = \"{}\"\ncontract_id = {}\nmin_version = \"{}\"\n",
+                contract, cid, min_ver
+            ));
+        }
+    }
+
+    fs::write(bundle_dir.join("manifest.toml"), manifest_toml).expect("write manifest.toml");
 
     bundle_dir
 }

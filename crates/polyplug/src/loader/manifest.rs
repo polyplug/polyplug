@@ -108,7 +108,7 @@ where
 }
 
 /// Raw dependency declaration from a `[[dependency]]` table in `manifest.toml`.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct RawManifestDependency {
     pub kind: String,
     pub contract: String,
@@ -172,7 +172,7 @@ pub enum ManifestDependency {
 /// Data parsed from a bundle's `manifest.toml`.
 ///
 /// Only `runtime` is read in this epic. Additional fields are added in Epic 12.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ManifestData {
     /// The runtime required to load this bundle.
     /// Matched against `BundleLoader::runtime_name()` during dispatch.

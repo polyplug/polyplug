@@ -7,11 +7,12 @@ use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
 use polyplug_abi::StringView;
+use polyplug_utils::guest_contract_id;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
 use polyplug_dotnet::HostfxrLocation;
@@ -73,8 +74,8 @@ fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
     rt.load_bundle(std::path::Path::new(CSHARP_DLL))
 }
 
-fn get_vtable(rt: &Runtime) -> *const PluginInterface {
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
+    let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: PluginHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
@@ -130,7 +131,7 @@ fn integration_dotnet_add() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 
@@ -161,7 +162,7 @@ fn integration_dotnet_add_primitive() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add_primitive must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add_primitive must return ABI_OK");
     assert_eq!(out, 30_u32, "add_primitive(10, 20) must equal 30");
 }
 
@@ -191,7 +192,7 @@ fn integration_dotnet_version_string() {
             &mut out_view as *mut StringView as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "version must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "version must return ABI_OK");
     // SAFETY: out_view.ptr points to valid UTF-8 bytes for out_view.len bytes (C# static array).
     let version_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
     assert_eq!(version_bytes, b"1.0", "version() must return \"1.0\"");
@@ -223,7 +224,7 @@ fn integration_dotnet_reset() {
             &mut dummy_out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "reset must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "reset must return ABI_OK");
 }
 
 #[test]

@@ -3,16 +3,15 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
-use polyplug::error::LoaderError;
-use polyplug::error::RuntimeError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
+use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_utils::guest_contract_id;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 
@@ -73,15 +72,15 @@ fn js_quickjs_load_bundle_and_call() {
         result.err()
     );
 
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: PluginHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
-    let vtable_ptr: *const PluginInterface = rt
+    let vtable_ptr: *const GuestContractInterface = rt
         .resolve_plugin(handle)
         .expect("handle must be valid")
         .vtable();
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert_eq!(
         vtable.function_count, 4,
         "test.add must register 4 functions"
@@ -102,6 +101,6 @@ fn js_quickjs_load_bundle_and_call() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, ABI_OK, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }

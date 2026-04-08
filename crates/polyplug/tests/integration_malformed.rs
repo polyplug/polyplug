@@ -31,19 +31,11 @@ fn cleanup(dir: &PathBuf) {
 }
 
 fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
-    let manifest: ManifestData = ManifestData {
-        id: 1,
-        name: name.to_owned(),
-        runtime: runtime.to_owned(),
-        file: file.to_owned(),
-        version: String::new(),
-        provides: Vec::new(),
-        function_count: HashMap::new(),
-        dependencies: Vec::new(),
-        needs_reinit_on_dep_reload: false,
-        path: PathBuf::new(),
-    };
-    fs::write(dir.join("manifest.toml"), toml::to_string(&manifest).expect("serialize manifest")).expect("write manifest");
+    let manifest_toml: String = format!(
+        "id = 1\nname = \"{}\"\nruntime = \"{}\"\nfile = \"{}\"\n",
+        name, runtime, file
+    );
+    fs::write(dir.join("manifest.toml"), manifest_toml).expect("write manifest");
 }
 
 #[test]

@@ -7,10 +7,9 @@
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch,
+    PluginContext, PluginDescriptor, PluginHandle, StringView,
 };
-use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+use polyplug_utils::{GuestContractId, BundleId};
 
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
@@ -258,7 +257,7 @@ fn test_dispatch_add_function() {
         )
     };
 
-    assert_eq!(call_result.code, AbiErrorCode::Ok as u32, "add function must return ABI_OK");
+    assert_eq!(call_result.code, AbiErrorCode::Ok, "add function must return ABI_OK");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     // Leak the library.
@@ -315,7 +314,7 @@ fn test_dispatch_add_with_zero() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok as u32);
+    assert_eq!(init_result.code, AbiErrorCode::Ok);
 
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
     let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
@@ -398,7 +397,7 @@ fn test_dispatch_add_wrapping_overflow() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok as u32);
+    assert_eq!(init_result.code, AbiErrorCode::Ok);
 
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
     let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {

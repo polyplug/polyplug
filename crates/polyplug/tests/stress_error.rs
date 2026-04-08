@@ -14,13 +14,12 @@ use libloading::os::unix::RTLD_LAZY;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
-    DispatchType, NativeDispatch,
+    PluginContext, PluginDescriptor, PluginHandle, StringView,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_abi::tracking::TrackingAllocator;
-use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
+use polyplug_utils::{GuestContractId, BundleId};
 
 // --- Plugin environment variable ---------------------------------------------
 
@@ -361,7 +360,7 @@ fn stress_error_code_and_message_received_correctly() {
         unsafe { core::mem::transmute(fn_ptr) };
 
     let mut out: AbiError = AbiError {
-        code: 0_u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     };
 
@@ -376,7 +375,7 @@ fn stress_error_code_and_message_received_correctly() {
     );
 
     // The actual error is written to *out.
-    assert_eq!(out.code, 99_u32, "error code must be 99");
+    assert_eq!(out.code, AbiErrorCode::from_u32(99), "error code must be 99");
     assert_eq!(out.message.len, 22_usize, "message length must be 22");
 
     // Read the message bytes.
@@ -483,7 +482,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     };
 
     let mut out: AbiError = AbiError {
-        code: 0_u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     };
 
@@ -545,7 +544,7 @@ fn stress_error_message_lifetime_valid_during_read() {
         unsafe { core::mem::transmute(fn_ptr) };
 
     let mut out: AbiError = AbiError {
-        code: 0_u32,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     };
 
@@ -557,7 +556,7 @@ fn stress_error_message_lifetime_valid_during_read() {
         call_result.code, AbiErrorCode::Ok,
         "dispatch wrapper must return ABI_OK"
     );
-    assert_eq!(out.code, 99_u32, "error code must be 99");
+    assert_eq!(out.code, AbiErrorCode::from_u32(99), "error code must be 99");
     assert_eq!(out.message.len, 22_usize, "message length must be 22");
 
     // Read the message 1000 times to verify pointer stability.

@@ -1499,6 +1499,7 @@ dependencies = [
  "pelite",
  "polyplug",
  "polyplug_abi",
+ "polyplug_utils",
  "tempfile",
 ]
 
@@ -1562,6 +1563,7 @@ dependencies = [
  "criterion",
  "polyplug",
  "polyplug_abi",
+ "polyplug_utils",
  "pyo3",
  "tempfile",
 ]
