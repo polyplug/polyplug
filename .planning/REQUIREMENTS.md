@@ -81,7 +81,7 @@
 - [ ] **CG-02**: Update codegen to generate instance wrappers
 - [ ] **CG-03**: Generated instance wrappers hold `interface` + `instance` pointer
 - [ ] **CG-04**: Generated wrappers call `create_instance`/`destroy_instance`
-- [ ] **CG-05**: Update host contract vtable generation for `HostContractInterface`
+- [x] **CG-05**: Update host contract vtable generation for `HostContractInterface`
 - [x] **CG-06**: Generate `singleton` support for host contracts
 
 ### Category: Cleanup
