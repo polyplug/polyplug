@@ -238,7 +238,7 @@ Plans:
 | 12. SDK Instance Model | 4/4 | Complete | 2026-04-08 |
 | 13. C++ Codegen Modernization | 2/2 | Complete   | 2026-04-08 |
 | 14. Hot-Reload Documentation | 1/1 | Complete   | 2026-04-08 |
-| 15. Final Cleanup | 0/8 | Pending | — |
+| 15. Final Cleanup | 0/9 | Pending | — |
 
 ## Dependencies
 
@@ -344,12 +344,12 @@ Plans:
 **Success Criteria** (what must be TRUE):
 1. No "vtable" naming remains in codebase (excluding ABI fields and planning artifacts)
 2. All tests use new instance model and naming
-**Plans:** 8 plans in 5 waves
+**Plans:** 9 plans in 5 waves
 
 Wave Structure:
 - Wave 1: Generator updates (Plan 01)
 - Wave 2: Regenerate examples (Plan 02)
-- Wave 3: Source, tests, SDKs, fixtures (Plans 03-06) - parallel
+- Wave 3: Source, tests, SDKs, fixtures, polyplugc tests (Plans 03-06, 04b) - parallel
 - Wave 4: Documentation (Plan 07)
 - Wave 5: Verification (Plan 08)
 
@@ -357,7 +357,8 @@ Plans:
 - [ ] 15-01-PLAN.md — Update generator files to use interface terminology [Wave 1]
 - [ ] 15-02-PLAN.md — Regenerate all examples after generator updates [Wave 2]
 - [ ] 15-03-PLAN.md — Update runtime.rs test helper functions and variables [Wave 3]
-- [ ] 15-04-PLAN.md — Update test files with interface terminology [Wave 3]
+- [ ] 15-04-PLAN.md — Update polyplug test files with interface terminology [Wave 3]
+- [ ] 15-04b-PLAN.md — Update polyplugc test files with interface terminology [Wave 3]
 - [ ] 15-05-PLAN.md — Update SDK files with interface terminology [Wave 3]
 - [ ] 15-06-PLAN.md — Update test fixtures with interface terminology [Wave 3]
 - [ ] 15-07-PLAN.md — Update documentation files [Wave 4]
@@ -382,3 +383,4 @@ Plans:
 *Phase 12 plan 03 split into 03a/03b per checker feedback: 2026-04-08*
 *Phase 13 plans added: 2026-04-08*
 *Phase 15 plans added: 2026-04-08*
+*Phase 15 plan 04b added for polyplugc tests: 2026-04-08*
