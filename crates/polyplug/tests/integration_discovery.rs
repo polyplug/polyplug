@@ -12,7 +12,7 @@ use polyplug::loader::ManifestData;
 use polyplug::loader::RawManifestDependency;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
-use polyplug_utils::guest_contract_id;
+use polyplug_utils::GuestContractId;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,8 +29,8 @@ fn write_bundle_with_manifest(dir: &Path, manifest: &ManifestData) {
 fn chain_loads_in_dependency_order() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_x: u64 = guest_contract_id("contract.X", 1);
-    let cid_y: u64 = guest_contract_id("contract.Y", 1);
+    let cid_x: GuestContractId = GuestContractId::new("contract.X", 1);
+    let cid_y: GuestContractId = GuestContractId::new("contract.Y", 1);
 
     write_bundle_with_manifest(
         tmp.path(),
@@ -130,7 +130,7 @@ fn empty_manifest() -> ManifestData {
 fn missing_dep_fails_before_load() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_x: u64 = guest_contract_id("contract.X", 1);
+    let cid_x: GuestContractId = GuestContractId::new("contract.X", 1);
 
     write_bundle_with_manifest(
         tmp.path(),
@@ -166,8 +166,8 @@ fn missing_dep_fails_before_load() {
 fn cycle_detected_with_clear_error() {
     let tmp: TempDir = TempDir::new().expect("tmp dir");
 
-    let cid_a: u64 = guest_contract_id("contract.A", 1);
-    let cid_b: u64 = guest_contract_id("contract.B", 1);
+    let cid_a: GuestContractId = GuestContractId::new("contract.A", 1);
+    let cid_b: GuestContractId = GuestContractId::new("contract.B", 1);
 
     write_bundle_with_manifest(
         tmp.path(),
