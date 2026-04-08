@@ -43,12 +43,12 @@
 
 ### Category: Hot-Reload
 
-- [ ] **HR-01**: Remove `wait_for_quiescence` with `Arc::strong_count`
-- [ ] **HR-02**: Update hot-reload to use callback-only model
-- [ ] **HR-03**: `ReloadPhase::Preparing` fires before interface swap
-- [ ] **HR-04**: Host destroys all instances in callback
-- [ ] **HR-05**: Runtime swaps interfaces after callback returns
-- [ ] **HR-06**: Warning callback if instances remain (UB warning)
+- [x] **HR-01**: Remove `wait_for_quiescence` with `Arc::strong_count`
+- [x] **HR-02**: Update hot-reload to use callback-only model
+- [x] **HR-03**: `ReloadPhase::Preparing` fires before interface swap
+- [x] **HR-04**: Host destroys all instances in callback
+- [x] **HR-05**: Runtime swaps interfaces after callback returns
+- [x] **HR-06**: Warning callback if instances remain (UB warning)
 
 ### Category: Host Contracts
 
