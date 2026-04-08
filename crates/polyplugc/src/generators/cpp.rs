@@ -358,7 +358,7 @@ fn generate_cpp_guest_plugin_interface(
     out.push_str("}\n\n");
 
     out.push_str(&format!(
-        "static GuestContractInterface {}_VTABLE = {{\n",
+        "static GuestContractInterface {}_INTERFACE = {{\n",
         plugin_upper
     ));
     out.push_str(&format!("    {}_CONTRACT_ID,\n", plugin_upper));
@@ -443,7 +443,7 @@ fn generate_cpp_guest_contract_interface(
     out.push_str("}\n\n");
 
     // VTable static
-    out.push_str(&format!("static GuestContractInterface {}_VTABLE = {{\n", upper));
+    out.push_str(&format!("static GuestContractInterface {}_INTERFACE = {{\n", upper));
     out.push_str(&format!("    {}_CONTRACT_ID,\n", upper));
     out.push_str(&format!(
         "    Version{{ {}U, {}U, {}U }},  // contract_version\n",
@@ -723,7 +723,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
             out.push_str("    };\n");
 
             out.push_str(&format!(
-                "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+                "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
                 upper = plugin_upper
             ));
             out.push_str(&format!(
@@ -782,7 +782,7 @@ fn generate_init_hpp_register_contract(
     out.push_str("    };\n");
 
     out.push_str(&format!(
-        "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_VTABLE);\n",
+        "    AbiError err_{upper} = host->register_contract(host, &desc_{upper}, &polyplug_plugin::{upper}_INTERFACE);\n",
         upper = upper
     ));
     out.push_str(&format!(
