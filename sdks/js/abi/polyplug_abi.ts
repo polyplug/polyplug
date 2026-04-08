@@ -94,19 +94,40 @@ export interface PluginHandle {
 }
 
 /**
- *  Opaque host context passed to plugin functions via rt_ctx parameter.
- * 
- *  Contains the runtime pointer and the bundle_id of the calling bundle.
- *  The actual implementation is in the polyplug crate; this definition
- *  establishes the ABI layout.
- * 
- *  OWNERSHIP: `'static`, lives as long as the runtime.
+ *  Guest Contract Instance — opaque handle to a guest contract instance.
+ *
+ *  OWNERSHIP: This is an owned handle - the instance must be destroyed via
+ *  `GuestContractInterface::destroy_instance` before hot-reload.
+ *
+ *  # Layout
+ *  - `data`: Opaque instance pointer (owned by guest)
+ *  - `contract_id`: Contract ID for zero-overhead dispatch
  */
-export interface HostContext {
-    /**  Opaque pointer to the Runtime. Never dereferenced by plugins. */
-    runtime: bigint;
-    /**  Bundle ID of the calling bundle for dependency enforcement. */
-    bundle_id: bigint;
+export interface GuestContractInstance {
+    /**  Opaque instance data pointer. Guest owns the memory. */
+    data: bigint;
+    /**  Contract ID for zero-overhead dispatch. */
+    contract_id: bigint;
+}
+
+/**
+ *  Host Contract Instance — opaque handle to a host contract instance.
+ *
+ *  OWNERSHIP: For singleton host contracts, the same instance is returned
+ *  for all callers. For multi-instance, a new instance each time.
+ */
+export interface HostContractInstance {
+    /**  Opaque instance data pointer. Host owns the memory. */
+    data: bigint;
+}
+
+/**
+ *  Version — three-component semantic version (major.minor.patch).
+ */
+export interface Version {
+    major: number;
+    minor: number;
+    patch: number;
 }
 
 /**
@@ -162,13 +183,13 @@ export interface VmDispatch {
 
 /**
  *  Union of dispatch mechanisms — use based on `dispatch_type`.
- * 
+ *
  *  # Safety
- *  Access the correct variant based on `PluginInterface::dispatch_type`:
+ *  Access the correct variant based on `GuestContractInterface::dispatch_type`:
  *  - `dispatch_type == Native` → access `.native`
  *  - `dispatch_type == VirtualMachine` → access `.vm`
  */
-export type PluginDispatch =
+export type GuestContractDispatch =
     | { native: NativeDispatch }
     | { vm: VmDispatch }
 ;
@@ -193,54 +214,143 @@ export interface PluginDescriptor {
 }
 
 /**
- *  Plugin interface — one per contract implemented by a plugin.
- * 
+ *  Guest Contract Interface — one per contract implemented by a guest (plugin).
+ *
  *  OWNERSHIP: Must be `'static` or intentionally leaked.
  *  Never stack-allocated. Never freed while runtime lives.
- * 
+ *
+ *  # Instance Lifecycle
+ *  - `create_instance`: Factory function to create new instances
+ *  - `destroy_instance`: Destructor to clean up instances before hot-reload
+ *
  *  # Dispatch
- *  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id]`
- *  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(...)`
+ *  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
+ *  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
  */
-export interface PluginInterface {
-    /**
-     *  Pointer to the host context for this plugin.
-     *  Used for host function calls and dependency enforcement.
-     */
-    rt_ctx: bigint;
-    /**  FNV-1a hash of "contract_name@major_version". */
+export interface GuestContractInterface {
+    /**  FNV-1a hash of "guest_contract:name@major_version". */
     contract_id: bigint;
-    /**  minor.patch encoded as `(minor << 16 | patch)`. */
-    contract_version: number;
-    /**  Number of valid entries in the dispatch array. */
-    function_count: number;
+    /**  Contract version (major, minor, patch). */
+    contract_version: Version;
     /**  Dispatch mechanism type (Native or VirtualMachine). */
     dispatch_type: DispatchType;
+    /**
+     *  Create a new instance of this contract.
+     *  Factory function called by host to create instances.
+     *  Returns null handle on failure.
+     */
+    create_instance: (host: bigint, args: bigint) => GuestContractInstance;
+    /**
+     *  Destroy an instance of this contract.
+     *  MUST be called before hot-reload for all instances.
+     */
+    destroy_instance: (host: bigint, instance: GuestContractInstance) => void;
     /**  Union of dispatch mechanisms — access based on dispatch_type. */
-    dispatch: PluginDispatch;
+    dispatch: GuestContractDispatch;
 }
 
 /**
- *  Host capabilities passed to every plugin at init time.
- * 
+ *  Host Interface — function table passed to guests during initialization.
+ *
  *  OWNERSHIP: `'static`, lives as long as the runtime.
- * 
- *  All functions take `rt_ctx` as first parameter - an opaque pointer to the Runtime.
- *  This allows each Runtime to have its own isolated state (no global registry).
+ *
+ *  # Self-passing pattern
+ *  Each function receives the interface pointer as its first parameter,
+ *  allowing guests to call: `host->find_by_contract(host, id, ver)`
+ *  SDKs hide this pattern: `host.find_by_contract(id, ver)`
+ *
+ *  All functions are safe to call from any thread. The runtime handles
+ *  internal synchronization.
  */
-export interface HostVTable {
-    register_plugin: (rt_ctx: bigint, descriptor: bigint, vtable: bigint) => AbiError;
-    alloc: (rt_ctx: bigint, size: number, align: number) => bigint;
-    free: (rt_ctx: bigint, ptr: bigint, size: number, align: number) => void;
-    find_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number) => PluginHandle;
-    find_by_bundle: (rt_ctx: bigint, bundle_id: bigint, contract_id: bigint, min_version: number) => PluginHandle;
-    find_all_by_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number, out: bigint, out_cap: number) => number;
-    resolve_plugin: (rt_ctx: bigint, handle: PluginHandle) => bigint;
-    /**
-     *  Get host contract vtable by contract_id and minimum version.
-     *  Returns null if no host contract matches the criteria.
-     */
-    get_host_contract: (rt_ctx: bigint, contract_id: bigint, min_version: number) => bigint;
+export interface HostInterface {
+    /**  Opaque pointer to Runtime. Guests must NOT free or modify this pointer. */
+    runtime: bigint;
+    /**  Register a guest contract implementation. */
+    register_contract: (this: bigint, descriptor: bigint, iface: bigint) => AbiError;
+    /**  Allocate memory using the host allocator. */
+    alloc: (this: bigint, size: number, align: number) => bigint;
+    /**  Free memory allocated via `alloc`. */
+    free: (this: bigint, ptr: bigint, size: number, align: number) => void;
+    /**  Find a guest contract by contract_id and minimum version. */
+    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => PluginHandle;
+    /**  Find all guest contracts matching contract_id and minimum version. */
+    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<PluginHandle>;
+    /**  Resolve a ContractHandle to a GuestContractInterface pointer. */
+    resolve_contract: (this: bigint, handle: PluginHandle) => bigint;
+    /**  Call a method on a guest contract instance (cross-dispatch). */
+    call_guest_method: (this: bigint, instance: GuestContractInstance, method_id: number, args: bigint, out: bigint) => AbiError;
+    /**  Get a host contract instance by contract_id and minimum version. */
+    get_host_contract: (this: bigint, contract_id: bigint, min_version: number) => HostContractInstance;
+    /**  List all loaded bundles. */
+    list_bundles: (this: bigint) => Array<bigint>;
+    /**  Get dependencies for the calling bundle. */
+    get_dependencies: (this: bigint) => Array<DependencyInfo>;
+}
+
+/**
+ *  Runtime Interface — function table returned to host from polyplug_runtime_create().
+ *
+ *  OWNERSHIP: The struct is allocated by `polyplug_runtime_create()`. The host owns
+ *  the pointer and must call `destroy()` to free the runtime and interface.
+ *
+ *  # Self-passing pattern
+ *  Each function receives the interface pointer as its first parameter,
+ *  allowing hosts to call: `rt->load_bundle(rt, path)`
+ *  SDKs hide this pattern: `rt.load_bundle(path)`
+ */
+export interface RuntimeInterface {
+    /**  Opaque pointer to Runtime. */
+    runtime: bigint;
+    /**  Load a plugin bundle from the given path. */
+    load_bundle: (this: bigint, path: bigint) => AbiError;
+    /**  Reload a bundle (hot-reload). */
+    reload_bundle: (this: bigint, bundle_id: bigint) => AbiError;
+    /**  Unload a bundle. */
+    unload_bundle: (this: bigint, bundle_id: bigint) => AbiError;
+    /**  Find a guest contract by contract_id and minimum version. */
+    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => PluginHandle;
+    /**  Find all guest contracts matching contract_id and minimum version. */
+    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<PluginHandle>;
+    /**  Resolve a ContractHandle to a GuestContractInterface pointer. */
+    resolve_contract: (this: bigint, handle: PluginHandle) => bigint;
+    /**  Get a host contract instance by contract_id and minimum version. */
+    get_host_contract: (this: bigint, contract_id: bigint, min_version: number) => HostContractInstance;
+    /**  Get the last error message. */
+    get_last_error: (this: bigint) => StringView;
+    /**  List all loaded bundles. */
+    list_bundles: (this: bigint) => Array<bigint>;
+    /**  Get dependencies (returns empty array for host context). */
+    get_dependencies: (this: bigint) => Array<DependencyInfo>;
+    /**  Destroy the runtime and free this interface. */
+    destroy: (this: bigint) => void;
+}
+
+/**
+ *  Dependency Info — information about a bundle dependency.
+ */
+export interface DependencyInfo {
+    /**  Bundle ID of the dependency. */
+    bundle_id: bigint;
+    /**  Contract ID required from the dependency. */
+    contract_id: bigint;
+    /**  Minimum version required. */
+    min_version: number;
+}
+
+/**
+ *  Opaque host context passed to plugin functions via rt_ctx parameter.
+ *
+ *  Contains the runtime pointer and the bundle_id of the calling bundle.
+ *  The actual implementation is in the polyplug crate; this definition
+ *  establishes the ABI layout.
+ *
+ *  OWNERSHIP: `'static`, lives as long as the runtime.
+ */
+export interface HostContext {
+    /**  Opaque pointer to the Runtime. Never dereferenced by plugins. */
+    runtime: bigint;
+    /**  Bundle ID of the calling bundle for dependency enforcement. */
+    bundle_id: bigint;
 }
 
 /**
@@ -414,10 +524,15 @@ export const ABI_EXPECTED_SIZES: {
     DispatchType: number;
     NativeDispatch: number;
     VmDispatch: number;
-    PluginDispatch: number;
-    PluginInterface: number;
+    GuestContractDispatch: number;
+    GuestContractInterface: number;
     PluginDescriptor: number;
-    HostVTable: number;
+    HostInterface: number;
+    RuntimeInterface: number;
+    GuestContractInstance: number;
+    HostContractInstance: number;
+    Version: number;
+    DependencyInfo: number;
     PluginContext: number;
     ExtensionEntry: number;
     RuntimeConfig: number;
@@ -430,10 +545,15 @@ export const ABI_EXPECTED_SIZES: {
     DispatchType: 4,
     NativeDispatch: 8,
     VmDispatch: 16,
-    PluginDispatch: 16,
-    PluginInterface: 48,
+    GuestContractDispatch: 16,
+    GuestContractInterface: 56,
     PluginDescriptor: 48,
-    HostVTable: 64,
+    HostInterface: 88,
+    RuntimeInterface: 96,
+    GuestContractInstance: 16,
+    HostContractInstance: 8,
+    Version: 12,
+    DependencyInfo: 24,
     PluginContext: 32,
     ExtensionEntry: 16,
     RuntimeConfig: 40,
@@ -503,6 +623,15 @@ export function validateAbi(): void {
     // Validate HostContext: runtime (bigint) + bundle_id (bigint)
     validateAbiStruct({ runtime: 0n, bundle_id: 0n }, 'HostContext', [['runtime', 'bigint'], ['bundle_id', 'bigint']]);
 
-    // Validate PluginInterface: rt_ctx (bigint) + contract_id (bigint) + contract_version (number) + function_count (number) + dispatch_type (number) + dispatch (object)
-    validateAbiStruct({ rt_ctx: 0n, contract_id: 0n, contract_version: 0, function_count: 0, dispatch_type: 0, dispatch: {} }, 'PluginInterface', [['rt_ctx', 'bigint'], ['contract_id', 'bigint'], ['contract_version', 'number'], ['function_count', 'number'], ['dispatch_type', 'number']]);
+    // Validate GuestContractInstance: data (bigint) + contract_id (bigint)
+    validateAbiStruct({ data: 0n, contract_id: 0n }, 'GuestContractInstance', [['data', 'bigint'], ['contract_id', 'bigint']]);
+
+    // Validate HostContractInstance: data (bigint)
+    validateAbiStruct({ data: 0n }, 'HostContractInstance', [['data', 'bigint']]);
+
+    // Validate Version: major (number) + minor (number) + patch (number)
+    validateAbiStruct({ major: 0, minor: 0, patch: 0 }, 'Version', [['major', 'number'], ['minor', 'number'], ['patch', 'number']]);
+
+    // Validate GuestContractInterface: contract_id (bigint) + contract_version (Version) + dispatch_type (number) + create_instance + destroy_instance + dispatch
+    validateAbiStruct({ contract_id: 0n, contract_version: { major: 0, minor: 0, patch: 0 }, dispatch_type: 0, create_instance: () => ({ data: 0n, contract_id: 0n }), destroy_instance: () => {}, dispatch: {} }, 'GuestContractInterface', [['contract_id', 'bigint'], ['dispatch_type', 'number']]);
 }
