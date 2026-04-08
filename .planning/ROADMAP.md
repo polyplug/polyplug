@@ -237,7 +237,7 @@ Plans:
 | 11. Guest Calling Convention | 10/10 | Complete   | 2026-04-07 |
 | 12. SDK Instance Model | 4/4 | Complete | 2026-04-08 |
 | 13. C++ Codegen Modernization | 2/2 | Complete   | 2026-04-08 |
-| 14. Hot-Reload Documentation | 0/0 | Pending | — |
+| 14. Hot-Reload Documentation | 1/1 | Complete   | 2026-04-08 |
 | 15. Final Cleanup | 0/0 | Pending | — |
 
 ## Dependencies
@@ -333,7 +333,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
 1. Phase 04 VERIFICATION.md updated with HR-01 through HR-06 verified
 2. Hot-reload callback model documented with evidence
-**Plans:** 0 plans (pending)
+**Plans:** 1/1 plans complete
 
 ### Phase 15: Final Cleanup
 
