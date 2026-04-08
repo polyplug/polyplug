@@ -232,8 +232,9 @@ fn test_dispatch_add_function() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
+    // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
     assert_eq!(
-        interface.dispatch.native.function_count, 1,
+        unsafe { interface.dispatch.native.function_count }, 1,
         "test.add interface must have 1 function"
     );
 
@@ -243,6 +244,7 @@ fn test_dispatch_add_function() {
 
     // SAFETY: fn_ptr is function 0 in the vtable. args and out are correctly typed.
     // The function has signature: extern "C" fn(*const (), *mut ()) -> AbiError
+    // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are

@@ -12,7 +12,8 @@
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView, Version,
+    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    NativeDispatch, DispatchType,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -154,6 +155,21 @@ unsafe extern "C" fn noop_get_dependencies(
     polyplug_abi::Array::empty()
 }
 
+/// No-op create_instance for fake interface.
+unsafe extern "C" fn fake_create_instance(
+    _host: *const HostInterface,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// No-op destroy_instance for fake interface.
+unsafe extern "C" fn fake_destroy_instance(
+    _host: *const HostInterface,
+    _instance: GuestContractInstance,
+) {
+}
+
 std::thread_local! {
     static GRAPH_REGISTRY: core::cell::RefCell<PluginRegistry> =
         core::cell::RefCell::new(PluginRegistry::new());
@@ -284,8 +300,8 @@ fn test_duplicate_registration_allowed() {
         contract_id: test_add_id,
         contract_version: Version { major: 1, minor: 0, patch: 0 },
         dispatch_type: polyplug_abi::DispatchType::Native,
-        create_instance: unsafe extern "C" fn(_: *const HostInterface, _: *const ()) -> GuestContractInstance { GuestContractInstance::null() },
-        destroy_instance: unsafe extern "C" fn(_: *const HostInterface, _: GuestContractInstance) {},
+        create_instance: fake_create_instance,
+        destroy_instance: fake_destroy_instance,
         dispatch: polyplug_abi::DispatchMechanisms {
             native: polyplug_abi::NativeDispatch {
                 function_count: 0,
