@@ -403,8 +403,8 @@ fn generate_lua_user_type(out: &mut String, ty: &ResolvedType) {
     out.push_str(&format!("    }} {};\n", ty.name));
 }
 
-/// Generate the full host caller for a contract with factory pattern.
-/// Creates methods table, metatable, and factory function.
+/// Generate the full host caller for a contract with instance-based RAII pattern.
+/// Creates methods table, metatable with __gc, and factory function.
 fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) {
     let contract_prefix: String = contract_name_to_prefix(&contract.name);
     let contract_struct: String = contract_name_to_struct(&contract.name);
@@ -413,7 +413,7 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
 
     // Methods table
     out.push_str(&format!(
-        "-- Methods for {contract_struct}\n",
+        "-- Methods for {contract_struct} (instance wrapper)\n",
         contract_struct = contract_struct
     ));
     out.push_str(&format!(
@@ -421,20 +421,28 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
         contract_struct = contract_struct
     ));
 
-    // is_valid method
+    // is_valid method - checks instance.data is not null
     out.push_str("    is_valid = function(self)\n");
-    out.push_str("        return self._guard ~= nil\n");
+    out.push_str("        return self._instance ~= nil and self._instance.data ~= nil\n");
     out.push_str("    end,\n\n");
 
-    // reset method
-    out.push_str("    reset = function(self)\n");
-    out.push_str("        if self._guard ~= nil then\n");
-    out.push_str("            self._guard:reset()\n");
-    out.push_str("            self._guard = nil\n");
+    // destroy method - calls destroy_instance and nullifies
+    out.push_str("    destroy = function(self)\n");
+    out.push_str("        if self._instance ~= nil and self._instance.data ~= nil then\n");
+    out.push_str("            self._interface.destroy_instance(self._host, self._instance)\n");
+    out.push_str("            self._instance.data = nil\n");
     out.push_str("        end\n");
     out.push_str("    end,\n\n");
 
-    // Contract function methods
+    // reset method - destroy existing, create new instance
+    out.push_str("    reset = function(self)\n");
+    out.push_str("        self:destroy()\n");
+    out.push_str("        if self._interface ~= nil then\n");
+    out.push_str("            self._instance = self._interface.create_instance(self._host, nil)\n");
+    out.push_str("        end\n");
+    out.push_str("    end,\n\n");
+
+    // Contract function methods - pass instance as first argument
     for func in &contract.functions {
         generate_host_caller_method(out, func, &contract_prefix, &contract_struct);
         out.push_str(",\n\n");
@@ -442,9 +450,9 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
 
     out.push_str("}\n\n");
 
-    // Metatable
+    // Metatable with __gc for automatic cleanup
     out.push_str(&format!(
-        "-- Metatable for {contract_struct}\n",
+        "-- Metatable for {contract_struct} with __gc cleanup\n",
         contract_struct = contract_struct
     ));
     out.push_str(&format!(
@@ -452,43 +460,51 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
         contract_struct = contract_struct
     ));
     out.push_str(&format!(
-        "    __index = {contract_struct}_methods\n",
+        "    __index = {contract_struct}_methods,\n",
         contract_struct = contract_struct
+    ));
+    out.push_str(&format!(
+        "    __gc = function(self) self:destroy() end\n"
     ));
     out.push_str("}\n\n");
 
-    // Factory function
+    // Factory function - resolves interface, creates instance
     out.push_str(&format!(
-        "-- Factory function for {contract_struct}\n",
+        "-- Factory function for {contract_struct} (instance wrapper)\n",
         contract_struct = contract_struct
     ));
     out.push_str(&format!(
-        "function M.{contract_struct}_create(runtime, min_version)\n",
+        "function M.{contract_struct}_create(runtime, host)\n",
         contract_struct = contract_struct
     ));
-    out.push_str("    if min_version == nil then min_version = 0 end\n");
     out.push_str(&format!(
-        "    local handle = runtime:find_by_contract({contract_id_const}, min_version)\n"
+        "    local handle = runtime:find_by_contract({contract_id_const}, 0)\n"
     ));
     out.push_str("    if handle == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str("    local guard = runtime:resolve_plugin(handle)\n");
-    out.push_str("    if guard == nil then\n");
+    out.push_str("    local interface = runtime:resolve_contract(handle)\n");
+    out.push_str("    if interface == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str("    local instance = {\n");
-    out.push_str("        _guard = guard\n");
+    out.push_str("    local instance = interface.create_instance(host, nil)\n");
+    out.push_str("    if instance == nil or instance.data == nil then\n");
+    out.push_str("        return nil\n");
+    out.push_str("    end\n");
+    out.push_str("    local wrapper = {\n");
+    out.push_str("        _interface = interface,\n");
+    out.push_str("        _instance = instance,\n");
+    out.push_str("        _host = host\n");
     out.push_str("    }\n");
     out.push_str(&format!(
-        "    setmetatable(instance, {contract_struct}_mt)\n",
+        "    setmetatable(wrapper, {contract_struct}_mt)\n",
         contract_struct = contract_struct
     ));
-    out.push_str("    return instance\n");
+    out.push_str("    return wrapper\n");
     out.push_str("end\n");
 }
 
-/// Generate a single caller method for a contract function.
+/// Generate a single caller method for a contract function (instance-based).
 fn generate_host_caller_method(
     out: &mut String,
     func: &ResolvedFunction,
@@ -499,32 +515,31 @@ fn generate_host_caller_method(
     let sig_params: String = build_lua_sig_params(func);
     out.push_str(&format!("    {} = function(self{sig_params})\n", func.name));
 
-    // Guard validity check
-    out.push_str("        if self._guard == nil then\n");
-    out.push_str("            error(\"invalid caller: guard is nil\", 2)\n");
-    out.push_str("        end\n");
-
-    // Get vtable from guard
-    out.push_str("        local vtable = self._guard:vtable()\n");
-    out.push_str("        if vtable == nil then\n");
-    out.push_str("            error(\"guard is not valid\", 2)\n");
+    // Instance validity check
+    out.push_str("        if self._instance == nil or self._instance.data == nil then\n");
+    out.push_str("            error(\"invalid caller: instance is nil\", 2)\n");
     out.push_str("        end\n");
 
     // Setup args and out
     emit_lua_host_args_setup(out, func, contract_prefix);
     emit_lua_host_out_setup(out, &func.returns);
 
-    out.push_str("        local interface = ffi.cast(\"GuestContractInterface*\", vtable)\n");
+    // Interface validity check
+    out.push_str("        if self._interface == nil then\n");
+    out.push_str("            error(\"interface is nil\", 2)\n");
+    out.push_str("        end\n");
     out.push_str(&format!(
-        "        if {fn_id} >= interface.dispatch.native.function_count then\n"
+        "        if {fn_id} >= self._interface.dispatch.native.function_count then\n"
     ));
     out.push_str("            error(\"function not available in vtable\", 2)\n");
     out.push_str("        end\n");
+
+    // Dispatch with instance as first argument
     out.push_str(&format!(
-        "        local fn_ptr = interface.dispatch.native.functions[{fn_id}]\n"
+        "        local fn_ptr = self._interface.dispatch.native.functions[{fn_id}]\n"
     ));
     out.push_str("        local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
-    out.push_str("        local err = fn(args_ptr, out_ptr)\n");
+    out.push_str("        local err = fn(self._instance, args_ptr, out_ptr)\n");
     out.push_str("        if err ~= 0 then\n");
     out.push_str("            error(\"polyplug call failed\", 2)\n");
     out.push_str("        end\n");
