@@ -27,6 +27,7 @@ use polyplug_abi::StringView;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_utils::BundleId;
+use polyplug_utils::GuestContractId;
 
 // ─── Plugin paths from build.rs ──────────────────────────────────────────────
 
@@ -88,7 +89,8 @@ unsafe extern "C" fn bench_register_callback(
 
     let result: Result<PluginHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-        let registry = cell.borrow().as_ref().expect("registry not initialized");
+        let borrowed = cell.borrow();
+        let registry = borrowed.as_ref().expect("registry not initialized");
         unsafe {
             registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id()))
         }
@@ -137,10 +139,9 @@ unsafe extern "C" fn bench_find_by_contract(
     min_version: u32,
 ) -> PluginHandle {
     BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
-        cell.borrow()
-            .as_ref()
-            .expect("registry not initialized")
-            .find(contract_id, min_version)
+        let registry = cell.borrow();
+        let reg = registry.as_ref().expect("registry not initialized");
+        reg.find(polyplug_utils::GuestContractId::from_u64(contract_id), min_version)
             .unwrap_or_else(|_| PluginHandle::null())
     })
 }
