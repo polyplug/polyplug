@@ -1519,23 +1519,32 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("        if (host == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
+    // Get the instance first
     out.push_str(&format!(
-        "        const HostContractInterface* interface = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
+        "        HostContractInstance instance = host->get_host_contract(host, 0x{:016X}ULL, min_version);\n",
+        contract.contract_id
+    ));
+    out.push_str("        if (instance.data == nullptr) {\n");
+    out.push_str("            return std::nullopt;\n");
+    out.push_str("        }\n");
+    // Resolve the interface for dispatch metadata
+    out.push_str(&format!(
+        "        const HostContractInterface* interface = host->resolve_host_contract_interface(host, 0x{:016X}ULL, min_version);\n",
         contract.contract_id
     ));
     out.push_str("        if (interface == nullptr) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return {}(interface);\n", class_name));
+    out.push_str(&format!("        return {}(interface, instance);\n", class_name));
     out.push_str("    }\n\n");
 
     // is_valid method
-    out.push_str("    /// Check if caller is valid (interface is non-null).\n");
-    out.push_str("    bool is_valid() const noexcept { return interface_ != nullptr; }\n\n");
+    out.push_str("    /// Check if caller is valid (interface and instance are non-null).\n");
+    out.push_str("    bool is_valid() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }\n\n");
 
     // Explicit bool conversion
     out.push_str("    /// Explicit bool conversion for validity check.\n");
-    out.push_str("    explicit operator bool() const noexcept { return interface_ != nullptr; }\n\n");
+    out.push_str("    explicit operator bool() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }\n\n");
 
     // Methods for each function
     for func in &contract.functions {
@@ -1545,11 +1554,12 @@ fn generate_cpp_guest_host_contract_caller(out: &mut String, contract: &Resolved
     // Private section
     out.push_str("private:\n");
     out.push_str(&format!(
-        "    explicit {}(const HostContractInterface* interface) noexcept\n",
+        "    explicit {}(const HostContractInterface* interface, HostContractInstance instance) noexcept\n",
         class_name
     ));
-    out.push_str("        : interface_(interface) {}\n\n");
+    out.push_str("        : interface_(interface), instance_(instance) {}\n\n");
     out.push_str("    const HostContractInterface* interface_;\n");
+    out.push_str("    HostContractInstance instance_;\n");
     out.push_str("};\n\n");
 }
 
@@ -1618,22 +1628,13 @@ fn generate_cpp_guest_host_contract_method(
         "                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[{fn_id}_u32]);\n"
     ));
     out.push_str(
-        "                // TODO: Host contract instance support - get_host_contract returns HostContractInstance,\n",
-    );
-    out.push_str(
-        "                // need to store and pass to dispatch. For now, pass nullptr as instance placeholder.\n",
-    );
-    out.push_str(
-        "                // Singleton contracts may work (if impl ignores instance param), multi-instance will fail.\n",
-    );
-    out.push_str(
-        "                err = fn_(HostContractInstance{nullptr}, args_ptr, out_ptr);\n",
+        "                err = fn_(instance_, args_ptr, out_ptr);\n",
     );
     out.push_str("                break;\n");
     out.push_str("            }\n");
     out.push_str("            case DispatchType::VirtualMachine: {\n");
     out.push_str(&format!(
-        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, HostContractInstance{{nullptr}}, {fn_id}_u32, args_ptr, out_ptr);\n"
+        "                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, {fn_id}_u32, args_ptr, out_ptr);\n"
     ));
     out.push_str("                break;\n");
     out.push_str("            }\n");

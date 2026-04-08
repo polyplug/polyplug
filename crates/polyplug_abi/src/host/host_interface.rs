@@ -202,6 +202,24 @@ pub struct HostInterface {
         contract_id: u64,
         min_version: u32,
     ) -> crate::host::HostContractInstance,
+    /// Resolve a host contract interface by contract_id and minimum version.
+    ///
+    /// Returns the HostContractInterface pointer for the contract.
+    /// This is needed to access dispatch metadata (dispatch_type, function_count, functions).
+    /// Returns null if no matching contract found.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `contract_id`: Host contract identifier hash
+    /// - `min_version`: Minimum version required
+    ///
+    /// # Returns
+    /// Pointer to HostContractInterface, or null if invalid/not found.
+    pub resolve_host_contract_interface: unsafe extern "C" fn(
+        this: *const HostInterface,
+        contract_id: u64,
+        min_version: u32,
+    ) -> *const crate::host::HostContractInterface,
     /// List all loaded bundles.
     ///
     /// Returns an Array of BundleId. Caller must free via `host->free`.
@@ -250,10 +268,11 @@ mod tests {
 
     #[test]
     fn layout_host_interface() {
-        // HostInterface: runtime pointer (8 bytes) + 10 extern "C" fn pointers (80 bytes).
+        // HostInterface: runtime pointer (8 bytes) + 11 extern "C" fn pointers (88 bytes).
         // Fields: register_contract, alloc, free, find_by_contract, find_all_by_contract,
-        //         resolve_contract, call_guest_method, get_host_contract, list_bundles, get_dependencies
-        assert_eq!(size_of::<HostInterface>(), 88);
+        //         resolve_contract, call_guest_method, get_host_contract,
+        //         resolve_host_contract_interface, list_bundles, get_dependencies
+        assert_eq!(size_of::<HostInterface>(), 96);
         assert_eq!(align_of::<HostInterface>(), 8);
         assert_eq!(offset_of!(HostInterface, runtime), 0);
         assert_eq!(offset_of!(HostInterface, register_contract), 8);
@@ -264,8 +283,9 @@ mod tests {
         assert_eq!(offset_of!(HostInterface, resolve_contract), 48);
         assert_eq!(offset_of!(HostInterface, call_guest_method), 56);
         assert_eq!(offset_of!(HostInterface, get_host_contract), 64);
-        assert_eq!(offset_of!(HostInterface, list_bundles), 72);
-        assert_eq!(offset_of!(HostInterface, get_dependencies), 80);
+        assert_eq!(offset_of!(HostInterface, resolve_host_contract_interface), 72);
+        assert_eq!(offset_of!(HostInterface, list_bundles), 80);
+        assert_eq!(offset_of!(HostInterface, get_dependencies), 88);
     }
 
     /// Verify HostInterface has runtime: *mut c_void field at offset 0.
@@ -278,12 +298,12 @@ mod tests {
     /// Verify list_bundles field exists.
     #[test]
     fn list_bundles_field_exists() {
-        assert_eq!(offset_of!(HostInterface, list_bundles), 72);
+        assert_eq!(offset_of!(HostInterface, list_bundles), 80);
     }
 
     /// Verify get_dependencies field exists.
     #[test]
     fn get_dependencies_field_exists() {
-        assert_eq!(offset_of!(HostInterface, get_dependencies), 80);
+        assert_eq!(offset_of!(HostInterface, get_dependencies), 88);
     }
 }

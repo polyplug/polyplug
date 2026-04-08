@@ -112,6 +112,7 @@ impl RuntimeBuilder {
             resolve_contract: crate::runtime::host_resolve_contract,
             call_guest_method: crate::runtime::host_call_method,
             get_host_contract: crate::runtime::host_get_host_contract,
+            resolve_host_contract_interface: crate::runtime::host_resolve_host_contract_interface,
             list_bundles: crate::runtime::host_list_bundles,
             get_dependencies: crate::runtime::host_get_dependencies,
         }));

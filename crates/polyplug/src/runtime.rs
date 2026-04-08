@@ -262,6 +262,7 @@ impl Runtime {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         });
@@ -922,6 +923,44 @@ pub(crate) unsafe extern "C" fn host_get_host_contract(
     }
 }
 
+/// HostInterface.resolve_host_contract_interface callback — returns HostContractInterface pointer.
+///
+/// # Safety
+/// this must be a valid HostInterface pointer with valid runtime field.
+pub(crate) unsafe extern "C" fn host_resolve_host_contract_interface(
+    this: *const HostInterface,
+    contract_id: u64,
+    min_version: u32,
+) -> *const HostContractInterface {
+    if this.is_null() {
+        return core::ptr::null();
+    }
+    // SAFETY: this is a valid HostInterface pointer passed by the host.
+    // (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    // Find the host contract interface
+    let host_contracts_guard = runtime.host_contracts.read().unwrap_or_else(|e| {
+        eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+        e.into_inner()
+    });
+
+    // Find interface matching contract_id and version
+    host_contracts_guard.values()
+        .find(|iface| {
+            iface.contract_id.id() == contract_id &&
+            iface.contract_version.major >= (min_version >> 16)
+        })
+        .map(|v| *v as *const HostContractInterface)
+        .unwrap_or_else(|| {
+            runtime.set_last_error(&format!(
+                "host contract interface not found: id={}, min_version={}",
+                contract_id, min_version
+            ));
+            core::ptr::null()
+        })
+}
+
 /// HostInterface.list_bundles callback — returns Array<BundleId>.
 ///
 /// # Safety
@@ -1094,6 +1133,7 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         };
@@ -1761,6 +1801,7 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         };
@@ -1793,6 +1834,7 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         };
@@ -1892,6 +1934,7 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         };
@@ -1960,6 +2003,7 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         };
@@ -2033,6 +2077,7 @@ mod tests {
             resolve_contract: host_resolve_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
+            resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
         };
