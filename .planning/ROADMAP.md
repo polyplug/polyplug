@@ -235,6 +235,10 @@ Plans:
 | 9. Codegen Test Cleanup | 3/3 | Complete | 2026-04-06 |
 | 10. SDK Cleanup Completion | 2/2 | Complete    | 2026-04-06 |
 | 11. Guest Calling Convention | 10/10 | Complete   | 2026-04-07 |
+| 12. SDK Instance Model | 0/0 | Pending | — |
+| 13. C++ Codegen Modernization | 0/0 | Pending | — |
+| 14. Hot-Reload Documentation | 0/0 | Pending | — |
+| 15. Final Cleanup | 0/0 | Pending | — |
 
 ## Dependencies
 
@@ -270,39 +274,67 @@ Phase 10 (SDK Cleanup Completion)
     |
     v
 Phase 11 (Guest Calling Convention & Missing Introspection)
+    |
+    v
+Phase 12 (SDK Instance Model Completion)
+    |
+    v
+Phase 13 (C++ Codegen Modernization)
+    |
+    v
+Phase 14 (Hot-Reload Documentation)
+    |
+    v
+Phase 15 (Final Cleanup)
 ```
 
-### Phase 11: Guest Calling Convention & Missing Introspection
+### Phase 12: SDK Instance Model Completion
 
-**Goal:** Rename `RuntimeAbi` to `HostInterface`, create `RuntimeInterface` for symmetric API, delete `RuntimeContext`/`HostContext` wrappers, rename `call_method` to `call_guest_method`, implement guest-to-guest calls, add introspection ABIs, create `Array<T>` type, update all SDKs and codegen.
-**Requirements**: D-01 through D-14 from CONTEXT.md
-**Depends on:** Phase 10
-**Plans:** 10/10 plans complete
-
-Plans:
-- [x] 11-01-PLAN.md — Rename RuntimeAbi to HostInterface, create RuntimeInterface (D-01, D-02)
-- [x] 11-02-PLAN.md — Delete RuntimeContext and HostContext wrapper types (D-03)
-- [x] 11-03-PLAN.md — Enhance Array<T>, add contract_id to GuestContractInstance, create DependencyInfo (D-05, D-06, D-10)
-- [x] 11-04-PLAN.md — Update GuestContractInterface/HostContractInterface signatures (D-12, D-13)
-- [x] 11-05-PLAN.md — Add introspection ABIs (list_bundles, get_dependencies, find_all_by_contract) (D-07, D-08, D-11)
-- [x] 11-06-PLAN.md — First-class documentation for all interface types (D-14)
-- [x] 11-07-PLAN.md — Update VM loaders to use HostInterface (gap closure)
-- [x] 11-08-PLAN.md — Update polyplugc codegen for new calling convention (gap closure)
-- [x] 11-09-PLAN.md — Update tests and benchmarks for new patterns (gap closure)
-- [x] 11-10-PLAN.md — Final verification: workspace compiles and tests pass (gap closure)
-
+**Goal:** Complete SDK updates to use polyplug_abi types and add instance-based wrappers
+**Depends on:** Phase 11
+**Requirements:** SDK-01, SDK-05, SDK-07
+**Gap Closure:** Closes SDK gaps from audit
 **Success Criteria** (what must be TRUE):
-1. HostInterface struct exists (renamed from RuntimeAbi) with self-passing pattern
-2. RuntimeInterface struct exists with destroy() function for host API
-3. RuntimeContext and HostContext deleted from codebase
-4. GuestContractInstance has contract_id field (16 bytes)
-5. Array<T> has align field for caller-frees semantics (24 bytes)
-6. DependencyInfo struct exists for introspection
-7. list_bundles and get_dependencies ABIs work
-8. find_all_by_contract returns Array<ContractHandle>
-9. GuestContractInterface create/destroy take *const HostInterface
-10. HostContractInterface has runtime field and self-passing pattern
-11. All interface types have first-class documentation
+1. Rust host SDK imports types from polyplug_abi (no duplicates)
+2. JS SDK uses TypeScript interfaces from polyplug_abi
+3. All SDKs generate instance-based wrappers via codegen
+**Plans:** 0 plans (pending)
+
+### Phase 13: C++ Codegen Modernization
+
+**Goal:** Update C++ codegen to use modern HostInterface/instance patterns
+**Depends on:** Phase 12
+**Requirements:** INST-01, INST-02, INST-03, INST-04, INST-05, INST-06, CG-02, CG-03, CG-04, CG-05
+**Gap Closure:** Closes instance model/codegen gaps from audit
+**Success Criteria** (what must be TRUE):
+1. C++ codegen generates *Instance RAII wrappers (not PluginGuard)
+2. Generated wrappers call create_instance on construction
+3. Generated wrappers call destroy_instance on drop
+4. Instance passed as first argument to all dispatch calls
+5. C++ SDK uses HostInterface terminology
+**Plans:** 0 plans (pending)
+
+### Phase 14: Hot-Reload Documentation
+
+**Goal:** Create VERIFICATION.md for hot-reload callback model requirements
+**Depends on:** Phase 13
+**Requirements:** HR-01, HR-02, HR-03, HR-04, HR-05, HR-06
+**Gap Closure:** Closes verification gaps from audit
+**Success Criteria** (what must be TRUE):
+1. Phase 04 VERIFICATION.md updated with HR-01 through HR-06 verified
+2. Hot-reload callback model documented with evidence
+**Plans:** 0 plans (pending)
+
+### Phase 15: Final Cleanup
+
+**Goal:** Complete remaining naming and test cleanup
+**Depends on:** Phase 14
+**Requirements:** CLN-01, CLN-04
+**Gap Closure:** Closes cleanup gaps from audit
+**Success Criteria** (what must be TRUE):
+1. No "vtable" naming remains in codebase
+2. All tests use new instance model and naming
+**Plans:** 0 plans (pending)
 
 ---
 *Roadmap created: 2026-04-03*
