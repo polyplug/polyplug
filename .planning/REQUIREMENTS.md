@@ -67,7 +67,7 @@
 
 ### Category: SDK Updates
 
-- [ ] **SDK-01**: Update Rust host SDK to use `polyplug_abi` types
+- [x] **SDK-01**: Update Rust host SDK to use `polyplug_abi` types
 - [x] **SDK-02**: Update Python SDK - remove `RuntimeConfigC` duplicate
 - [x] **SDK-03**: Update C# SDK - remove `RuntimeConfigC` duplicate
 - [x] **SDK-04**: Update Lua SDK - use types from `polyplug_abi`
