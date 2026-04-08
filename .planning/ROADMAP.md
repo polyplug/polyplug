@@ -235,7 +235,7 @@ Plans:
 | 9. Codegen Test Cleanup | 3/3 | Complete | 2026-04-06 |
 | 10. SDK Cleanup Completion | 2/2 | Complete    | 2026-04-06 |
 | 11. Guest Calling Convention | 10/10 | Complete   | 2026-04-07 |
-| 12. SDK Instance Model | 3/4 | In Progress|  |
+| 12. SDK Instance Model | 4/4 | Complete | 2026-04-08 |
 | 13. C++ Codegen Modernization | 0/0 | Pending | — |
 | 14. Hot-Reload Documentation | 0/0 | Pending | — |
 | 15. Final Cleanup | 0/0 | Pending | — |
@@ -298,13 +298,13 @@ Phase 15 (Final Cleanup)
 1. Rust host SDK imports types from polyplug_abi (no duplicates)
 2. JS SDK uses TypeScript interfaces from polyplug_abi
 3. All SDKs generate instance-based wrappers via codegen
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 12-01-PLAN.md — Verify Rust SDK polyplug_abi imports (SDK-01) [wave 1]
 - [x] 12-02-PLAN.md — Update JS SDK TypeScript type naming (SDK-05) [wave 1]
 - [x] 12-03a-PLAN.md — Instance wrappers for C++/Python generators (SDK-07 part 1) [wave 2]
-- [ ] 12-03b-PLAN.md — Instance wrappers for Lua/C#/JS generators + verification (SDK-07 part 2) [wave 3]
+- [x] 12-03b-PLAN.md — Instance wrappers for Lua/C#/JS generators + verification (SDK-07 part 2) [wave 3]
 
 ### Phase 13: C++ Codegen Modernization
 

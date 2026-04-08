@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: executing
-last_updated: "2026-04-08T12:52:15.562Z"
+status: verifying
+last_updated: "2026-04-08T13:07:21.982Z"
 progress:
   total_phases: 14
-  completed_phases: 9
+  completed_phases: 10
   total_plans: 61
-  completed_plans: 60
-  percent: 98
+  completed_plans: 61
+  percent: 100
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -32,10 +32,10 @@ progress:
 
 ## Current Position
 
-Phase: 12 (sdk-instance-model) — EXECUTING
+Phase: 12 (sdk-instance-model) — COMPLETE
 Plan: 4 of 4
-**Status:** Ready to execute
-**Progress:** [██████████] 98%
+**Status:** Phase complete — ready for verification
+**Progress:** [██████████] 100%
 
 ## Phase Completion Summary
 
@@ -52,25 +52,22 @@ Plan: 4 of 4
 | 09 | Codegen Test Cleanup | Complete | 2026-04-06 |
 | 10 | SDK Cleanup Completion | Complete | 2026-04-06 |
 | 11 | Guest Calling Convention & Missing Introspection | Complete | 2026-04-07 |
+| 12 | SDK Instance Model Completion | Complete | 2026-04-08 |
 
-## Phase 11 Progress
+## Phase 12 Progress
 
 **All Waves Complete:**
 
-- 11-01: HostInterface + RuntimeInterface structs
-- 11-02: Deleted RuntimeContext/HostContext, self-passing pattern
-- 11-03: Array<T>, GuestContractInstance.contract_id, DependencyInfo
-- 11-04: Interface callback updates
-- 11-05: Introspection ABIs (list_bundles, get_dependencies)
-- 11-06: Documentation
-- 11-07: VM loader HostInterface updates
-- 11-08: Codegen calling convention update
+- 12-01: Rust SDK polyplug_abi imports verification
+- 12-02: JS SDK TypeScript type naming update
+- 12-03a: C++/Python instance wrapper codegen
+- 12-03b: Lua/C#/JS instance wrapper codegen
 
 ## Session Continuity
 
-Last session: 2026-04-08T12:52:15.560Z
-Completed: Phase 11 plan 08 - Codegen calling convention update
-Next: Project complete - all phases finished
+Last session: 2026-04-08T13:07:21.982Z
+Completed: Phase 12 plan 03b - Lua/C#/JS instance wrapper codegen
+Next: Phase 13 - C++ Codegen Modernization (pending)
 
 ## Phase 08 Accomplishments
 
