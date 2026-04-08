@@ -10,5 +10,8 @@ rust-version.workspace = true
 polyplug_abi = { workspace = true }
 polyplug = { workspace = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

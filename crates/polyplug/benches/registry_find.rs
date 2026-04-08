@@ -14,29 +14,47 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::plugin_registry::PluginRegistry;
+use polyplug::registry::PluginRegistry;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::GuestContractInstance;
 use polyplug_abi::HostInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::DispatchMechanisms;
 use polyplug_abi::PluginHandle;
-use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
 use polyplug_utils::GuestContractId;
 use polyplug_utils::BundleId;
 
-// ─── Mock vtable for benchmarking ────────────────────────────────────────────
+// ─── Instance lifecycle stubs for benchmarks ────────────────────────────────────
+
+/// Stub create_instance for benchmarks - returns null instance.
+unsafe extern "C" fn bench_create_instance(
+    _host: *const HostInterface,
+    _args: *const (),
+) -> GuestContractInstance {
+    GuestContractInstance::null()
+}
+
+/// Stub destroy_instance for benchmarks - no cleanup needed.
+unsafe extern "C" fn bench_destroy_instance(
+    _host: *const HostInterface,
+    _instance: GuestContractInstance,
+) {
+}
+
+// ─── Mock vtable for benchmarking ────────────────────────────────────────────────
 
 static BENCH_VTABLE: GuestContractInterface = GuestContractInterface {
-    contract_id: GuestContractId::from_raw(0x0000_0000_0000_0001_u64),
+    contract_id: GuestContractId::from_u64(0x0000_0000_0000_0001_u64),
     contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
-    create_instance: |_| GuestContractInstance::null(),
-    destroy_instance: |_, _| {},
+    create_instance: bench_create_instance,
+    destroy_instance: bench_destroy_instance,
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
+            function_count: 0,
             functions: core::ptr::null(),
         },
     },
@@ -47,6 +65,23 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
         name: StringView::from_static(name.as_bytes()),
         contract_name: StringView::from_static(contract_name.as_bytes()),
         version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+    }
+}
+
+/// Create a vtable for dynamic benchmarks
+fn make_vtable(id: u64) -> GuestContractInterface {
+    GuestContractInterface {
+        contract_id: GuestContractId::from_u64(id),
+        contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
+        dispatch_type: DispatchType::Native,
+        create_instance: bench_create_instance,
+        destroy_instance: bench_destroy_instance,
+        dispatch: DispatchMechanisms {
+            native: NativeDispatch {
+                function_count: 0,
+                functions: core::ptr::null(),
+            },
+        },
     }
 }
 
@@ -72,7 +107,7 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("find_by_contract", "single_slot"), |b| {
         b.iter(|| {
             let result: Result<PluginHandle, _> =
-                registry.find(black_box(GuestContractId::from_raw(contract_id)), black_box(0u32));
+                registry.find(black_box(GuestContractId::from_u64(contract_id)), black_box(0u32));
             let _ = black_box(result);
         });
     });
@@ -87,20 +122,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
 
     // Use leaked Box to get 'static vtables
     let vtables: Vec<Box<GuestContractInterface>> = (0..10_usize)
-        .map(|i| {
-            Box::new(GuestContractInterface {
-                contract_id: GuestContractId::from_raw(0xAAAA_BBBB_CCCC_DDDD_u64),
-                contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
-                dispatch_type: DispatchType::Native,
-                create_instance: |_| GuestContractInstance::null(),
-                destroy_instance: |_, _| {},
-                dispatch: DispatchMechanisms {
-                    native: NativeDispatch {
-                        functions: core::ptr::null(),
-                    },
-                },
-            })
-        })
+        .map(|_| Box::new(make_vtable(0xAAAA_BBBB_CCCC_DDDD_u64)))
         .collect();
 
     let vtable_refs: Vec<&'static GuestContractInterface> =
@@ -132,7 +154,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let result: Result<PluginHandle, _> =
-                    registry.find(black_box(GuestContractId::from_raw(contract_id)), black_box(0u32));
+                    registry.find(black_box(GuestContractId::from_u64(contract_id)), black_box(0u32));
                 let _ = black_box(result);
             });
         },
@@ -148,20 +170,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
 
     // Use leaked Box to get 'static vtables
     let vtables: Vec<Box<GuestContractInterface>> = (0..100_u64)
-        .map(|i| {
-            Box::new(GuestContractInterface {
-                contract_id: GuestContractId::from_raw(0x2000_0000_0000_0000_u64 + i),
-                contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
-                dispatch_type: DispatchType::Native,
-                create_instance: |_| GuestContractInstance::null(),
-                destroy_instance: |_, _| {},
-                dispatch: DispatchMechanisms {
-                    native: NativeDispatch {
-                        functions: core::ptr::null(),
-                    },
-                },
-            })
-        })
+        .map(|i| Box::new(make_vtable(0x2000_0000_0000_0000_u64 + i)))
         .collect();
 
     let vtable_refs: Vec<&'static GuestContractInterface> =
@@ -195,7 +204,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
         |b| {
             b.iter(|| {
                 let result: Result<PluginHandle, _> =
-                    registry.find(black_box(GuestContractId::from_raw(target_contract_id)), black_box(0u32));
+                    registry.find(black_box(GuestContractId::from_u64(target_contract_id)), black_box(0u32));
                 let _ = black_box(result);
             });
         },
@@ -226,7 +235,7 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("find_by_contract", "not_found"), |b| {
         b.iter(|| {
             let result: Result<PluginHandle, _> =
-                registry.find(black_box(GuestContractId::from_raw(nonexistent_contract_id)), black_box(0u32));
+                registry.find(black_box(GuestContractId::from_u64(nonexistent_contract_id)), black_box(0u32));
             let _ = black_box(result);
         });
     });

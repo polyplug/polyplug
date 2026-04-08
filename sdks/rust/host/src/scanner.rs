@@ -109,21 +109,21 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<(PathBuf, ManifestData)> {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-    use polyplug::loader::ManifestData;
 
     fn write_test_bundle(dir: &Path, name: &str, id: u64) {
         let bundle_dir: PathBuf = dir.join(name);
         std::fs::create_dir_all(&bundle_dir).expect("create bundle dir");
         let so_name: String = format!("{name}.so");
         std::fs::write(bundle_dir.join(&so_name), b"").expect("write stub so");
-        let manifest: ManifestData = ManifestData {
-            id,
-            name: name.to_owned(),
-            runtime: "native".to_owned(),
-            file: so_name,
-            ..ManifestData::for_test("", "native", "")
-        };
-        std::fs::write(bundle_dir.join("manifest.toml"), manifest.to_toml())
+        let manifest_content: String = format!(
+            r#"id = {}
+name = "{}"
+runtime = "native"
+file = "{}"
+"#,
+            id, name, so_name
+        );
+        std::fs::write(bundle_dir.join("manifest.toml"), manifest_content)
             .expect("write manifest");
     }
 
