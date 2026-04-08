@@ -34,12 +34,12 @@
 
 ### Category: Instance Model
 
-- [ ] **INST-01**: Update codegen to generate `*Instance` RAII wrappers
-- [ ] **INST-02**: Generated wrapper calls `create_instance` on construction
-- [ ] **INST-03**: Generated wrapper calls `destroy_instance` on drop
-- [ ] **INST-04**: Instance passed as first argument to all dispatch calls
-- [ ] **INST-05**: Native dispatch: `functions[fn_id](instance, args, out)`
-- [ ] **INST-06**: VM dispatch: `call(loader_data, instance, fn_id, args, out)`
+- [x] **INST-01**: Update codegen to generate `*Instance` RAII wrappers
+- [x] **INST-02**: Generated wrapper calls `create_instance` on construction
+- [x] **INST-03**: Generated wrapper calls `destroy_instance` on drop
+- [x] **INST-04**: Instance passed as first argument to all dispatch calls
+- [x] **INST-05**: Native dispatch: `functions[fn_id](instance, args, out)`
+- [x] **INST-06**: VM dispatch: `call(loader_data, instance, fn_id, args, out)`
 
 ### Category: Hot-Reload
 
@@ -78,9 +78,9 @@
 ### Category: Codegen
 
 - [x] **CG-01**: Update codegen to use `GuestContractInterface` naming
-- [ ] **CG-02**: Update codegen to generate instance wrappers
-- [ ] **CG-03**: Generated instance wrappers hold `interface` + `instance` pointer
-- [ ] **CG-04**: Generated wrappers call `create_instance`/`destroy_instance`
+- [x] **CG-02**: Update codegen to generate instance wrappers
+- [x] **CG-03**: Generated instance wrappers hold `interface` + `instance` pointer
+- [x] **CG-04**: Generated wrappers call `create_instance`/`destroy_instance`
 - [x] **CG-05**: Update host contract vtable generation for `HostContractInterface`
 - [x] **CG-06**: Generate `singleton` support for host contracts
 
