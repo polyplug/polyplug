@@ -806,7 +806,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
     out
 }
 
-/// Generate `host/Callers.cs` — zero-overhead host caller classes.
+/// Generate `host/Callers.cs` — zero-overhead host caller classes with instance wrapper pattern.
 fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     let mut out: String = String::new();
     out.push_str(CS_HEADER);
@@ -834,34 +834,67 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
         out.push_str("}\n\n");
 
         out.push_str(&format!(
-            "/// <summary>\n/// Host caller for contract `{}` (id=0x{:016X})\n/// </summary>\n",
+            "/// <summary>\n/// Host caller for contract `{}` (id=0x{:016X})\n/// Instance-based RAII wrapper with automatic cleanup via IDisposable.\n/// </summary>\n",
             contract.name, contract.contract_id
         ));
         out.push_str(&format!(
             "public sealed class {caller_name} : IDisposable {{\n"
         ));
-        out.push_str("    private PluginGuard _guard;\n\n");
+        out.push_str("    private readonly GuestContractInterface* _interface;\n");
+        out.push_str("    private GuestContractInstance _instance;\n");
+        out.push_str("    private readonly HostInterface* _host;\n");
+        out.push_str("    private bool _disposed;\n\n");
+
+        // Private constructor
         out.push_str(&format!(
-            "    private {caller_name}(PluginGuard guard) {{ _guard = guard; }}\n\n"
+            "    private {caller_name}(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {{\n"
         ));
-        out.push_str("    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>\n");
+        out.push_str("        _interface = iface;\n");
+        out.push_str("        _instance = inst;\n");
+        out.push_str("        _host = host;\n");
+        out.push_str("        _disposed = false;\n");
+        out.push_str("    }\n\n");
+
+        // Factory method
+        out.push_str("    /// <summary>Factory method - resolves contract and creates instance.</summary>\n");
         out.push_str(&format!(
-            "    public static {caller_name}? Create(Runtime rt, uint minVersion = 0) {{\n"
+            "    public static {caller_name}? Create(Runtime rt, HostInterface* host) {{\n"
         ));
         out.push_str(&format!(
-            "        var handle = rt.FindByContract({class_name}Constants.{contract_upper}_CONTRACT_ID, minVersion);\n"
+            "        var handle = rt.FindByContract({class_name}Constants.{contract_upper}_CONTRACT_ID, 0);\n"
         ));
         out.push_str("        if (handle == ulong.MaxValue) { return null; }\n");
-        out.push_str("        var guard = rt.ResolvePlugin(handle);\n");
-        out.push_str("        if (guard.IsNull()) { return null; }\n");
-        out.push_str(&format!("        return new {caller_name}(guard);\n"));
+        out.push_str("        var iface = rt.ResolveContract(handle);\n");
+        out.push_str("        if (iface == null) { return null; }\n");
+        out.push_str("        var inst = iface->CreateInstance((nint)host, nint.Zero);\n");
+        out.push_str("        if (inst.Data == nint.Zero) { return null; }\n");
+        out.push_str(&format!("        return new {caller_name}(iface, inst, host);\n"));
         out.push_str("    }\n\n");
+
+        // IsValid property
         out.push_str("    /// <summary>Check if this caller instance is still valid.</summary>\n");
-        out.push_str("    public bool IsValid => !_guard.IsNull();\n\n");
-        out.push_str("    /// <summary>Explicitly release the guard reference.</summary>\n");
-        out.push_str("    public void Reset() { _guard.Release(); }\n\n");
-        out.push_str("    /// <summary>Dispose pattern for explicit cleanup.</summary>\n");
-        out.push_str("    public void Dispose() { Reset(); }\n\n");
+        out.push_str("    public bool IsValid => !_disposed && _instance.Data != nint.Zero;\n\n");
+
+        // Reset method - destroy existing, create new
+        out.push_str("    /// <summary>Reset instance - destroy existing and create new.</summary>\n");
+        out.push_str("    public void Reset() {\n");
+        out.push_str("        if (!_disposed && _instance.Data != nint.Zero) {\n");
+        out.push_str("            _interface->DestroyInstance((nint)_host, _instance);\n");
+        out.push_str("        }\n");
+        out.push_str("        _instance = _interface->CreateInstance((nint)_host, nint.Zero);\n");
+        out.push_str("    }\n\n");
+
+        // Dispose pattern
+        out.push_str("    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>\n");
+        out.push_str("    public void Dispose() {\n");
+        out.push_str("        if (!_disposed) {\n");
+        out.push_str("            if (_instance.Data != nint.Zero) {\n");
+        out.push_str("                _interface->DestroyInstance((nint)_host, _instance);\n");
+        out.push_str("                _instance.Data = nint.Zero;\n");
+        out.push_str("            }\n");
+        out.push_str("            _disposed = true;\n");
+        out.push_str("        }\n");
+        out.push_str("    }\n\n");
 
         for func in &contract.functions {
             generate_host_fn_caller(&mut out, func, contract, &class_name);
@@ -872,7 +905,7 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
     out
 }
 
-/// Generate a single host caller method for a contract function.
+/// Generate a single host caller method for a contract function (instance-based).
 fn generate_host_fn_caller(
     out: &mut String,
     func: &ResolvedFunction,
@@ -904,27 +937,28 @@ fn generate_host_fn_caller(
         "    public {ret} {method_name}({params_sig}) {{\n"
     ));
 
-    out.push_str("        nint vtablePtr = _guard.GetVTable();\n");
-    out.push_str("        if (vtablePtr == nint.Zero) {\n");
-    out.push_str("            throw new ObjectDisposedException(nameof(PluginGuard));\n");
+    // Instance validity check
+    out.push_str("        if (_disposed || _instance.Data == nint.Zero) {\n");
+    let caller_name = format!("{}Caller", _contract_struct);
+    out.push_str(&format!(
+        "            throw new ObjectDisposedException(nameof({caller_name}));\n"
+    ));
     out.push_str("        }\n\n");
 
     out.push_str("        unsafe {\n");
-    out.push_str("            var pluginInterface = *(GuestContractInterface*)vtablePtr;\n");
     out.push_str(&format!(
-        "            if ({fn_id}u >= pluginInterface.Dispatch.Native.FunctionCount) {{\n"
+        "            if ({fn_id}u >= _interface->Dispatch.Native.FunctionCount) {{\n"
     ));
     out.push_str(
         "                throw new InvalidOperationException(\"function not available\");\n",
     );
     out.push_str("            }\n");
-    out.push_str("            nint funcsArray = pluginInterface.Dispatch.Native.Functions;\n");
+    out.push_str("            nint funcsArray = _interface->Dispatch.Native.Functions;\n");
     out.push_str(&format!(
         "            nint funcPtr = ((nint*)funcsArray)[{fn_id}];\n"
     ));
-    // On x86-64 System V ABI, AbiError (24 bytes) is returned via hidden pointer parameter.
-    // The function signature is: void dispatch(AbiError* ret, void* args, void* out)
-    out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;\n");
+    // Instance-based dispatch: AbiError dispatch(GuestContractInstance instance, void* args, void* out)
+    out.push_str("            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;\n");
 
     if func.params.is_empty() {
         out.push_str("            nint argsPtr = nint.Zero;\n");
@@ -960,8 +994,8 @@ fn generate_host_fn_caller(
         out.push_str("            nint outPtr = nint.Zero;\n");
     }
 
-    out.push_str("            AbiError err = default;\n");
-    out.push_str("            dispatch(&err, argsPtr, outPtr);\n");
+    // Dispatch with instance as first argument
+    out.push_str("            AbiError err = dispatch(_instance, argsPtr, outPtr);\n");
     out.push_str("            if (err.Code != 0u) {\n");
     out.push_str("                throw new InvalidOperationException($\"plugin call failed: code={err.Code}\");\n");
     out.push_str("            }\n");
