@@ -817,44 +817,64 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
     let contract_hi_const: String = format!("ContractIds.{}_CONTRACT_HI", contract_upper);
 
     out.push_str(&format!(
-        "/** Host caller for contract `{}` with hot-reload support. */\n",
+        "/** Host caller for contract `{}` with instance-based lifecycle. */\n",
         contract.name
     ));
     out.push_str(&format!("export class {}Contract {{\n", class_name));
-    out.push_str("    #guard: any;\n\n");
-    out.push_str("    private constructor(guard: any) {\n");
-    out.push_str("        this.#guard = guard;\n");
+    out.push_str("    #interface: any;\n");
+    out.push_str("    #instance: any;\n");
+    out.push_str("    #host: any;\n\n");
+
+    out.push_str("    private constructor(interface_: any, instance: any, host: any) {\n");
+    out.push_str("        this.#interface = interface_;\n");
+    out.push_str("        this.#instance = instance;\n");
+    out.push_str("        this.#host = host;\n");
     out.push_str("    }\n\n");
-    out.push_str("    /** Factory method - creates instance or null if not found. */\n");
+
+    out.push_str("    /** Factory method - resolves contract and creates instance. */\n");
     out.push_str(&format!(
-        "    static create(rt: any, minVersion: number = 0): {}Contract | null {{\n",
+        "    static create(rt: any, host: any): {}Contract | null {{\n",
         class_name
     ));
     out.push_str(&format!(
-        "        const handle = rt.findByContractLoHi({}, {}, minVersion);\n",
+        "        const handle = rt.findByContractLoHi({}, {}, 0);\n",
         contract_lo_const, contract_hi_const
     ));
     out.push_str("        if (handle === null || handle === undefined) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
-    out.push_str("        const guard = rt.getGuard(handle);\n");
-    out.push_str("        if (!guard) {\n");
+    out.push_str("        const interface_ = rt.resolveContract(handle);\n");
+    out.push_str("        if (!interface_) {\n");
+    out.push_str("            return null;\n");
+    out.push_str("        }\n");
+    out.push_str("        const instance = interface_.create_instance(host, null);\n");
+    out.push_str("        if (!instance || instance.data === null) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        return new {}Contract(guard);\n",
+        "        return new {}Contract(interface_, instance, host);\n",
         class_name
     ));
     out.push_str("    }\n\n");
+
     out.push_str("    /** Check if this caller instance is still valid. */\n");
     out.push_str("    isValid(): boolean {\n");
-    out.push_str("        return this.#guard !== null && this.#guard !== undefined;\n");
+    out.push_str("        return this.#instance !== null && this.#instance !== undefined && this.#instance.data !== null;\n");
     out.push_str("    }\n\n");
-    out.push_str("    /** Explicitly release the guard reference. */\n");
+
+    out.push_str("    /** Destroy instance - calls destroy_instance. */\n");
+    out.push_str("    destroy(): void {\n");
+    out.push_str("        if (this.#instance !== null && this.#instance.data !== null) {\n");
+    out.push_str("            this.#interface.destroy_instance(this.#host, this.#instance);\n");
+    out.push_str("            this.#instance.data = null;\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    out.push_str("    /** Reset instance - destroy existing and create new. */\n");
     out.push_str("    reset(): void {\n");
-    out.push_str("        if (this.#guard !== null) {\n");
-    out.push_str("            this.#guard.reset();\n");
-    out.push_str("            this.#guard = null;\n");
+    out.push_str("        this.destroy();\n");
+    out.push_str("        if (this.#interface !== null) {\n");
+    out.push_str("            this.#instance = this.#interface.create_instance(this.#host, null);\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
@@ -872,8 +892,9 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
 
         out.push_str(&format!("    /** Call `{}` */\n", func.name));
         out.push_str(&format!("    {}({}): {} {{\n", func.name, params, ret_type));
-        out.push_str("        const vtable = this.#guard?.vtable?.();\n");
-        out.push_str("        if (!vtable) throw new Error('caller is not valid');\n");
+        out.push_str("        if (!this.#instance || this.#instance.data === null) {\n");
+        out.push_str("            throw new Error('caller is not valid');\n");
+        out.push_str("        }\n");
 
         if func.params.is_empty() {
             out.push_str("        const argsPtr = 0;\n");
@@ -890,21 +911,22 @@ fn generate_host_caller_class_quickjs(out: &mut String, contract: &ResolvedContr
         }
 
         out.push_str(&format!(
-            "        if ({fn_id} >= vtable.functionCount) {{ throw new Error('function not available'); }}\n",
+            "        if ({fn_id} >= this.#interface.functionCount) {{ throw new Error('function not available'); }}\n",
             fn_id = func.function_id
         ));
         out.push_str(&format!(
-            "        const fnPtr = vtable.dispatch.native.functions[{}];\n",
+            "        const fnPtr = this.#interface.dispatch.native.functions[{}];\n",
             func.function_id
         ));
         out.push_str("        if (!fnPtr) throw new Error('function not available');\n");
         out.push_str("        let fn = _funcCache.get(fnPtr);\n");
         out.push_str("        if (!fn) {\n");
-        out.push_str("            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };\n");
+        out.push_str("            fn = fnPtr as unknown as (instance: any, args: any, out: any) => { lo: number; hi: number };\n");
         out.push_str("            _funcCache.set(fnPtr, fn);\n");
         out.push_str("        }\n");
         out.push_str("        const outVal = { lo: 0, hi: 0 };\n");
-        out.push_str("        const err = fn(argsPtr, outVal);\n");
+        // Instance-based dispatch: pass instance as first argument
+        out.push_str("        const err = fn(this.#instance, argsPtr, outVal);\n");
         out.push_str("        if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');\n");
 
         if func.returns.is_some() {
