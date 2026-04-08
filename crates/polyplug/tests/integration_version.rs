@@ -6,6 +6,7 @@ use polyplug::compatibility::Compatibility;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;
+use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_utils::guest_contract_id;
 use std::fs;

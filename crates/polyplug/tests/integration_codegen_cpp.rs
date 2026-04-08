@@ -18,6 +18,7 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
+use polyplug_utils::{GuestContractId, BundleId};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -92,7 +93,7 @@ unsafe extern "C" fn registry_register_callback(
     let result: Result<PluginHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, interface, contract_name.to_owned(), vt.contract_id.id()) }
+        unsafe { registry.register(*desc, interface, contract_name.to_owned(), polyplug_utils::BundleId::from_u64(vt.contract_id.id())) }
     });
 
     match result {
@@ -308,7 +309,7 @@ fn test_cpp_codegen_files_exist() {
 // ─── Part B: Runtime dispatch through C++ plugin (skips if SO unavailable) ───
 
 /// Contract id for `test.add@1` (FNV-1a hash, matches C++ plugin).
-const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
+const TEST_ADD_CONTRACT_ID: polyplug_utils::GuestContractId = polyplug_utils::GuestContractId::from_u64(0xCC4232FAB0410D2B_u64);
 
 #[test]
 fn test_cpp_plugin_dispatch() {

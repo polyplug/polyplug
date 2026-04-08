@@ -2,7 +2,6 @@
 
 #![allow(clippy::expect_used)]
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -12,7 +11,6 @@ use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::loader::ManifestData;
 
 fn load_bundle_path(rt: *mut OpaqueRuntime, dir: &str) -> u32 {
     let bytes: &[u8] = dir.as_bytes();

@@ -7,7 +7,6 @@
 //! Tests null pointers, stale handles, and buffer boundary conditions
 //! for `polyplug_runtime_resolve_plugin` and `polyplug_runtime_find_all_by_contract`.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use polyplug::ffi::OpaqueRuntime;
@@ -18,7 +17,6 @@ use polyplug::ffi::polyplug_runtime_find_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
-use polyplug::loader::ManifestData;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const RELOAD_PLUGIN_V1_DIR: &str = env!("RELOAD_PLUGIN_V1_DIR");
@@ -221,19 +219,11 @@ fn test_find_all_by_contract_overflow() {
     std::fs::copy(&cpp_so_path, cpp_bundle_dir.join(cpp_so_filename))
         .expect("failed to copy cpp so");
 
-    let manifest: ManifestData = ManifestData {
-        id: 1,
-        name: "cpp_test_adder".to_owned(),
-        runtime: "native".to_owned(),
-        file: cpp_so_filename.to_owned(),
-        version: "1.0".to_owned(),
-        provides: vec!["test.add".to_owned()],
-        function_count: HashMap::from([("test.add@1".to_owned(), 1)]),
-        dependencies: Vec::new(),
-        needs_reinit_on_dep_reload: false,
-        path: PathBuf::new(),
-    };
-    std::fs::write(cpp_bundle_dir.join("manifest.toml"), toml::to_string(&manifest).expect("serialize manifest"))
+    let manifest_toml: String = format!(
+        "id = 1\nname = \"cpp_test_adder\"\nruntime = \"native\"\nfile = \"{}\"\nversion = \"1.0\"\nprovides = [\"test.add\"]\nfunction_count = {{ \"test.add@1\" = 1 }}\n",
+        cpp_so_filename
+    );
+    std::fs::write(cpp_bundle_dir.join("manifest.toml"), manifest_toml)
         .expect("failed to write manifest");
 
     // Load the C++ plugin (also provides "test.add@1")
