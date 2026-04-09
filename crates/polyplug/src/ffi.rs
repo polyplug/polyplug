@@ -3,7 +3,7 @@
 //! All functions use `catch_unwind` to prevent Rust panics from unwinding across
 //! the C ABI boundary. Errors are stored per-runtime in the Runtime's last_error field.
 
-use polyplug_abi::{GuestContractInterface, PluginHandle, types::StringView};
+use polyplug_abi::{GuestContractInterface, GuestContractHandle, types::StringView};
 
 use crate::loader::BundleLoader;
 use crate::reload::ReloadPhase;
@@ -102,7 +102,7 @@ impl ReloadPhaseFfi {
 
 // ─── Helper functions ──────────────────────────────────────────────────────────
 
-fn pack_handle(h: PluginHandle) -> u64 {
+fn pack_handle(h: GuestContractHandle) -> u64 {
     if h.is_null() {
         u64::MAX
     } else {
@@ -110,11 +110,11 @@ fn pack_handle(h: PluginHandle) -> u64 {
     }
 }
 
-fn unpack_handle(packed: u64) -> PluginHandle {
+fn unpack_handle(packed: u64) -> GuestContractHandle {
     if packed == u64::MAX {
-        PluginHandle::null()
+        GuestContractHandle::null()
     } else {
-        PluginHandle { index: packed as u32 }
+        GuestContractHandle { index: packed as u32 }
     }
 }
 
@@ -420,7 +420,7 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         if packed_handle == NULL_HANDLE {
             return core::ptr::null();
         }
-        let handle: PluginHandle = unpack_handle(packed_handle);
+        let handle: GuestContractHandle = unpack_handle(packed_handle);
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime.0.registry().resolve(handle) {
@@ -584,25 +584,25 @@ mod tests {
 
     #[test]
     fn handle_roundtrip_zero() {
-        let h: PluginHandle = PluginHandle { index: 0u32 };
+        let h: GuestContractHandle = GuestContractHandle { index: 0u32 };
         let packed: u64 = pack_handle(h);
-        let unpacked: PluginHandle = unpack_handle(packed);
+        let unpacked: GuestContractHandle = unpack_handle(packed);
         assert_eq!(unpacked.index, h.index);
     }
 
     #[test]
     fn handle_roundtrip_max_values() {
         // index = u32::MAX - 1 avoids the null sentinel (index == u32::MAX means null)
-        let h: PluginHandle = PluginHandle { index: u32::MAX - 1 };
+        let h: GuestContractHandle = GuestContractHandle { index: u32::MAX - 1 };
         let packed: u64 = pack_handle(h);
-        let unpacked: PluginHandle = unpack_handle(packed);
+        let unpacked: GuestContractHandle = unpack_handle(packed);
         assert_eq!(unpacked.index, h.index);
     }
 
     #[test]
     fn handle_roundtrip_pack_unpack_identity() {
         // pack(unpack(x)) == x for boundary values
-        // PluginHandle now only has index (u32), so we test values that fit
+        // GuestContractHandle now only has index (u32), so we test values that fit
         let boundary_values: [u64; 4] = [
             0u64,
             1u64,
@@ -610,7 +610,7 @@ mod tests {
             1000u64,
         ];
         for &val in &boundary_values {
-            let unpacked: PluginHandle = unpack_handle(val);
+            let unpacked: GuestContractHandle = unpack_handle(val);
             let repacked: u64 = pack_handle(unpacked);
             assert_eq!(repacked, val);
         }
@@ -620,7 +620,7 @@ mod tests {
     fn handle_sentinel_null_roundtrip() {
         // u64::MAX is the sentinel for the null handle
         let packed: u64 = u64::MAX;
-        let unpacked: PluginHandle = unpack_handle(packed);
+        let unpacked: GuestContractHandle = unpack_handle(packed);
         assert!(unpacked.is_null());
         let repacked: u64 = pack_handle(unpacked);
         assert_eq!(repacked, u64::MAX);
@@ -628,8 +628,8 @@ mod tests {
 
     #[test]
     fn handle_null_packs_to_sentinel() {
-        // The null PluginHandle (index == u32::MAX) must pack to u64::MAX
-        let null_h: PluginHandle = PluginHandle::null();
+        // The null GuestContractHandle (index == u32::MAX) must pack to u64::MAX
+        let null_h: GuestContractHandle = GuestContractHandle::null();
         assert!(null_h.is_null());
         let packed: u64 = pack_handle(null_h);
         assert_eq!(packed, u64::MAX);

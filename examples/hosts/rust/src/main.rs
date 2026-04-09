@@ -2,7 +2,7 @@ use polyplug::ReloadPhase;
 use polyplug::loader::scanner;
 use polyplug::runtime::Runtime;
 use polyplug::RuntimeConfig;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
 use polyplug_abi::HostContractInterface;
 use polyplug_js::{JsConfig, JsLoader};
@@ -218,7 +218,7 @@ fn find_contract<T>(runtime: &'static Runtime, contract_id: u64) -> Option<T>
 where
     T: ContractCaller,
 {
-    let handle: PluginHandle = runtime.find_by_contract(contract_id, 0).ok()?;
+    let handle: GuestContractHandle = runtime.find_by_contract(contract_id, 0).ok()?;
     if handle.is_null() {
         return None;
     }
@@ -227,35 +227,35 @@ where
 
 /// Trait for contract callers - allows generic find_contract helper.
 trait ContractCaller: Sized {
-    fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self>;
+    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self>;
 }
 
 impl ContractCaller for PipelineDecoderContract {
-    fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataTransformerContract {
-    fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineEncoderContract {
-    fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for DataReporterContract {
-    fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }
 
 impl ContractCaller for PipelineValidatorContract {
-    fn from_handle(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+    fn from_handle(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
         Self::new(handle, runtime.as_context_ptr())
     }
 }

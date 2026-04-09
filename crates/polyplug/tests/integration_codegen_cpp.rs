@@ -13,7 +13,7 @@ use polyplug_abi::HostInterface;
 use polyplug_abi::types::abi_error_ok;
 use polyplug_abi::types::StringView;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -90,7 +90,7 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     // Register with thread-local Registry.
-    let result: Result<PluginHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
+    let result: Result<GuestContractHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), polyplug_utils::BundleId::from_u64(vt.contract_id.id())) }
@@ -130,8 +130,8 @@ unsafe extern "C" fn noop_find_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -139,14 +139,14 @@ unsafe extern "C" fn noop_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
     _this: *const HostInterface,
-    _handle: PluginHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
@@ -371,7 +371,7 @@ fn test_cpp_plugin_dispatch() {
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return ABI_OK");
 
     // ── 5. Look up interface for test.add by contract_id ─────────────────────────
-    let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(TEST_ADD_CONTRACT_ID, 0_u32)
             .expect("test.add must be registered after polyplug_init")
@@ -472,7 +472,7 @@ fn test_cpp_host_loads_rust_plugin() {
         "Rust plugin polyplug_init must return ABI_OK"
     );
 
-    let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(TEST_ADD_CONTRACT_ID, 0_u32)
             .expect("test.add must be registered from Rust plugin")
@@ -570,7 +570,7 @@ fn test_exception_isolation_cpp() {
         "throwing plugin init must return ABI_OK"
     );
 
-    let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(TEST_ADD_CONTRACT_ID, 0_u32)
             .expect("test.add registered from throwing plugin")

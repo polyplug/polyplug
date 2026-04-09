@@ -12,7 +12,7 @@
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    PluginContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
     NativeDispatch, DispatchType,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -55,7 +55,7 @@ unsafe extern "C" fn graph_register_callback(
     };
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
+    let result: Result<GuestContractHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
         cell.borrow()
             .register(*desc, interface, contract_name_str.to_owned(), BundleId::from_u64(iface.contract_id.id()))
     });
@@ -97,8 +97,8 @@ unsafe extern "C" fn noop_find_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -106,14 +106,14 @@ unsafe extern "C" fn noop_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
     _this: *const HostInterface,
-    _handle: PluginHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
@@ -247,7 +247,7 @@ fn test_single_contract_registration_and_lookup() {
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
     // Find the test.add contract.
-    let handle: PluginHandle = GRAPH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(test_add_id, 0)
             .expect("test.add must be found")
@@ -284,7 +284,7 @@ fn test_unknown_contract_returns_not_found() {
     let lib: libloading::Library = load_and_init_plugin();
 
     let unknown_id: GuestContractId = GuestContractId::new("unknown.contract", 1);
-    let result: Result<PluginHandle, _> =
+    let result: Result<GuestContractHandle, _> =
         GRAPH_REGISTRY.with(|cell| cell.borrow().find(unknown_id, 0));
 
     assert!(
@@ -326,7 +326,7 @@ fn test_duplicate_registration_allowed() {
     };
 
     // SAFETY: fake_interface is a local static with 'static lifetime.
-    let result: Result<PluginHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
+    let result: Result<GuestContractHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
         cell.borrow().register(
             fake_descriptor,
             &fake_interface as *const GuestContractInterface,
@@ -350,14 +350,14 @@ fn test_invalid_handle_detected() {
     let lib: libloading::Library = load_and_init_plugin();
 
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
-    let handle: PluginHandle = GRAPH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(test_add_id, 0)
             .expect("must find test.add")
     });
 
     // Construct an invalid handle with an out-of-bounds index.
-    let invalid: PluginHandle = PluginHandle { index: 999 };
+    let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
 
     let result: Result<*const GuestContractInterface, _> =
         GRAPH_REGISTRY.with(|cell| cell.borrow().resolve(invalid));
@@ -376,12 +376,12 @@ fn test_multi_lookup_consistent() {
     let test_add_id: GuestContractId = GuestContractId::new("test.add", 1);
 
     // Repeated lookups must return consistent results.
-    let handle_a: PluginHandle = GRAPH_REGISTRY.with(|cell| {
+    let handle_a: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(test_add_id, 0)
             .expect("first find must succeed")
     });
-    let handle_b: PluginHandle = GRAPH_REGISTRY.with(|cell| {
+    let handle_b: GuestContractHandle = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(test_add_id, 0)
             .expect("second find must succeed")

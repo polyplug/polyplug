@@ -43,7 +43,7 @@ pub use polyplug_utils::{GuestContractId, HostContractId};
 
 pub use host::{HostContractInterface, HostContractInstance, HostInterface, RuntimeInterface};
 
-pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
+pub use plugin::{GuestContractHandle, PluginDescriptor, PluginContext};
 
 // ─── ABI version sentinel ────────────────────────────────────────────────────
 

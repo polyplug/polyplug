@@ -1,7 +1,7 @@
-//! Registry — interface storage and plugin handle management.
+//! Registry — interface storage and contract handle management.
 //!
 //! Simple index-based registry: each slot holds an interface pointer.
-//! PluginHandle validation checks for out-of-bounds indices only.
+//! GuestContractHandle validation checks for out-of-bounds indices only.
 //! Hosts must destroy instances before hot-reload via callback.
 //!
 //! Multi-impl support: different bundles may register different implementations of
@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::RwLock;
 
-use polyplug_abi::{GuestContractInterface, PluginDescriptor, PluginHandle};
+use polyplug_abi::{GuestContractInterface, PluginDescriptor, GuestContractHandle};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
@@ -104,7 +104,7 @@ impl PluginRegistry {
         interface_ptr: *const GuestContractInterface,
         contract_name: String,
         bundle_id: BundleId,
-    ) -> Result<PluginHandle, RegistryError> {
+    ) -> Result<GuestContractHandle, RegistryError> {
         // SAFETY: interface_ptr is a valid 'static GuestContractInterface supplied by the caller.
         // The ABI contract requires the pointer to remain valid for the library lifetime.
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
@@ -168,7 +168,7 @@ impl PluginRegistry {
         // Update bundle_index: record first slot for this bundle_id
         data.bundle_index.entry(bundle_id).or_insert(slot_idx);
 
-        Ok(PluginHandle { index: slot_idx })
+        Ok(GuestContractHandle { index: slot_idx })
     }
 
     /// Declare dependency contract_ids for a bundle.
@@ -212,7 +212,7 @@ impl PluginRegistry {
         &self,
         contract_id: GuestContractId,
         min_version: u32,
-    ) -> Result<PluginHandle, RegistryError> {
+    ) -> Result<GuestContractHandle, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -238,7 +238,7 @@ impl PluginRegistry {
                 // The pointer is written once at registration and never mutated.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    return Ok(PluginHandle { index: slot_idx });
+                    return Ok(GuestContractHandle { index: slot_idx });
                 }
             }
         }
@@ -254,7 +254,7 @@ impl PluginRegistry {
         bundle_id: BundleId,
         contract_id: GuestContractId,
         min_version: u32,
-    ) -> Result<PluginHandle, RegistryError> {
+    ) -> Result<GuestContractHandle, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -281,7 +281,7 @@ impl PluginRegistry {
                 && interface.contract_id == contract_id
                 && interface.contract_version.major >= min_version
             {
-                return Ok(PluginHandle { index: slot_idx });
+                return Ok(GuestContractHandle { index: slot_idx });
             }
         }
         Err(RegistryError::PluginNotFound {
@@ -295,7 +295,7 @@ impl PluginRegistry {
         &self,
         contract_id: GuestContractId,
         min_version: u32,
-        out: &mut [PluginHandle],
+        out: &mut [GuestContractHandle],
     ) -> usize {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
@@ -324,7 +324,7 @@ impl PluginRegistry {
                 // Read-only access after registration.
                 let version: u32 = interface.contract_version.major;
                 if version >= min_version {
-                    out[write_count] = PluginHandle { index: slot_idx };
+                    out[write_count] = GuestContractHandle { index: slot_idx };
                     write_count += 1usize;
                 }
             }
@@ -412,7 +412,7 @@ impl PluginRegistry {
         &self,
         contract_id: GuestContractId,
         min_version: u32,
-        out: &mut [PluginHandle],
+        out: &mut [GuestContractHandle],
     ) -> usize {
         self.find_all_by_contract(contract_id, min_version, out)
     }
@@ -422,16 +422,16 @@ impl PluginRegistry {
     //  Delegates to find_by_contract(). Kept for API compatibility.
     //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
     //  Pass 0 to accept any version.
-    pub fn find(&self, contract_id: GuestContractId, min_version: u32) -> Result<PluginHandle, RegistryError> {
+    pub fn find(&self, contract_id: GuestContractId, min_version: u32) -> Result<GuestContractHandle, RegistryError> {
         self.find_by_contract(contract_id, min_version)
     }
 
-    /// Validate a PluginHandle and return its interface pointer directly.
+    /// Validate a GuestContractHandle and return its interface pointer directly.
     ///
     /// Returns Err(InvalidHandle) if:
     /// - handle.index is out of bounds
     /// - the slot has no interface
-    pub fn resolve(&self, handle: PluginHandle) -> Result<*const GuestContractInterface, RegistryError> {
+    pub fn resolve(&self, handle: GuestContractHandle) -> Result<*const GuestContractInterface, RegistryError> {
         let data: std::sync::RwLockReadGuard<'_, RegistryData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
@@ -603,7 +603,7 @@ mod tests {
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "image.decode");
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
         // SAFETY: interface is a local value, but we're just testing registration
-        let handle: PluginHandle = unsafe {
+        let handle: GuestContractHandle = unsafe {
             registry.register(
                 descriptor,
                 &interface,
@@ -614,7 +614,7 @@ mod tests {
         .expect("registration should succeed");
         assert!(!handle.is_null());
 
-        let found: PluginHandle = registry
+        let found: GuestContractHandle = registry
             .find(GuestContractId::from_u64(0x1234_5678_9ABC_DEF0), 0)
             .expect("find should succeed");
         assert_eq!(found.index, handle.index);
@@ -627,7 +627,7 @@ mod tests {
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
         // SAFETY: interface is a local value, but we're just testing registration
-        let _handle: PluginHandle = unsafe {
+        let _handle: GuestContractHandle = unsafe {
             registry.register(
                 descriptor,
                 &interface,
@@ -638,7 +638,7 @@ mod tests {
         .expect("registration should succeed");
 
         // Use a handle with out-of-bounds index
-        let invalid: PluginHandle = PluginHandle { index: 999 };
+        let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
         let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(invalid);
         assert!(
             matches!(result, Err(RegistryError::InvalidHandle { .. })),
@@ -661,7 +661,7 @@ mod tests {
                 .expect("first registration should succeed");
         }
 
-        let result: Result<PluginHandle, RegistryError> =
+        let result: Result<GuestContractHandle, RegistryError> =
             // SAFETY: interface is a local value
             unsafe { registry.register(d2, &interface, "image.decode".to_owned(), bundle_id) };
         // Second registration should succeed (multi-impl allowed)
@@ -687,7 +687,7 @@ mod tests {
                 .expect("first registration should succeed");
         }
 
-        let result: Result<PluginHandle, RegistryError> =
+        let result: Result<GuestContractHandle, RegistryError> =
             // SAFETY: interface is a local value
             unsafe { registry.register(d2, &interface, "contract.b".to_owned(), bundle_id_b) };
         assert!(
@@ -703,7 +703,7 @@ mod tests {
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
         // SAFETY: interface is a local value
-        let handle: PluginHandle = unsafe {
+        let handle: GuestContractHandle = unsafe {
             registry.register(
                 descriptor,
                 &interface,

@@ -15,7 +15,7 @@ pub enum AbiErrorCode {
     Panic = 3,
     /// Not found — plugin/contract not found.
     NotFound = 4,
-    /// Stale handle — PluginHandle generation mismatch.
+    /// Stale handle — GuestContractHandle is invalid (contract unloaded).
     StaleHandle = 5,
     /// Function not available — function_id >= function_count.
     FunctionNotAvailable = 6,

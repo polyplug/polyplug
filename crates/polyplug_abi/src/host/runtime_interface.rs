@@ -29,14 +29,11 @@ use core::ffi::{c_char, c_void};
 use crate::{
     guest::GuestContractInterface,
     host::HostContractInstance,
-    plugin::PluginHandle,
+    plugin::GuestContractHandle,
     types::{AbiError, Array, DependencyInfo, StringView},
 };
 
 use polyplug_utils::BundleId;
-
-/// Type alias for backward compatibility during transition.
-pub type ContractHandle = PluginHandle;
 
 /// Runtime Interface — function table returned to host from polyplug_runtime_create().
 ///
@@ -118,7 +115,7 @@ pub struct RuntimeInterface {
     pub unload_bundle: unsafe extern "C" fn(this: *const RuntimeInterface, bundle_id: BundleId) -> AbiError,
     /// Find a guest contract by contract_id and minimum version.
     ///
-    /// Returns a ContractHandle that can be resolved to an interface.
+    /// Returns a GuestContractHandle that can be resolved to an interface.
     /// Returns null handle if no matching contract found.
     ///
     /// # Arguments
@@ -127,15 +124,15 @@ pub struct RuntimeInterface {
     /// - `min_version`: Minimum version required
     ///
     /// # Returns
-    /// ContractHandle for the first matching contract, or null handle.
+    /// GuestContractHandle for the first matching contract, or null handle.
     pub find_by_contract: unsafe extern "C" fn(
         this: *const RuntimeInterface,
         contract_id: u64,
         min_version: u32,
-    ) -> ContractHandle,
+    ) -> GuestContractHandle,
     /// Find all guest contracts matching contract_id and minimum version.
     ///
-    /// Returns an Array of ContractHandle. Caller must free via host->free.
+    /// Returns an Array of GuestContractHandle. Caller must free via host->free.
     /// Use when multiple implementations of the same contract may exist.
     ///
     /// # Arguments
@@ -144,25 +141,25 @@ pub struct RuntimeInterface {
     /// - `min_version`: Minimum version required
     ///
     /// # Returns
-    /// Array of ContractHandle. Caller owns and must free.
+    /// Array of GuestContractHandle. Caller owns and must free.
     pub find_all_by_contract: unsafe extern "C" fn(
         this: *const RuntimeInterface,
         contract_id: u64,
         min_version: u32,
-    ) -> Array<ContractHandle>,
-    /// Resolve a ContractHandle to a GuestContractInterface pointer.
+    ) -> Array<GuestContractHandle>,
+    /// Resolve a GuestContractHandle to a GuestContractInterface pointer.
     ///
     /// Returns null if the handle is invalid or contract was unloaded.
     ///
     /// # Arguments
     /// - `this`: RuntimeInterface pointer (self-passing)
-    /// - `handle`: ContractHandle from find_by_contract
+    /// - `handle`: GuestContractHandle from find_by_contract
     ///
     /// # Returns
     /// Pointer to GuestContractInterface, or null if invalid/stale.
     pub resolve_contract: unsafe extern "C" fn(
         this: *const RuntimeInterface,
-        handle: ContractHandle,
+        handle: GuestContractHandle,
     ) -> *const GuestContractInterface,
     /// Get a host contract instance by contract_id and minimum version.
     ///

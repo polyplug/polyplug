@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, HostInterface, PluginDescriptor, PluginHandle, RuntimeLanguage};
+use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractInstance, HostInterface, PluginDescriptor, GuestContractHandle, RuntimeLanguage};
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
 
@@ -119,7 +119,7 @@ impl Runtime {
         &self,
         contract_id: u64,
         min_version: u32,
-    ) -> Result<PluginHandle, RegistryError> {
+    ) -> Result<GuestContractHandle, RegistryError> {
         self.registry.find_by_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 
@@ -130,7 +130,7 @@ impl Runtime {
         bundle_id: u64,
         contract_id: u64,
         min_version: u32,
-    ) -> Result<PluginHandle, RegistryError> {
+    ) -> Result<GuestContractHandle, RegistryError> {
         self.registry
             .find_by_bundle(BundleId::from_u64(bundle_id), GuestContractId::from_u64(contract_id), min_version)
     }
@@ -141,7 +141,7 @@ impl Runtime {
         &self,
         contract_id: u64,
         min_version: u32,
-        out: &mut [PluginHandle],
+        out: &mut [GuestContractHandle],
     ) -> usize {
         self.registry
             .find_all_by_contract(GuestContractId::from_u64(contract_id), min_version, out)
@@ -163,7 +163,7 @@ impl Runtime {
     #[inline(always)]
     pub fn resolve_plugin(
         &self,
-        handle: PluginHandle,
+        handle: GuestContractHandle,
     ) -> Result<*const GuestContractInterface, RegistryError> {
         self.registry.resolve(handle)
     }
@@ -592,9 +592,9 @@ fn parse_manifest_version(v: &str, _bundle_name: &str) -> Result<Version, Runtim
     }
 }
 
-/// Helper to create a null PluginHandle.
-fn plugin_handle_null() -> PluginHandle {
-    PluginHandle::null()
+/// Helper to create a null GuestContractHandle.
+fn plugin_handle_null() -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// Helper to convert a StringView to an owned String.
@@ -699,7 +699,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
-) -> PluginHandle {
+) -> GuestContractHandle {
     if this.is_null() {
         return plugin_handle_null();
     }
@@ -727,7 +727,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     use polyplug_abi::Array;
 
     if this.is_null() {
@@ -746,10 +746,10 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     }
 
     // Allocate via host allocator
-    let size = count * core::mem::size_of::<PluginHandle>();
-    let align = core::mem::align_of::<PluginHandle>();
+    let size = count * core::mem::size_of::<GuestContractHandle>();
+    let align = core::mem::align_of::<GuestContractHandle>();
     // SAFETY: host_alloc is safe to call from unsafe context
-    let ptr = unsafe { host_alloc(this, size, align) as *mut PluginHandle };
+    let ptr = unsafe { host_alloc(this, size, align) as *mut GuestContractHandle };
 
     if ptr.is_null() {
         return Array::empty();
@@ -768,7 +768,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
 /// this must be a valid HostInterface pointer with valid runtime field.
 pub(crate) unsafe extern "C" fn host_resolve_contract(
     this: *const HostInterface,
-    handle: PluginHandle,
+    handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     if this.is_null() {
         return core::ptr::null();
@@ -1077,7 +1077,7 @@ mod tests {
         let runtime: Runtime = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
-        let result: Result<PluginHandle, _> =
+        let result: Result<GuestContractHandle, _> =
             runtime.find_by_contract(0x1234_5678_9ABC_DEF0_u64, 0);
         assert!(result.is_err(), "empty registry should return not found");
     }
@@ -1105,7 +1105,7 @@ mod tests {
     #[test]
     fn host_find_by_contract_null_this_returns_null() {
         // SAFETY: host_find_by_contract handles null HostInterface gracefully
-        let handle: PluginHandle =
+        let handle: GuestContractHandle =
             unsafe { host_find_by_contract(core::ptr::null(), 0_u64, 0_u32) };
         assert!(
             handle.is_null(),
@@ -1139,7 +1139,7 @@ mod tests {
         };
 
         // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
-        let handle: PluginHandle =
+        let handle: GuestContractHandle =
             unsafe { host_find_by_contract(&host_interface as *const HostInterface, 0x1111_2222_3333_4444_u64, 0_u32) };
         assert!(
             handle.is_null(),
@@ -1174,7 +1174,7 @@ mod tests {
         registry: &crate::registry::PluginRegistry,
         contract_id: u64,
         bundle_id: u64,
-    ) -> PluginHandle {
+    ) -> GuestContractHandle {
         use polyplug_abi::{
             DispatchType,
             DispatchMechanisms,
@@ -1208,7 +1208,7 @@ mod tests {
             version: Version { major: 1, minor: 0, patch: 0 },
         };
         // SAFETY: interface is leaked and lives for the process lifetime.
-        let result: Result<PluginHandle, crate::error::RegistryError> =
+        let result: Result<GuestContractHandle, crate::error::RegistryError> =
             unsafe { registry.register(descriptor, interface, "stub.contract".to_owned(), BundleId::from_u64(bundle_id)) };
         match result {
             Ok(handle) => handle,
@@ -1425,7 +1425,7 @@ mod tests {
             Err(e) => panic!("failed to build runtime: {e}"),
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
-        let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xBEEF_u64);
+        let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xBEEF_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
         match result {
@@ -1460,7 +1460,7 @@ mod tests {
             Err(e) => panic!("failed to build runtime: {e}"),
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
-        let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xCAFE_u64);
+        let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xCAFE_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
         if let Err(e) = result {
@@ -1475,7 +1475,7 @@ mod tests {
             Some(true),
             "loader should have been called during init"
         );
-        let handle_after: Result<PluginHandle, _> = runtime.find_by_contract(contract, 0_u32);
+        let handle_after: Result<GuestContractHandle, _> = runtime.find_by_contract(contract, 0_u32);
         assert!(
             handle_after.is_ok(),
             "after init, find_by_contract should succeed"
@@ -1530,7 +1530,7 @@ mod tests {
             Err(e) => panic!("failed to build runtime: {e}"),
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
-        let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xABCD_u64);
+        let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xABCD_u64);
         {
             let mut guard: std::sync::MutexGuard<'_, ReentrantState> = match state.lock() {
                 Ok(g) => g,
@@ -1585,7 +1585,7 @@ mod tests {
             Err(e) => panic!("failed to build runtime: {e}"),
         };
         let registry: &Arc<PluginRegistry> = runtime.registry();
-        let _handle: PluginHandle = register_contract(registry.as_ref(), contract, 0xFACE_u64);
+        let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xFACE_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(outer_bundle.as_path());
         if let Err(e) = result {

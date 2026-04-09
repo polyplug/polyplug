@@ -71,10 +71,10 @@ ffi.cdef[[
     //
     //  The handle is just an index into the registry array.
     //  Out-of-bounds indices return InvalidHandle error.
-    typedef struct PluginHandle {
+    typedef struct GuestContractHandle {
         //  Slot in the registry array.
         uint32_t index;
-    } PluginHandle;
+    } GuestContractHandle;
 
     //  Opaque handle to a guest contract instance.
     //  Created by GuestContractInterface.create_instance, destroyed by destroy_instance.
@@ -205,9 +205,9 @@ ffi.cdef[[
         AbiError (*register_contract)(const HostInterface*, const PluginDescriptor*, const GuestContractInterface*);
         uint8_t* (*alloc)(const HostInterface*, size_t, size_t);
         void (*free)(const HostInterface*, uint8_t*, size_t, size_t);
-        PluginHandle (*find_by_contract)(const HostInterface*, uint64_t, uint32_t);
+        GuestContractHandle (*find_by_contract)(const HostInterface*, uint64_t, uint32_t);
         struct { void* items; size_t len; size_t align; } (*find_all_by_contract)(const HostInterface*, uint64_t, uint32_t);
-        const GuestContractInterface* (*resolve_contract)(const HostInterface*, PluginHandle);
+        const GuestContractInterface* (*resolve_contract)(const HostInterface*, GuestContractHandle);
         HostContractInstance (*get_host_contract)(const HostInterface*, uint64_t, uint32_t);
         StringView (*get_last_error)(const HostInterface*);
         struct { void* items; size_t len; size_t align; } (*list_bundles)(const HostInterface*);

@@ -86,7 +86,7 @@ export interface Buffer {
  *  INTERNAL STRUCTURE: index into registry array + generation counter.
  *  The generation counter detects use-after-unload.
  */
-export interface PluginHandle {
+export interface GuestContractHandle {
     /**  Slot in the registry array. */
     index: number;
     /**  Incremented on unload — detects stale handles. */
@@ -272,11 +272,11 @@ export interface HostInterface {
     /**  Free memory allocated via `alloc`. */
     free: (this: bigint, ptr: bigint, size: number, align: number) => void;
     /**  Find a guest contract by contract_id and minimum version. */
-    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => PluginHandle;
+    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => GuestContractHandle;
     /**  Find all guest contracts matching contract_id and minimum version. */
-    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<PluginHandle>;
+    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<GuestContractHandle>;
     /**  Resolve a ContractHandle to a GuestContractInterface pointer. */
-    resolve_contract: (this: bigint, handle: PluginHandle) => bigint;
+    resolve_contract: (this: bigint, handle: GuestContractHandle) => bigint;
     /**  Call a method on a guest contract instance (cross-dispatch). */
     call_guest_method: (this: bigint, instance: GuestContractInstance, method_id: number, args: bigint, out: bigint) => AbiError;
     /**  Get a host contract instance by contract_id and minimum version. */
@@ -308,11 +308,11 @@ export interface RuntimeInterface {
     /**  Unload a bundle. */
     unload_bundle: (this: bigint, bundle_id: bigint) => AbiError;
     /**  Find a guest contract by contract_id and minimum version. */
-    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => PluginHandle;
+    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => GuestContractHandle;
     /**  Find all guest contracts matching contract_id and minimum version. */
-    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<PluginHandle>;
+    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<GuestContractHandle>;
     /**  Resolve a ContractHandle to a GuestContractInterface pointer. */
-    resolve_contract: (this: bigint, handle: PluginHandle) => bigint;
+    resolve_contract: (this: bigint, handle: GuestContractHandle) => bigint;
     /**  Get a host contract instance by contract_id and minimum version. */
     get_host_contract: (this: bigint, contract_id: bigint, min_version: number) => HostContractInstance;
     /**  Get the last error message. */
@@ -519,7 +519,7 @@ export const ABI_EXPECTED_SIZES: {
     StringView: number;
     Buffer: number;
     AbiError: number;
-    PluginHandle: number;
+    GuestContractHandle: number;
     HostContext: number;
     DispatchType: number;
     NativeDispatch: number;
@@ -540,7 +540,7 @@ export const ABI_EXPECTED_SIZES: {
     StringView: 16,
     Buffer: 24,
     AbiError: 24,
-    PluginHandle: 8,
+    GuestContractHandle: 8,
     HostContext: 16,
     DispatchType: 4,
     NativeDispatch: 8,
@@ -617,8 +617,8 @@ export function validateAbi(): void {
     // Validate AbiError: code (number) + message (StringView)
     validateAbiStruct({ code: 0, message: { ptr: 0n, len: 0 } }, 'AbiError', [['code', 'number']]);
 
-    // Validate PluginHandle: index (number) + generation (number)
-    validateAbiStruct({ index: 0, generation: 0 }, 'PluginHandle', [['index', 'number'], ['generation', 'number']]);
+    // Validate GuestContractHandle: index (number) + generation (number)
+    validateAbiStruct({ index: 0, generation: 0 }, 'GuestContractHandle', [['index', 'number'], ['generation', 'number']]);
 
     // Validate HostContext: runtime (bigint) + bundle_id (bigint)
     validateAbiStruct({ runtime: 0n, bundle_id: 0n }, 'HostContext', [['runtime', 'bigint'], ['bundle_id', 'bigint']]);

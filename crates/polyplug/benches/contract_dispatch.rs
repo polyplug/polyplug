@@ -20,7 +20,7 @@ use polyplug_abi::Buffer;
 use polyplug_abi::DispatchType;
 use polyplug_abi::HostInterface;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
@@ -87,7 +87,7 @@ unsafe extern "C" fn bench_register_callback(
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    let result: Result<PluginHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+    let result: Result<GuestContractHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         let borrowed = cell.borrow();
         let registry = borrowed.as_ref().expect("registry not initialized");
@@ -137,12 +137,12 @@ unsafe extern "C" fn bench_find_by_contract(
     _this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
-) -> PluginHandle {
+) -> GuestContractHandle {
     BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
         let registry = cell.borrow();
         let reg = registry.as_ref().expect("registry not initialized");
         reg.find(polyplug_utils::GuestContractId::from_u64(contract_id), min_version)
-            .unwrap_or_else(|_| PluginHandle::null())
+            .unwrap_or_else(|_| GuestContractHandle::null())
     })
 }
 
@@ -154,7 +154,7 @@ unsafe extern "C" fn bench_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> Array<PluginHandle> {
+) -> Array<GuestContractHandle> {
     Array::empty()
 }
 
@@ -164,7 +164,7 @@ unsafe extern "C" fn bench_find_all_by_contract(
 /// The returned pointer is valid and 'static — the library is kept alive via mem::forget.
 unsafe extern "C" fn bench_resolve_contract(
     _this: *const HostInterface,
-    handle: PluginHandle,
+    handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
         cell.borrow()
@@ -506,7 +506,7 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("cross_plugin", "find+call"), |b| {
         b.iter(|| {
             // SAFETY: bench_find_by_contract is a valid extern C fn backed by BENCH_REGISTRY.
-            let handle: PluginHandle = unsafe {
+            let handle: GuestContractHandle = unsafe {
                 black_box((host_interface.find_by_contract)(
                     &host_interface as *const HostInterface,
                     memory_contract_id,

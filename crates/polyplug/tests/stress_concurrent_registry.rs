@@ -10,7 +10,7 @@ use polyplug::error::RegistryError;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
-    PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
+    GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
 use polyplug_utils::BundleId;
 
@@ -129,7 +129,7 @@ fn stress_concurrent_register_find_resolve() {
             let interface: &'static GuestContractInterface = &INTERFACES_V1[idx];
             barrier_clone.wait();
             // SAFETY: interface is a static reference valid for the test lifetime.
-            let handle: PluginHandle = unsafe {
+            let handle: GuestContractHandle = unsafe {
                 reg_clone
                     .register(
                         descriptor,
@@ -141,7 +141,7 @@ fn stress_concurrent_register_find_resolve() {
             };
 
             for _round in 0_usize..RESOLVE_ROUNDS {
-                let found: PluginHandle = reg_clone
+                let found: GuestContractHandle = reg_clone
                     .find_by_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
                     .expect("find_by_contract must succeed");
                 let interface_ptr: *const GuestContractInterface =
@@ -169,7 +169,7 @@ fn stress_concurrent_register_find_resolve() {
     }
 
     for (idx, &expected_cid) in CONTRACT_IDS.iter().enumerate().take(THREADS) {
-        let found: PluginHandle = registry
+        let found: GuestContractHandle = registry
             .find_by_contract(GuestContractId::from_u64(expected_cid), 0_u32)
             .expect("main-thread find must succeed");
         let interface_ptr: *const GuestContractInterface =
@@ -185,7 +185,7 @@ fn stress_concurrent_swaps_with_resolvers() {
     let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "stress.swap.contract");
     // SAFETY: INTERFACE_SWAP_V1 is a static reference valid for the test lifetime.
-    let handle: PluginHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor,
@@ -210,7 +210,7 @@ fn stress_concurrent_swaps_with_resolvers() {
         let resolver_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             ready_clone.wait();
             while !stop_clone.load(Ordering::Relaxed) {
-                let handle_result: Result<PluginHandle, RegistryError> =
+                let handle_result: Result<GuestContractHandle, RegistryError> =
                     reg_clone.find_by_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =

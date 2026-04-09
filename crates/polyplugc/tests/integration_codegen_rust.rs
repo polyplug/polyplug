@@ -12,7 +12,7 @@ use polyplug_abi::string_view_null;
 use polyplug_abi::AbiError;
 use polyplug_abi::Array;
 use polyplug_utils::BundleId;
-use polyplug_abi::host::host_interface::ContractHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::HostInterface;
@@ -240,21 +240,21 @@ unsafe extern "C" fn stub_find_by_contract(
     _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> ContractHandle {
-    ContractHandle { index: u32::MAX }
+) -> GuestContractHandle {
+    GuestContractHandle { index: u32::MAX }
 }
 
 unsafe extern "C" fn stub_find_all_by_contract(
     _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> Array<ContractHandle> {
+) -> Array<GuestContractHandle> {
     Array::empty()
 }
 
 unsafe extern "C" fn stub_resolve_contract(
     _host: *const HostInterface,
-    _handle: ContractHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }

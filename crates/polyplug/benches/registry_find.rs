@@ -22,7 +22,7 @@ use polyplug_abi::HostInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::DispatchMechanisms;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
 use polyplug_utils::GuestContractId;
 use polyplug_utils::BundleId;
@@ -92,7 +92,7 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
-    let _handle: PluginHandle = unsafe {
+    let _handle: GuestContractHandle = unsafe {
         registry
             .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
@@ -106,7 +106,7 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("find_by_contract", "single_slot"), |b| {
         b.iter(|| {
-            let result: Result<PluginHandle, _> =
+            let result: Result<GuestContractHandle, _> =
                 registry.find(black_box(GuestContractId::from_u64(contract_id)), black_box(0u32));
             let _ = black_box(result);
         });
@@ -153,7 +153,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
         BenchmarkId::new("find_by_contract", "10_impls_same_contract"),
         |b| {
             b.iter(|| {
-                let result: Result<PluginHandle, _> =
+                let result: Result<GuestContractHandle, _> =
                     registry.find(black_box(GuestContractId::from_u64(contract_id)), black_box(0u32));
                 let _ = black_box(result);
             });
@@ -203,7 +203,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
         BenchmarkId::new("find_by_contract", "100_different_contracts"),
         |b| {
             b.iter(|| {
-                let result: Result<PluginHandle, _> =
+                let result: Result<GuestContractHandle, _> =
                     registry.find(black_box(GuestContractId::from_u64(target_contract_id)), black_box(0u32));
                 let _ = black_box(result);
             });
@@ -220,7 +220,7 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
-    let _handle: PluginHandle = unsafe {
+    let _handle: GuestContractHandle = unsafe {
         registry
             .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
@@ -234,7 +234,7 @@ fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("find_by_contract", "not_found"), |b| {
         b.iter(|| {
-            let result: Result<PluginHandle, _> =
+            let result: Result<GuestContractHandle, _> =
                 registry.find(black_box(GuestContractId::from_u64(nonexistent_contract_id)), black_box(0u32));
             let _ = black_box(result);
         });

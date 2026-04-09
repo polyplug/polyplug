@@ -14,7 +14,7 @@ use std::sync::Arc;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
-    PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
+    GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
 use polyplug_utils::BundleId;
 
@@ -85,7 +85,7 @@ fn test_swap_interface_changes_interface_pointer() {
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
 
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
-    let handle: PluginHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry.register(
             descriptor,
             &INTERFACE_V1,
@@ -147,7 +147,7 @@ fn test_direct_swap_interface() {
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.direct.contract");
 
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
-    let handle: PluginHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry.register(
             descriptor,
             &INTERFACE_V1,

@@ -14,7 +14,7 @@ use libloading::os::unix::RTLD_LAZY;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView,
+    PluginContext, PluginDescriptor, GuestContractHandle, StringView,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -54,12 +54,12 @@ unsafe extern "C" fn chain_find_by_contract(
     _this: *const HostInterface,
     contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
+) -> GuestContractHandle {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
         match registry.find(GuestContractId::from_u64(contract_id), 0) {
             Ok(handle) => handle,
-            Err(_) => PluginHandle::null(),
+            Err(_) => GuestContractHandle::null(),
         }
     })
 }
@@ -72,7 +72,7 @@ unsafe extern "C" fn chain_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     polyplug_abi::Array::empty()
 }
 
@@ -82,7 +82,7 @@ unsafe extern "C" fn chain_find_all_by_contract(
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
 unsafe extern "C" fn chain_resolve_contract(
     _this: *const HostInterface,
-    handle: PluginHandle,
+    handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
@@ -147,8 +147,8 @@ unsafe extern "C" fn noop_find_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -156,14 +156,14 @@ unsafe extern "C" fn noop_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
     _this: *const HostInterface,
-    _handle: PluginHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
@@ -247,7 +247,7 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
+    let result: Result<GuestContractHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
@@ -346,7 +346,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
 
     let contract_id: GuestContractId = GuestContractId::new("error.test", 1);
-    let handle: PluginHandle = ERROR_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = ERROR_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
             .expect("error.test must be registered")

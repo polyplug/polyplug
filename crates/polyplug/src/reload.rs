@@ -157,7 +157,7 @@ impl Runtime {
 
                     // Find NEW interface handle (registered during init)
                     // find_by_contract returns handle pointing to NEW registration
-                    let new_handle: polyplug_abi::plugin::PluginHandle = self.registry
+                    let new_handle: polyplug_abi::plugin::GuestContractHandle = self.registry
                         .find_by_contract(contract_id, 0)?;
 
                     // Get Arc to NEW interface
@@ -194,14 +194,14 @@ impl Runtime {
         }
     }
 
-    /// Refresh a plugin handle after reload.
+    /// Refresh a contract handle after reload.
     ///
-    /// Returns a new handle with updated generation.
+    /// Returns a new handle for the contract.
     pub fn refresh_handle(
         &self,
         contract_id: u64,
         min_version: u32,
-    ) -> Result<polyplug_abi::plugin::PluginHandle, crate::error::RegistryError> {
+    ) -> Result<polyplug_abi::plugin::GuestContractHandle, crate::error::RegistryError> {
         self.registry().find_by_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 }

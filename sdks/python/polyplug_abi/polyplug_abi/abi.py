@@ -80,7 +80,7 @@ class AbiError(ctypes.Structure):
     ]
 
 
-class PluginHandle(ctypes.Structure):
+class GuestContractHandle(ctypes.Structure):
     """Opaque handle to a loaded guest contract — validated on use.
 
     The handle is just an index into the registry array.

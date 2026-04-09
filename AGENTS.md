@@ -467,6 +467,8 @@ polyplug/
 | global state / thread-locals for Runtime | all state owned by Runtime instance |
 | dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
 | `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
+| `PluginHandle`, `PluginInterface`, `HostVTable` | `GuestContractHandle`, `GuestContractInterface`, `HostInterface` |
+| type aliases for "convenience" (`pub type OldName = NewName`) | use canonical names everywhere |
 
 ---
 
@@ -560,6 +562,52 @@ let code = AbiErrorCode::Ok;
 1. Remove the old code completely
 2. Update all usages in the same PR
 3. Do NOT leave deprecated shims
+
+---
+
+### 15. ABI Type Naming Conventions
+
+**ALWAYS use the canonical names for ABI types. NEVER create type aliases or deprecated names.**
+
+**Canonical ABI Types:**
+- `GuestContractInterface` — NOT `PluginInterface` or `PluginVTable`
+- `GuestContractInstance` — NOT `PluginInstance`
+- `GuestContractHandle` — NOT `PluginHandle` or `ContractHandle`
+- `HostInterface` — NOT `HostVTable` or `RuntimeAbi`
+- `HostContractInterface` — NOT `HostContractVTable`
+- `HostContractInstance` — NOT `HostInstance`
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — type aliases for "convenience"
+pub type PluginHandle = GuestContractHandle;
+pub type PluginInterface = GuestContractInterface;
+pub type HostVTable = HostInterface;
+pub type ContractHandle = GuestContractHandle;
+
+// FORBIDDEN — deprecated aliases
+#[deprecated(note = "Use GuestContractHandle")]
+pub type PluginHandle = GuestContractHandle;
+```
+
+**CORRECT:**
+```rust
+// CORRECT — use canonical names everywhere
+pub use polyplug_abi::GuestContractHandle;
+pub use polyplug_abi::GuestContractInterface;
+pub use polyplug_abi::HostInterface;
+```
+
+**Naming Convention:**
+- Guest types: `GuestContract*` (implemented by plugins, called by host)
+- Host types: `Host*` or `HostContract*` (implemented by host, called by plugins)
+- No "Plugin" prefix in type names — use "Guest" or "Contract" instead
+
+**Why this matters:**
+- Type aliases create confusion about which name is canonical
+- They encourage inconsistent naming across the codebase
+- They make refactoring harder — changing the source requires updating all aliases
+- The canonical names clearly indicate ownership (Guest vs Host)
 
 ---
 

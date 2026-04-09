@@ -9,7 +9,7 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::HostInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_abi::GuestContractId;
@@ -82,9 +82,9 @@ unsafe extern "C" fn noop_find_by_contract(
     this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
+) -> GuestContractHandle {
     let _ = this;
-    PluginHandle::null()
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback (not used in this test).
@@ -92,7 +92,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
     this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     let _ = this;
     polyplug_abi::Array::empty()
 }
@@ -100,7 +100,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
     this: *const HostInterface,
-    _handle: PluginHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     let _ = this;
     core::ptr::null()

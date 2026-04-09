@@ -74,8 +74,8 @@ unsafe extern "C" fn noop_find_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::PluginHandle {
-    polyplug_abi::PluginHandle::null()
+) -> polyplug_abi::GuestContractHandle {
+    polyplug_abi::GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -83,14 +83,14 @@ unsafe extern "C" fn noop_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<polyplug_abi::PluginHandle> {
+) -> polyplug_abi::Array<polyplug_abi::GuestContractHandle> {
     polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
     _this: *const HostInterface,
-    _handle: polyplug_abi::PluginHandle,
+    _handle: polyplug_abi::GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }

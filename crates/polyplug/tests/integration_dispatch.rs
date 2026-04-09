@@ -7,7 +7,7 @@
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView,
+    PluginContext, PluginDescriptor, GuestContractHandle, StringView,
 };
 use polyplug_utils::{GuestContractId, BundleId};
 
@@ -49,7 +49,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // Register with thread-local Registry.
     // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
+    let result: Result<GuestContractHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
@@ -92,8 +92,8 @@ unsafe extern "C" fn noop_find_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// No-op find_all_by_contract callback.
@@ -101,14 +101,14 @@ unsafe extern "C" fn noop_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> polyplug_abi::Array<PluginHandle> {
+) -> polyplug_abi::Array<GuestContractHandle> {
     polyplug_abi::Array::empty()
 }
 
 /// No-op resolve_contract callback.
 unsafe extern "C" fn noop_resolve_contract(
     _this: *const HostInterface,
-    _handle: PluginHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
@@ -229,7 +229,7 @@ fn test_dispatch_add_function() {
 
     // Look up the test.add plugin.
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
-    let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
             .expect("test.add must be registered")
@@ -330,7 +330,7 @@ fn test_dispatch_add_with_zero() {
     assert_eq!(init_result.code, AbiErrorCode::Ok);
 
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
-    let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
             .expect("test.add must be registered")
@@ -414,7 +414,7 @@ fn test_dispatch_add_wrapping_overflow() {
     assert_eq!(init_result.code, AbiErrorCode::Ok);
 
     let contract_id: GuestContractId = GuestContractId::new("test.add", 1);
-    let handle: PluginHandle = DISPATCH_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
             .expect("test.add must be registered")

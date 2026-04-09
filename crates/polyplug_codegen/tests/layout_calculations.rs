@@ -69,7 +69,7 @@ fn layout_bool_size_align() {
 
 // ─── Category 2: ABI Built-in Types (5 tests) ───────────────────────────────────
 
-use polyplug_abi::{AbiError, Buffer, PluginHandle, StringView};
+use polyplug_abi::{AbiError, Buffer, GuestContractHandle, StringView};
 
 /// StringView: size=16, align=8, ptr@0, len@8
 #[test]
@@ -139,23 +139,23 @@ fn layout_abierror_fields_and_size() {
     );
 }
 
-/// PluginHandle: size=4, align=4, index@0 (opaque handle)
+/// GuestContractHandle: size=4, align=4, index@0 (opaque handle)
 #[test]
 fn layout_plugin_handle_fields_and_size() {
     assert_eq!(
-        size_of::<PluginHandle>(),
+        size_of::<GuestContractHandle>(),
         4,
-        "PluginHandle size must be 4 bytes (opaque index handle)"
+        "GuestContractHandle size must be 4 bytes (opaque index handle)"
     );
     assert_eq!(
-        align_of::<PluginHandle>(),
+        align_of::<GuestContractHandle>(),
         4,
-        "PluginHandle alignment must be 4 bytes"
+        "GuestContractHandle alignment must be 4 bytes"
     );
     assert_eq!(
-        offset_of!(PluginHandle, index),
+        offset_of!(GuestContractHandle, index),
         0,
-        "PluginHandle.index must be at offset 0"
+        "GuestContractHandle.index must be at offset 0"
     );
 }
 
@@ -877,11 +877,11 @@ fn layout_buffer_followed_by_u32() {
     );
 }
 
-/// PluginHandle followed by u64: verifies PluginHandle alignment
+/// GuestContractHandle followed by u64: verifies GuestContractHandle alignment
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct HandleFollowedByU64 {
-    handle: PluginHandle, // 8 bytes @ 0
+    handle: GuestContractHandle, // 8 bytes @ 0
     value: u64,           // 8 bytes @ 8
 }
 
@@ -961,7 +961,7 @@ struct AllAbiTypesStruct {
     sv: StringView,       // 16 bytes @ 0
     buf: Buffer,          // 24 bytes @ 16
     err: AbiError,        // 24 bytes @ 40
-    handle: PluginHandle, // 4 bytes @ 64
+    handle: GuestContractHandle, // 4 bytes @ 64
 }
 
 #[test]

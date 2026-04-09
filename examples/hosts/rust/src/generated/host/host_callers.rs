@@ -12,7 +12,7 @@ use polyplug_abi::GuestContractInterface;
 use polyplug_abi::HostInterface;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInstance;
 use polyplug::ffi::polyplug_runtime_resolve_plugin;
 use super::types::*;
@@ -59,7 +59,7 @@ impl PipelineDecoderContract {
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
             polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
@@ -194,7 +194,7 @@ impl DataTransformerContract {
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
             polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
@@ -329,7 +329,7 @@ impl PipelineEncoderContract {
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
             polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
@@ -464,7 +464,7 @@ impl DataReporterContract {
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
             polyplug_runtime_resolve_plugin(host as *const _, handle.pack())
@@ -599,7 +599,7 @@ impl PipelineValidatorContract {
     /// # Returns
     /// - `Some(Self)` if interface found and instance created
     /// - `None` if interface not found or `create_instance` failed
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface = unsafe {
             polyplug_runtime_resolve_plugin(host as *const _, handle.pack())

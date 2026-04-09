@@ -132,7 +132,7 @@ fn make_hot_reload_runtime() -> Runtime {
 }
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
+    let handle: polyplug_abi::GuestContractHandle = rt.find_by_contract(contract_id, 0).ok()?;
     let interface_ptr: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?;
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*interface_ptr).dispatch.native.functions;
@@ -207,7 +207,7 @@ fn stress_memory_interface_swap_cycles() {
     };
 
     // SAFETY: INTERFACE_MEM_A is 'static and valid for the lifetime of this test.
-    let handle: polyplug_abi::PluginHandle = unsafe {
+    let handle: polyplug_abi::GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor,
@@ -248,7 +248,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     };
 
     // SAFETY: INTERFACE_QU_A is 'static and valid for the test lifetime.
-    let handle: polyplug_abi::PluginHandle = unsafe {
+    let handle: polyplug_abi::GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor,
@@ -271,7 +271,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
         let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 let find_result: Result<
-                    polyplug_abi::PluginHandle,
+                    polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
                 > = reg_clone.find_by_contract(GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64), 0_u32);
                 if let Ok(resolved_handle) = find_result {
@@ -348,7 +348,7 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
         let dispatcher_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             while !stop_clone.load(Ordering::Relaxed) {
                 let handle_result: Result<
-                    polyplug_abi::PluginHandle,
+                    polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
                 > = rt_clone.find_by_contract(contract_id, 0_u32);
 

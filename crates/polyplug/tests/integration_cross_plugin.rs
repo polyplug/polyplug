@@ -70,7 +70,7 @@ mod tests {
     use polyplug::error::RegistryError;
     use polyplug::registry::plugin_registry::PluginRegistry;
     use polyplug_abi::PluginDescriptor;
-    use polyplug_abi::PluginHandle;
+    use polyplug_abi::GuestContractHandle;
     use polyplug_abi::GuestContractInterface;
     use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 
@@ -88,7 +88,7 @@ mod tests {
         unsafe { registry.register(desc, interface, "audio.Decoder".to_owned(), bid) }
             .expect("register should succeed");
 
-        let handle: PluginHandle = registry
+        let handle: GuestContractHandle = registry
             .find_by_contract(cid, 0)
             .expect("find_by_contract should return Ok");
 
@@ -129,7 +129,7 @@ mod tests {
                 .expect("register bundle-b")
         };
 
-        let mut handles: [PluginHandle; 4] = [PluginHandle::null(); 4];
+        let mut handles: [GuestContractHandle; 4] = [GuestContractHandle::null(); 4];
         let count: usize = registry.find_all_by_contract(cid, 0, &mut handles);
         assert_eq!(count, 2, "must find exactly 2 providers");
     }
@@ -170,7 +170,7 @@ mod tests {
                 .expect("register bundle-b")
         };
 
-        let found: PluginHandle = registry
+        let found: GuestContractHandle = registry
             .find_by_bundle(bid_b, cid, 0)
             .expect("find_by_bundle(bundle-b) should succeed");
 
@@ -193,7 +193,7 @@ mod tests {
         let registry: PluginRegistry = PluginRegistry::new();
 
         // Construct a handle with an out-of-bounds index.
-        let invalid: PluginHandle = PluginHandle { index: 999 };
+        let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
 
         let result = registry.resolve(invalid);
         assert!(

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, PluginHandle, StringView, Version, DispatchMechanisms,
+    PluginContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch, Array,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -78,8 +78,8 @@ unsafe extern "C" fn stub_find_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 
 /// Stub find_all_by_contract -- returns empty array (not needed for memory stress tests).
@@ -90,7 +90,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> Array<PluginHandle> {
+) -> Array<GuestContractHandle> {
     Array::empty()
 }
 
@@ -100,7 +100,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// Always safe to call; returns null pointer.
 unsafe extern "C" fn stub_resolve_contract(
     _this: *const HostInterface,
-    _handle: PluginHandle,
+    _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
@@ -204,7 +204,7 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-    let result: Result<PluginHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
+    let result: Result<GuestContractHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
         let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
@@ -290,7 +290,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
 
     let contract_id: GuestContractId = GuestContractId::new("memory.test", 1);
-    let handle: PluginHandle = STRESS_REGISTRY.with(|cell| {
+    let handle: GuestContractHandle = STRESS_REGISTRY.with(|cell| {
         cell.borrow()
             .find(contract_id, 0)
             .expect("memory.test must be registered")

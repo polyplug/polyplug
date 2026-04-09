@@ -30,7 +30,7 @@ use polyplug_abi::DispatchType;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::StringView;
@@ -182,7 +182,7 @@ unsafe extern "C" fn js_dispatch(
 
 // ─── Host function registration ───────────────────────────────────────────────
 
-fn pack_handle(h: PluginHandle) -> Option<u64> {
+fn pack_handle(h: GuestContractHandle) -> Option<u64> {
     if h.is_null() {
         None
     } else {
@@ -269,7 +269,7 @@ fn register_host_functions<'js>(
             let contract_id: u64 = (hi as u64) << 32 | lo as u64;
             let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static HostInterface data.
-            let handle: PluginHandle =
+            let handle: GuestContractHandle =
                 unsafe { ((*hvt).find_by_contract)(hvt, contract_id, min_ver) };
             pack_handle(handle)
         },
@@ -324,7 +324,7 @@ fn register_host_functions<'js>(
             };
             // SAFETY: hvt points to 'static HostInterface data.
             // find_all_by_contract returns Array<ContractHandle>.
-            let handles: polyplug_abi::types::Array<PluginHandle> =
+            let handles: polyplug_abi::types::Array<GuestContractHandle> =
                 unsafe { ((*hvt).find_all_by_contract)(hvt, contract_id, min_ver) };
             handles.len as u32
         },
@@ -348,7 +348,7 @@ fn register_host_functions<'js>(
     let resolve_plugin_fn: Function<'js> =
         Function::new(ctx.clone(), |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
             let index: u32 = packed as u32;
-            let handle: PluginHandle = PluginHandle { index };
+            let handle: GuestContractHandle = GuestContractHandle { index };
             let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static HostInterface data.
             let vtable_ptr: *const GuestContractInterface =

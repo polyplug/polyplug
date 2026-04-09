@@ -14,7 +14,7 @@ use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::PluginInterface;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
@@ -258,13 +258,13 @@ fn vtable_is_registered_after_load() {
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
-    let handle: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
     assert!(
         handle.is_ok(),
         "registry must contain test.loader@1 after load"
     );
-    let handle: PluginHandle = handle.expect("handle must be Ok");
+    let handle: GuestContractHandle = handle.expect("handle must be Ok");
     let vtable_ptr: Result<*const PluginInterface, polyplug::error::RegistryError> =
         runtime.registry().resolve(handle);
     assert!(vtable_ptr.is_ok(), "handle must resolve to a vtable");
@@ -289,9 +289,9 @@ fn vtable_function_count_matches_script() {
         .expect("two-function bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.two", 1);
-    let handle: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
-    let handle: PluginHandle = handle.expect("test.two@1 must be registered");
+    let handle: GuestContractHandle = handle.expect("test.two@1 must be registered");
     let vtable_ptr: Result<*const PluginInterface, polyplug::error::RegistryError> =
         runtime.registry().resolve(handle);
     // SAFETY: see vtable_is_registered_after_load.
@@ -315,9 +315,9 @@ fn vtable_contract_id_matches_computed_hash() {
         .expect("valid bundle must load");
 
     let expected_cid: u64 = polyplug_abi::contract_id("test.loader", 1);
-    let handle: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(expected_cid, 0);
-    let handle: PluginHandle = handle.expect("test.loader@1 must be registered");
+    let handle: GuestContractHandle = handle.expect("test.loader@1 must be registered");
     let vtable_ptr: Result<*const PluginInterface, polyplug::error::RegistryError> =
         runtime.registry().resolve(handle);
     // SAFETY: see vtable_is_registered_after_load.
@@ -352,11 +352,11 @@ fn sequential_loads_both_succeed() {
     let cid1: u64 = polyplug_abi::contract_id("test.loader", 1);
     let cid2: u64 = polyplug_abi::contract_id("test.two", 1);
 
-    let handle1: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle1: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(cid1, 0);
     assert!(handle1.is_ok(), "test.loader must be registered");
 
-    let handle2: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle2: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(cid2, 0);
     assert!(handle2.is_ok(), "test.two must be registered");
 }
@@ -428,7 +428,7 @@ fn vtable_function_dispatch_returns_abi_ok() {
         .expect("valid bundle must load");
 
     let contract_id: u64 = polyplug_abi::contract_id("test.loader", 1);
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("test.loader@1 must be registered");

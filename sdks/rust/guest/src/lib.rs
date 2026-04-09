@@ -161,16 +161,13 @@ pub use polyplug_abi::types::Version;
 /// For stateless plugins, use `GuestContractInstance::null()`.
 pub use polyplug_abi::guest::GuestContractInstance;
 
-/// Opaque handle to a loaded plugin — validated on every use.
-pub use polyplug_abi::PluginHandle;
+/// Opaque handle to a loaded guest contract — validated on every use.
+pub use polyplug_abi::GuestContractHandle;
 
-/// Plugin Interface — one per contract implemented by a plugin.
+/// Guest Contract Interface — one per contract implemented by a plugin.
 ///
 /// OWNERSHIP: Must be `'static` or intentionally leaked.
 pub use polyplug_abi::GuestContractInterface;
-
-/// Legacy alias for GuestContractInterface (backward compatibility).
-pub type PluginInterface = GuestContractInterface;
 
 /// Dispatch type for plugin interfaces.
 pub use polyplug_abi::dispatch::dispatch_type::DispatchType;
@@ -183,18 +180,6 @@ pub use polyplug_abi::dispatch::vm_dispatch::VmDispatch;
 
 /// Union of dispatch mechanisms.
 pub use polyplug_abi::dispatch::dispatch_mechanisms::DispatchMechanisms;
-
-/// Legacy alias for DispatchMechanisms.
-pub type PluginDispatch = DispatchMechanisms;
-
-/// Legacy alias for DispatchMechanisms (host contract variant).
-pub type HostContractDispatch = DispatchMechanisms;
-
-/// Legacy alias for NativeDispatch (host contract variant).
-pub type NativeHostContractDispatch = NativeDispatch;
-
-/// Legacy alias for VmDispatch (host contract variant).
-pub type VmHostContractDispatch = VmDispatch;
 
 /// Host contract interface for calling host-provided contracts (`HostContractInterface`).
 ///

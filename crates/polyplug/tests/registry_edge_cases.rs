@@ -15,7 +15,7 @@ use polyplug::error::RegistryError;
 use polyplug::registry::plugin_registry::PluginRegistry;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
-    PluginHandle, StringView, Version, DispatchMechanisms, GuestContractId,
+    GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
 };
 use polyplug_utils::BundleId;
 
@@ -71,21 +71,21 @@ fn resolve_valid_handle_after_multiple_registrations() {
     let descriptor_c: PluginDescriptor = make_descriptor("plugin_c", "contract.c");
 
     // SAFETY: INTERFACE_A, INTERFACE_B, INTERFACE_C are 'static, pointers are valid for Registry lifetime.
-    let handle_a: PluginHandle = unsafe {
+    let handle_a: GuestContractHandle = unsafe {
         registry
             .register(descriptor_a, &INTERFACE_A, "contract.a".to_owned(), BundleId::from_u64(1_u64))
             .expect("registration A should succeed")
     };
 
     // SAFETY: INTERFACE_B is 'static, pointer is valid for Registry lifetime.
-    let handle_b: PluginHandle = unsafe {
+    let handle_b: GuestContractHandle = unsafe {
         registry
             .register(descriptor_b, &INTERFACE_B, "contract.b".to_owned(), BundleId::from_u64(2_u64))
             .expect("registration B should succeed")
     };
 
     // SAFETY: INTERFACE_C is 'static, pointer is valid for Registry lifetime.
-    let handle_c: PluginHandle = unsafe {
+    let handle_c: GuestContractHandle = unsafe {
         registry
             .register(descriptor_c, &INTERFACE_C, "contract.c".to_owned(), BundleId::from_u64(3_u64))
             .expect("registration C should succeed")
@@ -131,14 +131,14 @@ fn resolve_vacant_slot_returns_invalid_handle() {
 
     let descriptor: PluginDescriptor = make_descriptor("plugin_single", "contract.single");
     // SAFETY: INTERFACE is 'static, pointer is valid for Registry lifetime.
-    let handle: PluginHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry
             .register(descriptor, &INTERFACE, "contract.single".to_owned(), BundleId::from_u64(100_u64))
             .expect("registration should succeed")
     };
 
     // Test 1: Handle with index beyond slots length
-    let out_of_bounds_handle: PluginHandle = PluginHandle {
+    let out_of_bounds_handle: GuestContractHandle = GuestContractHandle {
         index: 9999_u32,
     };
     let result: Result<*const GuestContractInterface, RegistryError> =
@@ -149,7 +149,7 @@ fn resolve_vacant_slot_returns_invalid_handle() {
     );
 
     // Test 2: Handle pointing to slot that was never used (index 1 when only slot 0 exists)
-    let unused_slot_handle: PluginHandle = PluginHandle {
+    let unused_slot_handle: GuestContractHandle = GuestContractHandle {
         index: 1_u32,
     };
     let result_unused: Result<*const GuestContractInterface, RegistryError> =
@@ -223,12 +223,12 @@ fn resolve_concurrent_access_thread_safety() {
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> =
         Vec::with_capacity(CONCURRENT_THREADS);
 
-    let mut handles: Vec<PluginHandle> = Vec::with_capacity(CONCURRENT_THREADS);
+    let mut handles: Vec<GuestContractHandle> = Vec::with_capacity(CONCURRENT_THREADS);
     for idx in 0_usize..CONCURRENT_THREADS {
         let descriptor: PluginDescriptor =
             make_descriptor(CONCURRENT_PLUGIN_NAMES[idx], CONCURRENT_CONTRACT_NAMES[idx]);
         // SAFETY: CONCURRENT_INTERFACES[idx] is 'static, pointer is valid for Registry lifetime.
-        let handle: PluginHandle = unsafe {
+        let handle: GuestContractHandle = unsafe {
             registry
                 .register(
                     descriptor,
@@ -244,7 +244,7 @@ fn resolve_concurrent_access_thread_safety() {
     for idx in 0_usize..CONCURRENT_THREADS {
         let registry_clone: Arc<PluginRegistry> = Arc::clone(&registry);
         let barrier_clone: Arc<Barrier> = Arc::clone(&barrier);
-        let handle: PluginHandle = handles[idx];
+        let handle: GuestContractHandle = handles[idx];
         let expected_contract_id: u64 = CONCURRENT_CONTRACT_IDS[idx];
 
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -290,7 +290,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
     let descriptor_c: PluginDescriptor = make_descriptor("impl_c", "multi.contract");
 
     // SAFETY: INTERFACE_IMPL_A is 'static, pointer is valid for Registry lifetime.
-    let handle_a: PluginHandle = unsafe {
+    let handle_a: GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor_a,
@@ -302,7 +302,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
     };
 
     // SAFETY: INTERFACE_IMPL_B is 'static, pointer is valid for Registry lifetime.
-    let handle_b: PluginHandle = unsafe {
+    let handle_b: GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor_b,
@@ -314,7 +314,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
     };
 
     // SAFETY: INTERFACE_IMPL_C is 'static, pointer is valid for Registry lifetime.
-    let handle_c: PluginHandle = unsafe {
+    let handle_c: GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor_c,
@@ -338,7 +338,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "each impl should have its own slot"
     );
 
-    let found: PluginHandle = registry
+    let found: GuestContractHandle = registry
         .find_by_contract(GuestContractId::from_u64(MULTI_CONTRACT_ID), 0_u32)
         .expect("find_by_contract should find an implementation");
 
@@ -356,7 +356,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "should resolve to first implementation's interface"
     );
 
-    let mut all_handles: [PluginHandle; 4] = [PluginHandle {
+    let mut all_handles: [GuestContractHandle; 4] = [GuestContractHandle {
         index: 0_u32,
     }; 4];
     let count: usize = registry.find_all_by_contract(GuestContractId::from_u64(MULTI_CONTRACT_ID), 0_u32, &mut all_handles);
@@ -383,7 +383,7 @@ fn swap_interface_during_active_resolve() {
 
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
-    let handle: PluginHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry
             .register(
                 descriptor,

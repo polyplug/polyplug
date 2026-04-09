@@ -14,8 +14,8 @@ use polyplug::loader::manifest::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::DispatchType;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInterface;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
 
@@ -141,7 +141,7 @@ fn load_valid_bundle_registers_vtable() {
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered by querying the registry.
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("plugin must be registered");
@@ -198,19 +198,19 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
     // Verify the plugin was registered.
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 
     // Verify function_count
-    let vtable_ptr: *const PluginInterface = runtime
+    let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve(handle)
         .expect("resolve must succeed");
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
-    let vtable_ref: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert_eq!(vtable_ref.function_count, fn_count);
 }
 
@@ -257,7 +257,7 @@ file = "bundle.js"
     );
 
     // Verify the plugin was registered.
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("plugin must be registered");
@@ -490,7 +490,7 @@ fn vtable_contract_id_roundtrip() {
     loader.load(&manifest, &runtime).expect("load must succeed");
 
     // Verify the plugin was registered with the correct contract_id.
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("plugin must be registered");
@@ -546,19 +546,19 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {{
     loader.load(&manifest, &runtime).expect("load must succeed");
 
     // Verify the plugin was registered and get its vtable.
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("plugin must be registered");
     assert!(!handle.is_null(), "handle must be valid");
 
-    let vtable_ptr: *const PluginInterface = runtime
+    let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve(handle)
         .expect("resolve must succeed");
 
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
-    let vtable_ref: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(vtable_ref.function_count, fn_count);
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
@@ -698,7 +698,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
         .expect("load runtime_a must succeed");
 
     // Verify plugin A is registered in runtime_a
-    let handle_a: PluginHandle = runtime_a
+    let handle_a: GuestContractHandle = runtime_a
         .registry()
         .find(contract_id_a, 0)
         .expect("plugin A must be registered in runtime_a");
@@ -721,7 +721,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
         .expect("load runtime_b must succeed");
 
     // Verify plugin B is registered in runtime_b
-    let handle_b: PluginHandle = runtime_b
+    let handle_b: GuestContractHandle = runtime_b
         .registry()
         .find(contract_id_b, 0)
         .expect("plugin B must be registered in runtime_b");
@@ -730,7 +730,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     // CRITICAL: Verify that runtime_a still has plugin A (not corrupted by runtime_b)
     // With the old thread-local approach, loading runtime_b would have overwritten
     // the registration data, causing this check to fail.
-    let handle_a_still_valid: PluginHandle = runtime_a
+    let handle_a_still_valid: GuestContractHandle = runtime_a
         .registry()
         .find(contract_id_a, 0)
         .expect("plugin A must still be registered in runtime_a");
@@ -740,7 +740,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     );
 
     // Verify runtime_b does NOT have plugin A (isolation)
-    let handle_a_in_b: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle_a_in_b: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime_b.registry().find(contract_id_a, 0);
     assert!(
         handle_a_in_b.is_err()
@@ -753,7 +753,7 @@ fn multiple_runtimes_on_same_thread_are_isolated() {
     );
 
     // Verify runtime_a does NOT have plugin B (isolation)
-    let handle_b_in_a: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle_b_in_a: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime_a.registry().find(contract_id_b, 0);
     assert!(
         handle_b_in_a.is_err()
@@ -806,18 +806,18 @@ fn dispatch_vm_call_works_correctly() {
     let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "load must succeed: {result:?}");
 
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .registry()
         .find(contract_id, 0)
         .expect("plugin must be registered");
 
-    let vtable_ptr: *const PluginInterface = runtime
+    let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve(handle)
         .expect("resolve must succeed");
 
     // SAFETY: vtable_ptr is a valid pointer returned by resolve.
-    let vtable_ref: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable_ref: &GuestContractInterface = unsafe { &*vtable_ptr };
 
     assert_eq!(vtable_ref.dispatch_type, DispatchType::VirtualMachine);
 

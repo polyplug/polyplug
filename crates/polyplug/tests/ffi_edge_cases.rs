@@ -79,7 +79,7 @@ fn test_resolve_plugin_null_handle() {
 
 /// Test `resolve_plugin` with stale/invalid handle.
 /// Expected: Returns null, may set last_error.
-/// Note: With the new PluginHandle (index only, no generation), stale handles
+/// Note: With the new GuestContractHandle (index only, no generation), stale handles
 /// are detected differently. An out-of-bounds index returns null.
 #[test]
 fn test_resolve_plugin_stale_handle() {

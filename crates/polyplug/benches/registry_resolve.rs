@@ -22,7 +22,7 @@ use polyplug_abi::HostInterface;
 use polyplug_abi::NativeDispatch;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::DispatchMechanisms;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
 use polyplug_utils::GuestContractId;
 use polyplug_utils::BundleId;
@@ -92,7 +92,7 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
-    let handle: PluginHandle = unsafe {
+    let handle: GuestContractHandle = unsafe {
         registry
             .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
@@ -144,7 +144,7 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
     }
 
     // Get handle for slot 50 (middle of the array)
-    let handle: PluginHandle = registry
+    let handle: GuestContractHandle = registry
         .find(GuestContractId::from_u64(0x1000_0000_0000_0032_u64), 0)
         .expect("find should succeed");
 
@@ -170,14 +170,14 @@ fn bench_registry_resolve_stale(c: &mut Criterion) {
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
-    let _handle: PluginHandle = unsafe {
+    let _handle: GuestContractHandle = unsafe {
         registry
             .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 
     // Create a stale handle - use an index that doesn't exist
-    let stale_handle: PluginHandle = PluginHandle { index: u32::MAX - 1 };
+    let stale_handle: GuestContractHandle = GuestContractHandle { index: u32::MAX - 1 };
 
     let mut group: criterion::BenchmarkGroup<'_, criterion::measurement::WallTime> =
         c.benchmark_group("registry");
