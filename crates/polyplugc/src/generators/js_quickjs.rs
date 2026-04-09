@@ -276,7 +276,7 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    render_plugin_vtable_quickjs(&mut out, &plugin.name, contract)?;
+                    render_plugin_interface_quickjs(&mut out, &plugin.name, contract)?;
                 }
             }
         }
@@ -285,7 +285,7 @@ fn generate_contracts_ts(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     Ok(out)
 }
 
-fn render_plugin_vtable_quickjs(
+fn render_plugin_interface_quickjs(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
@@ -473,7 +473,7 @@ fn render_plugin_vtable_quickjs(
     out.push_str(&fn_refs.join(", "));
     out.push_str(" };\n");
 
-    // Store ABI wrappers in vtable
+    // Store ABI wrappers in interface
     out.push_str("    ");
     out.push_str(&plugin_var);
     out.push_str("_VTABLE.functions = [");
@@ -613,7 +613,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("    if (ctx_lo === 0 && ctx_hi === 0) {\n");
     out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n\n");
-    out.push_str("    // Store host vtable for later access via getHostVtable()\n");
+    out.push_str("    // Store host interface for later access via getHostVtable()\n");
     out.push_str("    storeHostVtable(host_lo, host_hi);\n\n");
     out.push_str("    // Get polyplug host interface from globalThis\n");
     out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
@@ -1191,10 +1191,10 @@ fn generate_ts_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("export class {} {{\n", class_name));
-    out.push_str("    private vtable: { lo: number; hi: number };\n\n");
+    out.push_str("    private _interface: { lo: number; hi: number };\n\n");
 
-    out.push_str("    private constructor(vtable: { lo: number; hi: number }) {\n");
-    out.push_str("        this.vtable = vtable;\n");
+    out.push_str("    private constructor(interfacePtr: { lo: number; hi: number }) {\n");
+    out.push_str("        this._interface = interfacePtr;\n");
     out.push_str("    }\n\n");
 
     out.push_str("    /** Factory method - creates caller instance or null if not found. */\n");
@@ -1210,18 +1210,18 @@ fn generate_ts_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("            return null;\n");
     out.push_str("        }\n");
     out.push_str(&format!(
-        "        const vtable = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x{:08X}, 0x{:08X}, minVersion);\n",
+        "        const interfacePtr = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x{:08X}, 0x{:08X}, minVersion);\n",
         contract_id_lo, contract_id_hi
     ));
-    out.push_str("        if (vtable === null || vtable === undefined || (vtable.lo === 0 && vtable.hi === 0)) {\n");
+    out.push_str("        if (interfacePtr === null || interfacePtr === undefined || (interfacePtr.lo === 0 && interfacePtr.hi === 0)) {\n");
     out.push_str("            return null;\n");
     out.push_str("        }\n");
-    out.push_str(&format!("        return new {}(vtable);\n", class_name));
+    out.push_str(&format!("        return new {}(interfacePtr);\n", class_name));
     out.push_str("    }\n\n");
 
     out.push_str("    /** Check if this caller instance is still valid. */\n");
     out.push_str("    isValid(): boolean {\n");
-    out.push_str("        return this.vtable.lo !== 0 || this.vtable.hi !== 0;\n");
+    out.push_str("        return this._interface.lo !== 0 || this._interface.hi !== 0;\n");
     out.push_str("    }\n\n");
 
     for func in &contract.functions {
@@ -1259,7 +1259,7 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
         func.name, params_str, return_type
     ));
 
-    out.push_str("        if (this.vtable.lo === 0 && this.vtable.hi === 0) {\n");
+    out.push_str("        if (this._interface.lo === 0 && this._interface.hi === 0) {\n");
     if has_return {
         out.push_str("            return null as any;\n");
     } else {
@@ -1277,11 +1277,11 @@ fn generate_ts_guest_host_contract_method(out: &mut String, func: &crate::ir::Re
     out.push_str("        }\n");
 
     // SAFETY comments for generated code are required per AGENTS.md for all unsafe operations
-    out.push_str("        // SAFETY: vtable.lo/hi are valid pointer halves per ABI contract.\n");
+    out.push_str("        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.\n");
     out.push_str("        // Pointer arithmetic reconstructs the full 64-bit address.\n");
-    out.push_str("        const vtablePtr = this.vtable.lo + this.vtable.hi * 4294967296;\n");
-    out.push_str("        // SAFETY: readHostContractHeader reads from a valid vtable pointer per the polyplug ABI.\n");
-    out.push_str("        const header = polyplug.readHostContractHeader(vtablePtr);\n");
+    out.push_str("        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;\n");
+    out.push_str("        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.\n");
+    out.push_str("        const header = polyplug.readHostContractHeader(interfaceAddr);\n");
     out.push_str(&format!(
         "        if ({fn_id} >= header.functionCount) {{\n"
     ));
@@ -1632,7 +1632,7 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
 
     // NATIVE dispatch factory
     out.push_str(&format!(
-        "/** Create a host contract vtable for `{}` with NATIVE dispatch. */\n",
+        "/** Create a host contract interface for `{}` with NATIVE dispatch. */\n",
         contract.name
     ));
     out.push_str(&format!(
@@ -1657,8 +1657,8 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     }
     out.push_str("    ];\n\n");
 
-    // Create the vtable
-    out.push_str("    const vtable: HostContractVTable = {\n");
+    // Create the interface
+    out.push_str("    const interface: HostContractVTable = {\n");
     out.push_str("        header: {\n");
     out.push_str("            vtableVersion: 1,\n");
     out.push_str(&format!(
@@ -1680,7 +1680,7 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n\n");
-    out.push_str("    return vtable;\n");
+    out.push_str("    return interface;\n");
     out.push_str("}\n\n");
 
     // Global implementation storage
@@ -1690,14 +1690,14 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
 
     // VM dispatch factory
     out.push_str(&format!(
-        "/** Create a host contract vtable for `{}` with VM dispatch. */\n",
+        "/** Create a host contract interface for `{}` with VM dispatch. */\n",
         contract.name
     ));
     out.push_str(&format!("export function {factory_vm_name}(\n"));
     out.push_str("    bridgeData: { lo: number; hi: number },\n");
     out.push_str("    dispatchFn: (bridgeData: { lo: number; hi: number }, fnId: number, args: number, out: number) => number,\n");
     out.push_str("): HostContractVTable {\n");
-    out.push_str("    const vtable: HostContractVTable = {\n");
+    out.push_str("    const interface: HostContractVTable = {\n");
     out.push_str("        header: {\n");
     out.push_str("            vtableVersion: 1,\n");
     out.push_str(&format!(
@@ -1719,7 +1719,7 @@ fn generate_js_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n\n");
-    out.push_str("    return vtable;\n");
+    out.push_str("    return interface;\n");
     out.push_str("}\n\n");
 }
 
@@ -2255,7 +2255,7 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
-            out.contains("private constructor(vtable: { lo: number; hi: number })"),
+            out.contains("private constructor(interfacePtr: { lo: number; hi: number })"),
             "missing private constructor: {out}"
         );
         assert!(
