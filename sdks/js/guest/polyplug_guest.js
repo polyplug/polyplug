@@ -15,22 +15,23 @@
 export const POLYPLUG_ABI_VERSION = 1;
 
 /**
- * ABI_OK - Success error code (0).
- * @type {number}
+ * ABI error codes — returned by all ABI functions.
+ * @enum {number}
  */
-export const ABI_OK = 0;
-
-/**
- * ABI_ERROR_GENERIC - Generic error code (1).
- * @type {number}
- */
-export const ABI_ERROR_GENERIC = 1;
-
-/**
- * ABI_ERROR_PANIC - Plugin panicked (3).
- * @type {number}
- */
-export const ABI_ERROR_PANIC = 3;
+export const AbiErrorCode = {
+    Ok: 0,
+    Generic: 1,
+    BufferTooSmall: 2,
+    Panic: 3,
+    NotFound: 4,
+    StaleHandle: 5,
+    FunctionNotAvailable: 6,
+    DuplicateProvider: 7,
+    InvalidPointer: 8,
+    HostContractNotFound: 100,
+    HostContractVersionMismatch: 101,
+    HostContractCallFailed: 102,
+};
 
 /**
  * Extension ID for the trace extension.
@@ -202,9 +203,7 @@ export function getExtension(extensionId) {
 // Module exports
 export default {
     POLYPLUG_ABI_VERSION,
-    ABI_OK,
-    ABI_ERROR_GENERIC,
-    ABI_ERROR_PANIC,
+    AbiErrorCode,
     EXT_TRACE_ID,
     DependencyNotFoundError,
     StringViewHelper,

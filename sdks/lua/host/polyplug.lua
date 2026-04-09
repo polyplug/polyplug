@@ -61,11 +61,7 @@ local function auto_load_native_lib()
 end
 
 M.NULL_HANDLE = runtime.NULL_HANDLE
-M.ABI_OK = abi.ABI_OK
-M.ABI_ERROR_GENERIC = abi.ABI_ERROR_GENERIC
-M.ABI_ERROR_NOT_FOUND = abi.ABI_ERROR_NOT_FOUND
-M.ABI_ERROR_STALE_HANDLE = abi.ABI_ERROR_STALE_HANDLE
-M.ABI_FUNCTION_NOT_AVAIL = abi.ABI_FUNCTION_NOT_AVAIL
+M.AbiErrorCode = abi.AbiErrorCode
 
 M.contract_id = abi.contract_id
 M.bundle_id = abi.bundle_id

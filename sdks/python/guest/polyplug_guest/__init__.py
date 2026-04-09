@@ -6,13 +6,7 @@ Re-exports the ABI types needed to write a plugin.
 from __future__ import annotations
 
 from polyplug_abi import (
-    ABI_ERROR_GENERIC,
-    ABI_ERROR_NOT_FOUND,
-    ABI_ERROR_PANIC,
-    ABI_ERROR_STALE_HANDLE,
-    ABI_FUNCTION_NOT_AVAIL,
-    ABI_OK,
-    ABI_BUFFER_TOO_SMALL,
+    AbiErrorCode,
     AbiError,
     Buffer,
     PluginDescriptor,
@@ -26,13 +20,7 @@ from polyplug_abi import (
 )
 
 __all__ = [
-    "ABI_OK",
-    "ABI_ERROR_GENERIC",
-    "ABI_BUFFER_TOO_SMALL",
-    "ABI_ERROR_PANIC",
-    "ABI_ERROR_NOT_FOUND",
-    "ABI_ERROR_STALE_HANDLE",
-    "ABI_FUNCTION_NOT_AVAIL",
+    "AbiErrorCode",
     "AbiError",
     "Buffer",
     "PluginDescriptor",

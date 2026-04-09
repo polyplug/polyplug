@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
-from polyplug_abi import ReloadPhase, ReloadPhaseType, StringView
+from polyplug_abi import AbiErrorCode, ReloadPhase, ReloadPhaseType, StringView
 
 _LIB_NAME: str = "polyplug"
 
@@ -737,12 +737,12 @@ class Runtime:
                 Runtime._host_contract_impls.get(contract_id)
             )
             if impl_func is None:
-                return 100  # ABI_HOST_CONTRACT_NOT_FOUND
+                return AbiErrorCode.HostContractNotFound
             try:
                 impl_func(fn_id, args_ptr, out_ptr)
-                return 0  # ABI_OK
+                return AbiErrorCode.Ok
             except Exception:
-                return 102  # ABI_HOST_CONTRACT_CALL_FAILED
+                return AbiErrorCode.HostContractCallFailed
 
         # Store the callback to keep it alive
         if not hasattr(Runtime, "_host_contract_callbacks"):
