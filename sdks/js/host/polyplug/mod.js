@@ -287,7 +287,7 @@ export class Runtime {
   registerHostContract(hostInterface) {
     const result = this.#lib.symbols.polyplug_runtime_register_host_contract(this.#ptr, hostInterface);
     if (result === 1) {
-      throw new Error("registerHostContract failed: null runtime or vtable pointer");
+      throw new Error("registerHostContract failed: null runtime or interface pointer");
     }
     if (result === 2) {
       throw new Error("registerHostContract failed: duplicate contract registration");

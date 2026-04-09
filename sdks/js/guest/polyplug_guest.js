@@ -92,7 +92,7 @@ export function getHostVtable() {
  * @typedef {Object} PluginInterface
  * @property {bigint} contract_id - Contract identifier (FNV-1a hash)
  * @property {number} contract_version - Version encoded as (major << 16) | (minor << 8) | patch
- * @property {number} function_count - Number of functions in the vtable
+ * @property {number} function_count - Number of functions in the interface
  * @property {number} dispatch_type - Dispatch mechanism type (0 = Native, 1 = VM)
  * @property {Object} dispatch - Union of dispatch mechanisms
  */
@@ -113,7 +113,7 @@ export function getHostVtable() {
  * 
  * @typedef {Object} PluginRegistrar
  * @property {Function} register_plugin - Function to register a plugin
- * @property {*} host - Host vtable pointer
+ * @property {*} host - Host interface pointer
  */
 
 /**
@@ -188,7 +188,7 @@ export class StringViewHelper {
  * Get extension by ID.
  * 
  * @param {number} extensionId - Extension identifier
- * @returns {*} Extension vtable pointer or null
+ * @returns {*} Extension interface pointer or null
  * 
  * @example
  * const traceVtable = polyplug.getExtension(EXT_TRACE_ID);

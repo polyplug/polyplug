@@ -15,9 +15,9 @@
  * Mirrors the C ABI callback parameters for hot-reload notifications.
  */
 export class ReloadPhase {
-    /** Phase type constant: Before vtable swap, host should cleanup instances */
+    /** Phase type constant: Before interface swap, host should cleanup instances */
     static TYPE_PREPARING = 0;
-    /** Phase type constant: After vtable swap, instances can be re-resolved */
+    /** Phase type constant: After interface swap, instances can be re-resolved */
     static TYPE_RELOADED = 1;
     /** Phase type constant: Reload aborted after max retries */
     static TYPE_FAILED = 2;

@@ -20,7 +20,7 @@
 //!     AbiError::ok()
 //! }
 //!
-//! // 3. Declare static vtable
+//! // 3. Declare static interface
 //! static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
 //! static MY_VTABLE: GuestContractInterface = GuestContractInterface {
 //!     contract_id: MY_CONTRACT_ID,
