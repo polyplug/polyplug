@@ -384,7 +384,7 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
             out.push_str("        // Default stub is no-op - users override for cleanup before hot-reload.\n");
             out.push_str("    }\n\n");
 
-            // VTable field and static constructor (GCHandle pinning)
+            // Interface field and static constructor (GCHandle pinning)
             out.push_str(&format!(
                 "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n"
             ));
@@ -537,7 +537,7 @@ fn generate_cs_guest_plugin_interface(
         upper = plugin_upper
     ));
 
-    // VTable field and static constructor (GCHandle pinning)
+    // Interface field and static constructor (GCHandle pinning)
     out.push_str(&format!(
         "    private static System.Runtime.InteropServices.GCHandle _{upper}_pin_handle;\n",
         upper = plugin_upper
