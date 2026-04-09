@@ -6,10 +6,10 @@
  * Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
  */
 export class HostLoggerContract {
-    private vtable: { lo: number; hi: number };
+    private _interface: { lo: number; hi: number };
 
-    private constructor(vtable: { lo: number; hi: number }) {
-        this.vtable = vtable;
+    private constructor(interfacePtr: { lo: number; hi: number }) {
+        this._interface = interfacePtr;
     }
 
     /** Factory method - creates caller instance or null if not found. */
@@ -21,32 +21,32 @@ export class HostLoggerContract {
         if (!polyplug || !polyplug.getHostContract) {
             return null;
         }
-        const vtable = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x845853BB, 0xF53EB5F2, minVersion);
-        if (vtable === null || vtable === undefined || (vtable.lo === 0 && vtable.hi === 0)) {
+        const interfacePtr = polyplug.getHostContract(hostPtr.lo, hostPtr.hi, 0x845853BB, 0xF53EB5F2, minVersion);
+        if (interfacePtr === null || interfacePtr === undefined || (interfacePtr.lo === 0 && interfacePtr.hi === 0)) {
             return null;
         }
-        return new HostLoggerContract(vtable);
+        return new HostLoggerContract(interfacePtr);
     }
 
     /** Check if this caller instance is still valid. */
     isValid(): boolean {
-        return this.vtable.lo !== 0 || this.vtable.hi !== 0;
+        return this._interface.lo !== 0 || this._interface.hi !== 0;
     }
 
     /** Call `log` */
     log(message: string): void {
-        if (this.vtable.lo === 0 && this.vtable.hi === 0) {
+        if (this._interface.lo === 0 && this._interface.hi === 0) {
             return;
         }
         const polyplug = (globalThis as any).polyplug;
         if (!polyplug) {
             return;
         }
-        // SAFETY: vtable.lo/hi are valid pointer halves per ABI contract.
+        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.
         // Pointer arithmetic reconstructs the full 64-bit address.
-        const vtablePtr = this.vtable.lo + this.vtable.hi * 4294967296;
-        // SAFETY: readHostContractHeader reads from a valid vtable pointer per the polyplug ABI.
-        const header = polyplug.readHostContractHeader(vtablePtr);
+        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;
+        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.
+        const header = polyplug.readHostContractHeader(interfaceAddr);
         if (0 >= header.functionCount) {
             return;
         }
@@ -73,18 +73,18 @@ export class HostLoggerContract {
 
     /** Call `log_with_level` */
     log_with_level(level: LogLevel, message: string): void {
-        if (this.vtable.lo === 0 && this.vtable.hi === 0) {
+        if (this._interface.lo === 0 && this._interface.hi === 0) {
             return;
         }
         const polyplug = (globalThis as any).polyplug;
         if (!polyplug) {
             return;
         }
-        // SAFETY: vtable.lo/hi are valid pointer halves per ABI contract.
+        // SAFETY: _interface.lo/hi are valid pointer halves per ABI contract.
         // Pointer arithmetic reconstructs the full 64-bit address.
-        const vtablePtr = this.vtable.lo + this.vtable.hi * 4294967296;
-        // SAFETY: readHostContractHeader reads from a valid vtable pointer per the polyplug ABI.
-        const header = polyplug.readHostContractHeader(vtablePtr);
+        const interfaceAddr = this._interface.lo + this._interface.hi * 4294967296;
+        // SAFETY: readHostContractHeader reads from a valid interface pointer per the polyplug ABI.
+        const header = polyplug.readHostContractHeader(interfaceAddr);
         if (1 >= header.functionCount) {
             return;
         }

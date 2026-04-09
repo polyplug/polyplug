@@ -13,7 +13,7 @@ const DispatchType = Object.freeze({
 // Plugin: encoder (pipeline.Encoder@1)
 //   encode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-export const ENCODER_VTABLE = {
+export const ENCODER_INTERFACE = {
     contractLo: 0xD3DB629F,
     contractHi: 0xFC50F9D1,
     dispatchType: DispatchType.VirtualMachine,
@@ -70,5 +70,5 @@ let ENCODER_IMPL = null;
 
 export function setEncoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     ENCODER_IMPL = { fn0 };
-    ENCODER_VTABLE.functions = [encoder_fn0_abi_wrapper];
+    ENCODER_INTERFACE.functions = [encoder_fn0_abi_wrapper];
 }

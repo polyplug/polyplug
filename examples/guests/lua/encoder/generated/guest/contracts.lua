@@ -9,23 +9,23 @@ local M = {}
 
 -- Function pointer type for encoder (pipeline.Encoder@1)
 --   encode(input: StringView) -> StringView
-local ENCODER_VTABLE = ffi.new("GuestContractInterface")
-ENCODER_VTABLE.contract_id = 0xFC50F9D1D3DB629F
-ENCODER_VTABLE.contract_version.major = 1
-ENCODER_VTABLE.contract_version.minor = 0
-ENCODER_VTABLE.contract_version.patch = 0
-ENCODER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
+local ENCODER_INTERFACE = ffi.new("GuestContractInterface")
+ENCODER_INTERFACE.contract_id = 0xFC50F9D1D3DB629F
+ENCODER_INTERFACE.contract_version.major = 1
+ENCODER_INTERFACE.contract_version.minor = 0
+ENCODER_INTERFACE.contract_version.patch = 0
+ENCODER_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for encoder - returns null instance.
 function ENCODER_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
-ENCODER_VTABLE.create_instance = ENCODER_create_instance_stub
+ENCODER_INTERFACE.create_instance = ENCODER_create_instance_stub
 -- Default destroy_instance stub for encoder - no-op.
 function ENCODER_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
-ENCODER_VTABLE.destroy_instance = ENCODER_destroy_instance_stub
+ENCODER_INTERFACE.destroy_instance = ENCODER_destroy_instance_stub
 
 local ENCODER_DESCRIPTOR = ffi.new("PluginDescriptor")
 ENCODER_DESCRIPTOR.name = polyplug_guest.string_view("encoder")
@@ -38,7 +38,7 @@ ENCODER_DESCRIPTOR.version.patch = 0
 function M.set_encoder_impl(encode_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", encode_fn)
-    ENCODER_VTABLE.dispatch.native.function_count = 1
-    ENCODER_VTABLE.dispatch.native.functions = functions
+    ENCODER_INTERFACE.dispatch.native.function_count = 1
+    ENCODER_INTERFACE.dispatch.native.functions = functions
 end
 return M

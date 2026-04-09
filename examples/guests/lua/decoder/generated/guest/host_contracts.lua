@@ -13,8 +13,8 @@ local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, const void*, void*)
 HostLoggerContract = {}
 HostLoggerContract.__index = HostLoggerContract
 
-function HostLoggerContract:new(vtable)
-    local obj = { _vtable = vtable }
+function HostLoggerContract:new(interface)
+    local obj = { _interface = interface }
     setmetatable(obj, self)
     return obj
 end
@@ -25,22 +25,22 @@ function HostLoggerContract.from_host(host_ptr, min_version)
         return nil
     end
     local host = ffi.cast("HostInterface*", host_ptr)
-    local vtable_ptr = host.get_host_contract(host_ptr, 0xF53EB5F2845853BBULL, min_version)
-    if vtable_ptr == nil then
+    local interface_ptr = host.get_host_contract(host_ptr, 0xF53EB5F2845853BBULL, min_version)
+    if interface_ptr == nil then
         return nil
     end
-    return HostLoggerContract:new(vtable_ptr)
+    return HostLoggerContract:new(interface_ptr)
 end
 
 function HostLoggerContract:is_valid()
-    return self._vtable ~= nil
+    return self._interface ~= nil
 end
 
 function HostLoggerContract:log(self, message)
-    if self._vtable == nil then
+    if self._interface == nil then
         return
     end
-    local header = ffi.cast("HostContractVTable*", self._vtable).header
+    local header = ffi.cast("HostContractVTable*", self._interface).header
     if 0 >= header.function_count then
         return
     end
@@ -68,10 +68,10 @@ function HostLoggerContract:log(self, message)
 end
 
 function HostLoggerContract:log_with_level(self, level, message)
-    if self._vtable == nil then
+    if self._interface == nil then
         return
     end
-    local header = ffi.cast("HostContractVTable*", self._vtable).header
+    local header = ffi.cast("HostContractVTable*", self._interface).header
     if 1 >= header.function_count then
         return
     end

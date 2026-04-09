@@ -3,4 +3,4 @@
 // Runtime: js-quickjs
 
 // Re-export interfaces from contracts.ts
-export { REPORTER_VTABLE } from './contracts';
+export { REPORTER_INTERFACE } from './contracts';

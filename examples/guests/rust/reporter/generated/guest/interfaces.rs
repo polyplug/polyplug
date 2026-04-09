@@ -39,7 +39,7 @@ use super::contracts::DataTransformerPlugin;
 use super::contracts::PipelineEncoderPlugin;
 use super::contracts::DataReporterPlugin;
 use super::contracts::PipelineValidatorPlugin;
-/// Wrapper for a function pointer stored in a static vtable array.
+/// Wrapper for a function pointer stored in a static interface array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
 // SAFETY: FnPtr wraps a 'static function pointer. Function pointers are safe
@@ -116,7 +116,7 @@ unsafe extern "C" fn REPORTER_destroy_instance_stub(
     // No-op - stateless plugins don't need cleanup
 }
 
-pub static REPORTER_VTABLE: GuestContractInterface = GuestContractInterface {
+pub static REPORTER_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(REPORTER_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,

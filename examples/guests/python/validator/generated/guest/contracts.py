@@ -78,7 +78,7 @@ def VALIDATOR_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContr
 VALIDATOR_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(VALIDATOR_create_instance_stub)
 VALIDATOR_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(VALIDATOR_destroy_instance_stub)
 
-VALIDATOR_VTABLE: GuestContractInterface = GuestContractInterface(
+VALIDATOR_INTERFACE: GuestContractInterface = GuestContractInterface(
     contract_id=0x45173A959EEC57C5,
     contract_version=0,
     dispatch_type=DispatchType.VirtualMachine,
@@ -110,7 +110,7 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_VALIDATOR: AbiError = host.contents.register_contract(
-        host_ptr, ctypes.byref(VALIDATOR_DESCRIPTOR), ctypes.byref(VALIDATOR_VTABLE)
+        host_ptr, ctypes.byref(VALIDATOR_DESCRIPTOR), ctypes.byref(VALIDATOR_INTERFACE)
     )
     if err_VALIDATOR.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")

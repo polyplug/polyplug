@@ -3,4 +3,4 @@
 // Runtime: js-quickjs
 
 // Re-export interfaces from contracts.ts
-export { DECODER_VTABLE } from './contracts';
+export { DECODER_INTERFACE } from './contracts';

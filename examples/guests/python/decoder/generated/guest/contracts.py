@@ -78,7 +78,7 @@ def DECODER_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContrac
 DECODER_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(DECODER_create_instance_stub)
 DECODER_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(DECODER_destroy_instance_stub)
 
-DECODER_VTABLE: GuestContractInterface = GuestContractInterface(
+DECODER_INTERFACE: GuestContractInterface = GuestContractInterface(
     contract_id=0xE1D7DE773BE6E7F7,
     contract_version=0,
     dispatch_type=DispatchType.VirtualMachine,
@@ -110,7 +110,7 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_DECODER: AbiError = host.contents.register_contract(
-        host_ptr, ctypes.byref(DECODER_DESCRIPTOR), ctypes.byref(DECODER_VTABLE)
+        host_ptr, ctypes.byref(DECODER_DESCRIPTOR), ctypes.byref(DECODER_INTERFACE)
     )
     if err_DECODER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")

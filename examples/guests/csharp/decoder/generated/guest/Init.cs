@@ -20,7 +20,7 @@ public static class Plugin {
             var nameHandle_decoder = System.Runtime.InteropServices.GCHandle.Alloc(plugin_name_decoder, System.Runtime.InteropServices.GCHandleType.Pinned);
             var contractHandle_decoder = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_decoder, System.Runtime.InteropServices.GCHandleType.Pinned);
             try {
-            fixed (GuestContractInterface* vtablePtr_decoder = &DecoderInterfaces.DECODER_INTERFACE) {
+            fixed (GuestContractInterface* interfacePtr_decoder = &DecoderInterfaces.DECODER_INTERFACE) {
                 var desc_decoder = new PluginDescriptor {
                     Name = new StringView { Ptr = nameHandle_decoder.AddrOfPinnedObject(), Len = (nuint)plugin_name_decoder.Length },
                     ContractName = new StringView { Ptr = contractHandle_decoder.AddrOfPinnedObject(), Len = (nuint)contract_name_decoder.Length },
@@ -28,7 +28,7 @@ public static class Plugin {
                 };
                 var host = (HostInterface*)hostPtr;
                 var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;
-                var err_decoder = registerFn(hostPtr, &desc_decoder, vtablePtr_decoder);
+                var err_decoder = registerFn(hostPtr, &desc_decoder, interfacePtr_decoder);
                 if (err_decoder.Code != AbiErrorCode.Ok) return err_decoder.Code;
             }
             } finally {

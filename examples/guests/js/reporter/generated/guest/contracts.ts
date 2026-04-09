@@ -13,7 +13,7 @@ const DispatchType = Object.freeze({
 // Plugin: reporter (data.Reporter@1)
 //   report(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-export const REPORTER_VTABLE = {
+export const REPORTER_INTERFACE = {
     contractLo: 0xA9F5AD68,
     contractHi: 0x76BB4643,
     dispatchType: DispatchType.VirtualMachine,
@@ -70,5 +70,5 @@ let REPORTER_IMPL = null;
 
 export function setReporterImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     REPORTER_IMPL = { fn0 };
-    REPORTER_VTABLE.functions = [reporter_fn0_abi_wrapper];
+    REPORTER_INTERFACE.functions = [reporter_fn0_abi_wrapper];
 }

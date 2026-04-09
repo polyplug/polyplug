@@ -78,7 +78,7 @@ def REPORTER_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContra
 REPORTER_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(REPORTER_create_instance_stub)
 REPORTER_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(REPORTER_destroy_instance_stub)
 
-REPORTER_VTABLE: GuestContractInterface = GuestContractInterface(
+REPORTER_INTERFACE: GuestContractInterface = GuestContractInterface(
     contract_id=0x76BB4643A9F5AD68,
     contract_version=0,
     dispatch_type=DispatchType.VirtualMachine,
@@ -110,7 +110,7 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_REPORTER: AbiError = host.contents.register_contract(
-        host_ptr, ctypes.byref(REPORTER_DESCRIPTOR), ctypes.byref(REPORTER_VTABLE)
+        host_ptr, ctypes.byref(REPORTER_DESCRIPTOR), ctypes.byref(REPORTER_INTERFACE)
     )
     if err_REPORTER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")

@@ -3,4 +3,4 @@
 // Runtime: js-quickjs
 
 // Re-export interfaces from contracts.ts
-export { VALIDATOR_VTABLE } from './contracts';
+export { VALIDATOR_INTERFACE } from './contracts';

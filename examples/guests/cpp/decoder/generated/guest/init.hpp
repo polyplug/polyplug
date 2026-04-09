@@ -21,7 +21,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext
         return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
     }
 
-    // Store host vtable for later access via polyplug::get_host_interface()
+    // Store host interface for later access via polyplug::get_host_interface()
     polyplug::store_host_vtable(host);
 
     // Register plugin: decoder
@@ -31,7 +31,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext
         { (const uint8_t*)"pipeline.Decoder@1", 18U },  // contract_name (StringView)
         { 1U, 0U, 0U }  // version (Version)
     };
-    AbiError err_DECODER = host->register_contract(host, &desc_DECODER, &polyplug_plugin::DECODER_VTABLE);
+    AbiError err_DECODER = host->register_contract(host, &desc_DECODER, &polyplug_plugin::DECODER_INTERFACE);
     if (err_DECODER.code != 0U) return err_DECODER;
 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};

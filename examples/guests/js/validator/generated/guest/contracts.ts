@@ -13,7 +13,7 @@ const DispatchType = Object.freeze({
 // Plugin: validator (pipeline.Validator@1)
 //   validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-export const VALIDATOR_VTABLE = {
+export const VALIDATOR_INTERFACE = {
     contractLo: 0x9EEC57C5,
     contractHi: 0x45173A95,
     dispatchType: DispatchType.VirtualMachine,
@@ -70,5 +70,5 @@ let VALIDATOR_IMPL = null;
 
 export function setValidatorImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     VALIDATOR_IMPL = { fn0 };
-    VALIDATOR_VTABLE.functions = [validator_fn0_abi_wrapper];
+    VALIDATOR_INTERFACE.functions = [validator_fn0_abi_wrapper];
 }

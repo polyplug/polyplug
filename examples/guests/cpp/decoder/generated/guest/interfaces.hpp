@@ -66,7 +66,7 @@ static void DECODER_destroy_instance_stub(const HostInterface* host, GuestContra
     // No-op - stateless plugins don't need cleanup.
 }
 
-static GuestContractInterface DECODER_VTABLE = {
+static GuestContractInterface DECODER_INTERFACE = {
     DECODER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,

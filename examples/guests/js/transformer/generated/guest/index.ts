@@ -4,5 +4,5 @@
 
 // Main entry point for bundling
 export { polyplug_init } from './init';
-export { TRANSFORMER_VTABLE } from './contracts';
+export { TRANSFORMER_INTERFACE } from './contracts';
 export { setTransformerImpl } from './contracts';

@@ -3,7 +3,7 @@
 // Runtime: js-quickjs
 
 import {
-    VALIDATOR_VTABLE
+    VALIDATOR_INTERFACE
 } from './contracts';
 import { storeHostVtable } from 'polyplug-guest';
 
@@ -36,7 +36,7 @@ export function polyplug_init(
         return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
 
-    // Store host vtable for later access via getHostVtable()
+    // Store host interface for later access via getHostVtable()
     storeHostVtable(host_lo, host_hi);
 
     // Get polyplug host interface from globalThis
@@ -47,11 +47,11 @@ export function polyplug_init(
 
     // Register plugin: validator
     polyplug.register_contract(
-        VALIDATOR_VTABLE.contractLo,
-        VALIDATOR_VTABLE.contractHi,
-        VALIDATOR_VTABLE,
-        VALIDATOR_VTABLE.fnCount,
-        VALIDATOR_VTABLE.contractName
+        VALIDATOR_INTERFACE.contractLo,
+        VALIDATOR_INTERFACE.contractHi,
+        VALIDATOR_INTERFACE,
+        VALIDATOR_INTERFACE.fnCount,
+        VALIDATOR_INTERFACE.contractName
     );
 
     return { code: ABI_OK, message: { ptr: 0, len: 0 } };

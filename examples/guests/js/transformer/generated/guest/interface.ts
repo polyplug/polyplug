@@ -3,4 +3,4 @@
 // Runtime: js-quickjs
 
 // Re-export interfaces from contracts.ts
-export { TRANSFORMER_VTABLE } from './contracts';
+export { TRANSFORMER_INTERFACE } from './contracts';

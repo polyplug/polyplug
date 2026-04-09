@@ -78,7 +78,7 @@ def ENCODER_destroy_instance_stub(host: ctypes.c_void_p, instance: _GuestContrac
 ENCODER_CREATE_INSTANCE_CFUNC = _CREATE_INSTANCE_FN_CTYPE(ENCODER_create_instance_stub)
 ENCODER_DESTROY_INSTANCE_CFUNC = _DESTROY_INSTANCE_FN_CTYPE(ENCODER_destroy_instance_stub)
 
-ENCODER_VTABLE: GuestContractInterface = GuestContractInterface(
+ENCODER_INTERFACE: GuestContractInterface = GuestContractInterface(
     contract_id=0xFC50F9D1D3DB629F,
     contract_version=0,
     dispatch_type=DispatchType.VirtualMachine,
@@ -110,7 +110,7 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
     ctx: PluginContext = PluginContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_ENCODER: AbiError = host.contents.register_contract(
-        host_ptr, ctypes.byref(ENCODER_DESCRIPTOR), ctypes.byref(ENCODER_VTABLE)
+        host_ptr, ctypes.byref(ENCODER_DESCRIPTOR), ctypes.byref(ENCODER_INTERFACE)
     )
     if err_ENCODER.code != AbiErrorCode.Ok:
         raise RuntimeError("plugin registration failed")

@@ -9,23 +9,23 @@ local M = {}
 
 -- Function pointer type for reporter (data.Reporter@1)
 --   report(input: StringView) -> StringView
-local REPORTER_VTABLE = ffi.new("GuestContractInterface")
-REPORTER_VTABLE.contract_id = 0x76BB4643A9F5AD68
-REPORTER_VTABLE.contract_version.major = 1
-REPORTER_VTABLE.contract_version.minor = 0
-REPORTER_VTABLE.contract_version.patch = 0
-REPORTER_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
+local REPORTER_INTERFACE = ffi.new("GuestContractInterface")
+REPORTER_INTERFACE.contract_id = 0x76BB4643A9F5AD68
+REPORTER_INTERFACE.contract_version.major = 1
+REPORTER_INTERFACE.contract_version.minor = 0
+REPORTER_INTERFACE.contract_version.patch = 0
+REPORTER_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for reporter - returns null instance.
 function REPORTER_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
-REPORTER_VTABLE.create_instance = REPORTER_create_instance_stub
+REPORTER_INTERFACE.create_instance = REPORTER_create_instance_stub
 -- Default destroy_instance stub for reporter - no-op.
 function REPORTER_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
-REPORTER_VTABLE.destroy_instance = REPORTER_destroy_instance_stub
+REPORTER_INTERFACE.destroy_instance = REPORTER_destroy_instance_stub
 
 local REPORTER_DESCRIPTOR = ffi.new("PluginDescriptor")
 REPORTER_DESCRIPTOR.name = polyplug_guest.string_view("reporter")
@@ -38,7 +38,7 @@ REPORTER_DESCRIPTOR.version.patch = 0
 function M.set_reporter_impl(report_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", report_fn)
-    REPORTER_VTABLE.dispatch.native.function_count = 1
-    REPORTER_VTABLE.dispatch.native.functions = functions
+    REPORTER_INTERFACE.dispatch.native.function_count = 1
+    REPORTER_INTERFACE.dispatch.native.functions = functions
 end
 return M

@@ -4,5 +4,5 @@
 
 // Main entry point for bundling
 export { polyplug_init } from './init';
-export { DECODER_VTABLE } from './contracts';
+export { DECODER_INTERFACE } from './contracts';
 export { setDecoderImpl } from './contracts';

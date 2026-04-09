@@ -66,7 +66,7 @@ static void REPORTER_destroy_instance_stub(const HostInterface* host, GuestContr
     // No-op - stateless plugins don't need cleanup.
 }
 
-static GuestContractInterface REPORTER_VTABLE = {
+static GuestContractInterface REPORTER_INTERFACE = {
     REPORTER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,

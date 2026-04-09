@@ -20,27 +20,30 @@ public:
         if (host == nullptr) {
             return std::nullopt;
         }
-        const HostContractVTable* vtable = host->get_host_contract(host, 0xF53EB5F2845853BBULL, min_version);
-        if (vtable == nullptr) {
+        HostContractInstance instance = host->get_host_contract(host, 0xF53EB5F2845853BBULL, min_version);
+        if (instance.data == nullptr) {
             return std::nullopt;
         }
-        return HostLoggerContract(vtable);
+        const HostContractInterface* interface = host->resolve_host_contract_interface(host, 0xF53EB5F2845853BBULL, min_version);
+        if (interface == nullptr) {
+            return std::nullopt;
+        }
+        return HostLoggerContract(interface, instance);
     }
 
-    /// Check if caller is valid (vtable is non-null).
-    bool is_valid() const noexcept { return vtable_ != nullptr; }
+    /// Check if caller is valid (interface and instance are non-null).
+    bool is_valid() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }
 
     /// Explicit bool conversion for validity check.
-    explicit operator bool() const noexcept { return vtable_ != nullptr; }
+    explicit operator bool() const noexcept { return interface_ != nullptr && instance_.data != nullptr; }
 
     /// Call host contract function `log` (function_id=0)
     void log(std::string_view message) noexcept {
-        if (vtable_ == nullptr) {
+        if (interface_ == nullptr) {
             return;
         }
 
-        const HostContractVTableHeader* header = &vtable_->header;
-        if (0_u32 >= header->function_count) {
+        if (0_u32 >= interface_->dispatch.native.function_count) {
             return;
         }
 
@@ -48,14 +51,14 @@ public:
         const void* args_ptr = &message_view;
         void* out_ptr = nullptr;
         AbiError err;
-        switch (header->dispatch_type) {
+        switch (interface_->dispatch_type) {
             case DispatchType::Native: {
-                auto fn_ = reinterpret_cast<AbiError(*)(const void*, const void*, void*)>(vtable_->dispatch.native.functions[0_u32]);
-                err = fn_(vtable_->dispatch.native.impl_ptr, args_ptr, out_ptr);
+                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0_u32]);
+                err = fn_(instance_, args_ptr, out_ptr);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (vtable_->dispatch.vm.call)(vtable_->dispatch.vm.bridge_data, 0_u32, args_ptr, out_ptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 0_u32, args_ptr, out_ptr);
                 break;
             }
         }
@@ -68,12 +71,11 @@ public:
 
     /// Call host contract function `log_with_level` (function_id=1)
     void log_with_level(const LogLevel& level, std::string_view message) noexcept {
-        if (vtable_ == nullptr) {
+        if (interface_ == nullptr) {
             return;
         }
 
-        const HostContractVTableHeader* header = &vtable_->header;
-        if (1_u32 >= header->function_count) {
+        if (1_u32 >= interface_->dispatch.native.function_count) {
             return;
         }
 
@@ -82,14 +84,14 @@ public:
         const void* args_ptr = &args_val;
         void* out_ptr = nullptr;
         AbiError err;
-        switch (header->dispatch_type) {
+        switch (interface_->dispatch_type) {
             case DispatchType::Native: {
-                auto fn_ = reinterpret_cast<AbiError(*)(const void*, const void*, void*)>(vtable_->dispatch.native.functions[1_u32]);
-                err = fn_(vtable_->dispatch.native.impl_ptr, args_ptr, out_ptr);
+                auto fn_ = reinterpret_cast<AbiError(*)(HostContractInstance, const void*, void*)>(interface_->dispatch.native.functions[1_u32]);
+                err = fn_(instance_, args_ptr, out_ptr);
                 break;
             }
             case DispatchType::VirtualMachine: {
-                err = (vtable_->dispatch.vm.call)(vtable_->dispatch.vm.bridge_data, 1_u32, args_ptr, out_ptr);
+                err = (interface_->dispatch.vm.call)(interface_->dispatch.vm.loader_data, instance_, 1_u32, args_ptr, out_ptr);
                 break;
             }
         }
@@ -101,10 +103,11 @@ public:
     }
 
 private:
-    explicit HostLoggerContract(const HostContractVTable* vtable) noexcept
-        : vtable_(vtable) {}
+    explicit HostLoggerContract(const HostContractInterface* interface, HostContractInstance instance) noexcept
+        : interface_(interface), instance_(instance) {}
 
-    const HostContractVTable* vtable_;
+    const HostContractInterface* interface_;
+    HostContractInstance instance_;
 };
 
 /// Contract ID constant for `host.logger` (FNV-1a of "host_contract:host.logger@1")

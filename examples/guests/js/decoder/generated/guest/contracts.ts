@@ -13,7 +13,7 @@ const DispatchType = Object.freeze({
 // Plugin: decoder (pipeline.Decoder@1)
 //   decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-export const DECODER_VTABLE = {
+export const DECODER_INTERFACE = {
     contractLo: 0x3BE6E7F7,
     contractHi: 0xE1D7DE77,
     dispatchType: DispatchType.VirtualMachine,
@@ -70,5 +70,5 @@ let DECODER_IMPL = null;
 
 export function setDecoderImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     DECODER_IMPL = { fn0 };
-    DECODER_VTABLE.functions = [decoder_fn0_abi_wrapper];
+    DECODER_INTERFACE.functions = [decoder_fn0_abi_wrapper];
 }

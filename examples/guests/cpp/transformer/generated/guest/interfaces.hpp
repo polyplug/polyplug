@@ -66,7 +66,7 @@ static void TRANSFORMER_destroy_instance_stub(const HostInterface* host, GuestCo
     // No-op - stateless plugins don't need cleanup.
 }
 
-static GuestContractInterface TRANSFORMER_VTABLE = {
+static GuestContractInterface TRANSFORMER_INTERFACE = {
     TRANSFORMER_CONTRACT_ID,
     Version{ 1U, 0U, 0U },  // contract_version
     DispatchType::Native,

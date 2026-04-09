@@ -87,7 +87,7 @@ impl HostLoggerCaller {
                     let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
-                    // - The vtable guarantees that the function at this index is a native dispatch
+                    // - The interface guarantees that the function at this index is a native dispatch
                     //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError
                     let dispatch_fn: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                     dispatch_fn(core::ptr::null(), args_ptr, out_ptr)
@@ -144,7 +144,7 @@ impl HostLoggerCaller {
                     let fn_ptr: *const () = *interface.dispatch.native.functions.add(1_usize);
                     // SAFETY: Transmuting *const () to a function pointer is sound because:
                     // - Function pointers have the same size and alignment as data pointers
-                    // - The vtable guarantees that the function at this index is a native dispatch
+                    // - The interface guarantees that the function at this index is a native dispatch
                     //   with the exact signature: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError
                     let dispatch_fn: unsafe extern "C" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                     dispatch_fn(core::ptr::null(), args_ptr, out_ptr)

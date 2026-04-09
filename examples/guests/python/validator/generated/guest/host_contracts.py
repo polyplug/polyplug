@@ -13,26 +13,26 @@ _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p
 
 # Guest caller for host contract `host.logger` (id=0xF53EB5F2845853BB)
 class HostLoggerContract:
-    def __init__(self, vtable: int) -> None:
-        self._vtable: int = vtable
+    def __init__(self, interface: int) -> None:
+        self._interface: int = interface
 
     @classmethod
     def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:
         if host_ptr == 0:
             return None
         host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
-        vtable: int = host.contents.get_host_contract(host_ptr, 0xF53EB5F2845853BB, min_version)
-        if vtable == 0:
+        interface: int = host.contents.get_host_contract(host_ptr, 0xF53EB5F2845853BB, min_version)
+        if interface == 0:
             return None
-        return cls(vtable)
+        return cls(interface)
 
     def is_valid(self) -> bool:
-        return self._vtable != 0
+        return self._interface != 0
 
     def log(self, message: str) -> None:
-        if self._vtable == 0:
+        if self._interface == 0:
             return
-        header: Any = ctypes.cast(self._vtable, ctypes.POINTER(HostContractVTable)).contents.header
+        header: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractVTable)).contents.header
         if 0 >= header.function_count:
             return
         dispatch_type: int = header.dispatch_type
@@ -54,9 +54,9 @@ class HostLoggerContract:
             return
 
     def log_with_level(self, level: LogLevel, message: str) -> None:
-        if self._vtable == 0:
+        if self._interface == 0:
             return
-        header: Any = ctypes.cast(self._vtable, ctypes.POINTER(HostContractVTable)).contents.header
+        header: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractVTable)).contents.header
         if 1 >= header.function_count:
             return
         dispatch_type: int = header.dispatch_type

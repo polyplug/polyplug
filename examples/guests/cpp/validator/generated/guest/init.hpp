@@ -21,7 +21,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext
         return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};
     }
 
-    // Store host vtable for later access via polyplug::get_host_interface()
+    // Store host interface for later access via polyplug::get_host_interface()
     polyplug::store_host_vtable(host);
 
     // Register plugin: validator
@@ -31,7 +31,7 @@ extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext
         { (const uint8_t*)"pipeline.Validator@1", 20U },  // contract_name (StringView)
         { 1U, 0U, 0U }  // version (Version)
     };
-    AbiError err_VALIDATOR = host->register_contract(host, &desc_VALIDATOR, &polyplug_plugin::VALIDATOR_VTABLE);
+    AbiError err_VALIDATOR = host->register_contract(host, &desc_VALIDATOR, &polyplug_plugin::VALIDATOR_INTERFACE);
     if (err_VALIDATOR.code != 0U) return err_VALIDATOR;
 
     return AbiError{static_cast<uint32_t>(AbiErrorCode::Ok), StringView{nullptr, 0}};

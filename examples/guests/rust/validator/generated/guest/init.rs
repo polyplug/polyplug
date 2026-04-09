@@ -19,14 +19,14 @@ use polyplug_guest::PluginContext;
 use polyplug_guest::store_host_vtable;
 use core::ffi::c_void;
 use super::interfaces::VALIDATOR_CONTRACT_ID;
-use super::interfaces::VALIDATOR_VTABLE;
+use super::interfaces::VALIDATOR_INTERFACE;
 
 // Note: polyplug_abi_version() should be exported by the plugin crate itself,
 // not by the generated code. Add this to your lib.rs:
 //   #[unsafe(no_mangle)]
 //   pub extern "C" fn polyplug_abi_version() -> u32 { 1 }
 
-/// Register all plugin vtables with the host.
+/// Register all plugin interfaces with the host.
 ///
 /// # Safety
 /// `host` and `ctx` must be valid non-null pointers provided by the host.
@@ -61,9 +61,9 @@ pub unsafe extern "C" fn polyplug_init(
         contract_name: StringView { ptr: b"pipeline.Validator@1".as_ptr(), len: 20_usize },
         version: Version { major: 1, minor: 0, patch: 0 },
     };
-    // SAFETY: desc and vtable are 'static.
+    // SAFETY: desc and interface are 'static.
     let err_VALIDATOR: AbiError = unsafe {
-        (host.register_contract)(host, &desc_VALIDATOR as *const PluginDescriptor, &VALIDATOR_VTABLE as *const GuestContractInterface)
+        (host.register_contract)(host, &desc_VALIDATOR as *const PluginDescriptor, &VALIDATOR_INTERFACE as *const GuestContractInterface)
     };
     if err_VALIDATOR.code != AbiErrorCode::Ok {
         return err_VALIDATOR;

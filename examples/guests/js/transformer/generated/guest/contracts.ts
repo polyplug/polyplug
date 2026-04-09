@@ -13,7 +13,7 @@ const DispatchType = Object.freeze({
 // Plugin: transformer (data.Transformer@1)
 //   transform(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number }
 
-export const TRANSFORMER_VTABLE = {
+export const TRANSFORMER_INTERFACE = {
     contractLo: 0x62CD68EE,
     contractHi: 0x47759913,
     dispatchType: DispatchType.VirtualMachine,
@@ -70,5 +70,5 @@ let TRANSFORMER_IMPL = null;
 
 export function setTransformerImpl(fn0: (input: { ptr_lo: number; ptr_hi: number; len: number }) => { ptr_lo: number; ptr_hi: number; len: number }): void {
     TRANSFORMER_IMPL = { fn0 };
-    TRANSFORMER_VTABLE.functions = [transformer_fn0_abi_wrapper];
+    TRANSFORMER_INTERFACE.functions = [transformer_fn0_abi_wrapper];
 }

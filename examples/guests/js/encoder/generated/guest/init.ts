@@ -3,7 +3,7 @@
 // Runtime: js-quickjs
 
 import {
-    ENCODER_VTABLE
+    ENCODER_INTERFACE
 } from './contracts';
 import { storeHostVtable } from 'polyplug-guest';
 
@@ -36,7 +36,7 @@ export function polyplug_init(
         return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
 
-    // Store host vtable for later access via getHostVtable()
+    // Store host interface for later access via getHostVtable()
     storeHostVtable(host_lo, host_hi);
 
     // Get polyplug host interface from globalThis
@@ -47,11 +47,11 @@ export function polyplug_init(
 
     // Register plugin: encoder
     polyplug.register_contract(
-        ENCODER_VTABLE.contractLo,
-        ENCODER_VTABLE.contractHi,
-        ENCODER_VTABLE,
-        ENCODER_VTABLE.fnCount,
-        ENCODER_VTABLE.contractName
+        ENCODER_INTERFACE.contractLo,
+        ENCODER_INTERFACE.contractHi,
+        ENCODER_INTERFACE,
+        ENCODER_INTERFACE.fnCount,
+        ENCODER_INTERFACE.contractName
     );
 
     return { code: ABI_OK, message: { ptr: 0, len: 0 } };

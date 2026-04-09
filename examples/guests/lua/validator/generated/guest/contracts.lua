@@ -9,23 +9,23 @@ local M = {}
 
 -- Function pointer type for validator (pipeline.Validator@1)
 --   validate(input: StringView) -> StringView
-local VALIDATOR_VTABLE = ffi.new("GuestContractInterface")
-VALIDATOR_VTABLE.contract_id = 0x45173A959EEC57C5
-VALIDATOR_VTABLE.contract_version.major = 1
-VALIDATOR_VTABLE.contract_version.minor = 0
-VALIDATOR_VTABLE.contract_version.patch = 0
-VALIDATOR_VTABLE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
+local VALIDATOR_INTERFACE = ffi.new("GuestContractInterface")
+VALIDATOR_INTERFACE.contract_id = 0x45173A959EEC57C5
+VALIDATOR_INTERFACE.contract_version.major = 1
+VALIDATOR_INTERFACE.contract_version.minor = 0
+VALIDATOR_INTERFACE.contract_version.patch = 0
+VALIDATOR_INTERFACE.dispatch_type = polyplug_guest.DispatchType.VirtualMachine
 -- Default create_instance stub for validator - returns null instance.
 function VALIDATOR_create_instance_stub(host, args)
     -- Default stub returns null instance - users override for stateful plugins.
     return ffi.new("GuestContractInstance", nil)
 end
-VALIDATOR_VTABLE.create_instance = VALIDATOR_create_instance_stub
+VALIDATOR_INTERFACE.create_instance = VALIDATOR_create_instance_stub
 -- Default destroy_instance stub for validator - no-op.
 function VALIDATOR_destroy_instance_stub(host, instance)
     -- Default stub is no-op - users override for cleanup before hot-reload.
 end
-VALIDATOR_VTABLE.destroy_instance = VALIDATOR_destroy_instance_stub
+VALIDATOR_INTERFACE.destroy_instance = VALIDATOR_destroy_instance_stub
 
 local VALIDATOR_DESCRIPTOR = ffi.new("PluginDescriptor")
 VALIDATOR_DESCRIPTOR.name = polyplug_guest.string_view("validator")
@@ -38,7 +38,7 @@ VALIDATOR_DESCRIPTOR.version.patch = 0
 function M.set_validator_impl(validate_fn)
     local functions = ffi.new("PluginFunction[1]")
     functions[0] = ffi.cast("uintptr_t", validate_fn)
-    VALIDATOR_VTABLE.dispatch.native.function_count = 1
-    VALIDATOR_VTABLE.dispatch.native.functions = functions
+    VALIDATOR_INTERFACE.dispatch.native.function_count = 1
+    VALIDATOR_INTERFACE.dispatch.native.functions = functions
 end
 return M

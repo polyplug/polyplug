@@ -3,7 +3,7 @@
 // Runtime: js-quickjs
 
 import {
-    TRANSFORMER_VTABLE
+    TRANSFORMER_INTERFACE
 } from './contracts';
 import { storeHostVtable } from 'polyplug-guest';
 
@@ -36,7 +36,7 @@ export function polyplug_init(
         return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
     }
 
-    // Store host vtable for later access via getHostVtable()
+    // Store host interface for later access via getHostVtable()
     storeHostVtable(host_lo, host_hi);
 
     // Get polyplug host interface from globalThis
@@ -47,11 +47,11 @@ export function polyplug_init(
 
     // Register plugin: transformer
     polyplug.register_contract(
-        TRANSFORMER_VTABLE.contractLo,
-        TRANSFORMER_VTABLE.contractHi,
-        TRANSFORMER_VTABLE,
-        TRANSFORMER_VTABLE.fnCount,
-        TRANSFORMER_VTABLE.contractName
+        TRANSFORMER_INTERFACE.contractLo,
+        TRANSFORMER_INTERFACE.contractHi,
+        TRANSFORMER_INTERFACE,
+        TRANSFORMER_INTERFACE.fnCount,
+        TRANSFORMER_INTERFACE.contractName
     );
 
     return { code: ABI_OK, message: { ptr: 0, len: 0 } };
