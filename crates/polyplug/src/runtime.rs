@@ -1614,7 +1614,7 @@ mod tests {
 
     // --- Host Contract Tests ---
 
-    fn create_host_contract_vtable(
+    fn create_host_contract_interface(
         contract_id: u64,
         major: u32,
         minor: u32,
@@ -1653,7 +1653,7 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
-        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         let result: Result<(), HostContractError> =
             runtime.register_host_contract(contract_id, vtable);
@@ -1673,8 +1673,8 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
-        let vtable1: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
-        let vtable2: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 1);
+        let vtable1: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
+        let vtable2: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 1);
 
         let result1: Result<(), HostContractError> =
             runtime.register_host_contract(contract_id, vtable1);
@@ -1699,7 +1699,7 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
-        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
             .register_host_contract(contract_id, vtable)
@@ -1731,7 +1731,7 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 2);
-        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 2, 5);
+        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 2, 5);
 
         runtime
             .register_host_contract(contract_id, vtable)
@@ -1784,7 +1784,7 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.test", 1);
-        let vtable: &'static HostContractInterface = create_host_contract_vtable(contract_id, 1, 0);
+        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
             .register_host_contract(contract_id, vtable)
@@ -1882,7 +1882,7 @@ mod tests {
     }
 
     /// Create a counting host contract interface with configurable singleton mode.
-    fn create_counting_host_contract_vtable(
+    fn create_counting_host_contract_interface(
         contract_id: u64,
         major: u32,
         singleton: bool,
@@ -1917,7 +1917,7 @@ mod tests {
 
         let contract_id: u64 = polyplug_utils::host_contract_id("singleton.test", 1);
         let interface: &'static HostContractInterface =
-            create_counting_host_contract_vtable(contract_id, 1, true);  // singleton=true
+            create_counting_host_contract_interface(contract_id, 1, true);  // singleton=true
 
         runtime
             .register_host_contract(contract_id, interface)
@@ -1986,7 +1986,7 @@ mod tests {
 
         let contract_id: u64 = polyplug_utils::host_contract_id("multi.test", 1);
         let interface: &'static HostContractInterface =
-            create_counting_host_contract_vtable(contract_id, 1, false);  // singleton=false
+            create_counting_host_contract_interface(contract_id, 1, false);  // singleton=false
 
         runtime
             .register_host_contract(contract_id, interface)
@@ -2055,9 +2055,9 @@ mod tests {
         let multi_id: u64 = polyplug_utils::host_contract_id("multi.mixed", 1);
 
         let singleton_interface: &'static HostContractInterface =
-            create_counting_host_contract_vtable(singleton_id, 1, true);
+            create_counting_host_contract_interface(singleton_id, 1, true);
         let multi_interface: &'static HostContractInterface =
-            create_counting_host_contract_vtable(multi_id, 1, false);
+            create_counting_host_contract_interface(multi_id, 1, false);
 
         runtime
             .register_host_contract(singleton_id, singleton_interface)
