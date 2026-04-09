@@ -711,7 +711,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                         "            var contractHandle_{plugin_lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{plugin_lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
                     ));
                     out.push_str("            try {\n");
-                    out.push_str(&format!("            fixed (GuestContractInterface* vtablePtr_{plugin_lower} = &{}Interfaces.{plugin_upper}_INTERFACE) {{\n", plugin_pascal));
+                    out.push_str(&format!("            fixed (GuestContractInterface* interfacePtr_{plugin_lower} = &{}Interfaces.{plugin_upper}_INTERFACE) {{\n", plugin_pascal));
                     out.push_str(&format!(
                         "                var desc_{plugin_lower} = new PluginDescriptor {{\n"
                     ));
@@ -726,7 +726,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                     out.push_str("                var host = (HostInterface*)hostPtr;\n");
                     out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;\n");
                     out.push_str(&format!(
-                        "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, vtablePtr_{plugin_lower});\n"
+                        "                var err_{plugin_lower} = registerFn(hostPtr, &desc_{plugin_lower}, interfacePtr_{plugin_lower});\n"
                     ));
                     out.push_str(&format!("                if (err_{plugin_lower}.Code != AbiErrorCode.Ok) return err_{plugin_lower}.Code;\n"));
                     out.push_str("            }\n");
@@ -768,7 +768,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
                 "            var contractHandle_{lower} = System.Runtime.InteropServices.GCHandle.Alloc(contract_name_{lower}, System.Runtime.InteropServices.GCHandleType.Pinned);\n"
             ));
             out.push_str("            try {\n");
-            out.push_str(&format!("            fixed (GuestContractInterface* vtablePtr_{lower} = &{class_name}Interfaces.{upper}_INTERFACE) {{\n"));
+            out.push_str(&format!("            fixed (GuestContractInterface* interfacePtr_{lower} = &{class_name}Interfaces.{upper}_INTERFACE) {{\n"));
             out.push_str(&format!(
                 "                var desc_{lower} = new PluginDescriptor {{\n"
             ));
@@ -783,7 +783,7 @@ fn generate_cs_guest_init(ir: &ValidatedIr) -> String {
             out.push_str("                var host = (HostInterface*)hostPtr;\n");
             out.push_str("                var registerFn = (delegate* unmanaged[Cdecl]<IntPtr, PluginDescriptor*, GuestContractInterface*, AbiError>)host->RegisterContract;\n");
             out.push_str(&format!(
-                "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, vtablePtr_{lower});\n"
+                "                var err_{lower} = registerFn(hostPtr, &desc_{lower}, interfacePtr_{lower});\n"
             ));
             out.push_str(&format!("                if (err_{lower}.Code != AbiErrorCode.Ok) return err_{lower}.Code;\n"));
             out.push_str("            }\n");
@@ -1115,11 +1115,11 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("public sealed class {} {{\n", class_name));
-    out.push_str("    private readonly IntPtr _vtable;\n\n");
+    out.push_str("    private readonly IntPtr _interface;\n\n");
 
     // Private constructor
     out.push_str(&format!(
-        "    private {}(IntPtr vtable) {{ _vtable = vtable; }}\n\n",
+        "    private {}(IntPtr interface) {{ _interface = interface; }}\n\n",
         class_name
     ));
 
@@ -1135,19 +1135,19 @@ fn generate_cs_guest_host_contract_caller(out: &mut String, contract: &ResolvedH
     out.push_str("        unsafe {\n");
     out.push_str("            var hostInterface = (HostInterface*)host;\n");
     out.push_str(&format!(
-        "            var vtable = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
+        "            var interface = hostInterface->GetHostContract(host, 0x{:016X}UL, minVersion);\n",
         contract.contract_id
     ));
-    out.push_str("            if (vtable == IntPtr.Zero) {\n");
+    out.push_str("            if (interface == IntPtr.Zero) {\n");
     out.push_str("                return null;\n");
     out.push_str("            }\n");
-    out.push_str(&format!("            return new {}(vtable);\n", class_name));
+    out.push_str(&format!("            return new {}(interface);\n", class_name));
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
     // IsValid property
-    out.push_str("    /// <summary>Check if caller is valid (vtable is non-null).</summary>\n");
-    out.push_str("    public bool IsValid => _vtable != IntPtr.Zero;\n\n");
+    out.push_str("    /// <summary>Check if caller is valid (interface is non-null).</summary>\n");
+    out.push_str("    public bool IsValid => _interface != IntPtr.Zero;\n\n");
 
     // Methods for each function
     for func in &contract.functions {
@@ -1194,8 +1194,8 @@ fn generate_cs_guest_host_contract_method(
         return_type, method_name, params_str
     ));
 
-    // Null vtable check
-    out.push_str("        if (_vtable == IntPtr.Zero) {\n");
+    // Null interface check
+    out.push_str("        if (_interface == IntPtr.Zero) {\n");
     if has_return {
         out.push_str(&format!("            return default({});\n", return_type));
     } else {
@@ -1205,7 +1205,7 @@ fn generate_cs_guest_host_contract_method(
 
     // Get header and check function count
     out.push_str("        unsafe {\n");
-    out.push_str("            var header = &((HostContractVTable*)_vtable)->Header;\n");
+    out.push_str("            var header = &((HostContractVTable*)_interface)->Header;\n");
     out.push_str(&format!(
         "            if ({fn_id}u >= header->FunctionCount) {{\n"
     ));
@@ -1731,11 +1731,11 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
 
     // NATIVE dispatch factory
     out.push_str(&format!(
-        "/// <summary>\n/// Create a host contract vtable for `{}` with NATIVE dispatch.\n/// </summary>\n",
+        "/// <summary>\n/// Create a host contract interface for `{}` with NATIVE dispatch.\n/// </summary>\n",
         contract.name
     ));
     out.push_str("/// <remarks>\n");
-    out.push_str("/// Takes a reference to the implementation and creates a vtable.\n");
+    out.push_str("/// Takes a reference to the implementation and creates an interface.\n");
     out.push_str("/// The implementation must implement the interface.\n");
     out.push_str("/// </remarks>\n");
     out.push_str(&format!(
@@ -1769,7 +1769,7 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
     // Pin the function array
     out.push_str("    var functionsHandle = GCHandle.Alloc(functions, GCHandleType.Pinned);\n\n");
 
-    // Create the vtable
+    // Create the interface
     out.push_str("    return new HostContractVTable {\n");
     out.push_str("        Header = new HostContractVTableHeader {\n");
     out.push_str("            VTableVersion = 1,\n");
@@ -1793,7 +1793,7 @@ fn generate_cs_host_interface_factory(out: &mut String, contract: &ResolvedHostC
 
     // VM dispatch factory
     out.push_str(&format!(
-        "/// <summary>\n/// Create a host contract vtable for `{}` with VM dispatch.\n/// </summary>\n",
+        "/// <summary>\n/// Create a host contract interface for `{}` with VM dispatch.\n/// </summary>\n",
         contract.name
     ));
     out.push_str("/// <remarks>\n");
@@ -2535,8 +2535,8 @@ mod tests {
             "missing class: {out}"
         );
         assert!(
-            out.contains("private readonly IntPtr _vtable"),
-            "missing vtable field: {out}"
+            out.contains("private readonly IntPtr _interface"),
+            "missing interface field: {out}"
         );
         assert!(
             out.contains("public static HostLoggerContract? FromHost"),
@@ -2547,7 +2547,7 @@ mod tests {
             "missing Log method: {out}"
         );
         assert!(
-            out.contains("public bool IsValid => _vtable != IntPtr.Zero"),
+            out.contains("public bool IsValid => _interface != IntPtr.Zero"),
             "missing IsValid property: {out}"
         );
     }
