@@ -93,12 +93,12 @@
 
 ### Category: Typed Handles (Phase 7)
 
-- [x] **TH-01**: Replace `rt_ctx: *mut c_void` with `RuntimeContext` typed handle
+- [ ] **TH-01**: Replace `rt_ctx: *mut c_void` with `RuntimeContext` typed handle — **NOT IMPLEMENTED**: RuntimeContext struct never created; VERIFICATION.md erroneously claimed implementation
 - [x] **TH-02**: Replace `loader_data: *mut c_void` with `VmLoaderData` typed handle
 - [x] **TH-03**: Replace `instance: *mut c_void` in native dispatch with `GuestContractInstance`
-- [x] **TH-04**: Create `RuntimeContext` struct (opaque handle to Runtime)
+- [ ] **TH-04**: Create `RuntimeContext` struct (opaque handle to Runtime) — **NOT IMPLEMENTED**: RuntimeContext does not exist in polyplug_abi/src/host/
 - [x] **TH-05**: Create `VmLoaderData` struct (opaque handle to VM state)
-- [x] **TH-06**: Update all RuntimeAbi functions to use `RuntimeContext` instead of `*mut c_void`
+- [ ] **TH-06**: Update all RuntimeAbi functions to use `RuntimeContext` instead of `*mut c_void` — **NOT IMPLEMENTED**: RuntimeAbi functions use bare pointers, not RuntimeContext
 - [x] **TH-07**: Update PluginContext to use typed handles
 - [x] **TH-08**: Ensure all opaque handles are `#[repr(C)]` with single `data` field
 
@@ -146,7 +146,7 @@
 | CLN-01, CLN-04 | Phase 15: Final Cleanup |
 | CLN-02 | Phase 10: SDK Cleanup Completion |
 | CLN-03 | Phase 16: Milestone Gap Closure |
-| TH-01, TH-04, TH-06 | Phase 16: Milestone Gap Closure |
+| TH-01, TH-04, TH-06 | NOT IMPLEMENTED (deferred) |
 
 **Coverage:**
 - v1.1 requirements: 58 total
