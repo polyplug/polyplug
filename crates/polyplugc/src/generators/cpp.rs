@@ -442,7 +442,7 @@ fn generate_cpp_guest_contract_interface(
     out.push_str("    // No-op - stateless plugins don't need cleanup.\n");
     out.push_str("}\n\n");
 
-    // VTable static
+    // Interface static
     out.push_str(&format!("static GuestContractInterface {}_INTERFACE = {{\n", upper));
     out.push_str(&format!("    {}_CONTRACT_ID,\n", upper));
     out.push_str(&format!(
@@ -1860,7 +1860,7 @@ fn generate_cpp_host_contracts_file(ir: &ValidatedIr) -> String {
     out
 }
 
-// ─── Host VTable Factories Generation ─────────────────────────────────────────
+// ─── Host Interface Factories Generation ─────────────────────────────────────────
 
 /// Generate all host-side interface factories into a single file.
 fn generate_cpp_host_interface_factories_file(ir: &ValidatedIr) -> String {
