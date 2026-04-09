@@ -349,7 +349,7 @@ fn stress_large_buffer_fill_and_read() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "memory_fill_preallocated_buffer must return ABI_OK"
+        "memory_fill_preallocated_buffer must return Ok"
     );
     assert_eq!(
         out as usize, BUFFER_SIZE,
@@ -409,7 +409,7 @@ fn stress_string_view_non_ascii_utf8() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "memory_echo_string_view must return ABI_OK"
+        "memory_echo_string_view must return Ok"
     );
     assert_eq!(
         out_sv.ptr, input_sv.ptr,
@@ -478,7 +478,7 @@ fn stress_zero_length_buffer_and_string_view() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "memory_zero_length_roundtrip must return ABI_OK"
+        "memory_zero_length_roundtrip must return Ok"
     );
     assert_eq!(
         out.buf_len, 0_u64,
@@ -551,7 +551,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 };
                 assert_eq!(
                     result.code, AbiErrorCode::Ok,
-                    "thread {}: fill must return ABI_OK",
+                    "thread {}: fill must return Ok",
                     thread_idx
                 );
                 assert_eq!(
@@ -684,7 +684,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "memory_alloc_buffer_via_host must return ABI_OK"
+        "memory_alloc_buffer_via_host must return Ok"
     );
     assert!(
         !out_buf.ptr.is_null(),
@@ -776,7 +776,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "memory_fill_preallocated_buffer must return ABI_OK"
+        "memory_fill_preallocated_buffer must return Ok"
     );
     assert_eq!(out, 64_u32, "written byte count must be 64");
 

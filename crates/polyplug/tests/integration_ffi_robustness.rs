@@ -309,7 +309,7 @@ fn test_stringview_cross_thread_echo() {
                 )
             };
 
-            assert_eq!(call_result.code, AbiErrorCode::Ok, "echo must return ABI_OK");
+            assert_eq!(call_result.code, AbiErrorCode::Ok, "echo must return Ok");
             assert_eq!(out_sv.ptr, input_sv.ptr, "ptr must round-trip");
             assert_eq!(out_sv.len, input_sv.len, "len must round-trip");
 

@@ -269,7 +269,7 @@ fn test_dispatch_add_function() {
         )
     };
 
-    assert_eq!(call_result.code, AbiErrorCode::Ok, "add function must return ABI_OK");
+    assert_eq!(call_result.code, AbiErrorCode::Ok, "add function must return Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     // Leak the library.

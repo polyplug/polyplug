@@ -390,7 +390,7 @@ fn stress_error_code_and_message_received_correctly() {
     // The dispatch wrapper returns ABI_OK (success).
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "dispatch wrapper must return ABI_OK"
+        "dispatch wrapper must return Ok"
     );
 
     // The actual error is written to *out.
@@ -441,7 +441,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
 
     assert_eq!(
         result.code, AbiErrorCode::Panic,
-        "error_panic must return ABI_ERROR_PANIC (code={})",
+        "error_panic must return Panic (code={})",
         AbiErrorCode::Panic as u32
     );
 
@@ -526,7 +526,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     // error_chain_propagate itself returns ABI_OK (wrapper success).
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "error_chain_propagate wrapper must return ABI_OK"
+        "error_chain_propagate wrapper must return Ok"
     );
 
     // The propagated error from fn 1 (error_panic) is ABI_ERROR_PANIC.
@@ -574,7 +574,7 @@ fn stress_error_message_lifetime_valid_during_read() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "dispatch wrapper must return ABI_OK"
+        "dispatch wrapper must return Ok"
     );
     assert_eq!(out.code, AbiErrorCode::from_u32(99), "error code must be 99");
     assert_eq!(out.message.len, 22_usize, "message length must be 22");

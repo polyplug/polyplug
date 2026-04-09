@@ -405,7 +405,7 @@ fn smoke_rust_codegen_dispatch() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
 
     // ── 9. Retrieve the captured interface ──────────────────────────────────────
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
@@ -449,7 +449,7 @@ fn smoke_rust_codegen_dispatch() {
         )
     };
 
-    assert_eq!(call_result.code, AbiErrorCode::Ok, "add(3, 5) must return ABI_OK");
+    assert_eq!(call_result.code, AbiErrorCode::Ok, "add(3, 5) must return Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 
     println!("smoke_rust_codegen_dispatch: add(3, 5) = {} ✓", out);

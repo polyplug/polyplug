@@ -416,7 +416,7 @@ fn concurrent_loaders_do_not_race() {
 // ── 11. Dispatch — calling a registered Lua function ─────────────────────────
 
 /// Load the valid plugin and invoke its single function through the vtable.
-/// The noop function must return `ABI_OK` without panicking.
+/// The noop function must return `AbiErrorCode::Ok as u32` without panicking.
 #[test]
 fn vtable_function_dispatch_returns_abi_ok() {
     let (_dir, path) = write_temp_bundle("lua_loader_dispatch", valid_plugin_script());
@@ -461,8 +461,8 @@ fn vtable_function_dispatch_returns_abi_ok() {
         )
     };
     assert_eq!(
-        result.code, ABI_OK,
-        "noop function must return ABI_OK, got code={}",
+        result.code, AbiErrorCode::Ok as u32,
+        "noop function must return Ok, got code={}",
         result.code
     );
 }

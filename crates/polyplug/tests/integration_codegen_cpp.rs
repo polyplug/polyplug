@@ -368,7 +368,7 @@ fn test_cpp_plugin_dispatch() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
 
     // ── 5. Look up interface for test.add by contract_id ─────────────────────────
     let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
@@ -411,7 +411,7 @@ fn test_cpp_plugin_dispatch() {
         )
     };
 
-    assert_eq!(call_result.code, AbiErrorCode::Ok, "cpp_test_add must return ABI_OK");
+    assert_eq!(call_result.code, AbiErrorCode::Ok, "cpp_test_add must return Ok");
     assert_eq!(out, 30_u32, "add(10, 20) must equal 30");
 
     println!("test_cpp_plugin_dispatch: add(10, 20) = {} ✓", out);
@@ -469,7 +469,7 @@ fn test_cpp_host_loads_rust_plugin() {
     };
     assert_eq!(
         init_result.code, AbiErrorCode::Ok,
-        "Rust plugin polyplug_init must return ABI_OK"
+        "Rust plugin polyplug_init must return Ok"
     );
 
     let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
@@ -507,7 +507,7 @@ fn test_cpp_host_loads_rust_plugin() {
 
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
-        "Rust plugin add(3,5) must return ABI_OK"
+        "Rust plugin add(3,5) must return Ok"
     );
     assert_eq!(out, 8_u32, "Rust plugin add(3,5) must equal 8");
 
@@ -567,7 +567,7 @@ fn test_exception_isolation_cpp() {
     };
     assert_eq!(
         init_result.code, AbiErrorCode::Ok,
-        "throwing plugin init must return ABI_OK"
+        "throwing plugin init must return Ok"
     );
 
     let handle: GuestContractHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
