@@ -448,7 +448,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                     &contract_full == contract_impl
                 }) {
                     generate_guest_plugin_trait(&mut out, &plugin.name, contract);
-                    generate_guest_plugin_vtable(
+                    generate_guest_plugin_interface(
                         &mut out,
                         &plugin.name,
                         contract,
@@ -460,7 +460,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     } else {
         for contract in &ir.contracts {
             generate_guest_contract_trait(&mut out, contract);
-            generate_guest_contract_vtable(&mut out, contract, true);
+            generate_guest_contract_interface(&mut out, contract, true);
         }
     }
 
@@ -714,10 +714,10 @@ fn generate_host_caller_method(out: &mut String, func: &ResolvedFunction, contra
     // Instance-based dispatch: use interface_ and instance_
     out.push_str("        # SAFETY: interface_ is valid for the lifetime of this wrapper.\n");
     out.push_str("        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))\n");
-    out.push_str("        vtable: GuestContractInterface = iface_ptr.contents\n");
-    out.push_str(&format!("        if {fn_id} >= vtable.function_count:\n"));
-    out.push_str("            raise RuntimeError(\"function not available in vtable\")\n");
-    out.push_str("        functions_ptr: int = vtable.dispatch.native.functions\n");
+    out.push_str("        interface: GuestContractInterface = iface_ptr.contents\n");
+    out.push_str(&format!("        if {fn_id} >= interface.function_count:\n"));
+    out.push_str("            raise RuntimeError(\"function not available in interface\")\n");
+    out.push_str("        functions_ptr: int = interface.dispatch.native.functions\n");
     out.push_str(&format!(
         "        fn_ptr: int = ctypes.cast(functions_ptr + {fn_id} * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value\n"
     ));
@@ -907,7 +907,7 @@ fn generate_guest_trait_stub_method(
     ));
 }
 
-fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract, is_native: bool) {
+fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContract, is_native: bool) {
     let upper: String = contract_name_to_upper_snake(&contract.name);
     let lower: String = contract.name.replace('.', "_");
     let trait_name: String = contract_name_to_guest_trait(&contract.name);
@@ -1033,7 +1033,7 @@ fn generate_guest_contract_vtable(out: &mut String, contract: &ResolvedContract,
     out.push_str(")\n\n");
 }
 
-fn generate_guest_plugin_vtable(
+fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
     contract: &ResolvedContract,
@@ -1629,8 +1629,8 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
         contract.name, contract.contract_id
     ));
     out.push_str(&format!("class {}:\n", class_name));
-    out.push_str("    def __init__(self, vtable: int) -> None:\n");
-    out.push_str("        self._vtable: int = vtable\n\n");
+    out.push_str("    def __init__(self, interface: int) -> None:\n");
+    out.push_str("        self._interface: int = interface\n\n");
 
     out.push_str("    @classmethod\n");
     out.push_str("    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None:\n");
@@ -1638,15 +1638,15 @@ fn generate_python_guest_host_contract_caller(out: &mut String, contract: &Resol
     out.push_str("            return None\n");
     out.push_str("        host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
     out.push_str(&format!(
-        "        vtable: int = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
+        "        interface: int = host.contents.get_host_contract(host_ptr, 0x{:016X}, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("        if vtable == 0:\n");
+    out.push_str("        if interface == 0:\n");
     out.push_str("            return None\n");
-    out.push_str("        return cls(vtable)\n\n");
+    out.push_str("        return cls(interface)\n\n");
 
     out.push_str("    def is_valid(self) -> bool:\n");
-    out.push_str("        return self._vtable != 0\n\n");
+    out.push_str("        return self._interface != 0\n\n");
 
     for func in &contract.functions {
         generate_python_guest_host_contract_method(out, func);
@@ -1682,13 +1682,13 @@ fn generate_python_guest_host_contract_method(out: &mut String, func: &ResolvedF
         func.name, params_str, return_type
     ));
 
-    out.push_str("        if self._vtable == 0:\n");
+    out.push_str("        if self._interface == 0:\n");
     if has_return {
         out.push_str("            return None\n");
     } else {
         out.push_str("            return\n");
     }
-    out.push_str("        header: Any = ctypes.cast(self._vtable, ctypes.POINTER(HostContractVTable)).contents.header\n");
+    out.push_str("        header: Any = ctypes.cast(self._interface, ctypes.POINTER(HostContractVTable)).contents.header\n");
     out.push_str(&format!("        if {fn_id} >= header.function_count:\n"));
     if has_return {
         out.push_str("            return None\n");
@@ -1917,7 +1917,7 @@ fn generate_guest_host_contracts_stub(ir: &ValidatedIr) -> String {
     for contract in &ir.host_contracts {
         let class_name: String = host_contract_name_to_python_caller(&contract.name);
         out.push_str(&format!("class {}:\n", class_name));
-        out.push_str("    def __init__(self, vtable: int) -> None: ...\n");
+        out.push_str("    def __init__(self, interface: int) -> None: ...\n");
         out.push_str("    @classmethod\n");
         out.push_str(
             "    def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ...\n",
@@ -2171,15 +2171,15 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
 
     // NATIVE dispatch factory
     out.push_str(&format!(
-        "# Create a host contract vtable for `{}` with NATIVE dispatch.\n",
+        "# Create a host contract interface for `{}` with NATIVE dispatch.\n",
         contract.name
     ));
     out.push_str("#\n");
-    out.push_str("# Takes an implementation instance and creates a vtable.\n");
+    out.push_str("# Takes an implementation instance and creates an interface.\n");
     out.push_str("# The implementation must inherit from the ABC class.\n");
     out.push_str("#\n");
     out.push_str("# Memory:\n");
-    out.push_str("# The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str("# The returned interface is cached and lives for the lifetime of the program.\n");
     out.push_str(&format!(
         "def {factory_name}(impl: {class_name}) -> HostContractVTable:\n"
     ));
@@ -2205,8 +2205,8 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     }
     out.push_str("    ]\n\n");
 
-    // Create the vtable
-    out.push_str("    vtable = HostContractVTable(\n");
+    // Create the interface
+    out.push_str("    interface = HostContractVTable(\n");
     out.push_str("        header=HostContractVTableHeader(\n");
     out.push_str("            vtable_version=1,\n");
     out.push_str(&format!("            contract_id=0x{contract_id:016X},\n"));
@@ -2223,7 +2223,7 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str("            ),\n");
     out.push_str("        ),\n");
     out.push_str("    )\n\n");
-    out.push_str("    return vtable\n\n");
+    out.push_str("    return interface\n\n");
 
     // Global implementation storage
     out.push_str(&format!(
@@ -2232,7 +2232,7 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
 
     // VM dispatch factory
     out.push_str(&format!(
-        "# Create a host contract vtable for `{}` with VM dispatch.\n",
+        "# Create a host contract interface for `{}` with VM dispatch.\n",
         contract.name
     ));
     out.push_str("#\n");
@@ -2243,12 +2243,12 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str("#     dispatch_fn: Function to call for each contract function\n");
     out.push_str("#\n");
     out.push_str("# Memory:\n");
-    out.push_str("# The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str("# The returned interface is cached and lives for the lifetime of the program.\n");
     out.push_str(&format!("def {factory_vm_name}(\n"));
     out.push_str("    bridge_data: int,\n");
     out.push_str("    dispatch_fn: Callable[[int, int, int, int], AbiError],\n");
     out.push_str(") -> HostContractVTable:\n");
-    out.push_str("    vtable = HostContractVTable(\n");
+    out.push_str("    interface = HostContractVTable(\n");
     out.push_str("        header=HostContractVTableHeader(\n");
     out.push_str("            vtable_version=1,\n");
     out.push_str(&format!("            contract_id=0x{contract_id:016X},\n"));
@@ -2265,7 +2265,7 @@ fn generate_python_host_interface_factory(out: &mut String, contract: &ResolvedH
     out.push_str("            ),\n");
     out.push_str("        ),\n");
     out.push_str("    )\n\n");
-    out.push_str("    return vtable\n\n");
+    out.push_str("    return interface\n\n");
 }
 
 /// Generate a thunk function for a host contract function.
@@ -2850,7 +2850,7 @@ mod tests {
             "missing class def: {out}"
         );
         assert!(
-            out.contains("def __init__(self, vtable: int) -> None:"),
+            out.contains("def __init__(self, interface: int) -> None:"),
             "missing __init__: {out}"
         );
         assert!(
@@ -2974,7 +2974,7 @@ mod tests {
         };
         let result: String = generate_guest_host_contracts_stub(&ir);
         assert!(result.contains("class HostLoggerContract:"));
-        assert!(result.contains("def __init__(self, vtable: int) -> None: ..."));
+        assert!(result.contains("def __init__(self, interface: int) -> None: ..."));
         assert!(result.contains(
             "def from_host(cls, host_ptr: int, min_version: int = 0) -> Self | None: ..."
         ));
