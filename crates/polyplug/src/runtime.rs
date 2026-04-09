@@ -1653,17 +1653,17 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
-        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
+        let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         let result: Result<(), HostContractError> =
-            runtime.register_host_contract(contract_id, vtable);
+            runtime.register_host_contract(contract_id, interface);
         assert!(result.is_ok(), "registration should succeed");
 
         let found: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
         assert!(found.is_some(), "contract should be found");
-        let found_vtable: &HostContractInterface =
+        let found_interface: &HostContractInterface =
             found.expect("contract should be present after is_some check");
-        assert_eq!(found_vtable.contract_id.id(), contract_id);
+        assert_eq!(found_interface.contract_id.id(), contract_id);
     }
 
     #[test]
@@ -1673,15 +1673,15 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
-        let vtable1: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
-        let vtable2: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 1);
+        let interface1: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
+        let interface2: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 1);
 
         let result1: Result<(), HostContractError> =
-            runtime.register_host_contract(contract_id, vtable1);
+            runtime.register_host_contract(contract_id, interface1);
         assert!(result1.is_ok(), "first registration should succeed");
 
         let result2: Result<(), HostContractError> =
-            runtime.register_host_contract(contract_id, vtable2);
+            runtime.register_host_contract(contract_id, interface2);
         assert!(result2.is_err(), "duplicate registration should fail");
         match result2 {
             Err(HostContractError::DuplicateContract { contract_id: id }) => {
@@ -1699,10 +1699,10 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 1);
-        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
+        let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
-            .register_host_contract(contract_id, vtable)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         let removed: bool = runtime.unregister_host_contract(contract_id);
@@ -1731,10 +1731,10 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.logger", 2);
-        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 2, 5);
+        let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 2, 5);
 
         runtime
-            .register_host_contract(contract_id, vtable)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         let found_low: Option<&'static HostContractInterface> =
@@ -1784,10 +1784,10 @@ mod tests {
             .expect("runtime build should succeed");
 
         let contract_id: u64 = polyplug_utils::host_contract_id("host.test", 1);
-        let vtable: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
+        let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
-            .register_host_contract(contract_id, vtable)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
