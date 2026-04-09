@@ -333,12 +333,12 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                 out.push_str("        try {\n");
                 if has_params {
                     out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
-                    out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+                    out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
                     out.push_str("            }\n");
                 }
                 if has_return {
                     out.push_str("            if (outPtr == IntPtr.Zero) {\n");
-                    out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+                    out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
                     out.push_str("            }\n");
                 }
                 out.push_str(&format!(
@@ -507,12 +507,12 @@ fn generate_cs_guest_plugin_interface(
         out.push_str("        try {\n");
         if has_params {
             out.push_str("            if (argsPtr == IntPtr.Zero) {\n");
-            out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+            out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
             out.push_str("            }\n");
         }
         if has_return {
             out.push_str("            if (outPtr == IntPtr.Zero) {\n");
-            out.push_str("                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };\n");
+            out.push_str("                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };\n");
             out.push_str("            }\n");
         }
         out.push_str(&format!(

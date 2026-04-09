@@ -635,7 +635,60 @@ fn other_thing() -> Result<(), Error> { }
 
 ---
 
-### 16. Test Failures Must Be Fixed, Never Skipped
+### 17. ABI_* Constants Are FORBIDDEN
+
+**NEVER use `ABI_OK`, `ABI_ERROR_*`, or any `ABI_` prefixed constants. Use `AbiErrorCode` enum instead.**
+
+The `AbiErrorCode` enum is the canonical way to represent ABI error codes across all languages. Using raw constants creates inconsistency and makes the codebase harder to maintain.
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — use AbiErrorCode enum
+if err.code == ABI_OK { }
+if err.code == ABI_ERROR_GENERIC { }
+return ABI_ERROR_INVALID_POINTER;
+
+// FORBIDDEN — in all SDKs (Python, JS, Lua, C#, C++)
+if err.code == ABI_OK:  # Python
+if (err.code == ABI_OK) { ... }  // JavaScript
+if err.code == ABI_OK then  -- Lua
+if (err.Code == AbiConstants.ABI_OK)  // C#
+```
+
+**CORRECT:**
+```rust
+// CORRECT — use AbiErrorCode enum
+use polyplug_abi::AbiErrorCode;
+if err.code == AbiErrorCode::Ok as u32 { }
+if err.code == AbiErrorCode::Generic as u32 { }
+return AbiErrorCode::InvalidPointer as u32;
+
+// Python
+if err.code == AbiErrorCode.Ok:
+
+// JavaScript
+if (err.code === AbiErrorCode.Ok) { ... }
+
+// Lua
+if err.code == AbiErrorCode.Ok then
+
+// C#
+if (err.Code == (uint)AbiErrorCode.Ok)
+
+// C++
+if (err.code == AbiErrorCode_Ok)
+```
+
+**Why this matters:**
+- Consistent error handling across all languages
+- Type-safe enum instead of magic numbers
+- Easier to extend with new error codes
+- Generated code uses the canonical form
+- No confusion between constants and enums
+
+---
+
+### 18. Test Failures Must Be Fixed, Never Skipped
 
 **NEVER skip, ignore, or mark tests as `#[ignore]` to avoid fixing failures.**
 

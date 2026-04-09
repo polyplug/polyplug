@@ -493,12 +493,12 @@ fn generate_cpp_guest_abi_wrapper(
 
     if has_params {
         out.push_str("        if (args == nullptr) {\n");
-        out.push_str("            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER\n");
+        out.push_str("            return AbiError{AbiErrorCode_InvalidPointer, StringView{nullptr, 0}};\n");
         out.push_str("        }\n");
     }
     if !is_void_return {
         out.push_str("        if (out == nullptr) {\n");
-        out.push_str("            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER\n");
+        out.push_str("            return AbiError{AbiErrorCode_InvalidPointer, StringView{nullptr, 0}};\n");
         out.push_str("        }\n");
     }
 

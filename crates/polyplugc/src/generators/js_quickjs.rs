@@ -585,10 +585,12 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("\n} from './contracts';\n");
     out.push_str("import { storeHostVtable } from 'polyplug-guest';\n\n");
 
-    out.push_str("// ABI constants\n");
-    out.push_str("const ABI_OK = 0;\n");
-    out.push_str("const ABI_ERROR_GENERIC = 1;\n");
-    out.push_str("const ABI_ERROR_INVALID_POINTER = 8;\n\n");
+    out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
+    out.push_str("const AbiErrorCode = {\n");
+    out.push_str("    Ok: 0,\n");
+    out.push_str("    Generic: 1,\n");
+    out.push_str("    InvalidPointer: 8,\n");
+    out.push_str("};\n\n");
 
     out.push_str("interface AbiError {\n");
     out.push_str("    code: number;\n");
@@ -608,17 +610,17 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
     out.push_str("): AbiError {\n");
     out.push_str("    // Validate parameters\n");
     out.push_str("    if (host_lo === 0 && host_hi === 0) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
+    out.push_str("        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n");
     out.push_str("    if (ctx_lo === 0 && ctx_hi === 0) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
+    out.push_str("        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n\n");
     out.push_str("    // Store host interface for later access via getHostVtable()\n");
     out.push_str("    storeHostVtable(host_lo, host_hi);\n\n");
     out.push_str("    // Get polyplug host interface from globalThis\n");
     out.push_str("    const polyplug = (globalThis as any).polyplug;\n");
     out.push_str("    if (!polyplug || !polyplug.register_contract) {\n");
-    out.push_str("        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };\n");
+    out.push_str("        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };\n");
     out.push_str("    }\n\n");
 
     for plugin in &bundle.plugins {
@@ -636,7 +638,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         out.push_str("    );\n\n");
     }
 
-    out.push_str("    return { code: ABI_OK, message: { ptr: 0, len: 0 } };\n");
+    out.push_str("    return { code: AbiErrorCode.Ok, message: { ptr: 0, len: 0 } };\n");
     out.push_str("}\n");
 
     out
@@ -774,11 +776,13 @@ fn generate_callers_ts(ir: &ValidatedIr) -> String {
          // Runtime: js-quickjs (host-side callers)\n\n",
     );
 
-    // ABI constants
-    out.push_str("// ABI constants\n");
-    out.push_str("export const ABI_OK = 0;\n");
-    out.push_str("export const ABI_ERROR_GENERIC = 1;\n");
-    out.push_str("export const ABI_ERROR_INVALID_POINTER = 8;\n\n");
+    // ABI error codes (match polyplug_abi.AbiErrorCode)
+    out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
+    out.push_str("export const AbiErrorCode = {\n");
+    out.push_str("    Ok: 0,\n");
+    out.push_str("    Generic: 1,\n");
+    out.push_str("    InvalidPointer: 8,\n");
+    out.push_str("} as const;\n\n");
 
     // Contract ID constants
     out.push_str("// Contract ID constants\n");
@@ -1606,9 +1610,11 @@ fn generate_js_host_interface_factories_ts(ir: &ValidatedIr) -> String {
     out.push_str("import { DispatchType } from 'polyplug';\n");
     out.push_str("import type * as contracts from './contracts';\n\n");
 
-    out.push_str("// ABI constants\n");
-    out.push_str("const ABI_OK = 0;\n");
-    out.push_str("const ABI_ERROR_PANIC = 5;\n\n");
+    out.push_str("// ABI error codes (match polyplug_abi.AbiErrorCode)\n");
+    out.push_str("const AbiErrorCode = {\n");
+    out.push_str("    Ok: 0,\n");
+    out.push_str("    Panic: 5,\n");
+    out.push_str("};\n\n");
 
     for contract in &ir.host_contracts {
         generate_js_host_interface_factory(&mut out, contract);
@@ -1741,7 +1747,7 @@ fn generate_js_host_thunk(
     out.push_str("        try {\n");
     out.push_str(&format!("            const impl = _{iface_name}_impl;\n"));
     out.push_str("            if (impl === null) {\n");
-    out.push_str("                return ABI_ERROR_PANIC;\n");
+    out.push_str("                return AbiErrorCode.Panic;\n");
     out.push_str("            }\n");
 
     // Generate argument extraction
@@ -1758,7 +1764,7 @@ fn generate_js_host_thunk(
         out.push_str("            // Note: In QuickJS, we use the polyplug helpers\n");
     }
 
-    out.push_str("            return ABI_OK;\n");
+    out.push_str("            return AbiErrorCode.Ok;\n");
     out.push_str("        } catch (e) {\n");
     out.push_str("            return ABI_ERROR_PANIC;\n");
     out.push_str("        }\n");

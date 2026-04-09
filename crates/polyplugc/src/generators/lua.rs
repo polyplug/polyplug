@@ -259,10 +259,12 @@ fn generate_host_callers_file(ir: &ValidatedIr) -> String {
     out.push_str("local ffi = require(\"ffi\")\n\n");
 
     // ABI constants for host
-    out.push_str("-- ABI constants\n");
-    out.push_str("local ABI_OK = 0\n");
-    out.push_str("local ABI_ERROR_GENERIC = 1\n");
-    out.push_str("local ABI_ERROR_INVALID_POINTER = 8\n\n");
+    out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
+    out.push_str("local AbiErrorCode = {\n");
+    out.push_str("    Ok = 0,\n");
+    out.push_str("    Generic = 1,\n");
+    out.push_str("    InvalidPointer = 8,\n");
+    out.push_str("}\n\n");
 
     // Contract ID constants
     out.push_str("-- Contract ID constants\n");
@@ -340,10 +342,12 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
             .any(|p: &ResolvedPlugin| p.optional.contains(&"trace".to_owned()))
     });
 
-    out.push_str("-- ABI constants\n");
-    out.push_str("local ABI_OK = 0\n");
-    out.push_str("local ABI_ERROR_GENERIC = 1\n");
-    out.push_str("local ABI_ERROR_INVALID_POINTER = 8\n\n");
+    out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
+    out.push_str("local AbiErrorCode = {\n");
+    out.push_str("    Ok = 0,\n");
+    out.push_str("    Generic = 1,\n");
+    out.push_str("    InvalidPointer = 8,\n");
+    out.push_str("}\n\n");
 
     if has_trace {
         out.push_str("-- Optional: trace extension (host contracts will be used in future)\n\n");
@@ -357,10 +361,10 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
     out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
     out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
     out.push_str("    if host_ptr == nil then\n");
-    out.push_str("        return ABI_ERROR_GENERIC\n");
+    out.push_str("        return AbiErrorCode.Generic\n");
     out.push_str("    end\n");
     out.push_str("    if ctx_ptr == nil then\n");
-    out.push_str("        return ABI_ERROR_GENERIC\n");
+    out.push_str("        return AbiErrorCode.Generic\n");
     out.push_str("    end\n");
     out.push_str("    polyplug_guest.store_host_vtable(host_ptr)\n");
     out.push_str("    local ctx = polyplug_guest.cast_context(ctx_ptr)\n");
@@ -380,13 +384,13 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    local err_{plugin_upper} = host.register_contract(host_ptr, {plugin_upper}_DESCRIPTOR, {plugin_upper}_INTERFACE)\n"
             ));
-            out.push_str(&format!("    if err_{plugin_upper}.code ~= ABI_OK then\n"));
+            out.push_str(&format!("    if err_{plugin_upper}.code ~= AbiErrorCode.Ok then\n"));
             out.push_str(&format!("        return err_{plugin_upper}.code\n"));
             out.push_str("    end\n\n");
         }
     }
 
-    out.push_str("    return ABI_OK\n");
+    out.push_str("    return AbiErrorCode.Ok\n");
     out.push_str("end\n");
     out
 }
@@ -1543,9 +1547,11 @@ fn generate_lua_host_interface_factories_file(ir: &ValidatedIr) -> String {
     out.push_str(file_header());
     out.push_str("local ffi = require(\"ffi\")\n\n");
 
-    out.push_str("-- ABI types for host contract interfaces\n");
-    out.push_str("local ABI_OK = 0\n");
-    out.push_str("local ABI_ERROR_PANIC = 5\n\n");
+    out.push_str("-- ABI error codes (match polyplug_abi.AbiErrorCode)\n");
+    out.push_str("local AbiErrorCode = {\n");
+    out.push_str("    Ok = 0,\n");
+    out.push_str("    Panic = 5,\n");
+    out.push_str("}\n\n");
 
     out.push_str("local M = {}\n\n");
 
@@ -1681,7 +1687,7 @@ fn generate_lua_host_thunk(
     out.push_str("        local ok, err = pcall(function()\n");
     out.push_str(&format!("            local impl = _{class_name}_impl\n"));
     out.push_str("            if impl == nil then\n");
-    out.push_str("                return ABI_ERROR_PANIC\n");
+    out.push_str("                return AbiErrorCode.Panic\n");
     out.push_str("            end\n");
 
     // Generate argument extraction
@@ -1704,7 +1710,7 @@ fn generate_lua_host_thunk(
         out.push_str("            local _ = out\n");
     }
 
-    out.push_str("            return ABI_OK\n");
+    out.push_str("            return AbiErrorCode.Ok\n");
     out.push_str("        end)\n");
     out.push_str("        if not ok then\n");
     out.push_str("            return ABI_ERROR_PANIC\n");

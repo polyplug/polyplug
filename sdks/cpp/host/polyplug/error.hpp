@@ -54,11 +54,11 @@ private:
     std::string message_;
 };
 
-/// Throws PluginError if err.code != ABI_OK.
+/// Throws PluginError if err.code != AbiErrorCode_Ok.
 /// Intended for host-side code that wants C++ exceptions rather than manual
 /// AbiError checks after every ABI call.
 inline void throw_if_error(AbiError err) {
-    if (err.code != ABI_OK) {
+    if (err.code != AbiErrorCode_Ok) {
         throw PluginError(err);
     }
 }
@@ -79,7 +79,7 @@ private:
 /// Throw a PolyplugException if the AbiError indicates failure.
 /// Used by generated host caller code after every interface dispatch.
 inline void check_abi_error(AbiError err) {
-    if (err.code != ABI_OK) {
+    if (err.code != AbiErrorCode_Ok) {
         const char* msg = (err.message.ptr != nullptr)
             ? reinterpret_cast<const char*>(err.message.ptr)
             : "unknown error";

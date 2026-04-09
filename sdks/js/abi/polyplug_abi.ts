@@ -14,34 +14,23 @@
 /** ABI constant: POLYPLUG_ABI_VERSION */
 export const POLYPLUG_ABI_VERSION: number = 1;
 
-/** ABI constant: ABI_OK */
-export const ABI_OK: number = 0;
-
-/** ABI constant: ABI_ERROR_GENERIC */
-export const ABI_ERROR_GENERIC: number = 1;
-
-/** ABI constant: ABI_BUFFER_TOO_SMALL */
-export const ABI_BUFFER_TOO_SMALL: number = 2;
-
-/** ABI constant: ABI_ERROR_PANIC */
-export const ABI_ERROR_PANIC: number = 3;
-
-/** ABI constant: ABI_ERROR_NOT_FOUND */
-export const ABI_ERROR_NOT_FOUND: number = 4;
-
-/** ABI constant: ABI_ERROR_STALE_HANDLE */
-export const ABI_ERROR_STALE_HANDLE: number = 5;
-
-/** ABI constant: ABI_FUNCTION_NOT_AVAIL */
-export const ABI_FUNCTION_NOT_AVAIL: number = 6;
-
-/** ABI constant: ABI_ERROR_DUPLICATE_PROVIDER */
-export const ABI_ERROR_DUPLICATE_PROVIDER: number = 7;
-
-/** ABI constant: ABI_ERROR_INVALID_POINTER */
-export const ABI_ERROR_INVALID_POINTER: number = 8;
-
 // ─── ABI Enums ────────────────────────────────────────────────────────────────
+
+/** ABI error codes — returned by all ABI functions. */
+export const enum AbiErrorCode {
+    Ok = 0,
+    Generic = 1,
+    BufferTooSmall = 2,
+    Panic = 3,
+    NotFound = 4,
+    StaleHandle = 5,
+    FunctionNotAvailable = 6,
+    DuplicateProvider = 7,
+    InvalidPointer = 8,
+    HostContractNotFound = 100,
+    HostContractVersionMismatch = 101,
+    HostContractCallFailed = 102,
+}
 
 /**  Dispatch mechanism type — determines how function calls are routed. */
 export const enum DispatchType {
@@ -132,10 +121,10 @@ export interface Version {
 
 /**
  *  ABI error — returned by value from all ABI calls.
- * 
+ *
  *  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
  *  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
- *  after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+ *  after reading. If `code == AbiErrorCode.Ok`, `message.ptr` is NULL — no free needed.
  */
 export interface AbiError {
     /**  0 = success, non-zero = error. */

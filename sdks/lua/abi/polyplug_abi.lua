@@ -11,17 +11,24 @@ local M = {}
 -- ─── ABI Constants ────────────────────────────────────────────────────────────
 
 M.POLYPLUG_ABI_VERSION = ffi.cast("uint32_t", 1)
-M.ABI_OK = ffi.cast("uint32_t", 0)
-M.ABI_ERROR_GENERIC = ffi.cast("uint32_t", 1)
-M.ABI_BUFFER_TOO_SMALL = ffi.cast("uint32_t", 2)
-M.ABI_ERROR_PANIC = ffi.cast("uint32_t", 3)
-M.ABI_ERROR_NOT_FOUND = ffi.cast("uint32_t", 4)
-M.ABI_ERROR_STALE_HANDLE = ffi.cast("uint32_t", 5)
-M.ABI_FUNCTION_NOT_AVAIL = ffi.cast("uint32_t", 6)
-M.ABI_ERROR_DUPLICATE_PROVIDER = ffi.cast("uint32_t", 7)
-M.ABI_ERROR_INVALID_POINTER = ffi.cast("uint32_t", 8)
 
 -- ─── ABI Enums ────────────────────────────────────────────────────────────────
+
+--- ABI error codes — returned by all ABI functions.
+M.AbiErrorCode = {
+    Ok = ffi.cast("uint32_t", 0),
+    Generic = ffi.cast("uint32_t", 1),
+    BufferTooSmall = ffi.cast("uint32_t", 2),
+    Panic = ffi.cast("uint32_t", 3),
+    NotFound = ffi.cast("uint32_t", 4),
+    StaleHandle = ffi.cast("uint32_t", 5),
+    FunctionNotAvailable = ffi.cast("uint32_t", 6),
+    DuplicateProvider = ffi.cast("uint32_t", 7),
+    InvalidPointer = ffi.cast("uint32_t", 8),
+    HostContractNotFound = ffi.cast("uint32_t", 100),
+    HostContractVersionMismatch = ffi.cast("uint32_t", 101),
+    HostContractCallFailed = ffi.cast("uint32_t", 102),
+}
 
 ffi.cdef[[
     //  Dispatch mechanism type — determines how function calls are routed.
@@ -97,7 +104,7 @@ ffi.cdef[[
     //
     //  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
     //  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-    //  after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+    //  after reading. If `code == AbiErrorCode.Ok`, `message.ptr` is NULL — no free needed.
     typedef struct AbiError {
         //  0 = success, non-zero = error.
         uint32_t code;
