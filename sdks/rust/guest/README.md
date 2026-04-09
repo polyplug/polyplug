@@ -84,7 +84,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     if registrar.is_null() {
-        return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
     // SAFETY: registrar is non-null and provided by the host per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
@@ -341,7 +341,7 @@ pub enum AbiErrorCode: u32 {
 }
 ```
 
-Use `AbiErrorCode::Ok as u32` for success, `AbiErrorCode::Generic as u32` for errors.
+Use `AbiErrorCode::Ok` for success, `AbiErrorCode::Generic` for errors.
 
 ---
 
@@ -461,7 +461,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     if registrar.is_null() {
-        return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
     // SAFETY: registrar is non-null and provided by the host per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };

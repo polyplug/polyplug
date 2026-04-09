@@ -95,7 +95,7 @@ _DISPATCH_FN_TYPE = ctypes.CFUNCTYPE(
     ctypes.c_void_p,  # out_ptr
 )
 
-_ABI_ERROR_SIZE: int = ctypes.sizeof(AbiError)
+_ABI_STRUCT_SIZE: int = ctypes.sizeof(AbiError)
 
 
 def _wrap_sret(impl: object) -> object:
@@ -105,7 +105,7 @@ def _wrap_sret(impl: object) -> object:
         sret_ptr: ctypes.c_void_p, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p
     ) -> None:
         err: AbiError = impl(args_ptr, out_ptr)  # type: ignore[operator]
-        ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_ERROR_SIZE)
+        ctypes.memmove(sret_ptr, ctypes.addressof(err), _ABI_STRUCT_SIZE)
 
     return _sret_wrapper
 

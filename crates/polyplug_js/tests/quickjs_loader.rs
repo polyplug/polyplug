@@ -833,7 +833,7 @@ fn dispatch_vm_call_works_correctly() {
     };
 
     assert_eq!(
-        call_result.code, AbiErrorCode::Ok as u32,
+        call_result.code, AbiErrorCode::Ok,
         "dispatch.vm.call must return Ok, got code={}",
         call_result.code
     );

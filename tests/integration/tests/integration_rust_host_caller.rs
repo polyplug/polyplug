@@ -66,7 +66,7 @@ impl TestAddContract {
             let vtable: &GuestContractInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
-                    code: AbiErrorCode::FunctionNotAvailable as u32,
+                    code: AbiErrorCode::FunctionNotAvailable,
                     message: polyplug_abi::StringView::null(),
                 }
             } else if vtable.dispatch_type != polyplug_abi::DispatchType::Native {

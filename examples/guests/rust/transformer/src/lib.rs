@@ -20,7 +20,7 @@ impl DataTransformerPlugin for Plugin {
             alloc_string(&format!("TRANSFORMED:{}|{}|{}", name, value, count + 1))
         } else {
             Err(PluginError {
-                code: polyplug_guest::AbiErrorCode::Generic as u32,
+                code: polyplug_guest::AbiErrorCode::Generic,
                 message: "invalid format".into(),
             })
         }

@@ -442,7 +442,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     assert_eq!(
         result.code, AbiErrorCode::Panic,
         "error_panic must return Panic (code={})",
-        AbiErrorCode::Panic as u32
+        AbiErrorCode::Panic
     );
 
     // The message is from_static ("plugin panicked") -- do NOT free it.
@@ -533,7 +533,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     assert_eq!(
         out.code, AbiErrorCode::Panic,
         "propagated error must be Panic (={})",
-        AbiErrorCode::Panic as u32
+        AbiErrorCode::Panic
     );
 
     // The message from error_panic is from_static -- do NOT free it.

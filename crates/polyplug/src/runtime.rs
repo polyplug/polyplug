@@ -1084,7 +1084,7 @@ mod tests {
 
     #[test]
     fn abi_ok_constant() {
-        assert_eq!(polyplug_abi::AbiErrorCode::Ok as u32, 0_u32);
+        assert_eq!(polyplug_abi::AbiErrorCode::Ok, 0_u32);
     }
 
     /// TH-06: Verify host callbacks in runtime.rs use HostInterface self-passing pattern.

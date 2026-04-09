@@ -242,7 +242,7 @@ unsafe impl Sync for FnPtr {}
 #[derive(Debug)]
 pub struct PluginError {
     /// ABI error code (non-zero).
-    pub code: u32,
+    pub code: AbiErrorCode,
     /// Human-readable error message. May be empty.
     pub message: String,
 }
@@ -305,7 +305,7 @@ pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
     let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
     if ptr.is_null() {
         return Err(PluginError {
-            code: AbiErrorCode::Generic as u32,
+            code: AbiErrorCode::Generic,
             message: "allocation failed".to_string(),
         });
     }
