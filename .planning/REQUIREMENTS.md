@@ -86,10 +86,10 @@
 
 ### Category: Cleanup
 
-- [ ] **CLN-01**: Remove all "vtable" naming from codebase
+- [x] **CLN-01**: Remove all "vtable" naming from codebase
 - [x] **CLN-02**: Remove `*C` suffix types from FFI
 - [ ] **CLN-03**: Update documentation to use Guest/Host terminology
-- [ ] **CLN-04**: Update tests to use new instance model
+- [x] **CLN-04**: Update tests to use new instance model
 
 ### Category: Typed Handles (Phase 7)
 
