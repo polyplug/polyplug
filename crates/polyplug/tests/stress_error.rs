@@ -387,7 +387,7 @@ fn stress_error_code_and_message_received_correctly() {
     let call_result: AbiError =
         unsafe { dispatch_fn(core::ptr::null(), &mut out as *mut AbiError as *mut ()) };
 
-    // The dispatch wrapper returns ABI_OK (success).
+    // The dispatch wrapper returns Ok (success).
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
         "dispatch wrapper must return Ok"
@@ -418,7 +418,7 @@ fn stress_error_code_and_message_received_correctly() {
     core::mem::forget(library);
 }
 
-/// Test 2: error_panic catches an intentional panic and returns ABI_ERROR_PANIC (code=3).
+/// Test 2: error_panic catches an intentional panic and returns Panic (code=3).
 /// The message is from_static -- must NOT be freed. Process continues after the call.
 #[test]
 fn stress_panic_returns_abi_error_panic_process_continues() {
@@ -431,7 +431,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     // SAFETY: fn_ptr is function 1 in the interface (error_panic).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. fn 1 ignores both
-    // args and out -- it catches the panic internally and returns ABI_ERROR_PANIC directly.
+    // args and out -- it catches the panic internally and returns Panic directly.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
@@ -462,7 +462,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
 
 /// Test 3: error_chain_propagate (fn 2) calls another plugin via a real HostInterface
 /// and propagates the error back to the test. The chain target is fn 1 (error_panic)
-/// which returns ABI_ERROR_PANIC via its return value (not via out pointer).
+/// which returns Panic via its return value (not via out pointer).
 /// The propagated error code is written to *out by error_chain_propagate.
 #[test]
 fn stress_error_chain_b_errors_a_propagates() {
@@ -493,7 +493,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     let error_contract_id: GuestContractId = GuestContractId::new("error.test", 1);
 
     // ChainArgs pointing to fn 1 (error_panic).
-    // fn 1 returns ABI_ERROR_PANIC via its return value (not via *out),
+    // fn 1 returns Panic via its return value (not via *out),
     // so error_chain_propagate receives it as inner_result and writes it to *out.
     let chain_args: ChainArgs = ChainArgs {
         host: &chain_host_interface as *const HostInterface,
@@ -515,7 +515,7 @@ fn stress_error_chain_b_errors_a_propagates() {
 
     // SAFETY: chain_args is a valid ChainArgs with a live HostInterface.
     // out is a valid AbiError location. error_chain_propagate calls fn 1 via the host
-    // interface and writes the returned AbiError (ABI_ERROR_PANIC) to *out.
+    // interface and writes the returned AbiError (Panic) to *out.
     let call_result: AbiError = unsafe {
         dispatch_fn(
             &chain_args as *const ChainArgs as *const (),
@@ -523,16 +523,16 @@ fn stress_error_chain_b_errors_a_propagates() {
         )
     };
 
-    // error_chain_propagate itself returns ABI_OK (wrapper success).
+    // error_chain_propagate itself returns Ok (wrapper success).
     assert_eq!(
         call_result.code, AbiErrorCode::Ok,
         "error_chain_propagate wrapper must return Ok"
     );
 
-    // The propagated error from fn 1 (error_panic) is ABI_ERROR_PANIC.
+    // The propagated error from fn 1 (error_panic) is Panic.
     assert_eq!(
         out.code, AbiErrorCode::Panic,
-        "propagated error must be ABI_ERROR_PANIC (={})",
+        "propagated error must be Panic (={})",
         AbiErrorCode::Panic as u32
     );
 

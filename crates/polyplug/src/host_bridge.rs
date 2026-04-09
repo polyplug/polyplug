@@ -174,8 +174,8 @@ pub trait RuntimeLanguageBridge: Send + Sync {
     /// # Returns
     ///
     /// - `abi_error_ok()` on success
-    /// - `AbiError { code: ABI_HOST_CONTRACT_NOT_FOUND, ... }` if contract not found
-    /// - `AbiError { code: ABI_HOST_CONTRACT_CALL_FAILED, ... }` if dispatch failed
+    /// - `AbiError { code: HostContractNotFound, ... }` if contract not found
+    /// - `AbiError { code: HostContractCallFailed, ... }` if dispatch failed
     ///
     /// # Safety
     ///

@@ -453,9 +453,9 @@ mod tests {
     fn test_map_all_abi_types() {
         let types: Vec<AbiType> = vec![
             AbiType::Const(AbiConst {
-                name: String::from("ABI_OK"),
+                name: String::from("POLYPLUG_ABI_VERSION"),
                 rust_type: String::from("u32"),
-                value: String::from("0"),
+                value: String::from("1"),
                 doc: None,
             }),
             AbiType::Struct(AbiStruct {

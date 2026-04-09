@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 
 namespace Polyplug.Abi {
 
+
 /// ABI error codes — returned by all ABI functions.
 public enum AbiErrorCode : uint
 {
@@ -24,5 +25,4 @@ public static class AbiConstants
 {
     public const uint POLYPLUG_ABI_VERSION = 1u;
 }
-
 }

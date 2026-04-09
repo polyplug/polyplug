@@ -1,7 +1,7 @@
 #![allow(clippy::expect_used)]
 
 //! Integration test: verify the generated catch_unwind ABI wrapper catches a panic
-//! and returns ABI_ERROR_PANIC (= 3) WITHOUT aborting the process.
+//! and returns Panic (= 3) WITHOUT aborting the process.
 //!
 //! This test crate is the crate root for the `integration_panic` test binary.
 
@@ -395,7 +395,7 @@ fn test_panic_returns_abi_error_panic() {
     // SAFETY: do_panic ignores args and out entirely (void function, no params).
     let call_result: AbiError = unsafe { dispatch_fn(core::ptr::null(), core::ptr::null_mut()) };
 
-    // -- Step 11: Assert panic was caught and returned ABI_ERROR_PANIC --
+    // -- Step 11: Assert panic was caught and returned Panic --
     assert_eq!(
         call_result.code, AbiErrorCode::Panic,
         "do_panic ABI wrapper must return AbiErrorCode::Panic, got {:?}",

@@ -599,10 +599,10 @@ fn test_exception_isolation_cpp() {
         )
     };
 
-    // Must return ABI_ERROR_GENERIC (code=1) — std::exception was caught by noexcept wrapper
+    // Must return Generic (code=1) — std::exception was caught by noexcept wrapper
     assert_eq!(
         call_result.code, AbiErrorCode::Generic,
-        "exception must be caught and returned as ABI_ERROR_GENERIC"
+        "exception must be caught and returned as Generic"
     );
     // Process survived — if we reach this line, no crash occurred
     println!("test_exception_isolation_cpp: exception caught, host survived ✓");
