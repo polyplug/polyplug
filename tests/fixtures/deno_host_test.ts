@@ -77,7 +77,7 @@ skipUnlessNative("resolve_plugin_returns_guard", () => {
     } finally { lib.close(); }
 });
 
-skipUnlessNative("guard_vtable_nonnull", () => {
+skipUnlessNative("guard_interface_nonnull", () => {
     const lib = openPolyplug(POLYPLUG_SO);
     try {
         const rt = runtimeNew(lib);
@@ -86,8 +86,8 @@ skipUnlessNative("guard_vtable_nonnull", () => {
             const handle = rt.findByContract(TEST_ADD_CONTRACT_ID);
             const guard = rt.resolvePlugin(handle);
             try {
-                const vt = guard.vtable();
-                if (vt === null) throw new Error("vtable is null");
+                const iface = guard.vtable();
+                if (iface === null) throw new Error("interface is null");
             } finally { guard[Symbol.dispose](); }
         } finally { rt[Symbol.dispose](); }
     } finally { lib.close(); }

@@ -127,7 +127,7 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
 
 
 class HostVTable(ctypes.Structure):
-    """Host vtable passed to polyplug_init. 64 bytes (8 function pointers)."""
+    """HostVTable passed to polyplug_init. 64 bytes (8 function pointers)."""
 
     _fields_ = [
         ("register_plugin", ctypes.c_void_p),
@@ -148,10 +148,10 @@ _REGISTER_PLUGIN_FN_TYPE = ctypes.CFUNCTYPE(
     ctypes.POINTER(AbiError),  # sret: hidden pointer where caller expects AbiError
     ctypes.c_void_p,  # rt_ctx
     ctypes.POINTER(PluginDescriptor),  # descriptor
-    ctypes.POINTER(PluginInterface),  # vtable
+    ctypes.POINTER(PluginInterface),  # interface
 )
 
-# ── Plugin interface (vtable) ──────────────────────────────────────────────────
+# ── Plugin interface ──────────────────────────────────────────────────
 
 # Create native dispatch with function pointer array
 _native_dispatch = NativeDispatch(

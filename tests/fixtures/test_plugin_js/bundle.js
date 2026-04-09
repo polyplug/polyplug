@@ -44,7 +44,7 @@ function divide(argsPtr, outPtr) {
 }
 
 function polyplug_init(rt_ctx, host_vtable, ctx) {
-    var vtable = {
+    var interface = {
         contractLo: 0xB0410D2B >>> 0,
         contractHi: 0xCC4232FA >>> 0,
         fnCount: 4,
@@ -52,11 +52,11 @@ function polyplug_init(rt_ctx, host_vtable, ctx) {
         functions: [add, subtract, multiply, divide]
     };
     polyplug.registerVtable(
-        vtable.contractLo,
-        vtable.contractHi,
-        vtable,
-        vtable.fnCount,
-        vtable.contractName
+        interface.contractLo,
+        interface.contractHi,
+        interface,
+        interface.fnCount,
+        interface.contractName
     );
     return { code: 0, message: null };
 }
