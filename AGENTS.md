@@ -564,7 +564,35 @@ let code = AbiErrorCode::Ok;
 
 ---
 
-### 15. Type Aliases Are FORBIDDEN
+### 15. Deprecated Re-exports Are FORBIDDEN
+
+**NEVER create deprecated re-exports or "convenience" re-exports from other crates.**
+
+**FORBIDDEN:**
+```rust
+// FORBIDDEN — deprecated re-exports
+//! Deprecated - use `polyplug_abi::runtime::Compatibility` directly.
+pub use polyplug_abi::runtime::Compatibility;
+
+// FORBIDDEN — "convenience" re-exports from dependencies
+pub use polyplug_abi::SomeType;  // Let users import directly
+```
+
+**CORRECT:**
+```rust
+// CORRECT — users import directly from the source crate
+use polyplug_abi::runtime::Compatibility;
+```
+
+**Why this matters:**
+- Re-exports create confusion about where types actually live
+- They create tight coupling between crates
+- They make refactoring harder
+- They encourage not updating imports
+
+---
+
+### 16. Type Aliases Are FORBIDDEN
 
 **NEVER create type aliases. No exceptions.**
 
