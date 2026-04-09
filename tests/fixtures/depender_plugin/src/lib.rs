@@ -11,7 +11,7 @@ use polyplug_abi::*;
 
 // ─── Function pointer wrapper for Sync ─────────────────────────────────────────
 
-/// Wrapper for a function pointer stored in a static vtable array.
+/// Wrapper for a function pointer stored in a static interface array.
 /// The pointer is 'static (lifetime of the plugin binary) and read-only.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());

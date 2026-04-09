@@ -214,9 +214,9 @@ unsafe extern "C" fn destroy_instance_stub(
     _instance: GuestContractInstance,
 ) {}
 
-// ─── Static VTable ────────────────────────────────────────────────────────────
+// ─── Static Interface ────────────────────────────────────────────────────────────
 
-/// Wrapper for a function pointer stored in a static vtable array.
+/// Wrapper for a function pointer stored in a static interface array.
 /// The pointer is 'static (lifetime of the plugin binary) and read-only.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -228,7 +228,7 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-// The function pointer array for the memory.test vtable.
+// The function pointer array for the memory.test interface.
 // function_id 0 = memory_fill_preallocated_buffer(args: FillArgs) -> u32
 // function_id 1 = memory_alloc_buffer_via_host(args: AllocArgs) -> Buffer
 // function_id 2 = memory_echo_string_view(args: StringView) -> StringView

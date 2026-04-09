@@ -40,7 +40,7 @@ unsafe extern "C" fn version_check() -> u32 {
     200_u32
 }
 
-/// Wrapper for a function pointer stored in a static vtable array.
+/// Wrapper for a function pointer stored in a static interface array.
 /// The pointer is 'static (lifetime of the plugin binary) and read-only.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -52,9 +52,9 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-static VTABLE_FNS: [FnPtr; 1] = [FnPtr(version_check as *const ())];
+static INTERFACE_FNS: [FnPtr; 1] = [FnPtr(version_check as *const ())];
 
-static VTABLE: GuestContractInterface = GuestContractInterface {
+static INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(RELOAD_TEST_CONTRACT_ID),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -63,7 +63,7 @@ static VTABLE: GuestContractInterface = GuestContractInterface {
     dispatch: DispatchMechanisms {
         native: NativeDispatch {
             function_count: 1,
-            functions: VTABLE_FNS.as_ptr() as *const *const (),
+            functions: INTERFACE_FNS.as_ptr() as *const *const (),
         },
     },
 };
@@ -110,12 +110,12 @@ pub unsafe extern "C" fn polyplug_init(
     // SAFETY: host_abi is a valid non-null pointer from the host runtime, outlives this call.
     let host: &HostInterface = unsafe { &*host_abi };
     // SAFETY: register_contract is a valid function pointer set by the host.
-    // DESCRIPTOR and VTABLE are 'static.
+    // DESCRIPTOR and INTERFACE are 'static.
     unsafe {
         (host.register_contract)(
             host_abi,
             &DESCRIPTOR as *const PluginDescriptor,
-            &VTABLE as *const GuestContractInterface,
+            &INTERFACE as *const GuestContractInterface,
         )
     }
 }

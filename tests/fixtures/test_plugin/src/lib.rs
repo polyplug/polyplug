@@ -63,9 +63,9 @@ unsafe extern "C" fn destroy_instance_stub(
 ) {
 }
 
-// ─── Static VTable ────────────────────────────────────────────────────────────
+// ─── Static Interface ────────────────────────────────────────────────────────────
 
-/// Wrapper for a function pointer stored in a static vtable array.
+/// Wrapper for a function pointer stored in a static interface array.
 /// The pointer is 'static (lifetime of the plugin binary) and read-only.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -77,7 +77,7 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-// The function pointer array for the test.add vtable.
+// The function pointer array for the test.add interface.
 // function_id 0 = add(args: AddArgs) -> u32
 static TEST_ADD_FNS: [FnPtr; 1] = [FnPtr(plugin_add as *const ())];
 
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn polyplug_get_last_bundle_path() -> StringView {
 
 /// A function that always panics — used to verify panic isolation.
 ///
-/// This function is NOT registered in the vtable. The panic test calls it
+/// This function is NOT registered in the interface. The panic test calls it
 /// directly via `dlsym` to test the panic behavior.
 ///
 /// # Safety

@@ -5,7 +5,7 @@
 //! error model stress testing:
 //!   fn 0 — error_return_with_message: returns AbiError { code: 99, message: <host-alloc'd msg> }
 //!   fn 1 — error_panic: catches an intentional panic and returns ABI_ERROR_PANIC
-//!   fn 2 — error_chain_propagate: calls another plugin via host vtable and propagates its error
+//!   fn 2 — error_chain_propagate: calls another plugin via host interface and propagates its error
 
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::*;
@@ -176,9 +176,9 @@ unsafe extern "C" fn destroy_instance_stub(
     _instance: GuestContractInstance,
 ) {}
 
-// ─── Static VTable ────────────────────────────────────────────────────────────
+// ─── Static Interface ────────────────────────────────────────────────────────────
 
-/// Wrapper for a function pointer stored in a static vtable array.
+/// Wrapper for a function pointer stored in a static interface array.
 /// The pointer is 'static (lifetime of the plugin binary) and read-only.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -190,7 +190,7 @@ unsafe impl Send for FnPtr {}
 // same function concurrently. The underlying data is read-only 'static memory.
 unsafe impl Sync for FnPtr {}
 
-// The function pointer array for the error.test vtable.
+// The function pointer array for the error.test interface.
 // function_id 0 = error_return_with_message
 // function_id 1 = error_panic
 // function_id 2 = error_chain_propagate
