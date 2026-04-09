@@ -83,7 +83,7 @@ class AbiError(ctypes.Structure):
 
     OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
     via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
-    after reading. If `code == ABI_OK`, `message.ptr` is NULL — no free needed.
+    after reading. If `code == AbiErrorCode.Ok`, `message.ptr` is NULL — no free needed.
     """
 
     _fields_ = [
