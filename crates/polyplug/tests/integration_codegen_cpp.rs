@@ -2,7 +2,7 @@
 
 //! Integration test: run polyplugc to generate C++ bindings, assert all 7 expected
 //! files are present, optionally compile with g++, and dispatch through the pre-built
-//! C++ test plugin vtable when TEST_PLUGIN_CPP_SO is non-empty.
+//! C++ test plugin interface when TEST_PLUGIN_CPP_SO is non-empty.
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
@@ -58,7 +58,7 @@ fn run_polyplugc_cpp(api_toml: &Path, out_dir: &Path) -> Output {
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
-/// A register_contract callback that stores vtable entries into the thread-local
+/// A register_contract callback that stores interface entries into the thread-local
 /// Registry for dispatch testing.
 ///
 /// # Safety
@@ -277,7 +277,7 @@ fn test_cpp_codegen_files_exist() {
         out_dir.display()
     );
 
-    // ── 4. Attempt g++ compile of vtables.hpp (skip if g++ not found) ────────
+    // ── 4. Attempt g++ compile of interfaces.hpp (skip if g++ not found) ───────
     let gpp_version_result: std::io::Result<std::process::Output> =
         Command::new("g++").args(["--version"]).output();
 
@@ -370,26 +370,26 @@ fn test_cpp_plugin_dispatch() {
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return ABI_OK");
 
-    // ── 5. Look up vtable for test.add by contract_id ─────────────────────────
+    // ── 5. Look up interface for test.add by contract_id ─────────────────────────
     let handle: PluginHandle = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .find(TEST_ADD_CONTRACT_ID, 0_u32)
             .expect("test.add must be registered after polyplug_init")
     });
 
-    let vtable_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let interface_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
-            .expect("vtable must be resolvable from handle")
+            .expect("interface must be resolvable from handle")
     });
 
-    // SAFETY: vtable_ptr is valid — plugin is loaded and library is not yet dropped.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid — plugin is loaded and library is not yet dropped.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // ── 6. Get function pointer from vtable.dispatch.native.functions[0] ───────
+    // ── 6. Get function pointer from interface.dispatch.native.functions[0] ───────
     // SAFETY: functions[0] is the cpp_test_add ABI wrapper with signature
     //   extern "C" AbiError(const void* args, void* out).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
 
     // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
     // types are enforced: AddArgs matches what cpp_test_add expects.
@@ -478,21 +478,21 @@ fn test_cpp_host_loads_rust_plugin() {
             .expect("test.add must be registered from Rust plugin")
     });
 
-    let vtable_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
+    let interface_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
-            .expect("vtable must be resolvable")
+            .expect("interface must be resolvable")
     });
 
-    // SAFETY: vtable_ptr is valid — plugin is loaded
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid — plugin is loaded
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
 
     // SAFETY: functions[0] is the first ABI wrapper with signature
     //   extern "C" fn(*const (), *mut ()) -> AbiError
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -576,17 +576,17 @@ fn test_exception_isolation_cpp() {
             .expect("test.add registered from throwing plugin")
     });
 
-    let vtable_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY
-        .with(|cell| cell.borrow().resolve(handle).expect("vtable resolvable"));
+    let interface_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY
+        .with(|cell| cell.borrow().resolve(handle).expect("interface resolvable"));
 
-    // SAFETY: vtable_ptr is valid — plugin is loaded
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid — plugin is loaded
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     let args: AddArgs = AddArgs { a: 0_u32, b: 0_u32 };
     let mut out: u32 = 0_u32;
 
     // SAFETY: functions[0] is the cpp_throw_abi with noexcept wrapper
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr layout matches the target function signature per ABI contract.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
