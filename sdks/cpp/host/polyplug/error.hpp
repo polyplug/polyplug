@@ -77,7 +77,7 @@ private:
 };
 
 /// Throw a PolyplugException if the AbiError indicates failure.
-/// Used by generated host caller code after every vtable dispatch.
+/// Used by generated host caller code after every interface dispatch.
 inline void check_abi_error(AbiError err) {
     if (err.code != ABI_OK) {
         const char* msg = (err.message.ptr != nullptr)

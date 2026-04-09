@@ -4,8 +4,8 @@
 local M = {}
 
 --- Phase type constants (match FFI callback phase_type parameter)
-M.TYPE_PREPARING = 0  -- Before vtable swap, host should cleanup instances
-M.TYPE_RELOADED = 1   -- After vtable swap, instances can be re-resolved
+M.TYPE_PREPARING = 0  -- Before interface swap, host should cleanup instances
+M.TYPE_RELOADED = 1   -- After interface swap, instances can be re-resolved
 M.TYPE_FAILED = 2     -- Reload aborted after max retries
 
 --- Create a new ReloadPhase instance.
