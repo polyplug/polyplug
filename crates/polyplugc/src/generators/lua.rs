@@ -351,7 +351,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
         out.push_str("-- No optional extensions requested.\n\n");
     }
 
-    out.push_str("--- Register all plugin vtables with the host.\n");
+    out.push_str("--- Register all plugin interfaces with the host.\n");
     out.push_str("--- @param host_ptr userdata HostInterface pointer from host.\n");
     out.push_str("--- @param ctx_ptr userdata PluginContext pointer from host.\n");
     out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
@@ -531,7 +531,7 @@ fn generate_host_caller_method(
     out.push_str(&format!(
         "        if {fn_id} >= self._interface.dispatch.native.function_count then\n"
     ));
-    out.push_str("            error(\"function not available in vtable\", 2)\n");
+    out.push_str("            error(\"function not available in interface\", 2)\n");
     out.push_str("        end\n");
 
     // Dispatch with instance as first argument
@@ -558,10 +558,10 @@ fn generate_host_caller_method(
 fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, prefix: &str) {
     let fn_name: String = format!("{}_{}", prefix, func.name);
     let sig_params: String = build_lua_sig_params(func);
-    out.push_str(&format!("function M.{fn_name}(vtable{sig_params})\n"));
+    out.push_str(&format!("function M.{fn_name}(interface{sig_params})\n"));
     emit_lua_host_args_setup(out, func, prefix);
     emit_lua_host_out_setup(out, &func.returns);
-    out.push_str("    local fn_ptr = vtable.dispatch.native.functions[");
+    out.push_str("    local fn_ptr = interface.dispatch.native.functions[");
     out.push_str(&format!("{}]", func.function_id));
     out.push('\n');
     out.push_str("    if fn_ptr == nil then\n");
@@ -1244,8 +1244,8 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str(&format!("{} = {{}}\n", class_name));
     out.push_str(&format!("{}.__index = {}\n\n", class_name, class_name));
 
-    out.push_str(&format!("function {}:new(vtable)\n", class_name));
-    out.push_str("    local obj = { _vtable = vtable }\n");
+    out.push_str(&format!("function {}:new(interface)\n", class_name));
+    out.push_str("    local obj = { _interface = interface }\n");
     out.push_str("    setmetatable(obj, self)\n");
     out.push_str("    return obj\n");
     out.push_str("end\n\n");
@@ -1260,17 +1260,17 @@ fn generate_lua_guest_host_contract_caller(out: &mut String, contract: &Resolved
     out.push_str("    end\n");
     out.push_str("    local host = ffi.cast(\"HostInterface*\", host_ptr)\n");
     out.push_str(&format!(
-        "    local vtable_ptr = host.get_host_contract(host_ptr, 0x{:016X}ULL, min_version)\n",
+        "    local interface_ptr = host.get_host_contract(host_ptr, 0x{:016X}ULL, min_version)\n",
         contract.contract_id
     ));
-    out.push_str("    if vtable_ptr == nil then\n");
+    out.push_str("    if interface_ptr == nil then\n");
     out.push_str("        return nil\n");
     out.push_str("    end\n");
-    out.push_str(&format!("    return {}:new(vtable_ptr)\n", class_name));
+    out.push_str(&format!("    return {}:new(interface_ptr)\n", class_name));
     out.push_str("end\n\n");
 
     out.push_str(&format!("function {}:is_valid()\n", class_name));
-    out.push_str("    return self._vtable ~= nil\n");
+    out.push_str("    return self._interface ~= nil\n");
     out.push_str("end\n\n");
 
     for func in &contract.functions {
@@ -1305,7 +1305,7 @@ fn generate_lua_guest_host_contract_method(
         class_name, func.name, params_str
     ));
 
-    out.push_str("    if self._vtable == nil then\n");
+    out.push_str("    if self._interface == nil then\n");
     if has_return {
         out.push_str("        return nil\n");
     } else {
@@ -1313,7 +1313,7 @@ fn generate_lua_guest_host_contract_method(
     }
     out.push_str("    end\n");
 
-    out.push_str("    local header = ffi.cast(\"HostContractVTable*\", self._vtable).header\n");
+    out.push_str("    local header = ffi.cast(\"HostContractVTable*\", self._interface).header\n");
     out.push_str(&format!("    if {fn_id} >= header.function_count then\n"));
     if has_return {
         out.push_str("        return nil\n");
@@ -1576,15 +1576,15 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
 
     // NATIVE dispatch factory
     out.push_str(&format!(
-        "-- Create a host contract vtable for `{}` with NATIVE dispatch.\n",
+        "-- Create a host contract interface for `{}` with NATIVE dispatch.\n",
         contract.name
     ));
     out.push_str("--\n");
-    out.push_str("-- Takes an implementation table and creates a vtable.\n");
+    out.push_str("-- Takes an implementation table and creates an interface.\n");
     out.push_str("-- The implementation must have methods matching the contract.\n");
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
-    out.push_str("-- The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str("-- The returned interface is cached and lives for the lifetime of the program.\n");
     out.push_str(&format!("function M.{factory_name}(impl)\n"));
     out.push_str(&format!("    _{class_name}_impl = impl\n\n"));
 
@@ -1609,20 +1609,20 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     }
     out.push('\n');
 
-    // Create the vtable
-    out.push_str("    local vtable = ffi.new(\"HostContractVTable\")\n");
-    out.push_str("    vtable.header.vtable_version = 1\n");
+    // Create the interface
+    out.push_str("    local interface = ffi.new(\"HostContractVTable\")\n");
+    out.push_str("    interface.header.vtable_version = 1\n");
     out.push_str(&format!(
-        "    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"
+        "    interface.header.contract_id = 0x{contract_id:016X}ULL\n"
     ));
-    out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
-    out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
-    out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
-    out.push_str(&format!("    vtable.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
-    out.push_str("    vtable.header.dispatch_type = 0  -- DispatchType.Native\n");
-    out.push_str("    vtable.dispatch.native.impl_ptr = nil  -- We use global _impl instead\n");
-    out.push_str("    vtable.dispatch.native.functions = functions\n\n");
-    out.push_str("    return vtable\n");
+    out.push_str(&format!("    interface.header.contract_major = {major}\n"));
+    out.push_str(&format!("    interface.header.contract_minor = {minor}\n"));
+    out.push_str(&format!("    interface.header.function_count = {fn_count}\n"));
+    out.push_str(&format!("    interface.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
+    out.push_str("    interface.header.dispatch_type = 0  -- DispatchType.Native\n");
+    out.push_str("    interface.dispatch.native.impl_ptr = nil  -- We use global _impl instead\n");
+    out.push_str("    interface.dispatch.native.functions = functions\n\n");
+    out.push_str("    return interface\n");
     out.push_str("end\n\n");
 
     // Global implementation storage
@@ -1630,7 +1630,7 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
 
     // VM dispatch factory
     out.push_str(&format!(
-        "-- Create a host contract vtable for `{}` with VM dispatch.\n",
+        "-- Create a host contract interface for `{}` with VM dispatch.\n",
         contract.name
     ));
     out.push_str("--\n");
@@ -1641,23 +1641,23 @@ fn generate_lua_host_interface_factory(out: &mut String, contract: &ResolvedHost
     out.push_str("--     dispatch_fn: Function to call for each contract function\n");
     out.push_str("--\n");
     out.push_str("-- Memory:\n");
-    out.push_str("-- The returned vtable is cached and lives for the lifetime of the program.\n");
+    out.push_str("-- The returned interface is cached and lives for the lifetime of the program.\n");
     out.push_str(&format!(
         "function M.{factory_vm_name}(bridge_data, dispatch_fn)\n"
     ));
-    out.push_str("    local vtable = ffi.new(\"HostContractVTable\")\n");
-    out.push_str("    vtable.header.vtable_version = 1\n");
+    out.push_str("    local interface = ffi.new(\"HostContractVTable\")\n");
+    out.push_str("    interface.header.vtable_version = 1\n");
     out.push_str(&format!(
-        "    vtable.header.contract_id = 0x{contract_id:016X}ULL\n"
+        "    interface.header.contract_id = 0x{contract_id:016X}ULL\n"
     ));
-    out.push_str(&format!("    vtable.header.contract_major = {major}\n"));
-    out.push_str(&format!("    vtable.header.contract_minor = {minor}\n"));
-    out.push_str(&format!("    vtable.header.function_count = {fn_count}\n"));
-    out.push_str(&format!("    vtable.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
-    out.push_str("    vtable.header.dispatch_type = 1  -- DispatchType.VirtualMachine\n");
-    out.push_str("    vtable.dispatch.vm.call = dispatch_fn\n");
-    out.push_str("    vtable.dispatch.vm.bridge_data = bridge_data\n\n");
-    out.push_str("    return vtable\n");
+    out.push_str(&format!("    interface.header.contract_major = {major}\n"));
+    out.push_str(&format!("    interface.header.contract_minor = {minor}\n"));
+    out.push_str(&format!("    interface.header.function_count = {fn_count}\n"));
+    out.push_str(&format!("    interface.header.singleton = {singleton}  -- {}\n", if singleton { "singleton" } else { "multi-instance" }));
+    out.push_str("    interface.header.dispatch_type = 1  -- DispatchType.VirtualMachine\n");
+    out.push_str("    interface.dispatch.vm.call = dispatch_fn\n");
+    out.push_str("    interface.dispatch.vm.bridge_data = bridge_data\n\n");
+    out.push_str("    return interface\n");
     out.push_str("end\n\n");
 }
 
@@ -2219,7 +2219,7 @@ mod tests {
             "missing __index: {out}"
         );
         assert!(
-            out.contains("function HostLoggerContract:new(vtable)"),
+            out.contains("function HostLoggerContract:new(interface)"),
             "missing new method: {out}"
         );
         assert!(
