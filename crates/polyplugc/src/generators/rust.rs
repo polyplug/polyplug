@@ -2,7 +2,7 @@
 //!
 //! Generates:
 //! - Host-side: type-safe Rust wrappers to call plugins (for app developers)
-//! - Guest-side: ABI entry point, allocator hookup, vtable stubs (for plugin developers)
+//! - Guest-side: ABI entry point, allocator hookup, interface stubs (for plugin developers)
 
 use super::is_native_runtime;
 use super::CodeGenerator;
@@ -605,7 +605,7 @@ fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<
     }
 
     // FnPtr newtype — emitted once
-    out.push_str("/// Wrapper for a function pointer stored in a static vtable array.\n");
+    out.push_str("/// Wrapper for a function pointer stored in a static interface array.\n");
     out.push_str("#[repr(transparent)]\n");
     out.push_str("pub struct FnPtr(pub *const ());\n");
     out.push_str("// SAFETY: FnPtr wraps a 'static function pointer. Function pointers are safe\n");
@@ -641,15 +641,15 @@ fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<
     } else {
         for contract in &ir.contracts {
             // When no bundle info, default to native dispatch
-            generate_guest_contract_vtable(out, contract, true)?;
+            generate_guest_contract_interface(out, contract, true)?;
         }
     }
 
     Ok(())
 }
 
-/// Generate all vtable code for one contract.
-fn generate_guest_contract_vtable(
+/// Generate all interface code for one contract.
+fn generate_guest_contract_interface(
     out: &mut String,
     contract: &ResolvedContract,
     is_native: bool,
@@ -1089,7 +1089,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
     out.push_str("//   #[unsafe(no_mangle)]\n");
     out.push_str("//   pub extern \"C\" fn polyplug_abi_version() -> u32 { 1 }\n\n");
 
-    out.push_str("/// Register all plugin vtables with the host.\n");
+    out.push_str("/// Register all plugin interfaces with the host.\n");
     out.push_str("///\n");
     out.push_str("/// # Safety\n");
     out.push_str("/// `host` and `ctx` must be valid non-null pointers provided by the host.\n");
@@ -1158,7 +1158,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        version: Version {{ major: {version_major}, minor: {version_minor}, patch: 0 }},\n"
             ));
             out.push_str("    };\n");
-            out.push_str("    // SAFETY: desc and vtable are 'static.\n");
+            out.push_str("    // SAFETY: desc and interface are 'static.\n");
             out.push_str(&format!(
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
@@ -1194,7 +1194,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "        version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"
             ));
             out.push_str("    };\n");
-            out.push_str("    // SAFETY: desc and vtable are 'static.\n");
+            out.push_str("    // SAFETY: desc and interface are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
                 "        (host.register_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const GuestContractInterface)\n"
@@ -1428,31 +1428,31 @@ fn generate_host_fn_caller(
         out.push_str("core::ptr::null_mut();\n");
     }
     out.push_str("        // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.\n");
-    out.push_str("        let vtable: &GuestContractInterface = unsafe { &*self.interface };\n");
+    out.push_str("        let interface: &GuestContractInterface = unsafe { &*self.interface };\n");
     out.push_str("        // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.\n");
     out.push_str("        let err: AbiError = unsafe {\n");
     out.push_str(&format!(
-        "            if {fn_id}_u32 >= vtable.dispatch.native.function_count {{\n"
+        "            if {fn_id}_u32 >= interface.dispatch.native.function_count {{\n"
     ));
-    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b\"function not available in vtable\") }\n");
+    out.push_str("                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b\"function not available in interface\") }\n");
     out.push_str("            } else {\n");
-    out.push_str("                match vtable.dispatch_type {\n");
+    out.push_str("                match interface.dispatch_type {\n");
     out.push_str("                    DispatchType::Native => {\n");
     out.push_str(&format!(
-        "                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add({fn_id}_usize);\n"
+        "                        let fn_ptr: *const () = *interface.dispatch.native.functions.add({fn_id}_usize);\n"
     ));
     out.push_str("                        // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
     out.push_str("                        // - Function pointers have the same size and alignment as data pointers on all supported platforms\n");
-    out.push_str("                        // - The vtable guarantees that the function at this index is a native dispatch function\n");
+    out.push_str("                        // - The interface guarantees that the function at this index is a native dispatch function\n");
     out.push_str("                        //   with the exact signature: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut ()) -> AbiError\n");
     out.push_str("                        let dispatch_fn: unsafe extern \"C\" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
     out.push_str("                        dispatch_fn(self.instance, args_ptr, out_ptr)\n");
     out.push_str("                    }\n");
     out.push_str("                    DispatchType::VirtualMachine => {\n");
     out.push_str(&format!(
-        "                        (vtable.dispatch.vm.call)(\n"
+        "                        (interface.dispatch.vm.call)(\n"
     ));
-    out.push_str("                            vtable.dispatch.vm.loader_data,\n");
+    out.push_str("                            interface.dispatch.vm.loader_data,\n");
     out.push_str("                            self.instance,  // instance parameter\n");
     out.push_str(&format!("                            {fn_id}_u32,\n"));
     out.push_str("                            args_ptr,\n");
@@ -1928,17 +1928,17 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
 
     // ── NATIVE dispatch factory ─────────────────────────────────────────────────
     out.push_str(&format!(
-        "/// Create a host contract vtable for `{}` with NATIVE dispatch.\n",
+        "/// Create a host contract interface for `{}` with NATIVE dispatch.\n",
         contract.name
     ));
     out.push_str("///\n");
-    out.push_str("/// Takes ownership of the implementation and creates a 'static vtable.\n");
+    out.push_str("/// Takes ownership of the implementation and creates a 'static interface.\n");
     out.push_str("/// The implementation must be `Send + Sync`.\n");
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
-    out.push_str("/// The returned vtable is leaked and lives for the lifetime of the program.\n");
+    out.push_str("/// The returned interface is leaked and lives for the lifetime of the program.\n");
     out.push_str(
-        "/// The implementation Box is also leaked (its pointer is stored in the vtable).\n",
+        "/// The implementation Box is also leaked (its pointer is stored in the interface).\n",
     );
     out.push_str(&format!(
         "pub fn {factory_name}(implementation: Box<dyn {trait_name}>) -> &'static HostContractInterface {{\n"
@@ -2030,7 +2030,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
 
     // Create the HostContractInterface
     let patch: u32 = contract.version.patch;
-    out.push_str("    let vtable: HostContractInterface = HostContractInterface {\n");
+    out.push_str("    let interface: HostContractInterface = HostContractInterface {\n");
     out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
     out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
     out.push_str(&format!("        singleton: {singleton},\n"));
@@ -2045,12 +2045,12 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n\n");
-    out.push_str("    Box::leak(Box::new(vtable))\n");
+    out.push_str("    Box::leak(Box::new(interface))\n");
     out.push_str("}\n\n");
 
     // ── VM dispatch factory ─────────────────────────────────────────────────────
     out.push_str(&format!(
-        "/// Create a host contract vtable for `{}` with VM dispatch.\n",
+        "/// Create a host contract interface for `{}` with VM dispatch.\n",
         contract.name
     ));
     out.push_str("///\n");
@@ -2061,7 +2061,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("/// * `dispatch_fn` - Function to call for each contract function\n");
     out.push_str("///\n");
     out.push_str("/// # Memory\n");
-    out.push_str("/// The returned vtable is leaked and lives for the lifetime of the program.\n");
+    out.push_str("/// The returned interface is leaked and lives for the lifetime of the program.\n");
     out.push_str(&format!("pub fn {factory_vm_name}(\n"));
     out.push_str("    bridge_data: *mut c_void,\n");
     out.push_str("    dispatch_fn: unsafe extern \"C\" fn(\n");
@@ -2120,7 +2120,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     }
     out.push_str("    }\n\n");
 
-    out.push_str("    let vtable: HostContractInterface = HostContractInterface {\n");
+    out.push_str("    let interface: HostContractInterface = HostContractInterface {\n");
     out.push_str(&format!("        contract_id: HostContractId::from(0x{contract_id:016X}_u64),\n"));
     out.push_str(&format!("        contract_version: Version {{ major: {major}, minor: {minor}, patch: {patch} }},\n"));
     out.push_str(&format!("        singleton: {singleton},\n"));
@@ -2135,7 +2135,7 @@ fn generate_host_interface_factory(out: &mut String, contract: &ResolvedHostCont
     out.push_str("            },\n");
     out.push_str("        },\n");
     out.push_str("    };\n\n");
-    out.push_str("    Box::leak(Box::new(vtable))\n");
+    out.push_str("    Box::leak(Box::new(interface))\n");
     out.push_str("}\n\n");
 }
 
@@ -2540,7 +2540,7 @@ fn generate_guest_host_contract_method(
     ));
     out.push_str("                    // SAFETY: Transmuting *const () to a function pointer is sound because:\n");
     out.push_str("                    // - Function pointers have the same size and alignment as data pointers\n");
-    out.push_str("                    // - The vtable guarantees that the function at this index is a native dispatch\n");
+    out.push_str("                    // - The interface guarantees that the function at this index is a native dispatch\n");
     out.push_str("                    //   with the exact signature: unsafe extern \"C\" fn(*const (), *const (), *mut ()) -> AbiError\n");
     out.push_str("                    let dispatch_fn: unsafe extern \"C\" fn(*const (), *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);\n");
     out.push_str(
