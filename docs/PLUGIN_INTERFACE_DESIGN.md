@@ -50,7 +50,7 @@ VM loaders used **static trampolines** + **global registries**:
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  OLD ARCHITECTURE (BROKEN)                                                   │
 │                                                                              │
-│  vtable.functions[0] = trampoline_0  (static Rust function)                 │
+│  interface.functions[0] = trampoline_0  (static Rust function)                 │
 │                                                                              │
 │  trampoline_0(args, out) {                                                  │
 │      // PROBLEM: Which VM state to use?                                     │
