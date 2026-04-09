@@ -34,11 +34,6 @@ pub fn host_contract_id(name: &str, major_version: u32) -> u64 {
     HostContractId::new(name, major_version).id()
 }
 
-/// Deprecated type alias for GuestContractId.
-/// Use GuestContractId directly for new code.
-#[deprecated(since = "1.1.0", note = "Use GuestContractId instead")]
-pub type PluginContractId = GuestContractId;
-
 // ─── FNV-1a 64-bit Hash ───────────────────────────────────────────────────────
 
 /// FNV-1a 64-bit offset basis.

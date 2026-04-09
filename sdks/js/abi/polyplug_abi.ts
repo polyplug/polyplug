@@ -275,7 +275,7 @@ export interface HostInterface {
     find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => GuestContractHandle;
     /**  Find all guest contracts matching contract_id and minimum version. */
     find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<GuestContractHandle>;
-    /**  Resolve a ContractHandle to a GuestContractInterface pointer. */
+    /**  Resolve a GuestContractHandle to a GuestContractInterface pointer. */
     resolve_contract: (this: bigint, handle: GuestContractHandle) => bigint;
     /**  Call a method on a guest contract instance (cross-dispatch). */
     call_guest_method: (this: bigint, instance: GuestContractInstance, method_id: number, args: bigint, out: bigint) => AbiError;
@@ -311,7 +311,7 @@ export interface RuntimeInterface {
     find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => GuestContractHandle;
     /**  Find all guest contracts matching contract_id and minimum version. */
     find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<GuestContractHandle>;
-    /**  Resolve a ContractHandle to a GuestContractInterface pointer. */
+    /**  Resolve a GuestContractHandle to a GuestContractInterface pointer. */
     resolve_contract: (this: bigint, handle: GuestContractHandle) => bigint;
     /**  Get a host contract instance by contract_id and minimum version. */
     get_host_contract: (this: bigint, contract_id: bigint, min_version: number) => HostContractInstance;

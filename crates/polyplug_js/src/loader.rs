@@ -323,7 +323,7 @@ fn register_host_functions<'js>(
                 None => return 0_u32,
             };
             // SAFETY: hvt points to 'static HostInterface data.
-            // find_all_by_contract returns Array<ContractHandle>.
+            // find_all_by_contract returns Array<GuestContractHandle>.
             let handles: polyplug_abi::types::Array<GuestContractHandle> =
                 unsafe { ((*hvt).find_all_by_contract)(hvt, contract_id, min_ver) };
             handles.len as u32

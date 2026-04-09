@@ -719,7 +719,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     }
 }
 
-/// HostInterface.find_all_by_contract callback — returns Array<ContractHandle>.
+/// HostInterface.find_all_by_contract callback — returns Array<GuestContractHandle>.
 ///
 /// # Safety
 /// - this must be a valid HostInterface pointer with valid runtime field
