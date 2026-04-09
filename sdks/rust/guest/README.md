@@ -84,7 +84,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     if registrar.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
     }
     // SAFETY: registrar is non-null and provided by the host per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
@@ -174,7 +174,7 @@ pub struct AbiError {
 }
 ```
 
-- `code == 0` → success (`ABI_OK`).
+- `code == 0` → success (`AbiErrorCode::Ok`).
 - `code != 0` → failure; `message` provides a human-readable description.
 - **Ownership of `message.ptr`:** allocated by the callee via `polyplug_host_alloc`.
   Caller frees with `polyplug_host_free(message.ptr as *mut u8, message.len, 1)`.
@@ -319,18 +319,29 @@ an ABI call returns a non-zero code.
 
 ---
 
-## ABI Constants
+## ABI Error Codes
 
-| Constant | Value | Meaning |
-|---|---|---|
-| `POLYPLUG_ABI_VERSION` | `1` | ABI version your plugin must report |
-| `ABI_OK` | `0` | Success |
-| `ABI_ERROR_GENERIC` | `1` | Unclassified error |
-| `ABI_ERROR_NOT_FOUND` | `2` | Plugin or contract not found |
-| `ABI_ERROR_PANIC` | `3` | Plugin panicked |
-| `ABI_ERROR_STALE_HANDLE` | `4` | Handle refers to an unloaded plugin |
-| `ABI_FUNCTION_NOT_AVAIL` | `5` | Function index out of range for vtable |
-| `ABI_BUFFER_TOO_SMALL` | `6` | Output buffer too small — reallocate and retry |
+The `AbiErrorCode` enum defines all possible return codes:
+
+```rust
+pub enum AbiErrorCode: u32 {
+    Ok = 0,                    // Success
+    Generic = 1,               // Unclassified error
+    BufferTooSmall = 2,        // Output buffer too small
+    Panic = 3,                 // Plugin panicked
+    NotFound = 4,              // Plugin or contract not found
+    StaleHandle = 5,           // Handle refers to unloaded plugin
+    FunctionNotAvailable = 6,  // Function index out of range
+    DuplicateProvider = 7,     // Contract already registered
+    InvalidPointer = 8,        // Null or invalid pointer
+    // Host contract errors (100+):
+    HostContractNotFound = 100,
+    HostContractVersionMismatch = 101,
+    HostContractCallFailed = 102,
+}
+```
+
+Use `AbiErrorCode::Ok as u32` for success, `AbiErrorCode::Generic as u32` for errors.
 
 ---
 
@@ -450,7 +461,7 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
     if registrar.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic as u32, message: StringView::null() };
     }
     // SAFETY: registrar is non-null and provided by the host per ABI contract.
     let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
@@ -556,7 +567,7 @@ let s: &str = match std::str::from_utf8(bytes) {
     Ok(s) => s,
     Err(_) => {
         return AbiError {
-            code: ABI_ERROR_GENERIC,
+            code: AbiErrorCode::Generic as u32,
             message: StringView {
                 ptr: b"invalid UTF-8".as_ptr(),
                 len: 13,

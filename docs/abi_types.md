@@ -204,19 +204,19 @@ AbiError — total: 24 bytes, align: 8
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AbiError {
-    pub code:    u32,        // 0 = ABI_OK
+    pub code:    u32,        // 0 = AbiErrorCode::Ok
     pub message: StringView, // host_alloc'd; caller frees. NULL if code==0.
 }
 ```
 
 Reserved error codes (0–255 runtime, 256+ plugin-defined):
-- `0`  — `ABI_OK`
-- `1`  — `ABI_ERROR_GENERIC`
-- `2`  — `ABI_BUFFER_TOO_SMALL`
-- `3`  — `ABI_ERROR_PANIC`
-- `4`  — `ABI_ERROR_NOT_FOUND`
-- `5`  — `ABI_ERROR_STALE_HANDLE`
-- `6`  — `ABI_FUNCTION_NOT_AVAIL`
+- `0`  — `AbiErrorCode::Ok`
+- `1`  — `AbiErrorCode::Generic`
+- `2`  — `AbiErrorCode::BufferTooSmall`
+- `3`  — `AbiErrorCode::Panic`
+- `4`  — `AbiErrorCode::NotFound`
+- `5`  — `AbiErrorCode::StaleHandle`
+- `6`  — `AbiErrorCode::FunctionNotAvailable`
 
 ---
 

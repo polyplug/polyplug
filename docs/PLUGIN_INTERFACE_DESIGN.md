@@ -331,7 +331,7 @@ unsafe extern "C" fn lua_dispatch(
     let lua_fn = &data.functions[fn_id as usize];
     lua_fn.call::<()>((args as i64, out as i64))
         .map(|_| AbiError::ok())
-        .unwrap_or(AbiError::new(ABI_ERROR_GENERIC))
+        .unwrap_or(AbiError::new(AbiErrorCode::Generic))
 }
 
 // Deno dispatch - ALL V8 logic here (no channels!)

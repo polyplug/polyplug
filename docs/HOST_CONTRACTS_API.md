@@ -312,7 +312,7 @@ unsafe extern "C" fn log_dispatch(
     // Return AbiError::ok()
     
     AbiError {
-        code: ABI_OK,
+        code: AbiErrorCode::Ok,
         message: StringView::null(),
     }
 }
@@ -384,7 +384,7 @@ impl HostLoggerCaller {
             func(&args as *const LogArgs as *const (), core::ptr::null_mut())
         };
         
-        if err.code != ABI_OK {
+        if err.code != AbiErrorCode::Ok {
             return Err(ContractError::from_abi(err));
         }
         
@@ -407,9 +407,9 @@ impl HostLoggerCaller {
 
 | Code | Name | Meaning |
 |------|------|---------|
-| 100 | `ABI_HOST_CONTRACT_NOT_FOUND` | Contract ID not registered |
-| 101 | `ABI_HOST_CONTRACT_VERSION_MISMATCH` | Minor version incompatible |
-| 102 | `ABI_HOST_CONTRACT_CALL_FAILED` | Function execution failed |
+| 100 | `AbiErrorCode::HostContractNotFound` | Contract ID not registered |
+| 101 | `AbiErrorCode::HostContractVersionMismatch` | Minor version incompatible |
+| 102 | `AbiErrorCode::HostContractCallFailed` | Function execution failed |
 
 ### Error Handling Pattern
 
