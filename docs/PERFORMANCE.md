@@ -5,8 +5,6 @@ This document covers performance characteristics and optimization strategies for
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **Interface**: Previously called "vtable"
-- **Contract dispatch**: Previously called "vtable dispatch"
 - **GuestContractInterface**: Previously called "PluginInterface"
 - **RuntimeAbi**: Previously called "HostVTable"
 

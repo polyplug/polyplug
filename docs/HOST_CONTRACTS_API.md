@@ -5,9 +5,6 @@
 This document uses terminology renamed in v1.1:
 - **RuntimeAbi**: Previously called "HostVTable" - the runtime's ABI provided to guests
 - **HostContractInterface**: Previously called "HostContractVTable" - a contract the host implements
-- **Interface**: Previously called "vtable"
-
-Old names may appear in historical context or migration notes only.
 
 ## Overview
 

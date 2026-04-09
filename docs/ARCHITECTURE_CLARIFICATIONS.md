@@ -5,9 +5,8 @@
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "PluginInterface" or "vtable"
+- **GuestContractInterface**: Previously called "PluginInterface"
 - **RuntimeAbi**: Previously called "HostVTable"
-- **Interface**: Previously called "vtable"
 
 The `VTableSlot` wrapper struct was removed in the instance model refactor. Interfaces are now stored directly in the registry.
 

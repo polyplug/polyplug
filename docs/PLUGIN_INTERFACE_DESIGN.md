@@ -5,7 +5,7 @@
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "PluginInterface" or "vtable"
+- **GuestContractInterface**: Previously called "PluginInterface"
 - **RuntimeAbi**: Previously called "HostVTable"
 - **Guest Contract**: A contract implemented by plugins
 - **Host Contract**: A contract provided by the host to plugins
