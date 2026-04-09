@@ -18,9 +18,9 @@ from polyplug_abi import (
     PluginDescriptor,
     PluginHandle,
     PluginContext,
-    HostVTable,
+    HostInterface,
     StringView,
-    PluginInterface,
+    GuestContractInterface,
     DispatchType,
     to_str,
 )
@@ -38,37 +38,42 @@ __all__ = [
     "PluginDescriptor",
     "PluginHandle",
     "PluginContext",
-    "HostVTable",
+    "HostInterface",
     "StringView",
-    "PluginInterface",
+    "GuestContractInterface",
     "DispatchType",
     "to_str",
     "alloc_string",
-    "store_host_vtable",
-    "get_host_vtable",
+    "store_host_interface",
+    "get_host_interface",
 ]
 
 
 _host_alloc = None
 _host_free = None
-_host_vtable_ptr: int = 0
+_host_interface_ptr: int = 0
 
 
-def store_host_vtable(host_vtable_ptr: int) -> None:
-    global _host_vtable_ptr
-    _host_vtable_ptr = host_vtable_ptr
+def store_host_interface(host_interface_ptr: int) -> None:
+    global _host_interface_ptr
+    _host_interface_ptr = host_interface_ptr
 
 
-def get_host_vtable() -> int:
-    return _host_vtable_ptr
+def get_host_interface() -> int:
+    return _host_interface_ptr
 
 
-def _init_allocator(host_vtable_ptr: int, rt_ctx: int) -> None:
+# Legacy aliases for backwards compatibility
+store_host_vtable = store_host_interface
+get_host_vtable = get_host_interface
+
+
+def _init_allocator(host_interface_ptr: int, rt_ctx: int) -> None:
     """Initialize the allocator with host interface pointers."""
     global _host_alloc, _host_free
     import ctypes
 
-    host = ctypes.cast(host_vtable_ptr, ctypes.POINTER(HostVTable))
+    host = ctypes.cast(host_interface_ptr, ctypes.POINTER(HostInterface))
     _host_alloc = host.contents.alloc
     _host_free = host.contents.free
 

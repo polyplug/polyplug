@@ -126,28 +126,25 @@ inline void operator delete[](void* ptr, std::size_t sz, std::align_val_t al) no
     }
 }
 
-// ─── RuntimeAbi Storage ───────────────────────────────────────────────────────
+// ─── HostInterface Storage ───────────────────────────────────────────────────────
 
 namespace polyplug {
 namespace detail {
 
-inline const RuntimeAbi*& host_vtable_storage() noexcept {
-    static const RuntimeAbi* stored = nullptr;
+inline const HostInterface*& host_interface_storage() noexcept {
+    static const HostInterface* stored = nullptr;
     return stored;
 }
 
 }
 
-inline void store_host_vtable(const RuntimeAbi* vtable) noexcept {
-    detail::host_vtable_storage() = vtable;
+inline void store_host_interface(const HostInterface* iface) noexcept {
+    detail::host_interface_storage() = iface;
 }
 
-inline const RuntimeAbi* get_host_vtable() noexcept {
-    return detail::host_vtable_storage();
+inline const HostInterface* get_host_interface() noexcept {
+    return detail::host_interface_storage();
 }
-
-// Legacy alias for backward compatibility
-using HostVTable = RuntimeAbi;
 
 }
 

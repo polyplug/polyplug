@@ -19,18 +19,18 @@ M.contract_id = abi.contract_id
 M.bundle_id = abi.bundle_id
 M.extension_id = abi.extension_id
 
-local _host_vtable_ptr = nil
+local _host_interface_ptr = nil
 
-function M.store_host_vtable(ptr)
-    _host_vtable_ptr = ptr
+function M.store_host_interface(ptr)
+    _host_interface_ptr = ptr
 end
 
-function M.get_host_vtable()
-    return _host_vtable_ptr
+function M.get_host_interface()
+    return _host_interface_ptr
 end
 
-function M.cast_host_vtable(ptr_int)
-    return ffi.cast("HostVTable*", ffi.cast("uintptr_t", ptr_int))
+function M.cast_host_interface(ptr_int)
+    return ffi.cast("HostInterface*", ffi.cast("uintptr_t", ptr_int))
 end
 
 function M.cast_context(ptr)
