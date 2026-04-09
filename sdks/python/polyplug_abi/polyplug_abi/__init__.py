@@ -10,13 +10,7 @@ from typing import Optional
 
 from polyplug_abi.abi import (
     POLYPLUG_ABI_VERSION,
-    ABI_OK,
-    ABI_ERROR_GENERIC,
-    ABI_BUFFER_TOO_SMALL,
-    ABI_ERROR_PANIC,
-    ABI_ERROR_NOT_FOUND,
-    ABI_ERROR_STALE_HANDLE,
-    ABI_FUNCTION_NOT_AVAIL,
+    AbiErrorCode,
     StringView,
     Buffer,
     Version,
@@ -109,13 +103,7 @@ class ReloadPhase:
 
 __all__ = [
     "POLYPLUG_ABI_VERSION",
-    "ABI_OK",
-    "ABI_ERROR_GENERIC",
-    "ABI_BUFFER_TOO_SMALL",
-    "ABI_ERROR_PANIC",
-    "ABI_ERROR_NOT_FOUND",
-    "ABI_ERROR_STALE_HANDLE",
-    "ABI_FUNCTION_NOT_AVAIL",
+    "AbiErrorCode",
     "StringView",
     "Buffer",
     "Version",

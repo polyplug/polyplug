@@ -1,7 +1,7 @@
 # THIS FILE IS MANUALLY MAINTAINED TO MATCH polyplug_abi
 # DO NOT MODIFY FIELD ORDER OR SIZES — these must match the host runtime exactly.
 
-"""ABI constants and types for the polyplug plugin runtime.
+"""ABI types for the polyplug plugin runtime.
 
 This module contains the frozen ABI types that match the Rust ABI exactly.
 DO NOT modify field order or sizes — these must match the host runtime.
@@ -13,18 +13,30 @@ import ctypes
 import enum
 from typing import ClassVar
 
-# ─── ABI Constants ────────────────────────────────────────────────────────────
+# ─── ABI Version ──────────────────────────────────────────────────────────────
 
 POLYPLUG_ABI_VERSION: int = 1
-ABI_OK: int = 0
-ABI_ERROR_GENERIC: int = 1
-ABI_BUFFER_TOO_SMALL: int = 2
-ABI_ERROR_PANIC: int = 3
-ABI_ERROR_NOT_FOUND: int = 4
-ABI_ERROR_STALE_HANDLE: int = 5
-ABI_FUNCTION_NOT_AVAIL: int = 6
-ABI_ERROR_DUPLICATE_PROVIDER: int = 7
-ABI_ERROR_INVALID_POINTER: int = 8
+
+
+# ─── ABI Error Codes ──────────────────────────────────────────────────────────
+
+
+class AbiErrorCode(enum.IntEnum):
+    """ABI error codes — returned by all ABI functions."""
+
+    Ok = 0
+    Generic = 1
+    BufferTooSmall = 2
+    Panic = 3
+    NotFound = 4
+    StaleHandle = 5
+    FunctionNotAvailable = 6
+    DuplicateProvider = 7
+    InvalidPointer = 8
+    HostContractNotFound = 100
+    HostContractVersionMismatch = 101
+    HostContractCallFailed = 102
+
 
 # ─── ABI Structs ──────────────────────────────────────────────────────────────
 
