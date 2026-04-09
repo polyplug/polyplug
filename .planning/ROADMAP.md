@@ -239,6 +239,7 @@ Plans:
 | 13. C++ Codegen Modernization | 2/2 | Complete   | 2026-04-08 |
 | 14. Hot-Reload Documentation | 1/1 | Complete   | 2026-04-08 |
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
+| 16. Milestone Gap Closure | 0/5 | Pending | — |
 
 ## Dependencies
 
@@ -286,6 +287,9 @@ Phase 14 (Hot-Reload Documentation)
     |
     v
 Phase 15 (Final Cleanup)
+        |
+        v
+Phase 16 (Milestone Gap Closure)
 ```
 
 ### Phase 12: SDK Instance Model Completion
@@ -364,6 +368,34 @@ Plans:
 - [x] 15-07-PLAN.md — Update documentation files [Wave 4]
 - [x] 15-08-PLAN.md — Final verification: grep audit + test suite [Wave 5]
 
+### Phase 16: Milestone Gap Closure
+
+**Goal:** Close all remaining audit gaps: verification reconciliation, generator comments, documentation, checkbox updates
+**Depends on:** Phase 15
+**Requirements:** CLN-03, TH-01, TH-04, TH-06, HC-02, HC-03, HC-04
+**Gap Closure:** Closes all deferred/partial gaps from milestone audit
+**Success Criteria** (what must be TRUE):
+1. REQUIREMENTS.md checkboxes reflect actual state (HC-* marked complete)
+2. Phase 07 VERIFICATION.md matches actual code (RuntimeContext not implemented, *mut c_void used)
+3. 4 generator comments updated (no "VTable" in non-test code)
+4. Documentation uses Guest/Host terminology consistently
+5. All tests pass
+**Plans:** 5 plans
+
+Wave Structure:
+- Wave 1: REQUIREMENTS.md checkbox updates (Plan 01)
+- Wave 2: Phase 07 VERIFICATION.md reconciliation (Plan 02)
+- Wave 3: Generator comment fixes (Plan 03)
+- Wave 4: Documentation terminology (Plan 04)
+- Wave 5: Final verification (Plan 05)
+
+Plans:
+- [ ] 16-01-PLAN.md — Update REQUIREMENTS.md checkboxes for HC-02/03/04 [Wave 1]
+- [ ] 16-02-PLAN.md — Reconcile Phase 07 VERIFICATION.md with actual code state [Wave 2]
+- [ ] 16-03-PLAN.md — Fix 4 generator comments with VTable terminology [Wave 3]
+- [ ] 16-04-PLAN.md — Update documentation with Guest/Host terminology (CLN-03) [Wave 4]
+- [ ] 16-05-PLAN.md — Final verification: grep audit + test suite [Wave 5]
+
 ---
 *Roadmap created: 2026-04-03*
 *Phase 1 plans added: 2026-04-03*
@@ -384,3 +416,4 @@ Plans:
 *Phase 13 plans added: 2026-04-08*
 *Phase 15 plans added: 2026-04-08*
 *Phase 15 plan 04b added for polyplugc tests: 2026-04-08*
+*Phase 16 added for milestone gap closure: 2026-04-09*

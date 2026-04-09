@@ -53,9 +53,9 @@
 ### Category: Host Contracts
 
 - [x] **HC-01**: `HostContractInterface` supports `singleton: bool` field
-- [ ] **HC-02**: `get_host_contract` returns same instance for singleton
-- [ ] **HC-03**: `get_host_contract` creates new instance for multi-instance
-- [ ] **HC-04**: Update codegen for host contract implementations
+- [x] **HC-02**: `get_host_contract` returns same instance for singleton — Verified in Phase 08
+- [x] **HC-03**: `get_host_contract` creates new instance for multi-instance — Verified in Phase 08
+- [x] **HC-04**: Update codegen for host contract implementations — Verified in Phase 08
 
 ### Category: RuntimeAbi
 
@@ -136,7 +136,7 @@
 | REG-01 through REG-06 | Phase 8: Retroactive Verification |
 | INST-01 through INST-06 | Phase 13: C++ Codegen Modernization |
 | HC-01 | Phase 3: Instance Model |
-| HC-02 through HC-04 | Phase 8: Retroactive Verification |
+| HC-02 through HC-04 | Phase 16: Milestone Gap Closure |
 | CG-01, CG-06 | Phase 3: Instance Model |
 | CG-02 through CG-05 | Phase 13: C++ Codegen Modernization |
 | HR-01 through HR-06 | Phase 14: Hot-Reload Documentation |
@@ -145,8 +145,8 @@
 | SDK-05 | Phase 12: SDK Instance Model Completion |
 | CLN-01, CLN-04 | Phase 15: Final Cleanup |
 | CLN-02 | Phase 10: SDK Cleanup Completion |
-| CLN-03 | Phase 6: Cleanup |
-| TH-01 through TH-08 | Phase 8: Retroactive Verification |
+| CLN-03 | Phase 16: Milestone Gap Closure |
+| TH-01, TH-04, TH-06 | Phase 16: Milestone Gap Closure |
 
 **Coverage:**
 - v1.1 requirements: 58 total
