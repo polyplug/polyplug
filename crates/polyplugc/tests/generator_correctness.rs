@@ -338,13 +338,13 @@ fn signature_primitive_params_match_contract() {
     );
     // Return type must match.
     assert!(
-        contracts.contains("Result<u64, PluginError>"),
-        "return type `Result<u64, PluginError>` must appear in trait method:\n{contracts}"
+        contracts.contains("Result<u64, GuestError>"),
+        "return type `Result<u64, GuestError>` must appear in trait method:\n{contracts}"
     );
 }
 
 /// Verifies that a no-param, no-return function generates a trait method with
-/// the correct signature `fn name(&self) -> Result<(), PluginError>`.
+/// the correct signature `fn name(&self) -> Result<(), GuestError>`.
 #[test]
 fn signature_void_function_matches_contract() {
     let fns: Vec<ResolvedFunction> = vec![make_fn("reset", 0, vec![], None)];
@@ -356,13 +356,13 @@ fn signature_void_function_matches_contract() {
         "trait must have `fn reset(&self)` method:\n{contracts}"
     );
     assert!(
-        contracts.contains("Result<(), PluginError>"),
-        "void return must be `Result<(), PluginError>`:\n{contracts}"
+        contracts.contains("Result<(), GuestError>"),
+        "void return must be `Result<(), GuestError>`:\n{contracts}"
     );
 }
 
 /// Verifies that a function returning a StringView produces a trait method
-/// whose return type is exactly `Result<StringView, PluginError>`.
+/// whose return type is exactly `Result<StringView, GuestError>`.
 #[test]
 fn signature_stringview_return_matches_contract() {
     let fns: Vec<ResolvedFunction> = vec![make_fn(
@@ -377,8 +377,8 @@ fn signature_stringview_return_matches_contract() {
     let contracts: String = generate_guest_contracts(ir, "sig_stringview_return");
 
     assert!(
-        contracts.contains("Result<StringView, PluginError>"),
-        "StringView return must produce `Result<StringView, PluginError>`:\n{contracts}"
+        contracts.contains("Result<StringView, GuestError>"),
+        "StringView return must produce `Result<StringView, GuestError>`:\n{contracts}"
     );
 }
 
@@ -408,16 +408,16 @@ fn signature_various_primitive_types_match_contract() {
         "param `enabled: bool` must appear:\n{contracts}"
     );
     assert!(
-        contracts.contains("Result<bool, PluginError>"),
-        "`Result<bool, PluginError>` must appear:\n{contracts}"
+        contracts.contains("Result<bool, GuestError>"),
+        "`Result<bool, GuestError>` must appear:\n{contracts}"
     );
     assert!(
         contracts.contains("delta: f64"),
         "param `delta: f64` must appear:\n{contracts}"
     );
     assert!(
-        contracts.contains("Result<i64, PluginError>"),
-        "`Result<i64, PluginError>` must appear:\n{contracts}"
+        contracts.contains("Result<i64, GuestError>"),
+        "`Result<i64, GuestError>` must appear:\n{contracts}"
     );
 }
 

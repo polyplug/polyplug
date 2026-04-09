@@ -116,7 +116,7 @@ mod guest {
 use polyplug_guest::AbiErrorCode;
 use polyplug_guest::AbiError;
 use polyplug_guest::PluginDescriptor;
-use polyplug_guest::PluginError;
+use polyplug_guest::GuestError;
 use polyplug_guest::HostInterface;
 use polyplug_guest::PluginContext;
 use polyplug_guest::StringView;
@@ -129,19 +129,19 @@ use guest::interfaces::set_test_adder_impl;
 struct MyPlugin;
 
 impl TestAddPlugin for MyPlugin {
-    fn add(&self, args: &AddArgs) -> Result<u32, PluginError> {
+    fn add(&self, args: &AddArgs) -> Result<u32, GuestError> {
         Ok(args.a.wrapping_add(args.b))
     }
 
-    fn add_primitive(&self, a: u32, b: u32) -> Result<u32, PluginError> {
+    fn add_primitive(&self, a: u32, b: u32) -> Result<u32, GuestError> {
         Ok(a.wrapping_add(b))
     }
 
-    fn version(&self) -> Result<StringView, PluginError> {
+    fn version(&self) -> Result<StringView, GuestError> {
         Ok(StringView { ptr: b"1.0.0".as_ptr(), len: 5_usize })
     }
 
-    fn reset(&self) -> Result<(), PluginError> {
+    fn reset(&self) -> Result<(), GuestError> {
         Ok(())
     }
 }

@@ -275,7 +275,7 @@ impl CodeGenerator for RustGenerator {
         // ── contracts.rs ──────────────────────────────────────────────────────
         let mut contracts_out: String = String::new();
         contracts_out.push_str(header);
-        contracts_out.push_str("use polyplug_guest::PluginError;\n");
+        contracts_out.push_str("use polyplug_guest::GuestError;\n");
         contracts_out.push_str("use polyplug_guest::StringView;\n");
         contracts_out.push_str("use super::types::*;\n\n");
 
@@ -517,7 +517,7 @@ fn generate_guest_trait_method(out: &mut String, func: &ResolvedFunction, contra
     };
     let sig_params: String = build_guest_trait_params(func, contract_struct);
     out.push_str(&format!(
-        "    fn {}(&self{}) -> Result<{ret_type}, PluginError>;\n",
+        "    fn {}(&self{}) -> Result<{ret_type}, GuestError>;\n",
         func.name, sig_params
     ));
 }
@@ -580,21 +580,21 @@ fn generate_guest_interfaces_file(out: &mut String, ir: &ValidatedIr) -> Result<
     out.push_str("use polyplug_guest::DispatchMechanisms;\n");
     out.push_str("use polyplug_guest::StringView;\n");
     out.push_str("use polyplug_guest::Version;\n");
-    out.push_str("use polyplug_guest::PluginError;\n");
+    out.push_str("use polyplug_guest::GuestError;\n");
     out.push_str("use polyplug_guest::alloc_string;\n");
     out.push_str("use polyplug_guest::string_view_null;\n");
     out.push_str("use polyplug_guest::string_view_from_static;\n");
     out.push_str("use polyplug_guest::abi_error_ok;\n");
     out.push_str("use super::types::*;\n");
 
-    // Helper function to convert PluginError to AbiError with message allocation
+    // Helper function to convert GuestError to AbiError with message allocation
     out.push_str(
-        "/// Convert a PluginError to an AbiError, allocating the message via host_alloc.\n",
+        "/// Convert a GuestError to an AbiError, allocating the message via host_alloc.\n",
     );
     out.push_str("/// Falls back to a null message if allocation fails.\n");
-    out.push_str("fn plugin_error_to_abi_error(e: PluginError) -> AbiError {\n");
+    out.push_str("fn plugin_error_to_abi_error(e: GuestError) -> AbiError {\n");
     out.push_str("    let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());\n");
-    out.push_str("    // SAFETY: PluginError.code is u32, AbiErrorCode is #[repr(u32)].\n");
+    out.push_str("    // SAFETY: GuestError.code is u32, AbiErrorCode is #[repr(u32)].\n");
     out.push_str("    // Both types have the same size and alignment, so transmute is safe.\n");
     out.push_str("    // Plugin-defined error codes (256+) are valid AbiErrorCode values.\n");
     out.push_str("    AbiError { code: unsafe { std::mem::transmute(e.code) }, message }\n");

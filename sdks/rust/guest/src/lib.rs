@@ -238,26 +238,26 @@ unsafe impl Sync for FnPtr {}
 /// Error returned from guest-side plugin trait methods.
 ///
 /// Produced by generated ABI wrappers when an ABI call returns a non-zero code.
-/// Plugin developers return `Result<T, PluginError>` from their trait implementations.
+/// Plugin developers return `Result<T, GuestError>` from their trait implementations.
 #[derive(Debug)]
-pub struct PluginError {
+pub struct GuestError {
     /// ABI error code (non-zero).
     pub code: AbiErrorCode,
     /// Human-readable error message. May be empty.
     pub message: String,
 }
 
-impl core::fmt::Display for PluginError {
+impl core::fmt::Display for GuestError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "PluginError(code={}, message={})",
+            "GuestError(code={}, message={})",
             self.code, self.message
         )
     }
 }
 
-impl core::error::Error for PluginError {}
+impl core::error::Error for GuestError {}
 
 // ─── String Helpers ───────────────────────────────────────────────────────────
 
@@ -290,7 +290,7 @@ pub fn to_str(sv: StringView) -> &'static str {
 /// The caller (host) is responsible for freeing the memory via `polyplug_host_free`.
 ///
 /// # Errors
-/// Returns `Err(PluginError)` if allocation fails.
+/// Returns `Err(GuestError)` if allocation fails.
 ///
 /// # Example
 /// ```rust
@@ -300,11 +300,11 @@ pub fn to_str(sv: StringView) -> &'static str {
 /// // sv.ptr points to host-allocated memory
 /// // Host must call polyplug_host_free(sv.ptr, sv.len, 1) when done
 /// ```
-pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
+pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
     let bytes: &[u8] = s.as_bytes();
     let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
     if ptr.is_null() {
-        return Err(PluginError {
+        return Err(GuestError {
             code: AbiErrorCode::Generic,
             message: "allocation failed".to_string(),
         });
