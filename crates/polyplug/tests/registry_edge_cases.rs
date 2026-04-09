@@ -60,9 +60,9 @@ macro_rules! make_interface {
 
 #[test]
 fn resolve_valid_handle_after_multiple_registrations() {
-    static VTABLE_A: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0001_u64, Version { major: 1, minor: 0, patch: 0 });
-    static VTABLE_B: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0002_u64, Version { major: 2, minor: 0, patch: 0 });
-    static VTABLE_C: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0003_u64, Version { major: 3, minor: 0, patch: 0 });
+    static INTERFACE_A: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0001_u64, Version { major: 1, minor: 0, patch: 0 });
+    static INTERFACE_B: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0002_u64, Version { major: 2, minor: 0, patch: 0 });
+    static INTERFACE_C: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0003_u64, Version { major: 3, minor: 0, patch: 0 });
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -70,52 +70,52 @@ fn resolve_valid_handle_after_multiple_registrations() {
     let descriptor_b: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
     let descriptor_c: PluginDescriptor = make_descriptor("plugin_c", "contract.c");
 
-    // SAFETY: VTABLE_A, VTABLE_B, VTABLE_C are 'static, pointers are valid for Registry lifetime.
+    // SAFETY: INTERFACE_A, INTERFACE_B, INTERFACE_C are 'static, pointers are valid for Registry lifetime.
     let handle_a: PluginHandle = unsafe {
         registry
-            .register(descriptor_a, &VTABLE_A, "contract.a".to_owned(), BundleId::from_u64(1_u64))
+            .register(descriptor_a, &INTERFACE_A, "contract.a".to_owned(), BundleId::from_u64(1_u64))
             .expect("registration A should succeed")
     };
 
-    // SAFETY: VTABLE_B is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_B is 'static, pointer is valid for Registry lifetime.
     let handle_b: PluginHandle = unsafe {
         registry
-            .register(descriptor_b, &VTABLE_B, "contract.b".to_owned(), BundleId::from_u64(2_u64))
+            .register(descriptor_b, &INTERFACE_B, "contract.b".to_owned(), BundleId::from_u64(2_u64))
             .expect("registration B should succeed")
     };
 
-    // SAFETY: VTABLE_C is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_C is 'static, pointer is valid for Registry lifetime.
     let handle_c: PluginHandle = unsafe {
         registry
-            .register(descriptor_c, &VTABLE_C, "contract.c".to_owned(), BundleId::from_u64(3_u64))
+            .register(descriptor_c, &INTERFACE_C, "contract.c".to_owned(), BundleId::from_u64(3_u64))
             .expect("registration C should succeed")
     };
 
-    let vtable_ptr_a: *const GuestContractInterface =
+    let interface_ptr_a: *const GuestContractInterface =
         registry.resolve(handle_a).expect("resolve for handle_a should succeed");
-    // SAFETY: vtable_ptr_a points to VTABLE_A which is 'static.
-    let contract_id_a: GuestContractId = unsafe { (*vtable_ptr_a).contract_id };
+    // SAFETY: interface_ptr_a points to INTERFACE_A which is 'static.
+    let contract_id_a: GuestContractId = unsafe { (*interface_ptr_a).contract_id };
     assert_eq!(
-        contract_id_a, VTABLE_A.contract_id,
-        "handle_a should return VTABLE_A"
+        contract_id_a, INTERFACE_A.contract_id,
+        "handle_a should return INTERFACE_A"
     );
 
-    let vtable_ptr_b: *const GuestContractInterface =
+    let interface_ptr_b: *const GuestContractInterface =
         registry.resolve(handle_b).expect("resolve for handle_b should succeed");
-    // SAFETY: vtable_ptr_b points to VTABLE_B which is 'static.
-    let contract_id_b: GuestContractId = unsafe { (*vtable_ptr_b).contract_id };
+    // SAFETY: interface_ptr_b points to INTERFACE_B which is 'static.
+    let contract_id_b: GuestContractId = unsafe { (*interface_ptr_b).contract_id };
     assert_eq!(
-        contract_id_b, VTABLE_B.contract_id,
-        "handle_b should return VTABLE_B"
+        contract_id_b, INTERFACE_B.contract_id,
+        "handle_b should return INTERFACE_B"
     );
 
-    let vtable_ptr_c: *const GuestContractInterface =
+    let interface_ptr_c: *const GuestContractInterface =
         registry.resolve(handle_c).expect("resolve for handle_c should succeed");
-    // SAFETY: vtable_ptr_c points to VTABLE_C which is 'static.
-    let contract_id_c: GuestContractId = unsafe { (*vtable_ptr_c).contract_id };
+    // SAFETY: interface_ptr_c points to INTERFACE_C which is 'static.
+    let contract_id_c: GuestContractId = unsafe { (*interface_ptr_c).contract_id };
     assert_eq!(
-        contract_id_c, VTABLE_C.contract_id,
-        "handle_c should return VTABLE_C"
+        contract_id_c, INTERFACE_C.contract_id,
+        "handle_c should return INTERFACE_C"
     );
 }
 
@@ -125,15 +125,15 @@ fn resolve_valid_handle_after_multiple_registrations() {
 
 #[test]
 fn resolve_vacant_slot_returns_invalid_handle() {
-    static VTABLE: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0010_u64, Version { major: 1, minor: 0, patch: 0 });
+    static INTERFACE: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0010_u64, Version { major: 1, minor: 0, patch: 0 });
 
     let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor: PluginDescriptor = make_descriptor("plugin_single", "contract.single");
-    // SAFETY: VTABLE is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry
-            .register(descriptor, &VTABLE, "contract.single".to_owned(), BundleId::from_u64(100_u64))
+            .register(descriptor, &INTERFACE, "contract.single".to_owned(), BundleId::from_u64(100_u64))
             .expect("registration should succeed")
     };
 
@@ -205,7 +205,7 @@ const CONCURRENT_PLUGIN_NAMES: [&str; CONCURRENT_THREADS] = [
     "concurrent_plugin_7",
 ];
 
-static CONCURRENT_VTABLES: [GuestContractInterface; CONCURRENT_THREADS] = [
+static CONCURRENT_INTERFACES: [GuestContractInterface; CONCURRENT_THREADS] = [
     make_interface!(CONCURRENT_CONTRACT_IDS[0], Version { major: 1, minor: 0, patch: 0 }),
     make_interface!(CONCURRENT_CONTRACT_IDS[1], Version { major: 1, minor: 0, patch: 0 }),
     make_interface!(CONCURRENT_CONTRACT_IDS[2], Version { major: 1, minor: 0, patch: 0 }),
@@ -227,12 +227,12 @@ fn resolve_concurrent_access_thread_safety() {
     for idx in 0_usize..CONCURRENT_THREADS {
         let descriptor: PluginDescriptor =
             make_descriptor(CONCURRENT_PLUGIN_NAMES[idx], CONCURRENT_CONTRACT_NAMES[idx]);
-        // SAFETY: CONCURRENT_VTABLES[idx] is 'static, pointer is valid for Registry lifetime.
+        // SAFETY: CONCURRENT_INTERFACES[idx] is 'static, pointer is valid for Registry lifetime.
         let handle: PluginHandle = unsafe {
             registry
                 .register(
                     descriptor,
-                    &CONCURRENT_VTABLES[idx],
+                    &CONCURRENT_INTERFACES[idx],
                     CONCURRENT_CONTRACT_NAMES[idx].to_owned(),
                     BundleId::from_u64(idx as u64),
                 )
@@ -251,11 +251,11 @@ fn resolve_concurrent_access_thread_safety() {
             barrier_clone.wait();
 
             for _round in 0_usize..CONCURRENT_ROUNDS {
-                let vtable_ptr: *const GuestContractInterface = registry_clone
+                let interface_ptr: *const GuestContractInterface = registry_clone
                     .resolve(handle)
                     .expect("resolve should succeed in concurrent context");
-                // SAFETY: vtable_ptr points to a 'static GuestContractInterface.
-                let contract_id: GuestContractId = unsafe { (*vtable_ptr).contract_id };
+                // SAFETY: interface_ptr points to a 'static GuestContractInterface.
+                let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
                 assert_eq!(
                     contract_id.id(), expected_contract_id,
                     "thread {} got wrong contract_id",
@@ -279,9 +279,9 @@ fn resolve_concurrent_access_thread_safety() {
 fn find_by_contract_multiple_implementations_returns_first() {
     const MULTI_CONTRACT_ID: u64 = 0xEEEE_2000_0000_0001_u64;
 
-    static VTABLE_IMPL_A: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 1, minor: 0, patch: 0 });
-    static VTABLE_IMPL_B: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 2, minor: 0, patch: 0 });
-    static VTABLE_IMPL_C: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 3, minor: 0, patch: 0 });
+    static INTERFACE_IMPL_A: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 1, minor: 0, patch: 0 });
+    static INTERFACE_IMPL_B: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 2, minor: 0, patch: 0 });
+    static INTERFACE_IMPL_C: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 3, minor: 0, patch: 0 });
 
     let registry: PluginRegistry = PluginRegistry::new();
 
@@ -289,36 +289,36 @@ fn find_by_contract_multiple_implementations_returns_first() {
     let descriptor_b: PluginDescriptor = make_descriptor("impl_b", "multi.contract");
     let descriptor_c: PluginDescriptor = make_descriptor("impl_c", "multi.contract");
 
-    // SAFETY: VTABLE_IMPL_A is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_IMPL_A is 'static, pointer is valid for Registry lifetime.
     let handle_a: PluginHandle = unsafe {
         registry
             .register(
                 descriptor_a,
-                &VTABLE_IMPL_A,
+                &INTERFACE_IMPL_A,
                 "multi.contract".to_owned(),
                 BundleId::from_u64(1000_u64),
             )
             .expect("registration A should succeed")
     };
 
-    // SAFETY: VTABLE_IMPL_B is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_IMPL_B is 'static, pointer is valid for Registry lifetime.
     let handle_b: PluginHandle = unsafe {
         registry
             .register(
                 descriptor_b,
-                &VTABLE_IMPL_B,
+                &INTERFACE_IMPL_B,
                 "multi.contract".to_owned(),
                 BundleId::from_u64(2000_u64),
             )
             .expect("registration B should succeed")
     };
 
-    // SAFETY: VTABLE_IMPL_C is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_IMPL_C is 'static, pointer is valid for Registry lifetime.
     let handle_c: PluginHandle = unsafe {
         registry
             .register(
                 descriptor_c,
-                &VTABLE_IMPL_C,
+                &INTERFACE_IMPL_C,
                 "multi.contract".to_owned(),
                 BundleId::from_u64(3000_u64),
             )
@@ -347,13 +347,13 @@ fn find_by_contract_multiple_implementations_returns_first() {
         "find_by_contract should return first registered implementation"
     );
 
-    let vtable_ptr: *const GuestContractInterface =
+    let interface_ptr: *const GuestContractInterface =
         registry.resolve(found).expect("resolve should succeed");
-    // SAFETY: vtable_ptr points to VTABLE_IMPL_A which is 'static.
-    let version: &Version = unsafe { &(*vtable_ptr).contract_version };
+    // SAFETY: interface_ptr points to INTERFACE_IMPL_A which is 'static.
+    let version: &Version = unsafe { &(*interface_ptr).contract_version };
     assert_eq!(
-        *version, VTABLE_IMPL_A.contract_version,
-        "should resolve to first implementation's vtable"
+        *version, INTERFACE_IMPL_A.contract_version,
+        "should resolve to first implementation's interface"
     );
 
     let mut all_handles: [PluginHandle; 4] = [PluginHandle {
@@ -376,45 +376,45 @@ fn swap_interface_during_active_resolve() {
     const VERSION_V1: Version = Version { major: 1, minor: 0, patch: 0 };
     const VERSION_V2: Version = Version { major: 2, minor: 0, patch: 0 };
 
-    static VTABLE_V1: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
-    static VTABLE_V2: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
+    static INTERFACE_V1: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
+    static INTERFACE_V2: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
 
     let registry: PluginRegistry = PluginRegistry::new();
 
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
-    // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(
                 descriptor,
-                &VTABLE_V1,
+                &INTERFACE_V1,
                 "swap.test.contract".to_owned(),
                 BundleId::from_u64(5000_u64),
             )
             .expect("initial registration should succeed")
     };
 
-    let vtable_ptr_before: *const GuestContractInterface =
+    let interface_ptr_before: *const GuestContractInterface =
         registry.resolve(handle).expect("resolve before swap should succeed");
-    // SAFETY: vtable_ptr_before points to VTABLE_V1 which is 'static.
-    let version_before: &Version = unsafe { &(*vtable_ptr_before).contract_version };
+    // SAFETY: interface_ptr_before points to INTERFACE_V1 which is 'static.
+    let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(
         *version_before, VERSION_V1,
-        "vtable before swap should have V1"
+        "interface before swap should have V1"
     );
 
     // Perform the swap - direct swap_interface takes Arc<GuestContractInterface>
-    let new_arc: Arc<GuestContractInterface> = Arc::new(VTABLE_V2.clone());
+    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
     registry
         .swap_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
 
     // The same handle should now resolve to V2 (no generation tracking)
-    let vtable_ptr_after: *const GuestContractInterface =
+    let interface_ptr_after: *const GuestContractInterface =
         registry.resolve(handle).expect("resolve should succeed after swap");
 
-    // SAFETY: vtable_ptr_after points to VTABLE_V2 which is 'static.
-    let version_after: &Version = unsafe { &(*vtable_ptr_after).contract_version };
+    // SAFETY: interface_ptr_after points to INTERFACE_V2 which is 'static.
+    let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
     assert_eq!(*version_after, VERSION_V2, "after swap should point to V2");
 }
 

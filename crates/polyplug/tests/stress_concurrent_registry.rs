@@ -89,7 +89,7 @@ macro_rules! make_interface {
     };
 }
 
-static VTABLES_V1: [GuestContractInterface; THREADS] = [
+static INTERFACES_V1: [GuestContractInterface; THREADS] = [
     make_interface!(CONTRACT_IDS[0], VERSION_V1),
     make_interface!(CONTRACT_IDS[1], VERSION_V1),
     make_interface!(CONTRACT_IDS[2], VERSION_V1),
@@ -102,9 +102,9 @@ static VTABLES_V1: [GuestContractInterface; THREADS] = [
 
 const SWAP_CONTRACT_ID: u64 = 0x7171_0000_0000_2000_u64;
 
-static VTABLE_SWAP_V1: GuestContractInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V1);
+static INTERFACE_SWAP_V1: GuestContractInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V1);
 
-static VTABLE_SWAP_V2: GuestContractInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V2);
+static INTERFACE_SWAP_V2: GuestContractInterface = make_interface!(SWAP_CONTRACT_ID, VERSION_V2);
 
 fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDescriptor {
     PluginDescriptor {
@@ -126,14 +126,14 @@ fn stress_concurrent_register_find_resolve() {
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             let descriptor: PluginDescriptor =
                 make_descriptor(PLUGIN_NAMES[idx], CONTRACT_NAMES[idx]);
-            let vtable: &'static GuestContractInterface = &VTABLES_V1[idx];
+            let interface: &'static GuestContractInterface = &INTERFACES_V1[idx];
             barrier_clone.wait();
-            // SAFETY: vtable is a static reference valid for the test lifetime.
+            // SAFETY: interface is a static reference valid for the test lifetime.
             let handle: PluginHandle = unsafe {
                 reg_clone
                     .register(
                         descriptor,
-                        vtable,
+                        interface,
                         CONTRACT_NAMES[idx].to_owned(),
                         BundleId::from_u64(idx as u64),
                     )
@@ -144,12 +144,12 @@ fn stress_concurrent_register_find_resolve() {
                 let found: PluginHandle = reg_clone
                     .find_by_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
                     .expect("find_by_contract must succeed");
-                let vtable_ptr: *const GuestContractInterface =
+                let interface_ptr: *const GuestContractInterface =
                     reg_clone.resolve(found).expect("resolve must succeed");
-                // SAFETY: vtable_ptr is from the registry and valid.
-                let contract_id: GuestContractId = unsafe { (*vtable_ptr).contract_id };
-                // SAFETY: vtable_ptr is from the registry and valid.
-                let version: &Version = unsafe { &(*vtable_ptr).contract_version };
+                // SAFETY: interface_ptr is from the registry and valid.
+                let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
+                // SAFETY: interface_ptr is from the registry and valid.
+                let version: &Version = unsafe { &(*interface_ptr).contract_version };
                 assert_eq!(contract_id.id(), CONTRACT_IDS[idx]);
                 assert_eq!(*version, VERSION_V1);
             }
@@ -172,10 +172,10 @@ fn stress_concurrent_register_find_resolve() {
         let found: PluginHandle = registry
             .find_by_contract(GuestContractId::from_u64(expected_cid), 0_u32)
             .expect("main-thread find must succeed");
-        let vtable_ptr: *const GuestContractInterface =
+        let interface_ptr: *const GuestContractInterface =
             registry.resolve(found).expect("main-thread resolve must succeed");
-        // SAFETY: vtable_ptr is valid.
-        let contract_id: GuestContractId = unsafe { (*vtable_ptr).contract_id };
+        // SAFETY: interface_ptr is valid.
+        let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
         assert_eq!(contract_id.id(), CONTRACT_IDS[idx]);
     }
 }
@@ -184,12 +184,12 @@ fn stress_concurrent_register_find_resolve() {
 fn stress_concurrent_swaps_with_resolvers() {
     let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "stress.swap.contract");
-    // SAFETY: VTABLE_SWAP_V1 is a static reference valid for the test lifetime.
+    // SAFETY: INTERFACE_SWAP_V1 is a static reference valid for the test lifetime.
     let handle: PluginHandle = unsafe {
         registry
             .register(
                 descriptor,
-                &VTABLE_SWAP_V1,
+                &INTERFACE_SWAP_V1,
                 "stress.swap.contract".to_owned(),
                 BundleId::from_u64(0xABCD_0001_u64),
             )
@@ -215,9 +215,9 @@ fn stress_concurrent_swaps_with_resolvers() {
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =
                         reg_clone.resolve(found);
-                    if let Ok(vtable_ptr) = resolve_result {
-                        // SAFETY: vtable_ptr is valid.
-                        let version: &Version = unsafe { &(*vtable_ptr).contract_version };
+                    if let Ok(interface_ptr) = resolve_result {
+                        // SAFETY: interface_ptr is valid.
+                        let version: &Version = unsafe { &(*interface_ptr).contract_version };
                         assert!(
                             *version == VERSION_V1 || *version == VERSION_V2,
                             "version must be V1 or V2"
@@ -233,12 +233,12 @@ fn stress_concurrent_swaps_with_resolvers() {
     ready.wait();
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static GuestContractInterface = if round % 2_usize == 0_usize {
-            &VTABLE_SWAP_V2
+        let new_interface: &'static GuestContractInterface = if round % 2_usize == 0_usize {
+            &INTERFACE_SWAP_V2
         } else {
-            &VTABLE_SWAP_V1
+            &INTERFACE_SWAP_V1
         };
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable.clone());
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
         registry
             .swap_interface(handle.index, new_arc)
             .expect("swap_interface must succeed");

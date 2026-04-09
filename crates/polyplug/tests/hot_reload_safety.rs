@@ -18,7 +18,7 @@ use polyplug_abi::{
 };
 use polyplug_utils::BundleId;
 
-// ─── Static vtables for testing ──────────────────────────────────────────────
+// ─── Static interfaces for testing ─────────────────────────────────────────────
 
 const MOCK_FNS: [*const (); 0] = [];
 
@@ -37,7 +37,7 @@ unsafe extern "C" fn noop_destroy_instance(
 ) {
 }
 
-static VTABLE_V1: GuestContractInterface = GuestContractInterface {
+static INTERFACE_V1: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -51,7 +51,7 @@ static VTABLE_V1: GuestContractInterface = GuestContractInterface {
     },
 };
 
-static VTABLE_V2: GuestContractInterface = GuestContractInterface {
+static INTERFACE_V2: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -80,15 +80,15 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 /// Verifies that swap_interface directly swaps the interface and the new interface
 /// is returned by resolve after the swap.
 #[test]
-fn test_swap_interface_changes_vtable() {
+fn test_swap_interface_changes_interface_pointer() {
     let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
 
-    // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry.register(
             descriptor,
-            &VTABLE_V1,
+            &INTERFACE_V1,
             "swap.test.contract".to_owned(),
             BundleId::from_u64(2_u64),
         )
@@ -103,22 +103,22 @@ fn test_swap_interface_changes_vtable() {
         "handle should be valid before swap"
     );
 
-    // SAFETY: vtable pointer is valid.
-    let vtable_ptr_before: *const GuestContractInterface =
+    // SAFETY: interface pointer is valid.
+    let interface_ptr_before: *const GuestContractInterface =
         resolve_result_before.expect("resolve before swap should succeed");
-    let version_before: &Version = unsafe { &(*vtable_ptr_before).contract_version };
+    let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(
         version_before.major, 1,
         "before swap: should have version 1"
     );
 
     // Perform the swap - direct swap_interface
-    let new_arc: Arc<GuestContractInterface> = Arc::new(VTABLE_V2.clone());
+    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
     registry
         .swap_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
 
-    // The same handle should now resolve to VTABLE_V2.
+    // The same handle should now resolve to INTERFACE_V2.
     let resolve_result_after: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
         registry.resolve(handle);
 
@@ -128,10 +128,10 @@ fn test_swap_interface_changes_vtable() {
         "handle should still be valid after swap (no generation tracking)"
     );
 
-    // SAFETY: vtable pointer is valid.
-    let vtable_ptr_after: *const GuestContractInterface =
+    // SAFETY: interface pointer is valid.
+    let interface_ptr_after: *const GuestContractInterface =
         resolve_result_after.expect("resolve after swap should succeed");
-    let version_after: &Version = unsafe { &(*vtable_ptr_after).contract_version };
+    let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
     assert_eq!(
         version_after.major, 2,
         "after swap: should have version 2"
@@ -146,11 +146,11 @@ fn test_direct_swap_interface() {
     let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.direct.contract");
 
-    // SAFETY: VTABLE_V1 is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry.register(
             descriptor,
-            &VTABLE_V1,
+            &INTERFACE_V1,
             "swap.direct.contract".to_owned(),
             BundleId::from_u64(3_u64),
         )
@@ -158,24 +158,24 @@ fn test_direct_swap_interface() {
     .expect("registration should succeed");
 
     // Resolve before swap
-    let vtable_ptr_before: *const GuestContractInterface =
+    let interface_ptr_before: *const GuestContractInterface =
         registry.resolve(handle).expect("resolve should succeed before swap");
 
-    // SAFETY: vtable_ptr_before points to VTABLE_V1 which is 'static.
-    let version_before: &Version = unsafe { &(*vtable_ptr_before).contract_version };
+    // SAFETY: interface_ptr_before points to INTERFACE_V1 which is 'static.
+    let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
     assert_eq!(version_before.major, 1, "before swap: V1");
 
     // Perform direct swap
-    let new_arc: Arc<GuestContractInterface> = Arc::new(VTABLE_V2.clone());
+    let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
     registry
         .swap_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
 
     // Resolve after swap - the handle should still be valid
-    let vtable_ptr_after: *const GuestContractInterface =
+    let interface_ptr_after: *const GuestContractInterface =
         registry.resolve(handle).expect("resolve should succeed after swap");
 
-    // SAFETY: vtable_ptr_after points to VTABLE_V2 which is 'static.
-    let version_after: &Version = unsafe { &(*vtable_ptr_after).contract_version };
+    // SAFETY: interface_ptr_after points to INTERFACE_V2 which is 'static.
+    let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };
     assert_eq!(version_after.major, 2, "after swap: V2");
 }
