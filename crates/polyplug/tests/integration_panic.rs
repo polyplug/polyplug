@@ -27,7 +27,7 @@ use polyplug_abi::ffi::polyplug_host_free;
 /// # Safety
 /// Only written by `capture_register_callback` which is called once during
 /// `polyplug_init`, before the interface pointer is read in the test.
-static mut CAPTURED_VTABLE_PTR: *const GuestContractInterface = core::ptr::null();
+static mut CAPTURED_INTERFACE_PTR: *const GuestContractInterface = core::ptr::null();
 
 /// A register_contract callback that captures the interface pointer.
 ///
@@ -38,10 +38,10 @@ unsafe extern "C" fn capture_register_callback(
     _descriptor: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
-    // SAFETY: CAPTURED_VTABLE_PTR is only written here, during polyplug_init,
+    // SAFETY: CAPTURED_INTERFACE_PTR is only written here, during polyplug_init,
     // before the test reads it. Single-threaded test execution ensures no data race.
     unsafe {
-        CAPTURED_VTABLE_PTR = interface;
+        CAPTURED_INTERFACE_PTR = interface;
     }
     AbiError {
         code: AbiErrorCode::Ok,
@@ -224,7 +224,7 @@ fn test_panic_returns_abi_error_panic() {
     std::fs::write(tmp_dir.join("Cargo.toml"), &cargo_toml_content).expect("write Cargo.toml");
 
     // -- Step 5: Write src/lib.rs implementing TestPanicPlugin --
-    // The generated src/guest/vtables.rs, src/guest/contracts.rs, src/guest/types.rs already exist.
+    // The generated src/guest/interfaces.rs, src/guest/contracts.rs, src/guest/types.rs already exist.
     // We provide the crate root lib.rs that declares the guest submodule and implements the trait.
     // We do NOT include mod guest::init -- we write our own polyplug_init here.
     // We do NOT define polyplug_abi_version -- it comes from polyplug rlib.
@@ -235,7 +235,7 @@ fn test_panic_returns_abi_error_panic() {
         "mod guest {\n",
         "    pub mod types;\n",
         "    pub mod contracts;\n",
-        "    pub mod vtables;\n",
+        "    pub mod interfaces;\n",
         "}\n",
         "\n",
         "use polyplug_guest::AbiError;\n",
@@ -246,8 +246,8 @@ fn test_panic_returns_abi_error_panic() {
         "use polyplug_guest::GuestContractInterface;\n",
         "use polyplug_guest::StringView;\n",
         "use polyplug_guest::AbiErrorCode;\n",
-        "use guest::vtables::PANIC_PLUGIN_IMPL;\n",
-        "use guest::vtables::PANIC_PLUGIN_VTABLE;\n",
+        "use guest::interfaces::PANIC_PLUGIN_IMPL;\n",
+        "use guest::interfaces::PANIC_PLUGIN_INTERFACE;\n",
         "use guest::contracts::TestPanicPlugin;\n",
         "\n",
         "struct PanicPlugin;\n",
@@ -258,7 +258,7 @@ fn test_panic_returns_abi_error_panic() {
         "    }\n",
         "}\n",
         "\n",
-        "/// Register the panic plugin vtable with the host.\n",
+        "/// Register the panic plugin interface with the host.\n",
         "///\n",
         "/// # Safety\n",
         "/// `host` and `ctx` must be valid pointers.\n",
@@ -287,12 +287,12 @@ fn test_panic_returns_abi_error_panic() {
         "        },\n",
         "        version: polyplug_guest::Version { major: 1, minor: 0, patch: 0 },\n",
         "    };\n",
-        "    // SAFETY: desc and vtable are valid for the duration of the call.\n",
+        "    // SAFETY: desc and interface are valid for the duration of the call.\n",
         "    unsafe {\n",
         "        (host_iface.register_contract)(\n",
         "            host,\n",
         "            &desc as *const PluginDescriptor,\n",
-        "            &PANIC_PLUGIN_VTABLE as *const GuestContractInterface,\n",
+        "            &PANIC_PLUGIN_INTERFACE as *const GuestContractInterface,\n",
         "        )\n",
         "    }\n",
         "}\n",
@@ -372,9 +372,9 @@ fn test_panic_returns_abi_error_panic() {
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed (code Ok)");
 
-    // SAFETY: CAPTURED_VTABLE_PTR was written by capture_register_callback above.
+    // SAFETY: CAPTURED_INTERFACE_PTR was written by capture_register_callback above.
     // Single-threaded; no race condition.
-    let interface_ptr: *const GuestContractInterface = unsafe { CAPTURED_VTABLE_PTR };
+    let interface_ptr: *const GuestContractInterface = unsafe { CAPTURED_INTERFACE_PTR };
     assert!(!interface_ptr.is_null(), "interface pointer must be non-null");
 
     // SAFETY: interface_ptr is valid (plugin library is loaded, not yet dropped).

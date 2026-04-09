@@ -32,11 +32,11 @@ fn create_runtime_with_native() -> Runtime {
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable: *const PluginInterface = rt.resolve_plugin(handle).ok()?.vtable();
-    // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
+    let interface: *const PluginInterface = rt.resolve_plugin(handle).ok()?;
+    // SAFETY: interface is from resolve_plugin and points to a valid interface while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
-        let fns: *const *const () = (*vtable).dispatch.native.functions;
+        let fns: *const *const () = (*interface).dispatch.native.functions;
         core::mem::transmute(*fns)
     };
     Some(fn_ptr)
@@ -71,12 +71,11 @@ fn test_b_in_flight_safety() {
                 rt_clone.find_by_contract(contract_id, 0);
             if let Ok(handle) = handle_result {
                 let vt_result: Result<
-                    polyplug::plugin_registry::PluginGuard,
+                    *const PluginInterface,
                     polyplug::error::RegistryError,
                 > = rt_clone.resolve_plugin(handle);
-                if let Ok(guard) = vt_result {
-                    let vt: *const PluginInterface = guard.vtable();
-                    // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
+                if let Ok(vt) = vt_result {
+                    // SAFETY: interface is from resolve_plugin and slot 0 is a valid extern "C" fn.
                     let _: u32 = unsafe {
                         let f: extern "C" fn() -> u32 =
                             core::mem::transmute(*(*vt).dispatch.native.functions);
@@ -140,9 +139,8 @@ fn test_e_cascade_reload() {
             .expect("find depender");
         let vt: *const PluginInterface = rt
             .resolve_plugin(handle)
-            .expect("resolve depender")
-            .vtable();
-        // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
+            .expect("resolve depender");
+        // SAFETY: interface is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
             let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).dispatch.native.functions);
             f()
@@ -156,9 +154,8 @@ fn test_e_cascade_reload() {
             .expect("find depender after reload");
         let vt: *const PluginInterface = rt
             .resolve_plugin(handle)
-            .expect("resolve depender after reload")
-            .vtable();
-        // SAFETY: vtable is from resolve_plugin and slot 0 is a valid extern "C" fn.
+            .expect("resolve depender after reload");
+        // SAFETY: interface is from resolve_plugin and slot 0 is a valid extern "C" fn.
         unsafe {
             let f: extern "C" fn() -> u32 = core::mem::transmute(*(*vt).dispatch.native.functions);
             f()

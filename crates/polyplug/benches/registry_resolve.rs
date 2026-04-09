@@ -44,9 +44,9 @@ unsafe extern "C" fn bench_destroy_instance(
 ) {
 }
 
-// ─── Mock vtable for benchmarking ────────────────────────────────────────────────
+// ─── Mock interface for benchmarking ────────────────────────────────────────────────
 
-static BENCH_VTABLE: GuestContractInterface = GuestContractInterface {
+static BENCH_INTERFACE: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0x0000_0000_0000_0001_u64),
     contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -68,8 +68,8 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
     }
 }
 
-/// Create a vtable for dynamic benchmarks
-fn make_vtable(id: u64) -> GuestContractInterface {
+/// Create an interface for dynamic benchmarks
+fn make_interface(id: u64) -> GuestContractInterface {
     GuestContractInterface {
         contract_id: GuestContractId::from_u64(id),
         contract_version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
@@ -91,10 +91,10 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
     let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
-    // SAFETY: BENCH_VTABLE is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let handle: PluginHandle = unsafe {
         registry
-            .register(descriptor, &BENCH_VTABLE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 
@@ -118,16 +118,16 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
 fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
     let registry: PluginRegistry = PluginRegistry::new();
 
-    // Use leaked Box to get 'static vtables
-    let vtables: Vec<Box<GuestContractInterface>> = (0..100_u64)
-        .map(|i| Box::new(make_vtable(0x1000_0000_0000_0000_u64 + i)))
+    // Use leaked Box to get 'static interfaces
+    let interfaces: Vec<Box<GuestContractInterface>> = (0..100_u64)
+        .map(|i| Box::new(make_interface(0x1000_0000_0000_0000_u64 + i)))
         .collect();
 
-    // Leak the vtables to make them 'static
-    let vtable_refs: Vec<&'static GuestContractInterface> =
-        vtables.into_iter().map(|b| &*Box::leak(b)).collect();
+    // Leak the interfaces to make them 'static
+    let interface_refs: Vec<&'static GuestContractInterface> =
+        interfaces.into_iter().map(|b| &*Box::leak(b)).collect();
 
-    for (i, vtable) in vtable_refs.iter().enumerate() {
+    for (i, interface) in interface_refs.iter().enumerate() {
         let i_u64: u64 = i as u64;
         let descriptor: PluginDescriptor = PluginDescriptor {
             name: StringView::from_static(b"plugin"),
@@ -135,10 +135,10 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
             version: polyplug_abi::Version { major: 1, minor: 0, patch: 0 },
         };
 
-        // SAFETY: vtable is 'static (leaked), pointer is valid for Registry lifetime.
+        // SAFETY: interface is 'static (leaked), pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register(descriptor, *vtable, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
+                .register(descriptor, *interface, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
                 .expect("registration should succeed");
         }
     }
@@ -169,10 +169,10 @@ fn bench_registry_resolve_stale(c: &mut Criterion) {
     let registry: PluginRegistry = PluginRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
-    // SAFETY: BENCH_VTABLE is 'static, pointer is valid for Registry lifetime.
+    // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let _handle: PluginHandle = unsafe {
         registry
-            .register(descriptor, &BENCH_VTABLE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 

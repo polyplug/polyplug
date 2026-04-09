@@ -8,7 +8,7 @@
 //!   Guests: Rust, C++, C#, Python, Lua, js-quickjs
 //!
 //! Since this is a Rust test harness, ALL 36 tests use the same underlying
-//! Rust vtable dispatch. The "host" label indicates which host language would
+//! Rust interface dispatch. The "host" label indicates which host language would
 //! typically call this guest in production. The difference between tests for
 //! the same guest is only the label — all share the same load + dispatch logic.
 
@@ -94,28 +94,28 @@ struct AddArgs {
 // ─── Thread-local for native .so tests ────────────────────────────────────────
 
 std::thread_local! {
-    static CAPTURED_VT: core::cell::Cell<*const GuestContractInterface> =
+    static CAPTURED_INTERFACE: core::cell::Cell<*const GuestContractInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
-// ─── HostVTable callbacks ──────────────────────────────────────────────────────
+// ─── HostInterface callbacks ──────────────────────────────────────────────────────
 
 /// Registration callback for native .so guests (Rust, C++) via libloading.
-/// Captures the vtable pointer into a thread-local cell for later dispatch.
+/// Captures the interface pointer into a thread-local cell for later dispatch.
 ///
 /// # Safety
-/// `vtable` must be valid for the call duration and remain valid as long as the
+/// `interface` must be valid for the call duration and remain valid as long as the
 /// loaded library is live (caller must use `core::mem::forget` on the Library).
-unsafe extern "C" fn capture_vtable_cb(
+unsafe extern "C" fn capture_interface_cb(
     _rt_ctx: *mut core::ffi::c_void,
     _desc: *const PluginDescriptor,
-    vtable: *const GuestContractInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    CAPTURED_VT.with(|cell| cell.set(vtable));
+    CAPTURED_INTERFACE.with(|cell| cell.set(interface));
     AbiError::ok()
 }
 
-// ─── HostVTable stub functions for native .so tests ─────────────────────────────
+// ─── HostInterface stub functions for native .so tests ─────────────────────────────
 
 /// Stub alloc callback using the global allocator.
 unsafe extern "C" fn stub_alloc(
@@ -191,8 +191,8 @@ unsafe extern "C" fn stub_get_host_contract(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Retrieve vtable for `test.add@1` from a Runtime instance.
-fn get_vtable_from_runtime(runtime: &Runtime) -> *const GuestContractInterface {
+/// Retrieve interface for `test.add@1` from a Runtime instance.
+fn get_interface_from_runtime(runtime: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: PluginHandle = runtime
         .find_by_contract(contract_id, 0)
@@ -200,20 +200,19 @@ fn get_vtable_from_runtime(runtime: &Runtime) -> *const GuestContractInterface {
     runtime
         .resolve_plugin(handle)
         .expect("handle must be valid")
-        .vtable()
 }
 
 /// Dispatch add(3, 5) and verify the result equals 8.
-fn dispatch_add_and_verify(vtable_ptr: *const PluginInterface) {
+fn dispatch_add_and_verify(interface_ptr: *const PluginInterface) {
     use polyplug_abi::DispatchType;
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr is valid for the call.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid for the call.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    let result: AbiError = if vtable.dispatch_type == DispatchType::Native {
+    let result: AbiError = if interface.dispatch_type == DispatchType::Native {
         // SAFETY: functions[0] is the add wrapper.
-        let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+        let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
         // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
         let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
             unsafe { core::mem::transmute(fn_ptr) };
@@ -227,8 +226,8 @@ fn dispatch_add_and_verify(vtable_ptr: *const PluginInterface) {
     } else {
         // SAFETY: dispatch_type is VirtualMachine, so .vm is valid.
         unsafe {
-            (vtable.dispatch.vm.call)(
-                vtable.dispatch.vm.loader_data,
+            (interface.dispatch.vm.call)(
+                interface.dispatch.vm.loader_data,
                 0, // fn_id = 0 for add
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
@@ -241,7 +240,7 @@ fn dispatch_add_and_verify(vtable_ptr: *const PluginInterface) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RUST GUEST (all 6 host labels)
-// For Rust guests: load via libloading + polyplug_init, capture vtable.
+// For Rust guests: load via libloading + polyplug_init, capture interface.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -254,7 +253,7 @@ fn test_rust_host_rust_guest() {
         println!("skipping: TEST_PLUGIN_SO path does not exist: {TEST_PLUGIN_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin .so")
@@ -272,8 +271,8 @@ fn test_rust_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -287,26 +286,26 @@ fn test_rust_host_rust_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper with signature extern "C" fn(*const (), *mut ()) -> AbiError.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to generic dispatch signature; AddArgs matches the add function.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -333,7 +332,7 @@ fn test_cpp_host_rust_guest() {
         println!("skipping: TEST_PLUGIN_SO path does not exist: {TEST_PLUGIN_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin .so")
@@ -351,8 +350,8 @@ fn test_cpp_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -366,26 +365,26 @@ fn test_cpp_host_rust_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -412,7 +411,7 @@ fn test_csharp_host_rust_guest() {
         println!("skipping: TEST_PLUGIN_SO path does not exist: {TEST_PLUGIN_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin .so")
@@ -430,8 +429,8 @@ fn test_csharp_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -445,26 +444,26 @@ fn test_csharp_host_rust_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -491,7 +490,7 @@ fn test_python_host_rust_guest() {
         println!("skipping: TEST_PLUGIN_SO path does not exist: {TEST_PLUGIN_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin .so")
@@ -509,8 +508,8 @@ fn test_python_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -524,26 +523,26 @@ fn test_python_host_rust_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -570,7 +569,7 @@ fn test_lua_host_rust_guest() {
         println!("skipping: TEST_PLUGIN_SO path does not exist: {TEST_PLUGIN_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin .so")
@@ -588,8 +587,8 @@ fn test_lua_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -603,26 +602,26 @@ fn test_lua_host_rust_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -649,7 +648,7 @@ fn test_js_host_rust_guest() {
         println!("skipping: TEST_PLUGIN_SO path does not exist: {TEST_PLUGIN_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load Rust test plugin .so")
@@ -667,8 +666,8 @@ fn test_js_host_rust_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in Rust plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -682,26 +681,26 @@ fn test_js_host_rust_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the `add` wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -720,7 +719,7 @@ fn test_js_host_rust_guest() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // C++ GUEST (all 6 host labels)
-// For C++ guests: load via libloading + polyplug_init, capture vtable.
+// For C++ guests: load via libloading + polyplug_init, capture interface.
 // Skip if TEST_PLUGIN_CPP_SO is empty (g++ unavailable).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -734,7 +733,7 @@ fn test_rust_host_cpp_guest() {
         println!("skipping: TEST_PLUGIN_CPP_SO path does not exist: {TEST_PLUGIN_CPP_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib C++ test plugin built by build.rs.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin .so")
@@ -752,8 +751,8 @@ fn test_rust_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -767,26 +766,26 @@ fn test_rust_host_cpp_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches cpp_test_add.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -813,7 +812,7 @@ fn test_cpp_host_cpp_guest() {
         println!("skipping: TEST_PLUGIN_CPP_SO path does not exist: {TEST_PLUGIN_CPP_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib C++ test plugin.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin .so")
@@ -831,8 +830,8 @@ fn test_cpp_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -846,26 +845,26 @@ fn test_cpp_host_cpp_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -892,7 +891,7 @@ fn test_csharp_host_cpp_guest() {
         println!("skipping: TEST_PLUGIN_CPP_SO path does not exist: {TEST_PLUGIN_CPP_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib C++ test plugin.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin .so")
@@ -910,8 +909,8 @@ fn test_csharp_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -925,26 +924,26 @@ fn test_csharp_host_cpp_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -971,7 +970,7 @@ fn test_python_host_cpp_guest() {
         println!("skipping: TEST_PLUGIN_CPP_SO path does not exist: {TEST_PLUGIN_CPP_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib C++ test plugin.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin .so")
@@ -989,8 +988,8 @@ fn test_python_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -1004,26 +1003,26 @@ fn test_python_host_cpp_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1050,7 +1049,7 @@ fn test_lua_host_cpp_guest() {
         println!("skipping: TEST_PLUGIN_CPP_SO path does not exist: {TEST_PLUGIN_CPP_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib C++ test plugin.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin .so")
@@ -1068,8 +1067,8 @@ fn test_lua_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -1083,26 +1082,26 @@ fn test_lua_host_cpp_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1129,7 +1128,7 @@ fn test_js_host_cpp_guest() {
         println!("skipping: TEST_PLUGIN_CPP_SO path does not exist: {TEST_PLUGIN_CPP_SO}");
         return;
     }
-    CAPTURED_VT.with(|cell| cell.set(core::ptr::null()));
+    CAPTURED_INTERFACE.with(|cell| cell.set(core::ptr::null()));
     // SAFETY: TEST_PLUGIN_CPP_SO is a compiled cdylib C++ test plugin.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_CPP_SO).expect("failed to load C++ test plugin .so")
@@ -1147,8 +1146,8 @@ fn test_js_host_cpp_guest() {
             .get(b"polyplug_init\0")
             .expect("polyplug_init symbol not found in C++ plugin")
     };
-    let host_vtable: HostInterface = HostInterface {
-        register_plugin: capture_vtable_cb,
+    let host_interface: HostInterface = HostInterface {
+        register_plugin: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
         find_by_contract: stub_find_by_contract,
@@ -1162,26 +1161,26 @@ fn test_js_host_cpp_guest() {
         host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
-    // SAFETY: init_fn is valid; host_vtable and ctx live for the duration of this call.
+    // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
     let init_result: AbiError = unsafe {
         init_fn(
             core::ptr::null_mut(),
-            &host_vtable as *const HostInterface,
+            &host_interface as *const HostInterface,
             &ctx as *const PluginContext,
         )
     };
     assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
-    let vtable_ptr: *const GuestContractInterface = CAPTURED_VT.with(|cell| cell.get());
+    let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
-        !vtable_ptr.is_null(),
-        "vtable must be non-null after polyplug_init"
+        !interface_ptr.is_null(),
+        "interface must be non-null after polyplug_init"
     );
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid — library kept alive via forget below.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid — library kept alive via forget below.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the cpp_test_add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1226,8 +1225,8 @@ fn test_rust_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1253,8 +1252,8 @@ fn test_cpp_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1284,17 +1283,16 @@ fn test_csharp_host_csharp_guest() {
     let handle: PluginHandle = runtime
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
-    let vtable_ptr: *const PluginInterface = runtime
+    let interface_ptr: *const PluginInterface = runtime
         .resolve_plugin(handle)
-        .expect("handle must be valid")
-        .vtable();
-    assert!(!vtable_ptr.is_null(), "vtable must be non-null");
+        .expect("handle must be valid");
+    assert!(!interface_ptr.is_null(), "interface must be non-null");
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
-    // SAFETY: vtable_ptr valid; CLR keeps assembly loaded for process lifetime.
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr valid; CLR keeps assembly loaded for process lifetime.
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
     // SAFETY: functions[0] is the add wrapper.
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr transmuted to generic dispatch signature; AddArgs matches.
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
@@ -1332,8 +1330,8 @@ fn test_python_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1359,8 +1357,8 @@ fn test_lua_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1386,8 +1384,8 @@ fn test_js_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1412,8 +1410,8 @@ fn test_rust_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1433,8 +1431,8 @@ fn test_cpp_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1454,8 +1452,8 @@ fn test_csharp_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1475,8 +1473,8 @@ fn test_python_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1496,8 +1494,8 @@ fn test_lua_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1517,8 +1515,8 @@ fn test_js_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1538,8 +1536,8 @@ fn test_rust_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1555,8 +1553,8 @@ fn test_cpp_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1572,8 +1570,8 @@ fn test_csharp_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1589,8 +1587,8 @@ fn test_python_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1606,8 +1604,8 @@ fn test_lua_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1623,8 +1621,8 @@ fn test_js_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1645,8 +1643,8 @@ fn test_rust_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1662,8 +1660,8 @@ fn test_cpp_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1679,8 +1677,8 @@ fn test_csharp_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1696,8 +1694,8 @@ fn test_python_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1713,8 +1711,8 @@ fn test_lua_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }
 
 #[test]
@@ -1730,6 +1728,6 @@ fn test_js_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let vtable_ptr: *const PluginInterface = get_vtable_from_runtime(&runtime);
-    dispatch_add_and_verify(vtable_ptr);
+    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    dispatch_add_and_verify(interface_ptr);
 }

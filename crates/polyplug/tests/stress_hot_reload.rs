@@ -48,7 +48,7 @@ unsafe extern "C" fn noop_destroy_instance(
 ) {
 }
 
-static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
+static INTERFACE_MEM_A: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -62,7 +62,7 @@ static VTABLE_MEM_A: GuestContractInterface = GuestContractInterface {
     },
 };
 
-static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
+static INTERFACE_MEM_B: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xDEAD_BEEF_0000_0001_u64),
     contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -76,7 +76,7 @@ static VTABLE_MEM_B: GuestContractInterface = GuestContractInterface {
     },
 };
 
-static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
+static INTERFACE_QU_A: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
     contract_version: Version { major: 1, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -90,7 +90,7 @@ static VTABLE_QU_A: GuestContractInterface = GuestContractInterface {
     },
 };
 
-static VTABLE_QU_B: GuestContractInterface = GuestContractInterface {
+static INTERFACE_QU_B: GuestContractInterface = GuestContractInterface {
     contract_id: GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64),
     contract_version: Version { major: 2, minor: 0, patch: 0 },
     dispatch_type: DispatchType::Native,
@@ -206,12 +206,12 @@ fn stress_memory_interface_swap_cycles() {
         version: Version { major: 1, minor: 0, patch: 0 },
     };
 
-    // SAFETY: VTABLE_MEM_A is 'static and valid for the lifetime of this test.
+    // SAFETY: INTERFACE_MEM_A is 'static and valid for the lifetime of this test.
     let handle: polyplug_abi::PluginHandle = unsafe {
         registry
             .register(
                 descriptor,
-                &VTABLE_MEM_A,
+                &INTERFACE_MEM_A,
                 "stress.mem.contract".to_owned(),
                 BundleId::from_u64(0xDEAD_BEEF_0000_0001_u64),
             )
@@ -220,9 +220,9 @@ fn stress_memory_interface_swap_cycles() {
 
     for cycle in 0_usize..CYCLES {
         let new_interface: &'static GuestContractInterface = if cycle % 2_usize == 0_usize {
-            &VTABLE_MEM_B
+            &INTERFACE_MEM_B
         } else {
-            &VTABLE_MEM_A
+            &INTERFACE_MEM_A
         };
 
         let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
@@ -247,12 +247,12 @@ fn stress_direct_swap_under_concurrent_reader_load() {
         version: Version { major: 1, minor: 0, patch: 0 },
     };
 
-    // SAFETY: VTABLE_QU_A is 'static and valid for the test lifetime.
+    // SAFETY: INTERFACE_QU_A is 'static and valid for the test lifetime.
     let handle: polyplug_abi::PluginHandle = unsafe {
         registry
             .register(
                 descriptor,
-                &VTABLE_QU_A,
+                &INTERFACE_QU_A,
                 "swap.load.contract".to_owned(),
                 BundleId::from_u64(0xCAFE_BABE_0000_0001_u64),
             )
@@ -299,9 +299,9 @@ fn stress_direct_swap_under_concurrent_reader_load() {
 
     for round in 0_usize..SWAP_ROUNDS {
         let new_interface: &'static GuestContractInterface = if round % 2_usize == 0_usize {
-            &VTABLE_QU_B
+            &INTERFACE_QU_B
         } else {
-            &VTABLE_QU_A
+            &INTERFACE_QU_A
         };
 
         let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
@@ -316,7 +316,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     }
 }
 
-/// VTable handoff correctness: verifies that every interface swap atomically
+/// Interface handoff correctness: verifies that every interface swap atomically
 /// transfers the correct function pointer and that no intermediate state
 /// (neither v1 nor v2) is observable between swaps.
 ///

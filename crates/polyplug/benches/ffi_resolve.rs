@@ -4,7 +4,7 @@
 // Run with: cargo bench -p polyplug --bench ffi_resolve
 //
 // Benchmark: polyplug_runtime_resolve_plugin FFI path
-// Measures: Time from FFI call to vtable pointer return (direct, no allocation)
+// Measures: Time from FFI call to interface pointer return (direct, no allocation)
 
 use core::hint::black_box;
 
@@ -36,7 +36,7 @@ unsafe extern "C" {
         contract_id: u64,
         min_version: u32,
     ) -> u64;
-    // New FFI: returns vtable pointer directly, no allocation
+    // New FFI: returns interface pointer directly, no allocation
     fn polyplug_runtime_resolve_plugin(rt: *const OpaqueRuntime, packed_handle: u64) -> *const ();
 }
 
@@ -73,13 +73,13 @@ fn bench_ffi_resolve_plugin(c: &mut Criterion) {
         c.benchmark_group("ffi");
     group.throughput(Throughput::Elements(1));
 
-    group.bench_function(BenchmarkId::new("resolve_plugin", "direct_vtable"), |b| {
+    group.bench_function(BenchmarkId::new("resolve_plugin", "direct_interface"), |b| {
         b.iter(|| {
             // SAFETY: rt is non-null valid OpaqueRuntime; packed_handle is a valid handle.
-            // New FFI returns vtable pointer directly - no allocation, no release needed.
-            let vtable_ptr: *const () =
+            // New FFI returns interface pointer directly - no allocation, no release needed.
+            let interface_ptr: *const () =
                 unsafe { polyplug_runtime_resolve_plugin(black_box(rt), black_box(packed_handle)) };
-            black_box(vtable_ptr);
+            black_box(interface_ptr);
         });
     });
 
@@ -102,9 +102,9 @@ fn bench_ffi_resolve_null_handle(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("resolve_plugin", "null_handle"), |b| {
         b.iter(|| {
             // SAFETY: rt is non-null valid OpaqueRuntime; u64::MAX is null handle sentinel.
-            let vtable_ptr: *const () =
+            let interface_ptr: *const () =
                 unsafe { polyplug_runtime_resolve_plugin(black_box(rt), black_box(u64::MAX)) };
-            black_box(vtable_ptr);
+            black_box(interface_ptr);
         });
     });
 
