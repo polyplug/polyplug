@@ -1766,7 +1766,7 @@ fn generate_js_host_thunk(
 
     out.push_str("            return AbiErrorCode.Ok;\n");
     out.push_str("        } catch (e) {\n");
-    out.push_str("            return ABI_ERROR_PANIC;\n");
+    out.push_str("            return AbiErrorCode.Panic;\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 }

@@ -1713,7 +1713,7 @@ fn generate_lua_host_thunk(
     out.push_str("            return AbiErrorCode.Ok\n");
     out.push_str("        end)\n");
     out.push_str("        if not ok then\n");
-    out.push_str("            return ABI_ERROR_PANIC\n");
+    out.push_str("            return AbiErrorCode.Panic\n");
     out.push_str("        end\n");
     out.push_str("        return err\n");
     out.push_str("    end\n\n");

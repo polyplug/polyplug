@@ -12,7 +12,7 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "guest"))
 
 from polyplug_guest.abi import (
-    ABI_OK,
+    AbiErrorCode,
     AbiError,
     PluginContext,
     PluginDescriptor,
@@ -45,7 +45,7 @@ def _py_add(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> AbiError:
     args = AddArgs.from_address(args_ptr)  # type: ignore[arg-type]
     result_ptr = ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_uint32))
     result_ptr[0] = args.a + args.b
-    return AbiError(code=ABI_OK)
+    return AbiError(code=AbiErrorCode.Ok)
 
 
 # NOTE: add_primitive takes two separate u32 params (not a struct).
@@ -58,7 +58,7 @@ def _py_add_primitive(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> Ab
     args = _AddPrimitiveArgs.from_address(args_ptr)  # type: ignore[arg-type]
     result_ptr = ctypes.cast(out_ptr, ctypes.POINTER(ctypes.c_uint32))
     result_ptr[0] = args.a + args.b
-    return AbiError(code=ABI_OK)
+    return AbiError(code=AbiErrorCode.Ok)
 
 
 _VERSION_BYTES: bytes = b"1.0.0-python"
@@ -68,13 +68,13 @@ def _py_version(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> AbiError
     sv_ptr = ctypes.cast(out_ptr, ctypes.POINTER(StringView))
     sv_ptr[0].ptr = _VERSION_BYTES
     sv_ptr[0].len = len(_VERSION_BYTES)
-    return AbiError(code=ABI_OK)
+    return AbiError(code=AbiErrorCode.Ok)
 
 
 def _py_reset(args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> AbiError:
     global _counter
     _counter = 0
-    return AbiError(code=ABI_OK)
+    return AbiError(code=AbiErrorCode.Ok)
 
 
 # ── ABI entry point type ──────────────────────────────────────────────────────
@@ -157,5 +157,5 @@ def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
         ctypes.byref(_DESCRIPTOR),
         ctypes.byref(_VTABLE),
     )
-    if err.code != ABI_OK:
+    if err.code != AbiErrorCode.Ok:
         raise RuntimeError(f"register_plugin failed with code {err.code}")

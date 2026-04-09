@@ -793,7 +793,7 @@ fn sequential_loads_of_different_contracts_all_succeed() {
 fn dispatch_vm_call_works_correctly() {
     // This test actually invokes dispatch.vm.call to verify the JS function
     // can be called through the ABI dispatch mechanism.
-    use polyplug_abi::{ABI_OK, AbiError};
+    use polyplug_abi::AbiError;
 
     let contract_id: u64 = polyplug_abi::contract_id("test.dispatch.call", 1);
     let bundle: String = make_bundle_js(contract_id, 1, "test.dispatch.call");
@@ -833,8 +833,8 @@ fn dispatch_vm_call_works_correctly() {
     };
 
     assert_eq!(
-        call_result.code, ABI_OK,
-        "dispatch.vm.call must return ABI_OK, got code={}",
+        call_result.code, AbiErrorCode::Ok as u32,
+        "dispatch.vm.call must return Ok, got code={}",
         call_result.code
     );
 }
