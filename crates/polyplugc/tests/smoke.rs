@@ -113,7 +113,7 @@ mod guest {
 }
 
 #[allow(unused_imports)]
-use polyplug_guest::ABI_ERROR_GENERIC;
+use polyplug_guest::AbiErrorCode;
 use polyplug_guest::AbiError;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::PluginError;
@@ -123,7 +123,7 @@ use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
-use guest::interfaces::TEST_ADDER_VTABLE;
+use guest::interfaces::TEST_ADDER_INTERFACE;
 use guest::interfaces::set_test_adder_impl;
 
 struct MyPlugin;
@@ -154,7 +154,7 @@ pub unsafe extern "C" fn polyplug_init(
     _ctx: *const PluginContext,
 ) -> AbiError {
     if host.is_null() {
-        return AbiError { code: ABI_ERROR_GENERIC, message: StringView::null() };
+        return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
 
     // Set the implementation before registering
@@ -169,12 +169,12 @@ pub unsafe extern "C" fn polyplug_init(
         version: Version { major: 1, minor: 0, patch: 0 },
     };
 
-    // SAFETY: desc and TEST_ADDER_VTABLE are 'static; host is valid.
+    // SAFETY: desc and TEST_ADDER_INTERFACE are 'static; host is valid.
     unsafe {
         (host.register_contract)(
             host as *const _,
             &desc as *const PluginDescriptor,
-            &TEST_ADDER_VTABLE as *const _,
+            &TEST_ADDER_INTERFACE as *const _,
         )
     }
 }
@@ -311,7 +311,7 @@ fn smoke_rust_codegen_dispatch() {
         .join("tests")
         .join("fixtures")
         .join("test_bundle.toml");
-    let guest_lib_path: PathBuf = workspace_root().join("crates").join("polyplug_guest");
+    let guest_lib_path: PathBuf = workspace_root().join("sdks").join("rust").join("guest");
 
     std::fs::create_dir_all(&src_dir).expect("failed to create src dir");
 
@@ -429,16 +429,21 @@ fn smoke_rust_codegen_dispatch() {
     let mut out: u32 = 0_u32;
 
     // SAFETY: functions[0] is the `add` ABI wrapper with signature
-    //   extern "C" fn(*const (), *mut ()) -> AbiError.
+    //   extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError.
+    // The instance parameter is passed as first argument (native dispatch).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is transmuted to the generic dispatch signature. Argument
     // types are enforced by the test: AddArgs matches what the generated wrapper expects.
-    let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
+    // The new signature includes GuestContractInstance as the first parameter.
+    let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError =
         unsafe { core::mem::transmute(fn_ptr) };
 
     // SAFETY: args is a valid AddArgs; out is a valid u32 location.
+    // For stateless plugins, we pass a null instance (GuestContractInstance::null()).
+    // The generated wrapper uses a OnceLock static for stateless plugins.
     let call_result: AbiError = unsafe {
         dispatch_fn(
+            GuestContractInstance::null(),  // instance parameter (stateless plugin)
             &args as *const AddArgs as *const (),
             &mut out as *mut u32 as *mut (),
         )
