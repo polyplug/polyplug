@@ -216,7 +216,7 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
 
 // --- Registry callback -------------------------------------------------------
 
-/// A register_contract callback that stores vtable entries into the thread-local ERROR_REGISTRY.
+/// A register_contract callback that stores interface entries into the thread-local ERROR_REGISTRY.
 ///
 /// # Safety
 /// `_this`, `descriptor`, and `interface` must be valid for the call duration.
@@ -309,7 +309,7 @@ fn load_error_plugin() -> libloading::Library {
     }
 }
 
-/// Initialise error_plugin and return the vtable pointer.
+/// Initialise error_plugin and return the interface pointer.
 /// Also resets the thread-local registry.
 fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInterface {
     // Reset registry before each use.
@@ -355,7 +355,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
     ERROR_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
-            .expect("vtable must be resolvable")
+            .expect("interface must be resolvable")
     })
 }
 
@@ -371,7 +371,7 @@ fn stress_error_code_and_message_received_correctly() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // SAFETY: fn_ptr is function 0 in the vtable (error_return_with_message).
+    // SAFETY: fn_ptr is function 0 in the interface (error_return_with_message).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).
@@ -428,7 +428,7 @@ fn stress_panic_returns_abi_error_panic_process_continues() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // SAFETY: fn_ptr is function 1 in the vtable (error_panic).
+    // SAFETY: fn_ptr is function 1 in the interface (error_panic).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. fn 1 ignores both
     // args and out -- it catches the panic internally and returns ABI_ERROR_PANIC directly.
@@ -473,7 +473,7 @@ fn stress_error_chain_b_errors_a_propagates() {
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
     // Build a HostInterface that routes find_by_contract and resolve_contract through the
-    // thread-local ERROR_REGISTRY that contains error_plugin's vtable.
+    // thread-local ERROR_REGISTRY that contains error_plugin's interface.
     let chain_host_interface: HostInterface = HostInterface {
         runtime: core::ptr::null_mut(),
         register_contract: registry_register_callback,
@@ -506,7 +506,7 @@ fn stress_error_chain_b_errors_a_propagates() {
         message: StringView::null(),
     };
 
-    // SAFETY: fn_ptr is function 2 in the vtable (error_chain_propagate).
+    // SAFETY: fn_ptr is function 2 in the interface (error_chain_propagate).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Args is *const ChainArgs,
     // out is *mut AbiError -- types enforced by this test.
@@ -515,7 +515,7 @@ fn stress_error_chain_b_errors_a_propagates() {
 
     // SAFETY: chain_args is a valid ChainArgs with a live HostInterface.
     // out is a valid AbiError location. error_chain_propagate calls fn 1 via the host
-    // vtable and writes the returned AbiError (ABI_ERROR_PANIC) to *out.
+    // interface and writes the returned AbiError (ABI_ERROR_PANIC) to *out.
     let call_result: AbiError = unsafe {
         dispatch_fn(
             &chain_args as *const ChainArgs as *const (),
@@ -556,7 +556,7 @@ fn stress_error_message_lifetime_valid_during_read() {
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // SAFETY: fn_ptr is function 0 in the vtable (error_return_with_message).
+    // SAFETY: fn_ptr is function 0 in the interface (error_return_with_message).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
     // enforced by the test (fn 0 writes AbiError to *out, ignores args).

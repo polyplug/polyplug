@@ -173,7 +173,7 @@ unsafe extern "C" fn stub_free(
 
 // --- Registry callback -------------------------------------------------------
 
-/// A register_contract callback that stores vtable entries into the thread-local Registry.
+/// A register_contract callback that stores interface entries into the thread-local Registry.
 ///
 /// # Safety
 /// `this`, `descriptor`, and `interface` must be valid for the call duration.
@@ -240,9 +240,9 @@ fn load_memory_plugin() -> libloading::Library {
     unsafe { libloading::Library::new(MEMORY_PLUGIN_SO).expect("failed to load memory_plugin .so") }
 }
 
-/// Initialise the memory_plugin and store vtable into the thread-local registry.
-/// Returns the vtable pointer.
-fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContractInterface {
+/// Initialise the memory_plugin and store interface into the thread-local registry.
+/// Returns the interface pointer.
+fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     STRESS_REGISTRY.with(|cell| {
         *cell.borrow_mut() = PluginRegistry::new();
@@ -299,7 +299,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
     STRESS_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
-            .expect("vtable must be resolvable")
+            .expect("interface must be resolvable")
     })
 }
 
@@ -308,7 +308,7 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
 #[test]
 fn stress_large_buffer_fill_and_read() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -332,7 +332,7 @@ fn stress_large_buffer_fill_and_read() {
     };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
+    // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are enforced
@@ -378,7 +378,7 @@ fn stress_large_buffer_fill_and_read() {
 #[test]
 fn stress_string_view_non_ascii_utf8() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -392,7 +392,7 @@ fn stress_string_view_non_ascii_utf8() {
 
     let mut out_sv: StringView = StringView::null();
 
-    // SAFETY: fn_ptr is function 2 in the vtable (memory_echo_string_view).
+    // SAFETY: fn_ptr is function 2 in the interface (memory_echo_string_view).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
@@ -437,7 +437,7 @@ fn stress_string_view_non_ascii_utf8() {
 #[test]
 fn stress_zero_length_buffer_and_string_view() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -461,7 +461,7 @@ fn stress_zero_length_buffer_and_string_view() {
         sv_len: u64::MAX,
     };
 
-    // SAFETY: fn_ptr is function 3 in the vtable (memory_zero_length_roundtrip).
+    // SAFETY: fn_ptr is function 3 in the interface (memory_zero_length_roundtrip).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(3) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
@@ -499,7 +499,7 @@ fn stress_zero_length_buffer_and_string_view() {
 #[test]
 fn stress_concurrent_8_threads_no_shared_memory() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     // GuestContractInterface is Send+Sync per its unsafe impls in the plugin.
@@ -525,7 +525,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
                 assert!(!ptr.is_null(), "thread {}: alloc must succeed", thread_idx);
                 alloc_counter.fetch_add(1, Ordering::Relaxed);
 
-                // Get function 0 (memory_fill_preallocated_buffer) from vtable.
+                // Get function 0 (memory_fill_preallocated_buffer) from interface.
                 // SAFETY: interface.functions is valid for function_count (4) entries.
                 let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
                 let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
@@ -601,7 +601,7 @@ fn stress_concurrent_8_threads_no_shared_memory() {
 #[test]
 fn stress_plugin_allocates_returns_to_host_then_host_frees() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -667,7 +667,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         cap: 0,
     };
 
-    // SAFETY: fn_ptr is function 1 in the vtable (memory_alloc_buffer_via_host).
+    // SAFETY: fn_ptr is function 1 in the interface (memory_alloc_buffer_via_host).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(1) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are
@@ -730,7 +730,7 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
 #[test]
 fn stress_caller_alloc_plugin_fills_freed_after_use() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -759,7 +759,7 @@ fn stress_caller_alloc_plugin_fills_freed_after_use() {
     };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
+    // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature. Arg types are

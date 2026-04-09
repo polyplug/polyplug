@@ -90,10 +90,10 @@ fn test_resolve_plugin_null_handle() {
     assert!(!rt.is_null());
     // SAFETY: rt is valid (asserted above); u64::MAX is the sentinel NULL_HANDLE value.
     // polyplug_runtime_resolve_plugin returns *const GuestContractInterface now.
-    let vtable: *const polyplug_abi::GuestContractInterface =
+    let interface: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
-        vtable.is_null(),
+        interface.is_null(),
         "resolve_plugin(NULL_HANDLE) must return null"
     );
     // Verify no last_error was set

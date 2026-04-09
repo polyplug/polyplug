@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-//! Integration test: call through vtable, verify function executes and returns ABI_OK.
+//! Integration test: call through interface, verify function executes and returns ABI_OK.
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
@@ -14,9 +14,9 @@ use polyplug_utils::{GuestContractId, BundleId};
 /// Path to the compiled test_plugin shared library — set by build.rs.
 const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
-// ─── Host functions that store vtable into a Registry ─────────────────────────
+// ─── Host functions that store interface into a Registry ─────────────────────────
 
-/// A register_contract callback that stores vtable entries into the thread-local
+/// A register_contract callback that stores interface entries into the thread-local
 /// Registry for dispatch testing.
 ///
 /// # Safety
@@ -235,7 +235,7 @@ fn test_dispatch_add_function() {
             .expect("test.add must be registered")
     });
 
-    // Resolve the vtable.
+    // Resolve the interface.
     let interface_ptr: *const GuestContractInterface =
         DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
 
@@ -252,7 +252,7 @@ fn test_dispatch_add_function() {
     let args: AddArgs = AddArgs { a: 3, b: 5 };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: fn_ptr is function 0 in the vtable. args and out are correctly typed.
+    // SAFETY: fn_ptr is function 0 in the interface. args and out are correctly typed.
     // The function has signature: extern "C" fn(*const (), *mut ()) -> AbiError
     // SAFETY: dispatch is a union, accessing .native requires unsafe since dispatch_type is Native.
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };

@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used)]
 
-//! Integration test: load the test_plugin .so, verify ABI version, verify vtable registration.
+//! Integration test: load the test_plugin .so, verify ABI version, verify interface registration.
 //!
 //! This test crate is the crate root for the `integration_load` test binary.
 
@@ -19,27 +19,27 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
-/// register_contract callback that captures the registered vtable pointer for inspection.
+/// register_contract callback that captures the registered interface pointer for inspection.
 ///
 /// # Safety
-/// `this`, `descriptor`, and `vtable` must be valid non-null pointers for
+/// `this`, `descriptor`, and `interface` must be valid non-null pointers for
 /// the duration of this call (guaranteed by the ABI contract).
 unsafe extern "C" fn capture_register(
     this: *const HostInterface,
     descriptor: *const PluginDescriptor,
-    vtable: *const GuestContractInterface,
+    interface: *const GuestContractInterface,
 ) -> AbiError {
-    if descriptor.is_null() || vtable.is_null() {
+    if descriptor.is_null() || interface.is_null() {
         return AbiError {
             code: polyplug_abi::AbiErrorCode::Generic,
             message: polyplug_abi::StringView::null(),
         };
     }
-    // SAFETY: vtable is valid for the call duration. We store the contract_id for
-    // later verification. The vtable itself lives in the plugin's static memory.
-    let contract_id: u64 = unsafe { (*vtable).contract_id.id() };
-    // SAFETY: vtable is valid for this call (ABI contract); reading the function_count.
-    let function_count: u32 = unsafe { (*vtable).dispatch.native.function_count };
+    // SAFETY: interface is valid for the call duration. We store the contract_id for
+    // later verification. The interface itself lives in the plugin's static memory.
+    let contract_id: u64 = unsafe { (*interface).contract_id.id() };
+    // SAFETY: interface is valid for this call (ABI contract); reading the function_count.
+    let function_count: u32 = unsafe { (*interface).dispatch.native.function_count };
 
     // Store results in thread-local for the test to read back.
     CAPTURED_CONTRACT_ID.with(|cell| {
@@ -185,12 +185,12 @@ fn test_load_and_abi_version() {
     let version: u32 = unsafe { abi_version_fn() };
     assert_eq!(version, 1, "polyplug_abi_version() must return 1");
 
-    // Leak the library — vtable pointers must remain valid.
+    // Leak the library — interface pointers must remain valid.
     core::mem::forget(library);
 }
 
 #[test]
-fn test_init_registers_vtable() {
+fn test_init_registers_interface() {
     // SAFETY: TEST_PLUGIN_SO is a compiled cdylib.
     let library: libloading::Library = unsafe {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
@@ -244,10 +244,10 @@ fn test_init_registers_vtable() {
 
     assert!(result.code == AbiErrorCode::Ok, "polyplug_init must return Ok");
 
-    // Verify the vtable was registered with correct data.
+    // Verify the interface was registered with correct data.
     let captured_id: u64 = CAPTURED_CONTRACT_ID
         .with(|cell| *cell.borrow())
-        .expect("vtable was not registered during init");
+        .expect("interface was not registered during init");
 
     let captured_count: u32 = CAPTURED_FUNCTION_COUNT
         .with(|cell| *cell.borrow())
@@ -261,7 +261,7 @@ fn test_init_registers_vtable() {
     );
     assert_eq!(
         captured_count, 1,
-        "test.add vtable must have function_count = 1"
+        "test.add interface must have function_count = 1"
     );
 
     // Leak the library.

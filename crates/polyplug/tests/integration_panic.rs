@@ -22,14 +22,14 @@ use polyplug_abi::ffi::polyplug_host_free;
 
 // ─── Host functions for integration tests ─────────────────────────────────────
 
-/// Global storage for the vtable pointer captured during `polyplug_init`.
+/// Global storage for the interface pointer captured during `polyplug_init`.
 ///
 /// # Safety
 /// Only written by `capture_register_callback` which is called once during
-/// `polyplug_init`, before the vtable pointer is read in the test.
+/// `polyplug_init`, before the interface pointer is read in the test.
 static mut CAPTURED_VTABLE_PTR: *const GuestContractInterface = core::ptr::null();
 
-/// A register_contract callback that captures the vtable pointer.
+/// A register_contract callback that captures the interface pointer.
 ///
 /// # Safety
 /// `this`, `_descriptor`, and `interface` must be valid for the duration of the call.
@@ -374,18 +374,18 @@ fn test_panic_returns_abi_error_panic() {
 
     // SAFETY: CAPTURED_VTABLE_PTR was written by capture_register_callback above.
     // Single-threaded; no race condition.
-    let vtable_ptr: *const GuestContractInterface = unsafe { CAPTURED_VTABLE_PTR };
-    assert!(!vtable_ptr.is_null(), "vtable pointer must be non-null");
+    let interface_ptr: *const GuestContractInterface = unsafe { CAPTURED_VTABLE_PTR };
+    assert!(!interface_ptr.is_null(), "interface pointer must be non-null");
 
-    // SAFETY: vtable_ptr is valid (plugin library is loaded, not yet dropped).
-    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
+    // SAFETY: interface_ptr is valid (plugin library is loaded, not yet dropped).
+    let interface: &GuestContractInterface = unsafe { &*interface_ptr };
 
-    // -- Step 10: Call function_id 0 (do_panic) through the vtable --
+    // -- Step 10: Call function_id 0 (do_panic) through the interface --
     // The generated ABI wrapper uses catch_unwind internally, so the panic is
     // caught inside the extern "C" boundary. The host sees AbiError { code: Panic }.
 
-    // SAFETY: fn_ptr is function 0 in the vtable (do_panic).
-    let fn_ptr: *const () = unsafe { *vtable.dispatch.native.functions.add(0) };
+    // SAFETY: fn_ptr is function 0 in the interface (do_panic).
+    let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is the do_panic ABI wrapper -- extern "C" with no
         // meaningful args/out (void, no params). The catch_unwind wrapper

@@ -133,9 +133,9 @@ fn make_hot_reload_runtime() -> Runtime {
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
     let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable_ptr: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?;
+    let interface_ptr: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?;
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
-        let fns: *const *const () = (*vtable_ptr).dispatch.native.functions;
+        let fns: *const *const () = (*interface_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
     };
     Some(fn_ptr)
@@ -145,7 +145,7 @@ fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() 
 
 /// Rapid reload cycles: 100+ alternating v1/v2 reloads on a single Runtime.
 ///
-/// Verifies that the vtable is consistent after every reload and that the
+/// Verifies that the interface is consistent after every reload and that the
 /// runtime does not panic or leak library handles across iterations.
 #[test]
 fn stress_rapid_reload_cycles_100() {
@@ -171,7 +171,7 @@ fn stress_rapid_reload_cycles_100() {
 
         let version_fn: extern "C" fn() -> u32 = resolve_version_fn(&rt, contract_id)
             .unwrap_or_else(|| {
-                panic!("vtable not resolvable after reload at cycle {i}");
+                panic!("interface not resolvable after reload at cycle {i}");
             });
 
         let version: u32 = version_fn();
@@ -185,7 +185,7 @@ fn stress_rapid_reload_cycles_100() {
 
     // 100 cycles: last reload (cycle 99, odd) used v1_so_path -> expects 100.
     let final_fn: extern "C" fn() -> u32 =
-        resolve_version_fn(&rt, contract_id).expect("final vtable resolution must succeed");
+        resolve_version_fn(&rt, contract_id).expect("final interface resolution must succeed");
     assert_eq!(
         final_fn(),
         100_u32,
@@ -219,13 +219,13 @@ fn stress_memory_interface_swap_cycles() {
     };
 
     for cycle in 0_usize..CYCLES {
-        let new_vtable: &'static GuestContractInterface = if cycle % 2_usize == 0_usize {
+        let new_interface: &'static GuestContractInterface = if cycle % 2_usize == 0_usize {
             &VTABLE_MEM_B
         } else {
             &VTABLE_MEM_A
         };
 
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable.clone());
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
         registry
             .swap_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at cycle {cycle}: {e}"));
@@ -279,9 +279,9 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                         *const GuestContractInterface,
                         polyplug::error::RegistryError,
                     > = reg_clone.resolve(resolved_handle);
-                    if let Ok(vtable_ptr) = resolve_result {
-                        // SAFETY: vtable_ptr is valid
-                        let version: &Version = unsafe { &(*vtable_ptr).contract_version };
+                    if let Ok(interface_ptr) = resolve_result {
+                        // SAFETY: interface_ptr is valid
+                        let version: &Version = unsafe { &(*interface_ptr).contract_version };
                         assert!(
                             version.major == 1 || version.major == 2,
                             "version must be 1 or 2"
@@ -298,13 +298,13 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     std::thread::sleep(Duration::from_millis(20_u64));
 
     for round in 0_usize..SWAP_ROUNDS {
-        let new_vtable: &'static GuestContractInterface = if round % 2_usize == 0_usize {
+        let new_interface: &'static GuestContractInterface = if round % 2_usize == 0_usize {
             &VTABLE_QU_B
         } else {
             &VTABLE_QU_A
         };
 
-        let new_arc: Arc<GuestContractInterface> = Arc::new(new_vtable.clone());
+        let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
         registry
             .swap_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at round {round}: {e}"));
@@ -316,14 +316,14 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     }
 }
 
-/// VTable handoff correctness: verifies that every vtable swap atomically
+/// VTable handoff correctness: verifies that every interface swap atomically
 /// transfers the correct function pointer and that no intermediate state
 /// (neither v1 nor v2) is observable between swaps.
 ///
-/// Dispatcher threads spin-read the vtable version function; every return value
+/// Dispatcher threads spin-read the interface version function; every return value
 /// must be exactly 100 (v1) or 200 (v2) -- never anything else.
 #[test]
-fn stress_vtable_handoff_correctness_no_torn_reads() {
+fn stress_interface_handoff_correctness_no_torn_reads() {
     const DISPATCHER_THREADS: usize = 6_usize;
     const RELOAD_ROUNDS: u32 = 80_u32;
 
@@ -400,7 +400,7 @@ fn stress_vtable_handoff_correctness_no_torn_reads() {
     let torn: usize = torn_reads.load(Ordering::Relaxed);
     assert_eq!(
         torn, 0_usize,
-        "torn reads detected: {torn} vtable calls returned neither 100 nor 200"
+        "torn reads detected: {torn} interface calls returned neither 100 nor 200"
     );
 }
 
@@ -471,7 +471,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
 
 /// Concurrent reloaders: two threads alternate reloading the same plugin.
 /// Both may succeed or one may get a transient error -- but neither must panic
-/// and the final vtable must be valid and callable.
+/// and the final interface must be valid and callable.
 #[test]
 fn stress_concurrent_reload_threads_no_panic() {
     const ROUNDS_PER_THREAD: u32 = 40_u32;
@@ -510,9 +510,9 @@ fn stress_concurrent_reload_threads_no_panic() {
     reloader_a.join().expect("reloader_a must not panic");
     reloader_b.join().expect("reloader_b must not panic");
 
-    // Final vtable must still be callable.
+    // Final interface must still be callable.
     let final_fn: extern "C" fn() -> u32 = resolve_version_fn(&rt, contract_id)
-        .expect("vtable must be resolvable after concurrent reloads");
+        .expect("interface must be resolvable after concurrent reloads");
     let version: u32 = final_fn();
     assert!(
         version == 100_u32 || version == 200_u32,

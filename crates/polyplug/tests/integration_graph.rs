@@ -24,7 +24,7 @@ const TEST_PLUGIN_SO: &str = env!("TEST_PLUGIN_SO");
 
 // --- Host functions for integration tests ------------------------------------
 
-/// A register_contract callbacks that stores vtable entries into a Registry
+/// A register_contract callbacks that stores interface entries into a Registry
 /// via thread-local state (avoids threading through the opaque host pointer).
 ///
 /// # Safety
@@ -255,11 +255,11 @@ fn test_single_contract_registration_and_lookup() {
 
     assert!(!handle.is_null(), "handle must not be null");
 
-    // Resolve the vtable.
+    // Resolve the interface.
     let interface_ptr: *const GuestContractInterface = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
-            .expect("handle must resolve to vtable")
+            .expect("handle must resolve to interface")
     });
 
     // SAFETY: interface_ptr is valid -- library is alive (not yet forgotten).

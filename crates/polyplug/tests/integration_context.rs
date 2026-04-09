@@ -230,6 +230,6 @@ fn rust_plugin_receives_bundle_path() {
         bundle_path_str
     );
 
-    // Leak the library -- keeping vtable pointers valid until process exit.
+    // Leak the library -- keeping interface pointers valid until process exit.
     core::mem::forget(library);
 }

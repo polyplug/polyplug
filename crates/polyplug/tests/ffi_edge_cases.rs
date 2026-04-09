@@ -34,9 +34,9 @@ const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 fn test_resolve_plugin_null_runtime() {
     // SAFETY: Passing null runtime is explicitly testing the null-safety contract.
     // polyplug_runtime_resolve_plugin returns *const GuestContractInterface now.
-    let vtable: *const polyplug_abi::GuestContractInterface =
+    let interface: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0x1234_5678_u64) };
-    assert!(vtable.is_null(), "resolve_plugin(null rt) must return null");
+    assert!(interface.is_null(), "resolve_plugin(null rt) must return null");
 
     // Verify last_error returns 0 for null runtime (no runtime to have an error)
     let mut buf: [u8; 256] = [0_u8; 256];
@@ -58,10 +58,10 @@ fn test_resolve_plugin_null_handle() {
     assert!(!rt.is_null(), "runtime creation must succeed");
 
     // SAFETY: rt is valid; u64::MAX is the sentinel NULL_HANDLE value.
-    let vtable: *const polyplug_abi::GuestContractInterface =
+    let interface: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
-        vtable.is_null(),
+        interface.is_null(),
         "resolve_plugin(NULL_HANDLE) must return null"
     );
 
@@ -106,10 +106,10 @@ fn test_resolve_plugin_stale_handle() {
     let invalid_index: u64 = 999_999_999_u64; // Clearly out of bounds
 
     // SAFETY: rt is valid; invalid_index is a deliberately invalid handle.
-    let vtable: *const polyplug_abi::GuestContractInterface =
+    let interface: *const polyplug_abi::GuestContractInterface =
         unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, invalid_index) };
     assert!(
-        vtable.is_null(),
+        interface.is_null(),
         "resolve_plugin(invalid handle) must return null"
     );
 

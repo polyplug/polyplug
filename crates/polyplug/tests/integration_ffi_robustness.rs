@@ -164,7 +164,7 @@ fn load_memory_plugin() -> libloading::Library {
     unsafe { libloading::Library::new(MEMORY_PLUGIN_SO).expect("failed to load memory_plugin .so") }
 }
 
-fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContractInterface {
+fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestContractInterface {
     FFI_REGISTRY.with(|cell| {
         *cell.borrow_mut() = PluginRegistry::new();
     });
@@ -221,14 +221,14 @@ fn init_memory_plugin_vtable(library: &libloading::Library) -> *const GuestContr
     FFI_REGISTRY.with(|cell| {
         cell.borrow()
             .resolve(handle)
-            .expect("vtable must be resolvable")
+            .expect("interface must be resolvable")
     })
 }
 
 #[test]
 fn test_misaligned_buffer_fill() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -254,7 +254,7 @@ fn test_misaligned_buffer_fill() {
     };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
+    // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature.
@@ -279,7 +279,7 @@ fn test_misaligned_buffer_fill() {
 #[test]
 fn test_stringview_cross_thread_echo() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -295,7 +295,7 @@ fn test_stringview_cross_thread_echo() {
             let input_sv: StringView = StringView { ptr, len };
             let mut out_sv: StringView = StringView::null();
 
-            // SAFETY: fn_ptr is function 2 in the vtable (memory_echo_string_view).
+            // SAFETY: fn_ptr is function 2 in the interface (memory_echo_string_view).
             let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(2) };
             let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
                 // SAFETY: fn_ptr is cast to the generic dispatch signature.
@@ -329,7 +329,7 @@ fn test_stringview_cross_thread_echo() {
 #[test]
 fn test_buffer_cap_less_than_len() {
     let library: libloading::Library = load_memory_plugin();
-    let interface_ptr: *const GuestContractInterface = init_memory_plugin_vtable(&library);
+    let interface_ptr: *const GuestContractInterface = init_memory_plugin_interface(&library);
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -349,7 +349,7 @@ fn test_buffer_cap_less_than_len() {
     };
     let mut out: u32 = 0_u32;
 
-    // SAFETY: fn_ptr is function 0 in the vtable (memory_fill_preallocated_buffer).
+    // SAFETY: fn_ptr is function 0 in the interface (memory_fill_preallocated_buffer).
     let fn_ptr: *const () = unsafe { *interface.dispatch.native.functions.add(0) };
     let dispatch_fn: unsafe extern "C" fn(*const (), *mut ()) -> AbiError =
         // SAFETY: fn_ptr is cast to the generic dispatch signature.

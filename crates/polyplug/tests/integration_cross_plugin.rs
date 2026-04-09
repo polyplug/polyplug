@@ -34,8 +34,8 @@ unsafe extern "C" fn null_destroy_instance(
 
 /// Allocate a `'static` `GuestContractInterface` with the given contract_id.
 ///
-/// Intentional leak -- test vtables are pointer-sized and tests are short-lived.
-/// The vtable must be `'static` because `Registry::register` stores a raw pointer
+/// Intentional leak -- test interfaces are pointer-sized and tests are short-lived.
+/// The interface must be `'static` because `Registry::register` stores a raw pointer
 /// that must remain valid for the registry's lifetime.
 fn make_static_interface(cid: GuestContractId) -> &'static GuestContractInterface {
     Box::leak(Box::new(GuestContractInterface {

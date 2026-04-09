@@ -4,7 +4,7 @@
 //!
 //! Regression test for Epic 9.6: NativeBundleLoader must NOT drop the
 //! libloading::Library handle at the end of load_bundle(). If it did,
-//! dlclose() would unmap plugin code pages while vtable fn pointers
+//! dlclose() would unmap plugin code pages while interface fn pointers
 //! into those pages are still stored in the Registry (use-after-free / SIGBUS).
 
 use polyplug::loader::ManifestData;
