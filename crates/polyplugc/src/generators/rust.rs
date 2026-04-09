@@ -751,7 +751,7 @@ fn generate_guest_contract_interface(
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
-        "pub(crate) static {upper}_VTABLE: GuestContractInterface = GuestContractInterface {{\n"
+        "pub(crate) static {upper}_INTERFACE: GuestContractInterface = GuestContractInterface {{\n"
     ));
     out.push_str(&format!("    contract_id: GuestContractId::from_u64({upper}_CONTRACT_ID),\n"));
     out.push_str(&format!(
@@ -880,7 +880,7 @@ fn generate_guest_plugin_interface(
     let minor: u32 = contract.version.minor;
     let patch: u32 = contract.version.patch;
     out.push_str(&format!(
-        "pub static {plugin_upper}_VTABLE: GuestContractInterface = GuestContractInterface {{\n"
+        "pub static {plugin_upper}_INTERFACE: GuestContractInterface = GuestContractInterface {{\n"
     ));
     out.push_str(&format!("    contract_id: GuestContractId::from_u64({plugin_upper}_CONTRACT_ID),\n"));
     out.push_str(&format!(
@@ -1071,13 +1071,13 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str(&format!(
                 "use super::interfaces::{plugin_upper}_CONTRACT_ID;\n"
             ));
-            out.push_str(&format!("use super::interfaces::{plugin_upper}_VTABLE;\n"));
+            out.push_str(&format!("use super::interfaces::{plugin_upper}_INTERFACE;\n"));
         }
     } else {
         for contract in &ir.contracts {
             let upper: String = contract_name_to_upper_snake(&contract.name);
             out.push_str(&format!("use super::interfaces::{upper}_CONTRACT_ID;\n"));
-            out.push_str(&format!("use super::interfaces::{upper}_VTABLE;\n"));
+            out.push_str(&format!("use super::interfaces::{upper}_INTERFACE;\n"));
         }
     }
     out.push('\n');
@@ -1163,7 +1163,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
                 "    let err_{plugin_upper}: AbiError = unsafe {{\n"
             ));
             out.push_str(&format!(
-                "        (host.register_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_VTABLE as *const GuestContractInterface)\n"
+                "        (host.register_contract)(host, &desc_{plugin_upper} as *const PluginDescriptor, &{plugin_upper}_INTERFACE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode::Ok {{\n"));
@@ -1197,7 +1197,7 @@ fn generate_guest_init_file(out: &mut String, ir: &ValidatedIr) {
             out.push_str("    // SAFETY: desc and interface are 'static.\n");
             out.push_str(&format!("    let err_{upper}: AbiError = unsafe {{\n"));
             out.push_str(&format!(
-                "        (host.register_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_VTABLE as *const GuestContractInterface)\n"
+                "        (host.register_contract)(host, &desc_{upper} as *const PluginDescriptor, &{upper}_INTERFACE as *const GuestContractInterface)\n"
             ));
             out.push_str("    };\n");
             out.push_str(&format!("    if err_{upper}.code != AbiErrorCode::Ok {{\n"));

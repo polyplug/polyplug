@@ -487,7 +487,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
             out.push_str(&format!(
                 "    err_{plugin_upper}: AbiError = host.contents.register_contract(\n"
             ));
-            out.push_str(&format!("        host_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_VTABLE)\n"));
+            out.push_str(&format!("        host_ptr, ctypes.byref({plugin_upper}_DESCRIPTOR), ctypes.byref({plugin_upper}_INTERFACE)\n"));
             out.push_str("    )\n");
             out.push_str(&format!("    if err_{plugin_upper}.code != AbiErrorCode.Ok:\n"));
             out.push_str("        raise RuntimeError(\"plugin registration failed\")\n\n");
@@ -499,7 +499,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
                 "    err_{upper}: AbiError = host.contents.register_contract(\n"
             ));
             out.push_str(&format!(
-                "        host_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_VTABLE)\n"
+                "        host_ptr, ctypes.byref({upper}_DESCRIPTOR), ctypes.byref({upper}_INTERFACE)\n"
             ));
             out.push_str("    )\n");
             out.push_str(&format!("    if err_{upper}.code != AbiErrorCode.Ok:\n"));
@@ -1010,7 +1010,7 @@ fn generate_guest_contract_interface(out: &mut String, contract: &ResolvedContra
     ));
 
     out.push_str(&format!(
-        "{upper}_VTABLE: GuestContractInterface = GuestContractInterface(\n"
+        "{upper}_INTERFACE: GuestContractInterface = GuestContractInterface(\n"
     ));
     out.push_str(&format!(
         "    contract_id=0x{:016X},\n",
@@ -1142,7 +1142,7 @@ fn generate_guest_plugin_interface(
     ));
 
     out.push_str(&format!(
-        "{plugin_upper}_VTABLE: GuestContractInterface = GuestContractInterface(\n"
+        "{plugin_upper}_INTERFACE: GuestContractInterface = GuestContractInterface(\n"
     ));
     out.push_str(&format!(
         "    contract_id=0x{:016X},\n",

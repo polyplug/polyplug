@@ -320,7 +320,7 @@ fn render_plugin_interface_quickjs(
         ));
     }
 
-    out.push_str(&format!("\nexport const {plugin_var}_VTABLE = {{\n"));
+    out.push_str(&format!("\nexport const {plugin_var}_INTERFACE = {{\n"));
     out.push_str(&format!("    contractLo: 0x{:08X},\n", contract_lo));
     out.push_str(&format!("    contractHi: 0x{:08X},\n", contract_hi));
     out.push_str("    dispatchType: DispatchType.VirtualMachine,\n");
@@ -476,7 +476,7 @@ fn render_plugin_interface_quickjs(
     // Store ABI wrappers in interface
     out.push_str("    ");
     out.push_str(&plugin_var);
-    out.push_str("_VTABLE.functions = [");
+    out.push_str("_INTERFACE.functions = [");
     out.push_str(
         &abi_wrappers
             .iter()
@@ -506,7 +506,7 @@ fn generate_interface_ts(ir: &ValidatedIr) -> String {
         for plugin in &bundle.plugins {
             let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
             out.push_str(&format!(
-                "export {{ {plugin_var}_VTABLE }} from './contracts';\n"
+                "export {{ {plugin_var}_INTERFACE }} from './contracts';\n"
             ));
         }
     }
@@ -531,7 +531,7 @@ fn generate_index_ts(ir: &ValidatedIr) -> String {
         for plugin in &bundle.plugins {
             let plugin_var: String = plugin.name.to_uppercase().replace(['.', '-'], "_");
             out.push_str(&format!(
-                "export {{ {plugin_var}_VTABLE }} from './contracts';\n"
+                "export {{ {plugin_var}_INTERFACE }} from './contracts';\n"
             ));
         }
         for plugin in &bundle.plugins {
@@ -580,7 +580,7 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
         if idx > 0 {
             out.push_str(",\n");
         }
-        out.push_str(&format!("    {plugin_var}_VTABLE"));
+        out.push_str(&format!("    {plugin_var}_INTERFACE"));
     }
     out.push_str("\n} from './contracts';\n");
     out.push_str("import { storeHostVtable } from 'polyplug-guest';\n\n");
@@ -628,11 +628,11 @@ fn generate_init_ts(ir: &ValidatedIr) -> String {
             plugin_name = plugin.name
         ));
         out.push_str("    polyplug.register_contract(\n");
-        out.push_str(&format!("        {plugin_var}_VTABLE.contractLo,\n"));
-        out.push_str(&format!("        {plugin_var}_VTABLE.contractHi,\n"));
-        out.push_str(&format!("        {plugin_var}_VTABLE,\n"));
-        out.push_str(&format!("        {plugin_var}_VTABLE.fnCount,\n"));
-        out.push_str(&format!("        {plugin_var}_VTABLE.contractName\n"));
+        out.push_str(&format!("        {plugin_var}_INTERFACE.contractLo,\n"));
+        out.push_str(&format!("        {plugin_var}_INTERFACE.contractHi,\n"));
+        out.push_str(&format!("        {plugin_var}_INTERFACE,\n"));
+        out.push_str(&format!("        {plugin_var}_INTERFACE.fnCount,\n"));
+        out.push_str(&format!("        {plugin_var}_INTERFACE.contractName\n"));
         out.push_str("    );\n\n");
     }
 

@@ -378,7 +378,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
             let _contract_name_full = format!("{}@{}", contract_name, version_major);
 
             out.push_str(&format!(
-                "    local err_{plugin_upper} = host.register_contract(host_ptr, {plugin_upper}_DESCRIPTOR, {plugin_upper}_VTABLE)\n"
+                "    local err_{plugin_upper} = host.register_contract(host_ptr, {plugin_upper}_DESCRIPTOR, {plugin_upper}_INTERFACE)\n"
             ));
             out.push_str(&format!("    if err_{plugin_upper}.code ~= ABI_OK then\n"));
             out.push_str(&format!("        return err_{plugin_upper}.code\n"));
@@ -610,22 +610,22 @@ fn generate_guest_plugin_interface(
     }
 
     out.push_str(&format!(
-        "local {plugin_var}_VTABLE = ffi.new(\"GuestContractInterface\")\n"
+        "local {plugin_var}_INTERFACE = ffi.new(\"GuestContractInterface\")\n"
     ));
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.contract_id = 0x{:016X}\n",
+        "{plugin_var}_INTERFACE.contract_id = 0x{:016X}\n",
         contract.contract_id
     ));
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.contract_version.major = {}\n",
+        "{plugin_var}_INTERFACE.contract_version.major = {}\n",
         contract.version.major
     ));
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.contract_version.minor = {}\n",
+        "{plugin_var}_INTERFACE.contract_version.minor = {}\n",
         contract.version.minor
     ));
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.contract_version.patch = {}\n",
+        "{plugin_var}_INTERFACE.contract_version.patch = {}\n",
         contract.version.patch
     ));
     let dispatch_type_str: &str = if true {
@@ -634,7 +634,7 @@ fn generate_guest_plugin_interface(
         "polyplug_guest.DispatchType.Native"
     };
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.dispatch_type = {dispatch_type_str}\n"
+        "{plugin_var}_INTERFACE.dispatch_type = {dispatch_type_str}\n"
     ));
     // Create/destroy instance stubs
     out.push_str(&format!(
@@ -647,7 +647,7 @@ fn generate_guest_plugin_interface(
     out.push_str("    return ffi.new(\"GuestContractInstance\", nil)\n");
     out.push_str("end\n");
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.create_instance = {plugin_var}_create_instance_stub\n"
+        "{plugin_var}_INTERFACE.create_instance = {plugin_var}_create_instance_stub\n"
     ));
     out.push_str(&format!(
         "-- Default destroy_instance stub for {plugin_name} - no-op.\n"
@@ -658,7 +658,7 @@ fn generate_guest_plugin_interface(
     out.push_str("    -- Default stub is no-op - users override for cleanup before hot-reload.\n");
     out.push_str("end\n");
     out.push_str(&format!(
-        "{plugin_var}_VTABLE.destroy_instance = {plugin_var}_destroy_instance_stub\n\n"
+        "{plugin_var}_INTERFACE.destroy_instance = {plugin_var}_destroy_instance_stub\n\n"
     ));
 
     out.push_str(&format!(
@@ -705,8 +705,8 @@ fn generate_guest_plugin_interface(
             "    functions[{idx}] = ffi.cast(\"uintptr_t\", {fn_name}_fn)\n"
         ));
     }
-    out.push_str(&format!("    {plugin_var}_VTABLE.dispatch.native.function_count = {function_count}\n"));
-    out.push_str(&format!("    {plugin_var}_VTABLE.dispatch.native.functions = functions\n"));
+    out.push_str(&format!("    {plugin_var}_INTERFACE.dispatch.native.function_count = {function_count}\n"));
+    out.push_str(&format!("    {plugin_var}_INTERFACE.dispatch.native.functions = functions\n"));
     out.push_str("end\n");
 
     Ok(())
