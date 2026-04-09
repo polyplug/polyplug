@@ -24,7 +24,7 @@ use polyplug_abi::{GuestContractInterface, HostContractInterface, HostContractIn
 use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
 
-use crate::compatibility::Compatibility;
+use polyplug_abi::runtime::Compatibility;
 use crate::error::HostContractError;
 use crate::error::LoaderError;
 use crate::error::RegistryError;
@@ -1344,7 +1344,7 @@ mod tests {
                 .load_bundle_with(
                     inner_bundle.as_path(),
                     LoadOptions {
-                        compatibility: crate::compatibility::Compatibility::default(),
+                        compatibility: polyplug_abi::runtime::Compatibility::default(),
                         ignore_function_count_mismatch: false,
                     },
                 );
@@ -1541,7 +1541,7 @@ mod tests {
         let result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
             outer_bundle.as_path(),
             LoadOptions {
-                compatibility: crate::compatibility::Compatibility::default(),
+                compatibility: polyplug_abi::runtime::Compatibility::default(),
                 ignore_function_count_mismatch: false,
             },
         );
@@ -1603,7 +1603,7 @@ mod tests {
         let inner_result: Result<(), crate::error::RuntimeError> = runtime.load_bundle_with(
             inner_bundle.as_path(),
             LoadOptions {
-                compatibility: crate::compatibility::Compatibility::default(),
+                compatibility: polyplug_abi::runtime::Compatibility::default(),
                 ignore_function_count_mismatch: false,
             },
         );

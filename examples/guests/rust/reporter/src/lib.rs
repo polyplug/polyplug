@@ -60,7 +60,7 @@ impl DataReporterPlugin for Plugin {
             ))
         } else {
             Err(PluginError {
-                code: polyplug_guest::ABI_ERROR_GENERIC,
+                code: polyplug_guest::AbiErrorCode::Generic as u32,
                 message: "invalid format".into(),
             })
         }

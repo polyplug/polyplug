@@ -4,7 +4,7 @@
 //! It implements the "error.test" contract with three functions for
 //! error model stress testing:
 //!   fn 0 — error_return_with_message: returns AbiError { code: 99, message: <host-alloc'd msg> }
-//!   fn 1 — error_panic: catches an intentional panic and returns ABI_ERROR_PANIC
+//!   fn 1 — error_panic: catches an intentional panic and returns AbiErrorCode::Panic
 //!   fn 2 — error_chain_propagate: calls another plugin via host interface and propagates its error
 
 use polyplug_abi::AbiErrorCode;
@@ -81,7 +81,7 @@ extern "C" fn error_return_with_message(_args: *const (), out: *mut ()) -> AbiEr
 
 /// fn 1 — error_panic
 ///
-/// Catches an intentional panic and returns ABI_ERROR_PANIC with the static
+/// Catches an intentional panic and returns AbiErrorCode::Panic with the static
 /// message "plugin panicked".
 ///
 /// # Safety

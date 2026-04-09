@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use polyplug::compatibility::Compatibility;
+use polyplug_abi::runtime::Compatibility;
 use polyplug::error::LoaderError;
 use polyplug::error::RuntimeError;
 use polyplug::loader::BundleLoader;

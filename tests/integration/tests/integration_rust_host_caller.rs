@@ -3,7 +3,7 @@
 
 use polyplug::plugin_registry::PluginGuard;
 use polyplug::runtime::Runtime;
-use polyplug_abi::ABI_OK;
+use polyplug_abi::AbiErrorCode::Ok;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::GuestContractHandle;
@@ -71,7 +71,7 @@ impl TestAddContract {
                 }
             } else if vtable.dispatch_type != polyplug_abi::DispatchType::Native {
                 AbiError {
-                    code: polyplug_abi::ABI_ERROR_GENERIC,
+                    code: polyplug_abi::AbiErrorCode::Generic,
                     message: polyplug_abi::StringView::null(),
                 }
             } else {
@@ -81,7 +81,7 @@ impl TestAddContract {
                 dispatch_fn(args_ptr, out_ptr)
             }
         };
-        if err.code != ABI_OK {
+        if err.code != AbiErrorCode::Ok {
             return Err(ContractError {
                 code: err.code,
                 message: String::new(),

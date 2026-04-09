@@ -101,6 +101,6 @@ fn js_quickjs_load_bundle_and_call() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }

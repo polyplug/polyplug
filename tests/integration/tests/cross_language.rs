@@ -234,7 +234,7 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
             )
         }
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 
@@ -294,7 +294,7 @@ fn test_rust_host_rust_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -316,7 +316,7 @@ fn test_rust_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -373,7 +373,7 @@ fn test_cpp_host_rust_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -395,7 +395,7 @@ fn test_cpp_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -452,7 +452,7 @@ fn test_csharp_host_rust_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -474,7 +474,7 @@ fn test_csharp_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -531,7 +531,7 @@ fn test_python_host_rust_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -553,7 +553,7 @@ fn test_python_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -610,7 +610,7 @@ fn test_lua_host_rust_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -632,7 +632,7 @@ fn test_lua_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -689,7 +689,7 @@ fn test_js_host_rust_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -711,7 +711,7 @@ fn test_js_host_rust_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -774,7 +774,7 @@ fn test_rust_host_cpp_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -796,7 +796,7 @@ fn test_rust_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -853,7 +853,7 @@ fn test_cpp_host_cpp_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -875,7 +875,7 @@ fn test_cpp_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -932,7 +932,7 @@ fn test_csharp_host_cpp_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -954,7 +954,7 @@ fn test_csharp_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1011,7 +1011,7 @@ fn test_python_host_cpp_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -1033,7 +1033,7 @@ fn test_python_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1090,7 +1090,7 @@ fn test_lua_host_cpp_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -1112,7 +1112,7 @@ fn test_lua_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1169,7 +1169,7 @@ fn test_js_host_cpp_guest() {
             &ctx as *const PluginContext,
         )
     };
-    assert_eq!(init_result.code, ABI_OK, "polyplug_init must return ABI_OK");
+    assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
     let interface_ptr: *const GuestContractInterface = CAPTURED_INTERFACE.with(|cell| cell.get());
     assert!(
         !interface_ptr.is_null(),
@@ -1191,7 +1191,7 @@ fn test_js_host_cpp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
     // SAFETY: keep library alive until after last call.
     core::mem::forget(library);
@@ -1303,7 +1303,7 @@ fn test_csharp_host_csharp_guest() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 

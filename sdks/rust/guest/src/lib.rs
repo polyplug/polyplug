@@ -94,26 +94,12 @@ pub use polyplug_abi::POLYPLUG_ABI_VERSION;
 /// ABI error codes — use `AbiErrorCode::Ok`, `AbiErrorCode::Generic`, etc.
 pub use polyplug_abi::AbiErrorCode;
 
-/// Legacy constant for ABI_OK (deprecated - use AbiErrorCode::Ok)
-pub const ABI_OK: u32 = 0;
 
-/// Legacy constant for ABI_ERROR_GENERIC (deprecated - use AbiErrorCode::Generic)
-pub const ABI_ERROR_GENERIC: u32 = 1;
 
-/// Legacy constant for ABI_ERROR_PANIC (deprecated - use AbiErrorCode::Panic)
-pub const ABI_ERROR_PANIC: u32 = 3;
 
-/// Legacy constant for ABI_ERROR_INVALID_POINTER (deprecated - use AbiErrorCode::InvalidPointer)
-pub const ABI_ERROR_INVALID_POINTER: u32 = 8;
 
-/// Legacy constant for ABI_HOST_CONTRACT_NOT_FOUND (deprecated - use AbiErrorCode::HostContractNotFound)
-pub const ABI_HOST_CONTRACT_NOT_FOUND: u32 = 100;
 
-/// Legacy constant for ABI_HOST_CONTRACT_VERSION_MISMATCH (deprecated - use AbiErrorCode::HostContractVersionMismatch)
-pub const ABI_HOST_CONTRACT_VERSION_MISMATCH: u32 = 101;
 
-/// Legacy constant for ABI_HOST_CONTRACT_CALL_FAILED (deprecated - use AbiErrorCode::HostContractCallFailed)
-pub const ABI_HOST_CONTRACT_CALL_FAILED: u32 = 102;
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 

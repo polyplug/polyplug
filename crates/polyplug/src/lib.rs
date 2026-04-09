@@ -9,7 +9,6 @@ pub mod registry;
 pub mod reload;
 pub mod runtime;
 pub mod runtime_builder;
-mod runtime_config;
 
 // Import from polyplug_abi (moved in Phase 01-03)
 pub use polyplug_abi::runtime::{RuntimeConfig, Compatibility};

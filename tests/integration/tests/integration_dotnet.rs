@@ -131,7 +131,7 @@ fn integration_dotnet_add() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add must return AbiErrorCode::Ok");
     assert_eq!(out, 8_u32, "add(3, 5) must equal 8");
 }
 
@@ -162,7 +162,7 @@ fn integration_dotnet_add_primitive() {
             &mut out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "add_primitive must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "add_primitive must return AbiErrorCode::Ok");
     assert_eq!(out, 30_u32, "add_primitive(10, 20) must equal 30");
 }
 
@@ -192,7 +192,7 @@ fn integration_dotnet_version_string() {
             &mut out_view as *mut StringView as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "version must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "version must return AbiErrorCode::Ok");
     // SAFETY: out_view.ptr points to valid UTF-8 bytes for out_view.len bytes (C# static array).
     let version_bytes: &[u8] = unsafe { core::slice::from_raw_parts(out_view.ptr, out_view.len) };
     assert_eq!(version_bytes, b"1.0", "version() must return \"1.0\"");
@@ -224,7 +224,7 @@ fn integration_dotnet_reset() {
             &mut dummy_out as *mut u32 as *mut (),
         )
     };
-    assert_eq!(result.code, AbiErrorCode::Ok, "reset must return ABI_OK");
+    assert_eq!(result.code, AbiErrorCode::Ok, "reset must return AbiErrorCode::Ok");
 }
 
 #[test]
