@@ -134,7 +134,7 @@ Polyplug allows multiple bundles to implement the same contract, enabling a rich
 ### Implementation Integrity
 - **DuplicateProvider Rule**: The same `bundle_id` cannot register the same `contract_id` twice. This prevents internal ambiguity within a single bundle.
 - **Cross-Bundle Multi-impl**: Different bundles *can* implement the same contract. The registry tracks these in a `Vec<u32>` of slot indices per contract ID.
-- **Stale Handle Protection**: Every `GuestContractHandle` contains a generation counter. The `resolve_guard` (or `resolve_plugin` in C) compares the handle's generation against the registry slot. If they mismatch (e.g., after a bundle is unloaded and a new one takes its slot), the resolution returns `ABI_ERROR_STALE_HANDLE`.
+- **Stale Handle Protection**: Every `GuestContractHandle` contains a generation counter. The `resolve_guard` (or `resolve_plugin` in C) compares the handle's generation against the registry slot. If they mismatch (e.g., after a bundle is unloaded and a new one takes its slot), the resolution returns `AbiErrorCode::StaleHandle`.
 
 ### Multi-impl Scenario
 Consider an application that supports multiple audio decoders. Both `flac-bundle` and `mp3-bundle` might register the same `audio.Decoder` contract.

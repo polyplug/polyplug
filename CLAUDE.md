@@ -89,9 +89,9 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Test functions: `snake_case` with test prefix or descriptive name (e.g., `test_load_and_abi_version`, `stress_error_code_and_message_received_correctly`)
 - Local variables: `snake_case` (e.g., `bundle_id`, `contract_id`, `registry`)
 - Thread-local statics: `SCREAMING_SNAKE_CASE` (e.g., `CAPTURED_VTABLE_PTR`, `BENCH_REGISTRY`, `ERROR_REGISTRY`)
-- Constants: `SCREAMING_SNAKE_CASE` (e.g., `TEST_PLUGIN_SO`, `POLYPLUG_ABI_VERSION`, `ABI_OK`)
+- Constants: `SCREAMING_SNAKE_CASE` (e.g., `TEST_PLUGIN_SO`, `POLYPLUG_ABI_VERSION`, `FNV_OFFSET`)
 - Structs: `PascalCase` (e.g., `Runtime`, `PluginRegistry`, `HostContext`)
-- Enums: `PascalCase` with `PascalCase` variants (e.g., `RuntimeError`, `LoaderError`, `ReloadPhaseType`)
+- Enums: `PascalCase` with `PascalCase` variants (e.g., `RuntimeError`, `LoaderError`, `ReloadPhaseType`, `AbiErrorCode`)
 - Type aliases: `PascalCase` (e.g., `RuntimeError`, `WarningCb`, `ReloadCb`)
 - Traits: `PascalCase` (e.g., `BundleLoader`, `TestAddPlugin`)
 ## Code Style
@@ -105,7 +105,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Rust edition 2024 (workspace-wide)
 - Minimum Rust version: 1.85
 ## Import Organization
-- Grouped imports with braces: `use polyplug_abi::{ABI_OK, AbiError, HostInterface};`
+- Grouped imports with braces: `use polyplug_abi::{AbiErrorCode, AbiError, HostInterface};`
 - Types explicitly imported, not glob-imported in public API
 - Test files may use more glob imports for brevity
 - Workspace dependencies use path aliases: `polyplug_utils`, `polyplug_abi`, `polyplug`
@@ -120,7 +120,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Internal functions may use domain-specific errors
 - FFI functions return error codes (`u32`), with messages in thread-local storage
 - All FFI exports wrapped in `std::panic::catch_unwind` to prevent panics crossing ABI boundary
-- ABI error codes defined in `polyplug_abi`: `ABI_OK = 0`, `ABI_ERROR_GENERIC = 1`, `ABI_ERROR_PANIC = 3`
+- ABI error codes defined in `polyplug_abi`: `AbiErrorCode::Ok = 0`, `AbiErrorCode::Generic = 1`, `AbiErrorCode::Panic = 3`
 - `AbiError` struct: `{ code: u32, message: StringView }`
 ## Async Patterns
 - No async runtime used (fully synchronous design)
