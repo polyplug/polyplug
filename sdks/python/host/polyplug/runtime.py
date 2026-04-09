@@ -542,8 +542,8 @@ class Runtime:
         """Register a callback for hot-reload notifications.
 
         The callback is invoked at each phase of a hot-reload:
-        - PREPARING: Before vtable swap, includes retry count
-        - RELOADED: After successful vtable swap
+        - PREPARING: Before interface swap, includes retry count
+        - RELOADED: After successful interface swap
         - FAILED: When reload fails, includes reason string
 
         Must be called before creating a Runtime instance.

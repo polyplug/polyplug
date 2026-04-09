@@ -64,7 +64,7 @@ def get_host_vtable() -> int:
 
 
 def _init_allocator(host_vtable_ptr: int, rt_ctx: int) -> None:
-    """Initialize the allocator with host vtable pointers."""
+    """Initialize the allocator with host interface pointers."""
     global _host_alloc, _host_free
     import ctypes
 

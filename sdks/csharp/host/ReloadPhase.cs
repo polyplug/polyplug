@@ -8,12 +8,12 @@ namespace Polyplug.Host;
 public enum ReloadPhaseType : uint
 {
     /// <summary>
-    /// Before vtable swap - host should destroy instances.
+    /// Before interface swap - host should destroy instances.
     /// </summary>
     Preparing = 0,
 
     /// <summary>
-    /// After vtable swap - instances can be re-resolved.
+    /// After interface swap - instances can be re-resolved.
     /// </summary>
     Reloaded = 1,
 
