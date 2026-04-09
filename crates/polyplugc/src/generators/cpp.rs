@@ -1,8 +1,8 @@
 //! C++ code generator for polyplugc.
 //!
 //! Generates:
-//! - Host-side: header-only C++ callers (RAII wrapper + vtable dispatch)
-//! - Guest-side: extern "C" ABI wrappers + abstract base classes + vtable statics
+//! - Host-side: header-only C++ callers (RAII wrapper + interface dispatch)
+//! - Guest-side: extern "C" ABI wrappers + abstract base classes + interface statics
 
 use super::is_native_runtime;
 use super::CodeGenerator;
@@ -680,7 +680,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
         "        return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};\n",
     );
     out.push_str("    }\n\n");
-    out.push_str("    // Store host vtable for later access via polyplug::get_host_interface()\n");
+    out.push_str("    // Store host interface for later access via polyplug::get_host_interface()\n");
     out.push_str("    polyplug::store_host_vtable(host);\n\n");
 
     if let Some(bundle) = &ir.bundle {
@@ -1218,7 +1218,7 @@ fn generate_cpp_host_function(
             "        if ({}_u32 >= interface_->function_count) {{\n",
             fn_id
         ));
-        out.push_str("            static constexpr const char* err_msg = \"function not available in vtable\";\n");
+        out.push_str("            static constexpr const char* err_msg = \"function not available in interface\";\n");
         out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
         out.push_str("        }\n");
         // Instance-based dispatch: signature is (GuestContractInstance, args, out)
@@ -1237,7 +1237,7 @@ fn generate_cpp_host_function(
             "        if ({}_u32 >= interface_->function_count) {{\n",
             fn_id
         ));
-        out.push_str("            static constexpr const char* err_msg = \"function not available in vtable\";\n");
+        out.push_str("            static constexpr const char* err_msg = \"function not available in interface\";\n");
         out.push_str("            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});\n");
         out.push_str("        }\n");
         // Instance-based dispatch: signature is (GuestContractInstance, args, out)
