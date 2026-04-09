@@ -503,7 +503,7 @@ fn smoke_cpp_codegen_dispatch() {
         "smoke_cpp_codegen_dispatch: all 5 C++ guest files present in {} ✓",
         out_dir.display()
     );
-    // ── 4. Attempt g++ compile of vtables.hpp (skip if g++ not found) ────────
+    // ── 4. Attempt g++ compile of interfaces.hpp (skip if g++ not found) ────────
     let gpp_version_result: std::io::Result<std::process::Output> =
         Command::new("g++").args(["--version"]).output();
 
@@ -512,7 +512,7 @@ fn smoke_cpp_codegen_dispatch() {
             let host_libs_cpp: PathBuf = workspace_root().join("sdks").join("cpp").join("abi");
             let interfaces_hpp: PathBuf = guest_dir.join("interfaces.hpp");
             let out_obj: PathBuf =
-                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_vtables.o");
+                PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("smoke_cpp_interfaces.o");
 
             let compile_result: std::process::Output = Command::new("g++")
                 .arg("-std=c++20")

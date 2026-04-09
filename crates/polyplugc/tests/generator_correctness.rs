@@ -1,10 +1,10 @@
 //! Generator correctness tests for polyplugc.
 //!
 //! Verifies that the Rust code generator produces output that:
-//!   1. Assigns vtable slot indices that are sequential and correct (0, 1, 2, …).
+//!   1. Assigns interface slot indices that are sequential and correct (0, 1, 2, …).
 //!   2. Emits function signatures (param names, types, return type) that exactly
 //!      match the contract declared in the IR.
-//!   3. Emits a vtable FNS entry for every function declared in a contract
+//!   3. Emits an interface FNS entry for every function declared in a contract
 //!      (missing-function detection).
 //!
 //! All tests operate at the IR + generator level — no compilation or dynamic
@@ -70,7 +70,7 @@ fn prim_param(name: &str, prim: PrimitiveType) -> ResolvedParam {
 
 /// Run the Rust guest generator on `ir` using a unique `test_tag` directory
 /// and return the content of `guest/interfaces.rs`.
-fn generate_guest_vtables(ir: ValidatedIr, test_tag: &str) -> String {
+fn generate_guest_interfaces(ir: ValidatedIr, test_tag: &str) -> String {
     run_guest_generator(ir, test_tag, "interfaces.rs")
 }
 
@@ -199,10 +199,10 @@ fn resolved_type_to_str(ty: &ResolvedTypeRef) -> &'static str {
     }
 }
 
-// ─── Test 1: VTable slot indices are sequential and correct ──────────────────
+// ─── Test 1: Interface slot indices are sequential and correct ──────────────────
 
 /// Verifies that every function in a contract is assigned a `function_id` that
-/// matches its declaration order (0-based) and that the generated vtable FNS
+/// matches its declaration order (0-based) and that the generated interface FNS
 /// array lists them in exactly that order.
 ///
 /// Concretely: for a contract with functions `[alpha, beta, gamma]`, the
@@ -215,29 +215,29 @@ fn resolved_type_to_str(ty: &ResolvedTypeRef) -> &'static str {
 /// ];
 /// ```
 #[test]
-fn vtable_slots_are_sequential() {
+fn interface_slots_are_sequential() {
     let fns: Vec<ResolvedFunction> = vec![
         make_fn("alpha", 0, vec![], None),
         make_fn("beta", 1, vec![], None),
         make_fn("gamma", 2, vec![], None),
     ];
     let ir: ValidatedIr = make_ir("slot.check", 1, fns);
-    let vtables: String = generate_guest_vtables(ir, "slots_sequential");
+    let interfaces: String = generate_guest_interfaces(ir, "slots_sequential");
 
     // The FNS array must have exactly 3 entries.
     assert!(
-        vtables.contains("[FnPtr; 3_usize]"),
-        "expected FNS array of size 3:\n{vtables}"
+        interfaces.contains("[FnPtr; 3_usize]"),
+        "expected FNS array of size 3:\n{interfaces}"
     );
 
     // The entries must appear in declaration order.
-    let pos_alpha: usize = vtables
+    let pos_alpha: usize = interfaces
         .find("slot_check_alpha_abi")
         .expect("alpha abi wrapper must appear in FNS");
-    let pos_beta: usize = vtables
+    let pos_beta: usize = interfaces
         .find("slot_check_beta_abi")
         .expect("beta abi wrapper must appear in FNS");
-    let pos_gamma: usize = vtables
+    let pos_gamma: usize = interfaces
         .find("slot_check_gamma_abi")
         .expect("gamma abi wrapper must appear in FNS");
 
@@ -254,7 +254,7 @@ fn vtable_slots_are_sequential() {
 /// Verifies that the `function_count` field emitted in the PluginInterface
 /// initialiser matches the number of functions declared in the contract.
 #[test]
-fn vtable_function_count_matches_contract() {
+fn interface_function_count_matches_contract() {
     let fns: Vec<ResolvedFunction> = vec![
         make_fn("op_a", 0, vec![], None),
         make_fn("op_b", 1, vec![prim_param("x", PrimitiveType::U32)], None),
@@ -273,39 +273,39 @@ fn vtable_function_count_matches_contract() {
     ];
     let expected_count: usize = fns.len();
     let ir: ValidatedIr = make_ir("count.check", 1, fns);
-    let vtables: String = generate_guest_vtables(ir, "fn_count_matches");
+    let interfaces: String = generate_guest_interfaces(ir, "fn_count_matches");
 
     let expected_line: String = format!("function_count: {expected_count}_u32");
     assert!(
-        vtables.contains(&expected_line),
-        "expected `{expected_line}` in interfaces.rs:\n{vtables}"
+        interfaces.contains(&expected_line),
+        "expected `{expected_line}` in interfaces.rs:\n{interfaces}"
     );
 }
 
 /// Verifies that each ABI wrapper carries the correct `function_id` comment,
 /// so the slot assignment visible in the source matches the declared index.
 #[test]
-fn vtable_wrapper_function_id_comments_match_slot() {
+fn interface_wrapper_function_id_comments_match_slot() {
     let fns: Vec<ResolvedFunction> = vec![
         make_fn("first", 0, vec![], None),
         make_fn("second", 1, vec![], None),
         make_fn("third", 2, vec![], None),
     ];
     let ir: ValidatedIr = make_ir("id.comment", 1, fns);
-    let vtables: String = generate_guest_vtables(ir, "wrapper_id_comments");
+    let interfaces: String = generate_guest_interfaces(ir, "wrapper_id_comments");
 
     // The generator emits: `/// ABI wrapper for <name> (function_id = <id>).`
     assert!(
-        vtables.contains("function_id = 0"),
-        "expected function_id = 0 comment for `first`:\n{vtables}"
+        interfaces.contains("function_id = 0"),
+        "expected function_id = 0 comment for `first`:\n{interfaces}"
     );
     assert!(
-        vtables.contains("function_id = 1"),
-        "expected function_id = 1 comment for `second`:\n{vtables}"
+        interfaces.contains("function_id = 1"),
+        "expected function_id = 1 comment for `second`:\n{interfaces}"
     );
     assert!(
-        vtables.contains("function_id = 2"),
-        "expected function_id = 2 comment for `third`:\n{vtables}"
+        interfaces.contains("function_id = 2"),
+        "expected function_id = 2 comment for `third`:\n{interfaces}"
     );
 }
 
@@ -424,12 +424,12 @@ fn signature_various_primitive_types_match_contract() {
 // ─── Test 3: Missing function detection ──────────────────────────────────────
 
 /// Verifies that every function declared in a contract has a corresponding ABI
-/// wrapper symbol and an entry in the vtable FNS array.
+/// wrapper symbol and an entry in the interface FNS array.
 ///
-/// If any function is omitted from the vtable the runtime cannot dispatch it —
+/// If any function is omitted from the interface the runtime cannot dispatch it —
 /// this test catches that class of generator bug.
 #[test]
-fn all_contract_functions_appear_in_vtable() {
+fn all_contract_functions_appear_in_interface() {
     let function_names: &[&str] = &["open", "read", "write", "close", "flush"];
     let fns: Vec<ResolvedFunction> = function_names
         .iter()
@@ -438,21 +438,21 @@ fn all_contract_functions_appear_in_vtable() {
         .collect();
 
     let ir: ValidatedIr = make_ir("file.ops", 1, fns);
-    let vtables: String = generate_guest_vtables(ir, "all_fns_in_vtable");
+    let interfaces: String = generate_guest_interfaces(ir, "all_fns_in_interface");
 
     for name in function_names {
         // Each function must have an ABI wrapper defined.
         let wrapper: String = format!("file_ops_{name}_abi");
         assert!(
-            vtables.contains(&wrapper),
-            "ABI wrapper `{wrapper}` missing from interfaces.rs:\n{vtables}"
+            interfaces.contains(&wrapper),
+            "ABI wrapper `{wrapper}` missing from interfaces.rs:\n{interfaces}"
         );
 
         // Each function must appear in the FNS array.
         let fns_entry: String = format!("FnPtr(file_ops_{name}_abi as *const ())");
         assert!(
-            vtables.contains(&fns_entry),
-            "FNS entry `{fns_entry}` missing from interfaces.rs:\n{vtables}"
+            interfaces.contains(&fns_entry),
+            "FNS entry `{fns_entry}` missing from interfaces.rs:\n{interfaces}"
         );
     }
 }
@@ -469,12 +469,12 @@ fn fns_array_size_equals_declared_function_count() {
         let contract_name: String = format!("array.sz.{n}");
         let test_tag: String = format!("fns_array_size_{n}");
         let ir: ValidatedIr = make_ir(&contract_name, 1, fns);
-        let vtables: String = generate_guest_vtables(ir, &test_tag);
+        let interfaces: String = generate_guest_interfaces(ir, &test_tag);
 
         let expected: String = format!("[FnPtr; {n}_usize]");
         assert!(
-            vtables.contains(&expected),
-            "for n={n}: expected `{expected}` in interfaces.rs:\n{vtables}"
+            interfaces.contains(&expected),
+            "for n={n}: expected `{expected}` in interfaces.rs:\n{interfaces}"
         );
     }
 }
@@ -485,12 +485,12 @@ fn fns_array_size_equals_declared_function_count() {
 fn single_function_contract_has_exactly_one_fns_entry() {
     let fns: Vec<ResolvedFunction> = vec![make_fn("ping", 0, vec![], None)];
     let ir: ValidatedIr = make_ir("single.fn", 1, fns);
-    let vtables: String = generate_guest_vtables(ir, "single_fn_one_fns_entry");
+    let interfaces: String = generate_guest_interfaces(ir, "single_fn_one_fns_entry");
 
     // Count array entries specifically: lines that are indented FnPtr calls
     // inside the FNS array (e.g. `    FnPtr(single_fn_ping_abi as *const ())`),
     // not the struct definition line `pub struct FnPtr(pub *const ());`.
-    let count: usize = vtables
+    let count: usize = interfaces
         .lines()
         .filter(|line: &&str| {
             let trimmed: &str = line.trim_start();
@@ -499,7 +499,7 @@ fn single_function_contract_has_exactly_one_fns_entry() {
         .count();
     assert_eq!(
         count, 1,
-        "expected exactly 1 FnPtr array entry for single-function contract, got {count}:\n{vtables}"
+        "expected exactly 1 FnPtr array entry for single-function contract, got {count}:\n{interfaces}"
     );
 }
 
@@ -538,23 +538,23 @@ fn multiple_contracts_have_independent_fns_arrays() {
         host_contracts: vec![],
         bundle: None,
     };
-    let vtables: String = run_guest_generator(ir, "multi_contracts_independent", "interfaces.rs");
+    let interfaces: String = run_guest_generator(ir, "multi_contracts_independent", "interfaces.rs");
 
     // Contract A's wrapper and FNS entry must be present.
     assert!(
-        vtables.contains("multi_a_foo_abi"),
-        "multi.a `foo` wrapper missing:\n{vtables}"
+        interfaces.contains("multi_a_foo_abi"),
+        "multi.a `foo` wrapper missing:\n{interfaces}"
     );
     // Contract B's wrapper and FNS entry must be present.
     assert!(
-        vtables.contains("multi_b_bar_abi"),
-        "multi.b `bar` wrapper missing:\n{vtables}"
+        interfaces.contains("multi_b_bar_abi"),
+        "multi.b `bar` wrapper missing:\n{interfaces}"
     );
     // Each contract must have its own independent FNS array (size 1 each).
-    let fns_array_count: usize = vtables.matches("[FnPtr; 1_usize]").count();
+    let fns_array_count: usize = interfaces.matches("[FnPtr; 1_usize]").count();
     assert_eq!(
         fns_array_count, 2,
         "expected 2 separate `[FnPtr; 1_usize]` arrays (one per contract), \
-         got {fns_array_count}:\n{vtables}"
+         got {fns_array_count}:\n{interfaces}"
     );
 }

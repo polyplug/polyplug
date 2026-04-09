@@ -1,6 +1,6 @@
 //! Integration test: use polyplug_codegen library to generate Rust bindings,
 //! compile them as a cdylib, load with libloading, dispatch `add(3, 5)` through
-//! the vtable, assert == 8.
+//! the interface, assert == 8.
 
 #![allow(clippy::expect_used)]
 
@@ -99,7 +99,7 @@ polyplug_guest = {{ path = "{}" }}
 /// Write a `src/lib.rs` that:
 ///   - Declares generated modules (types, contracts, interfaces) but NOT init.
 ///   - Defines `MyPlugin` and implements `TestAddPlugin`.
-///   - Exports a custom `polyplug_init` that sets `TEST_ADDER_IMPL` then registers the vtable.
+///   - Exports a custom `polyplug_init` that sets `TEST_ADDER_IMPL` then registers the interface.
 fn write_plugin_lib_rs(src_dir: &Path) {
     let content: &str = r#"// THIS FILE IS WRITTEN BY integration_codegen_rust TEST — DO NOT EDIT BY HAND
 
@@ -121,7 +121,7 @@ use polyplug_guest::Version;
 use polyplug_guest::string_view_null;
 use guest::contracts::TestAddPlugin;
 use guest::types::AddArgs;
-use guest::interfaces::TEST_ADDER_VTABLE;
+use guest::interfaces::TEST_ADDER_INTERFACE;
 use guest::interfaces::set_test_adder_impl;
 
 struct MyPlugin;
@@ -167,12 +167,12 @@ pub unsafe extern "C" fn polyplug_init(
         version: Version { major: 1, minor: 0, patch: 0 },
     };
 
-    // SAFETY: desc and TEST_ADDER_VTABLE are 'static; host is valid.
+    // SAFETY: desc and TEST_ADDER_INTERFACE are 'static; host is valid.
     unsafe {
         (host.register_contract)(
             host as *const _,
             &desc as *const PluginDescriptor,
-            &TEST_ADDER_VTABLE as *const _,
+            &TEST_ADDER_INTERFACE as *const _,
         )
     }
 }
