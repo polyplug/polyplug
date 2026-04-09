@@ -69,7 +69,7 @@ status: issues_found
 Reviewed 45 source files from the terminology refactoring phase that renamed "vtable" to "interface" throughout the codebase. The refactoring is mostly complete and correct, with preserved exceptions properly maintained. However, several generator files still contain outdated "VTable" terminology in comments and section headers. No bugs or security issues were introduced by the refactoring.
 
 **Key Findings:**
-- Preserved exceptions (`vtable_version`, `store_host_vtable`, `get_host_vtable`, `HostVTable`) are correctly NOT renamed
+- Preserved exceptions (`vtable_version`, `store_host_vtable`, `get_host_vtable`, `HostInterface`) are correctly NOT renamed
 - SDK files correctly use "interface" terminology in comments and error messages
 - Test fixture files correctly use `GuestContractInterface` and related renamed types
 - Generator files have remaining "VTable" references in comments that should be updated

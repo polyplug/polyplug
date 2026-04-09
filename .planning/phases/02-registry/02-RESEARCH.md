@@ -21,7 +21,7 @@ Phase 2 simplifies the registry by removing layers of indirection that were desi
 |----|-------------|------------------|
 | REG-01 | Remove VTableSlot wrapper - store GuestContractInterface directly | Replace `ArcSwap<VTableSlot>` with `Option<Arc<GuestContractInterface>>` or direct pointer |
 | REG-02 | Remove PluginGuard - replaced by instance model | Delete struct and `resolve_guard()` method; replace with direct interface access |
-| REG-03 | Remove generation counter from handles (ContractHandle) | Modify `PluginHandle` to have only `index` field; update `StaleHandle` error handling |
+| REG-03 | Remove generation counter from handles (ContractHandle) | Modify `GuestContractHandle` to have only `index` field; update `StaleHandle` error handling |
 | REG-04 | Remove ArcSwap pattern - hot-reload uses callback instead | Replace `ArcSwap` with direct swap under RwLock write guard |
 | REG-05 | Simplify RegistrySlot to store interface directly | Remove `vtable: Option<ArcSwap<VTableSlot>>`, replace with direct interface storage |
 | REG-06 | Update find_contract to return ContractHandle without generation | Remove generation loading from all find methods |
@@ -36,7 +36,7 @@ Phase 2 simplifies the registry by removing layers of indirection that were desi
 | `VTableSlot` | `plugin_registry.rs:29` | Wrapper for `*const GuestContractInterface` | DELETE - store interface directly |
 | `PluginGuard` | `plugin_registry.rs:36-54` | RAII guard holding `Arc<VTableSlot>` | DELETE - no guard needed |
 | `RegistrySlot` | `plugin_registry.rs:70-78` | Slot with generation, entry, vtable | Simplify - remove generation, store interface directly |
-| `PluginHandle` | `polyplug_abi/plugin_handle.rs` | Handle with index + generation | Simplify - keep only index |
+| `GuestContractHandle` | `polyplug_abi/plugin_handle.rs` | Handle with index + generation | Simplify - keep only index |
 | `PluginRegistry` | `plugin_registry.rs:112-115` | Main registry struct | Modify slot storage and methods |
 
 ### Dependencies to Remove
@@ -54,7 +54,7 @@ Phase 2 simplifies the registry by removing layers of indirection that were desi
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Current Registry Architecture               │
 ├─────────────────────────────────────────────────────────────────┤
-│ PluginHandle { index, generation }                              │
+│ GuestContractHandle { index, generation }                              │
 │         │                                                        │
 │         ▼                                                        │
 │ RegistrySlot {                                                   │
@@ -95,7 +95,7 @@ Phase 2 simplifies the registry by removing layers of indirection that were desi
 
 | Method | Current Implementation | Target Implementation |
 |--------|------------------------|------------------------|
-| `register()` | Returns `PluginHandle { index, generation }` | Returns `ContractHandle { index }` |
+| `register()` | Returns `GuestContractHandle { index, generation }` | Returns `ContractHandle { index }` |
 | `find_by_contract()` | Loads generation from slot | Returns handle with index only |
 | `resolve_guard()` | Returns `PluginGuard` holding Arc | DELETE - replace with `resolve()` returning interface |
 | `resolve()` | Calls `resolve_guard()` | Returns `*const GuestContractInterface` directly |
@@ -211,23 +211,23 @@ pub(crate) struct RegistrySlot {
 }
 ```
 
-### Current PluginHandle (to simplify)
+### Current GuestContractHandle (to simplify)
 
 ```rust
 // Source: crates/polyplug_abi/src/plugin/plugin_handle.rs:6-12
 #[repr(C)]
-pub struct PluginHandle {
+pub struct GuestContractHandle {
     pub index: u32,
     pub generation: u32,
 }
 ```
 
-### Target ContractHandle (or rename PluginHandle)
+### Target ContractHandle (or rename GuestContractHandle)
 
 ```rust
-// Target implementation - keep PluginHandle name for backward compat
+// Target implementation - keep GuestContractHandle name for backward compat
 #[repr(C)]
-pub struct PluginHandle {
+pub struct GuestContractHandle {
     pub index: u32,
 }
 ```
@@ -276,10 +276,10 @@ pub fn swap_interface(
 
 ## Open Questions
 
-1. **Should PluginHandle be renamed to ContractHandle?**
+1. **Should GuestContractHandle be renamed to ContractHandle?**
    - What we know: Requirements use "ContractHandle" terminology
    - What's unclear: Whether rename happens in this phase or later
-   - Recommendation: Keep `PluginHandle` name but simplify structure; rename in Phase 6 Cleanup
+   - Recommendation: Keep `GuestContractHandle` name but simplify structure; rename in Phase 6 Cleanup
 
 2. **Should we keep Arc<GuestContractInterface> or store raw pointer?**
    - What we know: Interface is `'static` from plugin library

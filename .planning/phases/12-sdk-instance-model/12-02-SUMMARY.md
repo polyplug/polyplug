@@ -13,8 +13,8 @@ key_files:
   created: []
   modified: [sdks/js/abi/polyplug_abi.ts]
 decisions:
-  - TypeScript ABI types use GuestContractInterface naming (not PluginInterface)
-  - TypeScript ABI types use HostInterface naming (not HostVTable)
+  - TypeScript ABI types use GuestContractInterface naming (not GuestContractInterface)
+  - TypeScript ABI types use HostInterface naming (not HostInterface)
   - Added RuntimeInterface, GuestContractInstance, HostContractInstance interfaces
 metrics:
   duration: "6m"
@@ -29,14 +29,14 @@ Aligned JS SDK TypeScript types with current polyplug_abi naming conventions, sa
 
 ## One-Liner
 
-Updated TypeScript ABI types from legacy naming (PluginInterface, HostVTable) to current conventions (GuestContractInterface, HostInterface), adding complete interface coverage for instance model.
+Updated TypeScript ABI types from legacy naming (GuestContractInterface, HostInterface) to current conventions (GuestContractInterface, HostInterface), adding complete interface coverage for instance model.
 
 ## Tasks Completed
 
 | Task | Name | Commit | Status |
 |------|------|--------|--------|
-| 1 | Rename PluginInterface to GuestContractInterface | e2813cc | Complete |
-| 2 | Rename HostVTable to HostInterface | e2813cc | Complete |
+| 1 | Rename GuestContractInterface to GuestContractInterface | e2813cc | Complete |
+| 2 | Rename HostInterface to HostInterface | e2813cc | Complete |
 | 3 | Add RuntimeInterface and instance interfaces | e2813cc | Complete |
 | 4 | Verify TypeScript compilation | (checkpoint approved) | Verified |
 
@@ -44,8 +44,8 @@ Updated TypeScript ABI types from legacy naming (PluginInterface, HostVTable) to
 
 ### Interface Naming Updates
 
-- `PluginInterface` → `GuestContractInterface` (line 230)
-- `HostVTable` → `HostInterface` (line 265)
+- `GuestContractInterface` → `GuestContractInterface` (line 230)
+- `HostInterface` → `HostInterface` (line 265)
 - `PluginDispatch` → `GuestContractDispatch` (line 192)
 
 ### New Interfaces Added
@@ -89,8 +89,8 @@ All 20 struct size entries verified correct:
 | `deno check sdks/js/abi/polyplug_abi.ts` | PASSED |
 | GuestContractInterface present | 1 match |
 | HostInterface present | 1 match |
-| PluginInterface absent | 0 matches |
-| HostVTable absent | 0 matches |
+| GuestContractInterface absent | 0 matches |
+| HostInterface absent | 0 matches |
 
 ## Deviations from Plan
 
@@ -98,7 +98,7 @@ None - plan executed exactly as written.
 
 ## Requirements Satisfied
 
-**SDK-05**: JS SDK TypeScript types use current polyplug_abi naming (GuestContractInterface, HostInterface, not PluginInterface/HostVTable).
+**SDK-05**: JS SDK TypeScript types use current polyplug_abi naming (GuestContractInterface, HostInterface, not GuestContractInterface/HostInterface).
 
 ## Self-Check: PASSED
 

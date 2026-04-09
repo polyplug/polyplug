@@ -7,8 +7,8 @@ use polyplug::loader::BundleLoader;
 use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
@@ -61,9 +61,9 @@ fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
     rt.load_bundle(std::path::Path::new(PYTHON_PLUGIN))
 }
 
-fn get_vtable(rt: &Runtime) -> *const PluginInterface {
+fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = rt
+    let handle: GuestContractHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
     rt.resolve_plugin(handle)
@@ -94,9 +94,9 @@ fn integration_python_add() {
     skip_if_no_python!();
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
+    let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded for process lifetime.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 1,
         "test.add vtable must have at least 1 function"
@@ -124,9 +124,9 @@ fn integration_python_add_primitive() {
     skip_if_no_python!();
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
+    let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr is valid; the Python module stays loaded.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 2,
         "test.add vtable must have at least 2 functions"
@@ -154,9 +154,9 @@ fn integration_python_version_string() {
     skip_if_no_python!();
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
+    let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 3,
         "test.add vtable must have at least 3 functions"
@@ -232,9 +232,9 @@ fn integration_python_utf8_roundtrip() {
     skip_if_no_python!();
     let rt: Runtime = create_runtime();
     load_fixture(&rt).expect("fixture must load");
-    let vtable_ptr: *const PluginInterface = get_vtable(&rt);
+    let vtable_ptr: *const GuestContractInterface = get_vtable(&rt);
     // SAFETY: vtable_ptr valid.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 3,
         "test.add vtable must have at least 3 functions"

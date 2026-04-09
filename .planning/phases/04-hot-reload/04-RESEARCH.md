@@ -52,7 +52,7 @@ Not applicable - no CONTEXT.md file exists for this phase.
 |------|----------|---------|-----------------|
 | `GuestContractInstance` | `polyplug_abi/guest/guest_contract_instance.rs` | Opaque instance handle | Destroyed in callback |
 | `GuestContractInterface` | `polyplug_abi/guest/guest_contract_interface.rs` | Contract with create/destroy | Swapped after callback |
-| `PluginHandle` | `polyplug_abi/plugin/plugin_handle.rs` | Handle to interface | Used to find interfaces for swap |
+| `GuestContractHandle` | `polyplug_abi/plugin/plugin_handle.rs` | Handle to interface | Used to find interfaces for swap |
 
 ## Architecture Patterns
 
@@ -418,7 +418,7 @@ pub fn reload_bundle(&self, path: &std::path::Path) -> Result<(), RuntimeError> 
 
         // Find NEW interface (registered during init) by contract_id
         // find_by_contract returns handle with slot index of NEW registration
-        let new_handle: PluginHandle = self.registry
+        let new_handle: GuestContractHandle = self.registry
             .find_by_contract(contract_id, 0)
             .map_err(|e| RuntimeError::Registry(e))?;
 
@@ -468,7 +468,7 @@ pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<GuestContra
 
 /// Already implemented - keep for finding new interface after init
 pub fn find_by_contract(&self, contract_id: GuestContractId, min_version: u32)
-    -> Result<PluginHandle, RegistryError>
+    -> Result<GuestContractHandle, RegistryError>
 ```
 
 ## State of the Art
@@ -519,7 +519,7 @@ Phase 4 depends on Phase 3 instance model completion:
 1. **How does swap find the NEW interface after init? (RESOLVED)**
    - What we know: Init registers interfaces via host_vtable.register_plugin
    - What was unclear: How to get the NEW interface pointer for swap
-   - Resolution: Use `find_by_contract(contract_id, 0)` to locate the newly registered interface. This returns a `PluginHandle` whose `index` field points to the NEW registration slot. Then call `get_interface_arc(handle.index)` to get the Arc for swap.
+   - Resolution: Use `find_by_contract(contract_id, 0)` to locate the newly registered interface. This returns a `GuestContractHandle` whose `index` field points to the NEW registration slot. Then call `get_interface_arc(handle.index)` to get the Arc for swap.
    - Implementation: In `Runtime.reload_bundle()`, after `loader.reload()` succeeds, for each old slot: get its `contract_id`, find new handle, get new interface Arc, call `swap_interface()`.
 
 2. **Does the slot contract_id change across reload? (RESOLVED)**

@@ -6,7 +6,7 @@
 
 ## Summary
 
-Phase 1 consolidates all FFI types in `polyplug_abi` crate with renamed interfaces following Guest/Host terminology. The current architecture has types split across three crates (`polyplug_abi`, `polyplug`, `polyplug_utils`) with inconsistent naming (PluginContractId, PluginInterface, HostVTable). The HostContractVTable family of types is documented in `docs/HOST_CONTRACTS_API.md` but NOT yet implemented in code.
+Phase 1 consolidates all FFI types in `polyplug_abi` crate with renamed interfaces following Guest/Host terminology. The current architecture has types split across three crates (`polyplug_abi`, `polyplug`, `polyplug_utils`) with inconsistent naming (PluginContractId, GuestContractInterface, HostInterface). The HostContractVTable family of types is documented in `docs/HOST_CONTRACTS_API.md` but NOT yet implemented in code.
 
 **Primary recommendation:** Create new types in `polyplug_abi` first, then update imports across dependent crates, ensuring all types are `#[repr(C)]` with stable ABI layouts.
 
@@ -33,9 +33,9 @@ sdks/rust/guest, sdks/rust/host (depend on polyplug_abi)
 
 | Type | Current Location | Needs Action |
 |------|------------------|--------------|
-| `PluginInterface` | `polyplug_abi/src/plugin/plugin_interface.rs` | Rename to `GuestContractInterface` |
-| `HostVTable` | `polyplug_abi/src/host/host_vtable.rs` | Rename to `RuntimeAbi` |
-| `PluginHandle` | `polyplug_abi/src/plugin/plugin_handle.rs` | Keep (used for ContractHandle later) |
+| `GuestContractInterface` | `polyplug_abi/src/plugin/plugin_interface.rs` | Rename to `GuestContractInterface` |
+| `HostInterface` | `polyplug_abi/src/host/host_vtable.rs` | Rename to `RuntimeAbi` |
+| `GuestContractHandle` | `polyplug_abi/src/plugin/plugin_handle.rs` | Keep (used for ContractHandle later) |
 | `PluginDescriptor` | `polyplug_abi/src/plugin/plugin_descriptor.rs` | Keep |
 | `PluginContext` | `polyplug_abi/src/plugin/plugin_context.rs` | Keep |
 | `RuntimeConfig` | `polyplug/src/runtime_config.rs` | Move to `polyplug_abi` |
@@ -47,10 +47,10 @@ sdks/rust/guest, sdks/rust/host (depend on polyplug_abi)
 
 ### Current Type Layouts
 
-**PluginInterface** (40 bytes, align 8):
+**GuestContractInterface** (40 bytes, align 8):
 ```rust
 #[repr(C)]
-pub struct PluginInterface {
+pub struct GuestContractInterface {
     pub contract_id: PluginContractId,    // 8 bytes (offset 0)
     pub contract_version: Version,        // 6 bytes (offset 8)
     pub dispatch_type: DispatchType,      // 4 bytes (offset 14)
@@ -58,10 +58,10 @@ pub struct PluginInterface {
 }
 ```
 
-**HostVTable** (64 bytes, align 8):
+**HostInterface** (64 bytes, align 8):
 ```rust
 #[repr(C)]
-pub struct HostVTable {
+pub struct HostInterface {
     pub register_plugin: extern "C" fn(...),      // 8 bytes (offset 0)
     pub alloc: extern "C" fn(...),                // 8 bytes (offset 8)
     pub free: extern "C" fn(...),                 // 8 bytes (offset 16)
@@ -134,9 +134,9 @@ After rename to `GuestContractId`, the prefix will change to `"guest_contract:"`
 
 | Type | Version | Purpose | Status |
 |------|---------|---------|--------|
-| `GuestContractInterface` | NEW | Renamed from PluginInterface | Rename existing |
+| `GuestContractInterface` | NEW | Renamed from GuestContractInterface | Rename existing |
 | `HostContractInterface` | NEW | Host-side contract interface | Create new |
-| `RuntimeAbi` | NEW | Renamed from HostVTable | Rename existing |
+| `RuntimeAbi` | NEW | Renamed from HostInterface | Rename existing |
 | `RuntimeConfig` | MOVE | Runtime configuration | Move from polyplug |
 | `ReloadPhase` | MOVE | Hot-reload phases | Move from polyplug |
 | `GuestContractInstance` | NEW | Opaque guest instance handle | Create new |
@@ -283,12 +283,12 @@ pub struct HostContractInterface {
 
 ## Code Examples
 
-### Current PluginInterface (to rename)
+### Current GuestContractInterface (to rename)
 
 ```rust
 // Source: crates/polyplug_abi/src/plugin/plugin_interface.rs
 #[repr(C)]
-pub struct PluginInterface {
+pub struct GuestContractInterface {
     pub contract_id: PluginContractId,
     pub contract_version: Version,
     pub dispatch_type: DispatchType,
@@ -348,8 +348,8 @@ pub struct VmDispatch {
 
 | Old Approach | Current Approach | When Changed | Impact |
 |--------------|------------------|--------------|--------|
-| `PluginInterface` | `GuestContractInterface` | Phase 1 | Clearer host/guest separation |
-| `HostVTable` | `RuntimeAbi` | Phase 1 | Runtime != host, clearer naming |
+| `GuestContractInterface` | `GuestContractInterface` | Phase 1 | Clearer host/guest separation |
+| `HostInterface` | `RuntimeAbi` | Phase 1 | Runtime != host, clearer naming |
 | `PluginContractId` | `GuestContractId` | Phase 1 | Consistent with GuestContractInterface |
 | Bare `c_void` instance pointers | `GuestContractInstance` handle | Phase 1 | Type safety at ABI boundary |
 | `*mut c_void` rt_ctx | `RuntimeContext` handle | Phase 7 | Final typed handle replacement |
@@ -387,23 +387,23 @@ pub struct VmDispatch {
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
-| ABI-01 | Rename PluginInterface to GuestContractInterface | Found current struct at `polyplug_abi/src/plugin/plugin_interface.rs` (40 bytes, repr(C)) |
+| ABI-01 | Rename GuestContractInterface to GuestContractInterface | Found current struct at `polyplug_abi/src/plugin/plugin_interface.rs` (40 bytes, repr(C)) |
 | ABI-02 | Create HostContractInterface with singleton field | Spec in docs/HOST_CONTRACTS_API.md shows 48-byte header + dispatch |
-| ABI-03 | Add create/destroy_instance to GuestContractInterface | Current PluginInterface has no instance methods - need to add function pointers |
+| ABI-03 | Add create/destroy_instance to GuestContractInterface | Current GuestContractInterface has no instance methods - need to add function pointers |
 | ABI-04 | Add create/destroy_instance to HostContractInterface | Same pattern as GuestContractInterface |
 | ABI-05 | Move RuntimeConfig to polyplug_abi | Found at `polyplug/src/runtime_config.rs` (24 bytes, repr(C)) |
 | ABI-06 | Move ReloadPhase to polyplug_abi | Found at `polyplug/src/reload.rs` - NOT repr(C), needs redesign |
 | ABI-07 | Move RuntimeCreateOptions to polyplug_abi | Type not found - may be LoadOptions or needs creation |
-| ABI-08 | Rename HostVTable to RuntimeAbi | Found at `polyplug_abi/src/host/host_vtable.rs` (64 bytes, repr(C)) |
+| ABI-08 | Rename HostInterface to RuntimeAbi | Found at `polyplug_abi/src/host/host_vtable.rs` (64 bytes, repr(C)) |
 | ABI-09 | Update VmDispatch with instance param | Found at `polyplug_abi/src/dispatch/vm_dispatch.rs` (16 bytes) - add instance param |
-| ABI-10 | Add call_method to RuntimeAbi | HostVTable has 8 functions - need to add call_method as 9th |
+| ABI-10 | Add call_method to RuntimeAbi | HostInterface has 8 functions - need to add call_method as 9th |
 | ABI-11 | Rename PluginContractId to GuestContractId | Found at `polyplug_utils/src/plugin_contract_id.rs` |
-| ABI-12 | All public ABI structs #[repr(C)] | Verified: PluginInterface, HostVTable, RuntimeConfig are repr(C); ReloadPhase is NOT |
-| RTABI-01 | Rename register_plugin (was register_contract) | HostVTable field name - rename in RuntimeAbi |
-| RTABI-02 | find_contract returns ContractHandle | HostVTable.find_by_contract returns PluginHandle |
-| RTABI-03 | resolve_contract returns interface pointer | HostVTable.resolve_plugin returns *const PluginInterface |
+| ABI-12 | All public ABI structs #[repr(C)] | Verified: GuestContractInterface, HostInterface, RuntimeConfig are repr(C); ReloadPhase is NOT |
+| RTABI-01 | Rename register_plugin (was register_contract) | HostInterface field name - rename in RuntimeAbi |
+| RTABI-02 | find_contract returns ContractHandle | HostInterface.find_by_contract returns GuestContractHandle |
+| RTABI-03 | resolve_contract returns interface pointer | HostInterface.resolve_plugin returns *const GuestContractInterface |
 | RTABI-04 | get_host_contract returns HostContractInstance | Current returns *const HostContractVTable (bare pointer) |
-| RTABI-05 | Remove find_by_bundle from ABI | HostVTable.find_by_bundle exists at offset 32 |
+| RTABI-05 | Remove find_by_bundle from ABI | HostInterface.find_by_bundle exists at offset 32 |
 
 ## Tests That Need Updating
 
@@ -420,8 +420,8 @@ pub struct VmDispatch {
 
 ### Primary (HIGH confidence)
 - `crates/polyplug_abi/src/lib.rs` - ABI type exports
-- `crates/polyplug_abi/src/plugin/plugin_interface.rs` - Current PluginInterface definition
-- `crates/polyplug_abi/src/host/host_vtable.rs` - Current HostVTable definition
+- `crates/polyplug_abi/src/plugin/plugin_interface.rs` - Current GuestContractInterface definition
+- `crates/polyplug_abi/src/host/host_vtable.rs` - Current HostInterface definition
 - `crates/polyplug/src/runtime_config.rs` - RuntimeConfig definition
 - `crates/polyplug/src/reload.rs` - ReloadPhase definition
 
@@ -453,9 +453,9 @@ pub struct VmDispatch {
 
 ### Key Findings
 
-1. **PluginInterface** (40 bytes) exists in `polyplug_abi/src/plugin/plugin_interface.rs` - needs rename to GuestContractInterface and addition of create_instance/destroy_instance fields
+1. **GuestContractInterface** (40 bytes) exists in `polyplug_abi/src/plugin/plugin_interface.rs` - needs rename to GuestContractInterface and addition of create_instance/destroy_instance fields
 
-2. **HostVTable** (64 bytes) exists in `polyplug_abi/src/host/host_vtable.rs` with 8 function pointers including `get_host_contract` - needs rename to RuntimeAbi and addition of `call_method`
+2. **HostInterface** (64 bytes) exists in `polyplug_abi/src/host/host_vtable.rs` with 8 function pointers including `get_host_contract` - needs rename to RuntimeAbi and addition of `call_method`
 
 3. **RuntimeConfig** (24 bytes, repr(C)) exists in `polyplug/src/runtime_config.rs` - needs move to polyplug_abi along with `Compatibility` enum dependency
 

@@ -23,7 +23,7 @@ key_files:
     - tests/fixtures/test_plugin_js/bundle.js
     - tests/fixtures/deno_host_test.ts
 decisions:
-  - Preserve ABI type names (HostVTable) in comments where they reference FFI types
+  - Preserve ABI type names (HostInterface) in comments where they reference FFI types
   - Preserve FFI parameter names (host_vtable) as they are ABI contract names
   - Rename SDK method calls are kept as-is (guard.vtable()) since they reference SDK API
 metrics:
@@ -69,7 +69,7 @@ Updated 3 non-Rust fixture files:
 Key changes:
 - Python: "Plugin interface (vtable)" section header simplified
 - Python: "# vtable" type hint comment → "# interface"
-- Python: HostVTable docstring clarified as ABI type reference
+- Python: HostInterface docstring clarified as ABI type reference
 - JS: Local variable renamed from vtable to interface
 - Deno: Test name "guard_vtable_nonnull" → "guard_interface_nonnull"
 - Deno: Variable `vt` → `iface`, error message "vtable is null" → "interface is null"
@@ -86,14 +86,14 @@ grep -rn "vtable" tests/fixtures/*/src/lib.rs | grep -v "vtable_version" | wc -l
 ### Python/JS Fixtures
 
 ```bash
-grep -n "vtable" tests/fixtures/test_plugin_python/test_plugin.py tests/fixtures/test_plugin_js/bundle.js tests/fixtures/deno_host_test.ts | grep -v "HostVTable" | grep -v "host_vtable" | wc -l
+grep -n "vtable" tests/fixtures/test_plugin_python/test_plugin.py tests/fixtures/test_plugin_js/bundle.js tests/fixtures/deno_host_test.ts | grep -v "HostInterface" | grep -v "host_vtable" | wc -l
 # Output: 1 (only SDK method call guard.vtable() remains - this is correct)
 ```
 
 Remaining references preserved:
 - `guard.vtable()` - SDK API method (correct - SDK uses this method name)
 - `host_vtable` parameter name - FFI contract name (preserved per plan)
-- `HostVTable` type name - ABI type name (preserved per plan)
+- `HostInterface` type name - ABI type name (preserved per plan)
 
 ### Build Verification
 

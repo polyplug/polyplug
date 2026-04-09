@@ -67,8 +67,8 @@ Fix test fixture AbiError.code type usage and verify workspace compiles. The fix
 
 All test fixtures were migrated to the new GuestContractInterface API:
 
-- **Removed `rt_ctx` field** from PluginInterface (now implicit)
-- **Removed `function_count` field** from PluginInterface (moved to NativeDispatch)
+- **Removed `rt_ctx` field** from GuestContractInterface (now implicit)
+- **Removed `function_count` field** from GuestContractInterface (moved to NativeDispatch)
 - **Added `create_instance` and `destroy_instance` stubs** for instance lifecycle
 - **Changed `contract_version`** from packed u32 to `Version { major, minor, patch }`
 - **Changed `contract_id`** to use `GuestContractId::from_u64()` constructor

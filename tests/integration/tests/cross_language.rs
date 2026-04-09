@@ -22,7 +22,7 @@ use polyplug_abi::HostContractInterface;
 use polyplug_abi::HostInterface;
 use polyplug_abi::PluginContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
 use polyplug_utils::guest_contract_id;
@@ -141,8 +141,8 @@ unsafe extern "C" fn stub_find_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle {
+) -> GuestContractHandle {
+    GuestContractHandle {
         index: u32::MAX,
         generation: 0,
     }
@@ -154,8 +154,8 @@ unsafe extern "C" fn stub_find_by_bundle(
     _bundle_id: u64,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle {
+) -> GuestContractHandle {
+    GuestContractHandle {
         index: u32::MAX,
         generation: 0,
     }
@@ -166,7 +166,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-    _out: *mut PluginHandle,
+    _out: *mut GuestContractHandle,
     _out_cap: usize,
 ) -> usize {
     0
@@ -175,8 +175,8 @@ unsafe extern "C" fn stub_find_all_by_contract(
 /// Stub resolve_plugin — returns null.
 unsafe extern "C" fn stub_resolve_plugin(
     _rt_ctx: *mut core::ffi::c_void,
-    _handle: PluginHandle,
-) -> *const PluginInterface {
+    _handle: GuestContractHandle,
+) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
@@ -194,7 +194,7 @@ unsafe extern "C" fn stub_get_host_contract(
 /// Retrieve interface for `test.add@1` from a Runtime instance.
 fn get_interface_from_runtime(runtime: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = guest_contract_id("test.add", 1);
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
     runtime
@@ -203,7 +203,7 @@ fn get_interface_from_runtime(runtime: &Runtime) -> *const GuestContractInterfac
 }
 
 /// Dispatch add(3, 5) and verify the result equals 8.
-fn dispatch_add_and_verify(interface_ptr: *const PluginInterface) {
+fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
     use polyplug_abi::DispatchType;
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
     let mut out: u32 = 0_u32;
@@ -1225,7 +1225,7 @@ fn test_rust_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1252,7 +1252,7 @@ fn test_cpp_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1280,10 +1280,10 @@ fn test_csharp_host_csharp_guest() {
         load_result.err()
     );
     let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
-    let handle: PluginHandle = runtime
+    let handle: GuestContractHandle = runtime
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
-    let interface_ptr: *const PluginInterface = runtime
+    let interface_ptr: *const GuestContractInterface = runtime
         .resolve_plugin(handle)
         .expect("handle must be valid");
     assert!(!interface_ptr.is_null(), "interface must be non-null");
@@ -1330,7 +1330,7 @@ fn test_python_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1357,7 +1357,7 @@ fn test_lua_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1384,7 +1384,7 @@ fn test_js_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1410,7 +1410,7 @@ fn test_rust_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1431,7 +1431,7 @@ fn test_cpp_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1452,7 +1452,7 @@ fn test_csharp_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1473,7 +1473,7 @@ fn test_python_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1494,7 +1494,7 @@ fn test_lua_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1515,7 +1515,7 @@ fn test_js_host_python_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1536,7 +1536,7 @@ fn test_rust_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1553,7 +1553,7 @@ fn test_cpp_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1570,7 +1570,7 @@ fn test_csharp_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1587,7 +1587,7 @@ fn test_python_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1604,7 +1604,7 @@ fn test_lua_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1621,7 +1621,7 @@ fn test_js_host_lua_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1643,7 +1643,7 @@ fn test_rust_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1660,7 +1660,7 @@ fn test_cpp_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1677,7 +1677,7 @@ fn test_csharp_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1694,7 +1694,7 @@ fn test_python_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1711,7 +1711,7 @@ fn test_lua_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }
 
@@ -1728,6 +1728,6 @@ fn test_js_host_js_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let interface_ptr: *const PluginInterface = get_interface_from_runtime(&runtime);
+    let interface_ptr: *const GuestContractInterface = get_interface_from_runtime(&runtime);
     dispatch_add_and_verify(interface_ptr);
 }

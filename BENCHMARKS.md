@@ -16,7 +16,7 @@
 | dispatch/buffer_arg | 35.46 | 0.12 | 4096-byte buffer fill + dispatch — measures dispatch + memory write | YES |
 | dispatch/struct_arg_and_return | 1.97 | 0.010 | AddArgs struct in, u32 out — dominant real-world path | YES |
 | dispatch/cross_plugin | 39.71 | 0.22 | Full dispatcher chain: TLS Registry.find + Registry.resolve + dispatch | YES |
-| dispatch/absent_extension_null_check | TBD | TBD | bench_get_extension stub null-return — floor cost of a function pointer call via HostVTable.get_extension | NO |
+| dispatch/absent_extension_null_check | TBD | TBD | bench_get_extension stub null-return — floor cost of a function pointer call via HostInterface.get_extension | NO |
 | reload_bundle() cold path | < 1ms p50 | < 5ms p99 | Full vtable-swap reload cycle (quiescence wait + ArcSwap + notify callback) | identical to baseline (no overhead when hot_reload_enabled=false; zero branches added to reader path) |
 
 ## Interpretation

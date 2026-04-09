@@ -5,9 +5,9 @@
 mod plugin_context;
 mod plugin_descriptor;
 mod guest_contract_handle;
-mod plugin_interface;
+mod guest_contract_interface;
 
 pub use plugin_context::PluginContext;
 pub use plugin_descriptor::PluginDescriptor;
 pub use guest_contract_handle::GuestContractHandle;
-pub use plugin_interface::PluginInterface;
+pub use guest_contract_interface::GuestContractInterface;

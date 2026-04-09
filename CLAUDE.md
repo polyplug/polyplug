@@ -105,7 +105,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Rust edition 2024 (workspace-wide)
 - Minimum Rust version: 1.85
 ## Import Organization
-- Grouped imports with braces: `use polyplug_abi::{ABI_OK, AbiError, HostVTable};`
+- Grouped imports with braces: `use polyplug_abi::{ABI_OK, AbiError, HostInterface};`
 - Types explicitly imported, not glob-imported in public API
 - Test files may use more glob imports for brevity
 - Workspace dependencies use path aliases: `polyplug_utils`, `polyplug_abi`, `polyplug`
@@ -140,7 +140,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - `Arc` for shared, thread-safe ownership
 - `Mutex` and `RwLock` for interior mutability
 - `RefCell` for thread-local test state
-- Raw pointers for FFI boundary (e.g., `*const PluginInterface`, `*mut c_void`)
+- Raw pointers for FFI boundary (e.g., `*const GuestContractInterface`, `*mut c_void`)
 - Host allocator functions: `polyplug_host_alloc(size, align)` and `polyplug_host_free(ptr, size, align)`
 - Plugin-allocated strings must be freed by caller after reading
 - Static string views (`from_static`) must NOT be freed
@@ -179,7 +179,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - `Result<T, E>` for fallible operations
 - `Option<T>` for nullable results
 - `AbiError` for FFI boundary returns
-- Handle packing for FFI: `u64` packed from `PluginHandle { index, generation }`
+- Handle packing for FFI: `u64` packed from `GuestContractHandle { index, generation }`
 ## Module Design
 - Public API exported from `lib.rs` via `pub use`
 - Internal modules marked `pub(crate)` or private
@@ -222,7 +222,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Purpose: VTable storage, handle validation, contract lookup
 - Location: `crates/polyplug/src/registry/plugin_registry.rs`
 - Contains: `PluginRegistry` with generational slots, `PluginGuard` for RAII vtable access
-- Depends on: ABI types (`PluginInterface`, `PluginHandle`)
+- Depends on: ABI types (`GuestContractInterface`, `GuestContractHandle`)
 - Used by: Runtime, Host callbacks
 - Purpose: Language-specific bundle loading and initialization
 - Location: `crates/polyplug_native/src/loader.rs`, `crates/polyplug_python/src/lib.rs`, `crates/polyplug_js/src/loader.rs`, `crates/polyplug_lua/src/loader.rs`, `crates/polyplug_dotnet/src/lib.rs`
@@ -231,7 +231,7 @@ A high-performance, zero/minimal-overhead cross-language plugin runtime for Rust
 - Used by: Runtime during `load_bundle()` and `reload_bundle()`
 - Purpose: C-compatible type definitions for host/plugin boundary
 - Location: `crates/polyplug_abi/src/`
-- Contains: `PluginInterface`, `HostVTable`, `PluginHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
+- Contains: `GuestContractInterface`, `HostInterface`, `GuestContractHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
 - Depends on: No internal dependencies (standalone)
 - Used by: All layers crossing FFI boundary
 - Purpose: Generate type-safe host/guest bindings from API definitions

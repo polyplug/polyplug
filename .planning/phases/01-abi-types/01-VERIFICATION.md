@@ -25,7 +25,7 @@ deferred:
 
 # Phase 1: ABI Types Verification Report
 
-**Phase Goal:** Complete ABI type migration - rename PluginInterface to GuestContractInterface, HostVTable to RuntimeAbi, add instance factory methods, create opaque instance handles, move RuntimeConfig and Compatibility to polyplug_abi, ensure all imports updated.
+**Phase Goal:** Complete ABI type migration - rename GuestContractInterface to GuestContractInterface, HostInterface to RuntimeAbi, add instance factory methods, create opaque instance handles, move RuntimeConfig and Compatibility to polyplug_abi, ensure all imports updated.
 **Verified:** 2026-04-04T13:00:00Z
 **Status:** passed
 **Re-verification:** Yes - after gap closure plans 05-12
@@ -37,7 +37,7 @@ deferred:
 | #   | Truth | Status | Evidence |
 | --- | ----- | ------ | -------- |
 | 1 | GuestContractInterface struct exists with create_instance/destroy_instance fields | VERIFIED | File exists at `crates/polyplug_abi/src/guest/guest_contract_interface.rs`, both fields present at lines 40-54 |
-| 2 | RuntimeAbi struct renamed from HostVTable with call_method field | VERIFIED | File exists at `crates/polyplug_abi/src/host/runtime_abi.rs`, call_method at lines 76-81 |
+| 2 | RuntimeAbi struct renamed from HostInterface with call_method field | VERIFIED | File exists at `crates/polyplug_abi/src/host/runtime_abi.rs`, call_method at lines 76-81 |
 | 3 | RuntimeConfig moved to polyplug_abi with #[repr(C)] | VERIFIED | File exists at `crates/polyplug_abi/src/runtime/runtime_config.rs`, #[repr(C)], 24 bytes |
 | 4 | ReloadPhaseData FFI-safe struct exists with StringView fields | VERIFIED | File exists at `crates/polyplug_abi/src/runtime/reload_phase_data.rs`, #[repr(C)], 56 bytes |
 | 5 | All ID types renamed: PluginContractId -> GuestContractId throughout codebase | VERIFIED | GuestContractId created with serde::Deserialize; plugin_interface.rs updated; compatibility/mod.rs test code uses GuestContractId; only deprecated alias remains |
@@ -105,14 +105,14 @@ deferred:
 
 | Requirement | Source Plan | Description | Status | Evidence |
 | ----------- | ---------- | ----------- | ------ | -------- |
-| ABI-01 | 01-02 | Rename PluginInterface to GuestContractInterface | SATISFIED | GuestContractInterface exists, legacy alias available |
+| ABI-01 | 01-02 | Rename GuestContractInterface to GuestContractInterface | SATISFIED | GuestContractInterface exists, legacy alias available |
 | ABI-02 | 01-02 | Create HostContractInterface with singleton field | SATISFIED | File exists with singleton bool |
 | ABI-03 | 01-02 | Add create_instance/destroy_instance to GuestContractInterface | SATISFIED | Fields present at lines 40-54 |
 | ABI-04 | 01-02 | Add create_instance/destroy_instance to HostContractInterface | SATISFIED | Fields present |
 | ABI-05 | 01-03 | Move RuntimeConfig to polyplug_abi | SATISFIED | File exists in runtime/ module |
 | ABI-06 | 01-03 | Create ReloadPhaseData FFI-safe struct | SATISFIED | File exists with StringView fields |
 | ABI-07 | N/A | Move RuntimeCreateOptions - DEFERRED | N/A | Type does not exist in codebase |
-| ABI-08 | 01-02 | Rename HostVTable to RuntimeAbi | SATISFIED | File runtime_abi.rs exists |
+| ABI-08 | 01-02 | Rename HostInterface to RuntimeAbi | SATISFIED | File runtime_abi.rs exists |
 | ABI-09 | 01-02 | Update VmDispatch with instance parameter | SATISFIED | VmDispatch.call has instance param |
 | ABI-10 | 01-02 | Add call_method to RuntimeAbi | SATISFIED | call_method field at lines 76-81 |
 | ABI-11 | 01-01, 01-06, 01-10, 01-11 | Rename PluginContractId to GuestContractId | PARTIAL | Type created with serde::Deserialize; plugin_interface.rs updated; compatibility/mod.rs test code still uses deprecated type |

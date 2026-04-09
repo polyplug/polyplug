@@ -32,8 +32,8 @@ metrics:
 ### Task 1 (Partial): Updated All Generators
 
 Modified all code generators to use new naming:
-- `PluginInterface` -> `GuestContractInterface`
-- `HostVTable` -> `RuntimeAbi`
+- `GuestContractInterface` -> `GuestContractInterface`
+- `HostInterface` -> `RuntimeAbi`
 - `PluginDispatch` -> `DispatchMechanisms`
 - `register_plugin` -> `register_contract`
 - `vtable()` -> `interface()` (C++)
@@ -85,8 +85,8 @@ The following test files need similar updates (pattern established by integratio
 - `ffi_edge_cases.rs`
 
 Key patterns to follow:
-1. Replace `use polyplug_abi::HostVTable` with `use polyplug_abi::RuntimeAbi`
-2. Replace `use polyplug_abi::PluginInterface` with `use polyplug_abi::GuestContractInterface`
+1. Replace `use polyplug_abi::HostInterface` with `use polyplug_abi::RuntimeAbi`
+2. Replace `use polyplug_abi::GuestContractInterface` with `use polyplug_abi::GuestContractInterface`
 3. Update RuntimeAbi struct initialization with correct field names
 4. Update PluginContext initialization (no `host_abi_version`)
 5. Use `GuestContractId::new().id()` for contract IDs
@@ -136,7 +136,7 @@ Update benchmark files in:
 
 **1. Generator used legacy naming**
 - Found during: Task 1
-- Issue: Generator produced PluginInterface/HostVTable instead of new types
+- Issue: Generator produced GuestContractInterface/HostInterface instead of new types
 - Fix: Updated rust.rs generator to use GuestContractInterface/RuntimeAbi
 - Files: crates/polyplugc/src/generators/rust.rs
 
@@ -154,7 +154,7 @@ Update benchmark files in:
 
 **4. NativeDispatch.function_count location**
 - Found during: Task 1 test update
-- Issue: function_count moved from PluginInterface to NativeDispatch
+- Issue: function_count moved from GuestContractInterface to NativeDispatch
 - Fix: Updated access path to `vtable.dispatch.native.function_count`
 - Files: crates/polyplug/tests/integration_load.rs
 

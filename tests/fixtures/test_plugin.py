@@ -17,7 +17,7 @@ from polyplug_guest.abi import (
     PluginContext,
     PluginDescriptor,
     PluginRegistrar,
-    PluginInterface,
+    GuestContractInterface,
     StringView,
     REGISTER_FN_TYPE,
 )
@@ -118,7 +118,7 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
     ctypes.cast(_FN_RESET, ctypes.c_void_p),
 )
 
-_VTABLE = PluginInterface(
+_VTABLE = GuestContractInterface(
     contract_id=_TEST_ADD_CONTRACT_ID,
     contract_version=(0 << 16) | 0,  # minor=0, patch=0
     function_count=4,

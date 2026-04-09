@@ -10,7 +10,7 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_utils::guest_contract_id;
 use polyplug_js::JsConfig;
 use polyplug_js::JsLoader;
@@ -73,7 +73,7 @@ fn js_quickjs_load_bundle_and_call() {
     );
 
     let contract_id: u64 = guest_contract_id("test.add", 1);
-    let handle: PluginHandle = rt
+    let handle: GuestContractHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load");
     let vtable_ptr: *const GuestContractInterface = rt

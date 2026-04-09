@@ -15,7 +15,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug::runtime_builder::RuntimeBuilder;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractId;
 use polyplug_python::PythonConfig;
 use polyplug_python::PythonLoader;
@@ -94,7 +94,7 @@ class _PluginDescriptor(ctypes.Structure):
         ("version_patch", ctypes.c_uint32),
     ]
 
-# New PluginInterface structure matching the current ABI
+# New GuestContractInterface structure matching the current ABI
 class _NativeDispatch(ctypes.Structure):
     _fields_ = [("functions", ctypes.c_void_p)]
 
@@ -110,7 +110,7 @@ class _PluginDispatch(ctypes.Union):
         ("vm",     _VmDispatch),
     ]
 
-class _PluginInterface(ctypes.Structure):
+class _GuestContractInterface(ctypes.Structure):
     _fields_ = [
         ("rt_ctx",          ctypes.c_void_p),
         ("contract_id",     ctypes.c_uint64),
@@ -134,7 +134,7 @@ _DESC.version_major = 1
 _DESC.version_minor = 0
 _DESC.version_patch = 0
 
-_INTERFACE = _PluginInterface()
+_INTERFACE = _GuestContractInterface()
 _INTERFACE.rt_ctx          = None
 _INTERFACE.contract_id     = 0xDEADBEEFCAFEBABE
 _INTERFACE.contract_version = 0
@@ -143,7 +143,7 @@ _INTERFACE.dispatch_type   = 0  # Native
 _INTERFACE._pad            = 0
 _INTERFACE.dispatch.native.functions = ctypes.cast(_FUNCTIONS_ARR, ctypes.c_void_p).value
 
-# HostVTable function pointer types
+# HostInterface function pointer types
 _RegisterFn = ctypes.CFUNCTYPE(
     _AbiError,
     ctypes.c_void_p,
@@ -158,7 +158,7 @@ _FindAllByContractFn = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes
 _ResolvePluginFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
 _GetHostContractFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 
-class _HostVTable(ctypes.Structure):
+class _HostInterface(ctypes.Structure):
     _fields_ = [
         ("register_plugin", _RegisterFn),
         ("alloc", _AllocFn),
@@ -171,7 +171,7 @@ class _HostVTable(ctypes.Structure):
     ]
 
 def polyplug_init(rt_ctx: int, host_vtable: int, _ctx: int) -> None:
-    host = _HostVTable.from_address(host_vtable)
+    host = _HostInterface.from_address(host_vtable)
     host.register_plugin(
         ctypes.c_void_p(rt_ctx),
         ctypes.addressof(_DESC),
@@ -291,7 +291,7 @@ fn test_valid_plugin_registers_in_registry() {
     assert!(result.is_ok(), "load failed: {result:?}");
     // The plugin registers with contract_id = 0xDEADBEEFCAFEBABE
     let contract_id: GuestContractId = GuestContractId::from_u64(0xDEADBEEFCAFEBABE);
-    let handle: Result<PluginHandle, polyplug::error::RegistryError> =
+    let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
     assert!(handle.is_ok(), "plugin must be registered in registry");
 }

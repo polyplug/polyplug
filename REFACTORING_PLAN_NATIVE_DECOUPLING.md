@@ -361,7 +361,7 @@ impl Runtime {
         &self,
         contract_id: u64,
         min_version: u32,
-    ) -> Result<polyplug_abi::plugin::PluginHandle, crate::error::RegistryError> {
+    ) -> Result<polyplug_abi::plugin::GuestContractHandle, crate::error::RegistryError> {
         self.registry().find_by_contract(contract_id, min_version)
     }
 }
@@ -559,7 +559,7 @@ use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::{reload::wait_for_quiescence, Runtime};
 use polyplug_abi::plugin::PluginContext;
 use polyplug_abi::types::AbiError;
-use polyplug_abi::{HostVTable, POLYPLUG_ABI_VERSION};
+use polyplug_abi::{HostInterface, POLYPLUG_ABI_VERSION};
 use polyplug_utils::BundleId;
 
 use crate::config::NativeConfig;
@@ -574,12 +574,12 @@ pub struct NativeLoader {
     /// Active library handles, keyed by BundleId.
     libraries: Mutex<HashMap<BundleId, libloading::Library>>,
     /// Host vtable for plugin registration.
-    host_vtable: &'static HostVTable,
+    host_vtable: &'static HostInterface,
 }
 
 impl NativeLoader {
     /// Create a new NativeLoader.
-    pub fn new(config: NativeConfig, host_vtable: &'static HostVTable) -> Self {
+    pub fn new(config: NativeConfig, host_vtable: &'static HostInterface) -> Self {
         Self {
             config,
             libraries: Mutex::new(HashMap::new()),
@@ -634,14 +634,14 @@ impl NativeLoader {
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
         let init_fn_ptr: unsafe extern "C" fn(
             *mut core::ffi::c_void,
-            *const HostVTable,
+            *const HostInterface,
             *const PluginContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
                     *mut core::ffi::c_void,
-                    *const HostVTable,
+                    *const HostInterface,
                     *const PluginContext,
                 ) -> AbiError,
             > = unsafe {
@@ -674,7 +674,7 @@ impl NativeLoader {
         let rt_ctx: *mut core::ffi::c_void =
             &host_ctx as *const polyplug::runtime::HostContext as *mut core::ffi::c_void;
         let init_result: AbiError =
-            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const HostVTable, &ctx) };
+            unsafe { init_fn_ptr(rt_ctx, self.host_vtable as *const HostInterface, &ctx) };
 
         // Step 7: Verify bundle_id wasn't tampered
         let found_bundle_id: BundleId = runtime.get_host_context_bundle_id(&host_ctx);

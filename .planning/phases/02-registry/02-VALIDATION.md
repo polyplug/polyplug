@@ -42,7 +42,7 @@ created: 2026-04-05
 | 02-01-02 | 01 | 1 | REG-02 | — | No PluginGuard, resolve returns pointer | unit | `cargo test -p polyplug --test registry_edge_cases` | ✅ | ✅ green |
 | 02-02-01 | 02 | 2 | REG-04 | — | Direct RwLock swap without ArcSwap | unit | `cargo test -p polyplug --test hot_reload_safety` | ✅ | ✅ green |
 | 02-02-02 | 02 | 2 | REG-04 | — | Tests updated for new patterns | unit | `cargo test -p polyplug --test stress_concurrent_registry` | ✅ | ✅ green |
-| 02-03-01 | 03 | 3 | REG-03 | — | PluginHandle has only index field | unit | `cargo test -p polyplug --test registry_edge_cases` | ✅ | ✅ green |
+| 02-03-01 | 03 | 3 | REG-03 | — | GuestContractHandle has only index field | unit | `cargo test -p polyplug --test registry_edge_cases` | ✅ | ✅ green |
 | 02-03-02 | 03 | 3 | REG-06 | — | find_by_contract returns handle without generation | unit | `cargo test -p polyplug --test registry_edge_cases` | ✅ | ✅ green |
 | 02-03-03 | 03 | 3 | REG-05 | — | RegistrySlot simplified (no generation) | unit | `cargo test -p polyplug --test registry_edge_cases` | ✅ | ✅ green |
 

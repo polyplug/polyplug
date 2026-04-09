@@ -1,18 +1,18 @@
 # GuestContractInterface Design Rationale
 
-> **Historical Document** — This document describes the design rationale for the `GuestContractInterface` architecture (previously called `PluginInterface`). The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
+> **Historical Document** — This document describes the design rationale for the `GuestContractInterface` architecture (previously called `GuestContractInterface`). The implementation is complete and this document is preserved for historical reference. For current implementation details, see the code in `crates/polyplug_abi/src/guest/` and `sdks/*/abi/`.
 
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "PluginInterface"
-- **RuntimeAbi**: Previously called "HostVTable"
+- **GuestContractInterface**: Previously called "GuestContractInterface"
+- **RuntimeAbi**: Previously called "HostInterface"
 - **Guest Contract**: A contract implemented by plugins
 - **Host Contract**: A contract provided by the host to plugins
 
 ## Overview
 
-This document explains the design decisions behind the `GuestContractInterface` architecture, which replaces the previous `PluginInterface` design. The key goals are:
+This document explains the design decisions behind the `GuestContractInterface` architecture, which replaces the previous `GuestContractInterface` design. The key goals are:
 
 1. **Zero overhead for native plugins** - Direct function call, no indirection
 2. **Minimal overhead for VM plugins** - One dispatch call, no global state
@@ -21,14 +21,14 @@ This document explains the design decisions behind the `GuestContractInterface` 
 
 ---
 
-## The Problem with the Old PluginInterface
+## The Problem with the Old GuestContractInterface
 
 ### Previous Architecture
 
 ```rust
-// OLD: PluginInterface forced all loaders into the same pattern
+// OLD: GuestContractInterface forced all loaders into the same pattern
 #[repr(C)]
-pub struct OldPluginInterface {
+pub struct OldGuestContractInterface {
     pub contract_id: u64,
     pub contract_version: u32,
     pub function_count: u32,
@@ -165,7 +165,7 @@ pub fn decode(&self, input: StringView) -> Result<StringView, ContractError> {
 
 **Why the branch is free:**
 
-Modern CPUs have sophisticated branch predictors. For a given `PluginInterface`:
+Modern CPUs have sophisticated branch predictors. For a given `GuestContractInterface`:
 - The `dispatch_type` is set once at load time
 - Every call uses the same branch direction
 - After 1-2 calls, the CPU predicts correctly 100% of the time
@@ -354,7 +354,7 @@ unsafe extern "C" fn deno_dispatch(
 
 ## Summary
 
-| Aspect | Old (PluginInterface) | New (GuestContractInterface) |
+| Aspect | Old (GuestContractInterface) | New (GuestContractInterface) |
 |--------|-------------------|----------------------|
 | Native overhead | ~5 ns | ~5 ns (zero change) |
 | VM overhead | ~100-200 ns | ~60-120 ns (40% faster) |

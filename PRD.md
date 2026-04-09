@@ -173,14 +173,14 @@ void   host_free(void* ptr);
 // Dependency resolution — only valid for declared dependencies
 // contract_id and bundle_id are computed by polyplugc from names in bundle.toml
 // Plugin developers never write IDs — they write names. Codegen handles the rest.
-PluginHandle find_by_contract(uint64_t contract_id, uint32_t min_version);
-PluginHandle find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+GuestContractHandle find_by_contract(uint64_t contract_id, uint32_t min_version);
+GuestContractHandle find_by_bundle(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
 size_t       find_all_by_contract(uint64_t contract_id, uint32_t min_version,
-                                   PluginHandle* out, size_t out_cap);  // caller-provides-buffer
+                                   GuestContractHandle* out, size_t out_cap);  // caller-provides-buffer
 
-// One-time resolution at init: PluginHandle → arc-swap Guard (opaque)
+// One-time resolution at init: GuestContractHandle → arc-swap Guard (opaque)
 // Returned guard keeps vtable alive. Store the guard, use guard->vtable on hot path.
-const PluginGuard* resolve_plugin(PluginHandle handle);
+const PluginGuard* resolve_plugin(GuestContractHandle handle);
 
 // Extension lookup
 const void* get_extension(uint32_t extension_id);
@@ -218,7 +218,7 @@ typedef struct {
 typedef struct {
     uint32_t index;       // slot index in registry
     uint32_t generation;  // detects use-after-unload
-} PluginHandle;           // null sentinel: { index: U32_MAX, generation: 0 }
+} GuestContractHandle;           // null sentinel: { index: U32_MAX, generation: 0 }
 
 // Passed to init() — gives plugin access to its bundle directory.
 // Valid for the duration of init() only. Do not store the pointer.
@@ -239,7 +239,7 @@ typedef struct PluginGuard PluginGuard;
 
 **Trust model:**
 
-polyplug assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. `PluginInterface` pointers must never be cast to mutable and written to — doing so is undefined behavior. There is no runtime enforcement: `mprotect` is bypassable by in-process code and is not used (security theater). See `TRUST_MODEL.md`.
+polyplug assumes plugins are trusted code loaded by the app developer. Malicious in-process code is explicitly out of scope. `GuestContractInterface` pointers must never be cast to mutable and written to — doing so is undefined behavior. There is no runtime enforcement: `mprotect` is bypassable by in-process code and is not used (security theater). See `TRUST_MODEL.md`.
 
 **Rules:**
 - All strings crossing the ABI boundary are UTF-8
@@ -261,23 +261,23 @@ The vtable system is how plugins and host exchange callable function pointers. I
 Host loads bundle (via correct loader — native, dotnet, python, or lua)
         │
         ▼
-Host builds HostVTable (its functions for plugins to call)
+Host builds HostInterface (its functions for plugins to call)
         │
         ▼
-Host calls init(registrar, ctx) passing HostVTable ptr and PluginContext
+Host calls init(registrar, ctx) passing HostInterface ptr and PluginContext
         │
         ▼
 Plugin resolves declared dependencies via find_by_contract / find_by_bundle
 Plugin stores PluginGuard for each dependency (arc-swap read guard)
         │
         ▼
-Plugin builds PluginInterface (its functions for host to call)
+Plugin builds GuestContractInterface (its functions for host to call)
         │
         ▼
-Plugin calls registrar->register() passing PluginInterface ptr
+Plugin calls registrar->register() passing GuestContractInterface ptr
         │
         ▼
-Host stores PluginInterface ptr in arc-swap slot
+Host stores GuestContractInterface ptr in arc-swap slot
         │
         ▼
 Load complete. All future calls = one indirect call.
@@ -285,22 +285,22 @@ Load complete. All future calls = one indirect call.
 
 This exchange is identical regardless of what language the plugin is written in.
 
-**HostVTable — given to every plugin at init:**
+**HostInterface — given to every plugin at init:**
 
 ```c
 typedef struct {
     void*                    (*alloc)(size_t size);
     void                     (*free)(void* ptr);
-    PluginHandle             (*find_by_contract)(uint64_t contract_id, uint32_t min_version);
-    PluginHandle             (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
+    GuestContractHandle             (*find_by_contract)(uint64_t contract_id, uint32_t min_version);
+    GuestContractHandle             (*find_by_bundle)(uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t                   (*find_all_by_contract)(uint64_t contract_id, uint32_t min_version,
-                                                      PluginHandle* out, size_t out_cap);
-    const PluginGuard*       (*resolve_plugin)(PluginHandle handle);
+                                                      GuestContractHandle* out, size_t out_cap);
+    const PluginGuard*       (*resolve_plugin)(GuestContractHandle handle);
     const void*              (*get_extension)(uint32_t extension_id);
-} HostVTable;
+} HostInterface;
 ```
 
-**PluginInterface — one per contract implemented:**
+**GuestContractInterface — one per contract implemented:**
 
 ```c
 typedef struct {
@@ -308,7 +308,7 @@ typedef struct {
     uint32_t contract_version;
     uint32_t function_count;
     void*    functions[];      // fixed order defined by contract schema
-} PluginInterface;
+} GuestContractInterface;
 ```
 
 **PluginRegistrar — bridge during init only:**
@@ -318,9 +318,9 @@ typedef struct {
     void (*register_plugin)(
         PluginRegistrar*        self,
         const PluginDescriptor* descriptor,
-        const PluginInterface*     vtable
+        const GuestContractInterface*     vtable
     );
-    const HostVTable* host;
+    const HostInterface* host;
 } PluginRegistrar;
 ```
 
@@ -341,8 +341,8 @@ struct PluginSlot {
     generation: u32,                   // incremented on unload, detects stale handles
 }
 
-struct VTableSlot(pub *const PluginInterface);
-// SAFETY: PluginInterface is read-only after registration. Send+Sync by trust model.
+struct VTableSlot(pub *const GuestContractInterface);
+// SAFETY: GuestContractInterface is read-only after registration. Send+Sync by trust model.
 unsafe impl Send for VTableSlot {}
 unsafe impl Sync for VTableSlot {}
 ```
@@ -726,7 +726,7 @@ public static AbiError Init(IntPtr registrarPtr, IntPtr ctxPtr) {
 // LibraryImport (source-generated, AOT-safe) replaces DllImport everywhere.
 [LibraryImport("polyplug"), SuppressGCTransition]
 public static partial uint CallPlugin(
-    PluginHandle handle, uint fnId, IntPtr args, IntPtr outPtr);
+    GuestContractHandle handle, uint fnId, IntPtr args, IntPtr outPtr);
 
 // find_plugin and get_extension also get [SuppressGCTransition]
 // host_alloc / host_free do NOT — they may trigger GC
@@ -865,7 +865,7 @@ JsLoader::new(JsConfig {})  // no fields — QuickJS is fully embedded, no syste
 ```
 Host process
 ├── rquickjs::Runtime::new()          ← embedded in-process, ~300μs startup
-├── ctx.globals().set("polyplug", {}) ← all HostVTable fns as direct Rust fn ptrs:
+├── ctx.globals().set("polyplug", {}) ← all HostInterface fns as direct Rust fn ptrs:
 │     findByContract(lo, hi, min_ver) → {index, generation} | null
 │     findByBundle(b_lo, b_hi, c_lo, c_hi, min_ver) → {index, generation} | null
 │     findAllByContract(lo, hi, min_ver) → [{index, generation}]
@@ -1939,7 +1939,7 @@ QuickJS cannot be a standalone host — it is an embedded VM that runs inside a 
 **Design rules:**
 - All symbols prefixed `polyplug_`
 - No Rust types cross the boundary — only primitives, pointers, and ABI structs
-- `PluginHandle` packed as `u64`: `(generation as u64) << 32 | index as u64`
+- `GuestContractHandle` packed as `u64`: `(generation as u64) << 32 | index as u64`
 - Errors reported via `polyplug_last_error()` thread-local string — never panics across FFI
 - Runtime pointer opaque (`*mut OpaqueRuntime`) — consumers never dereference it
 
@@ -2055,7 +2055,7 @@ Every plugin slot in the registry holds an `ArcSwap<VTableSlot>`. Readers (calle
 New version of bundle B detected (inotify / polling / explicit API)
         │
         ▼
-Runtime loads new_B.so (via correct loader), runs init, gets new PluginInterface*
+Runtime loads new_B.so (via correct loader), runs init, gets new GuestContractInterface*
         │
         ▼
 Runtime atomically swaps arc-swap slot: vtable_slot.store(Arc::new(VTableSlot(new_ptr)))

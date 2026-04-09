@@ -46,7 +46,7 @@ Generator tests fail due to ABI field name mismatches from previous phases:
 - `register_plugin` → `register_contract`
 - `resolve_plugin` → `resolve_contract`
 - `find_by_bundle` → removed
-- `PluginHandle.generation` → removed (no generation field)
+- `GuestContractHandle.generation` → removed (no generation field)
 - `GuestContractInterface.function_count` → moved to `dispatch.native.function_count`
 - `PluginContext.host_abi_version` → removed
 

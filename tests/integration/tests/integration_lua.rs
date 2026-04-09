@@ -8,7 +8,7 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::PluginHandle;
+use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
 use polyplug_utils::guest_contract_id;
 use polyplug_lua::LuaConfig;
@@ -39,7 +39,7 @@ fn load_fixture(rt: &Runtime) -> Result<(), RuntimeError> {
 
 fn get_vtable(rt: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = guest_contract_id("test.add", 1);
-    let handle: PluginHandle = rt
+    let handle: GuestContractHandle = rt
         .find_by_contract(contract_id, 0)
         .expect("test.add must be registered after load_fixture()");
     rt.resolve_plugin(handle)

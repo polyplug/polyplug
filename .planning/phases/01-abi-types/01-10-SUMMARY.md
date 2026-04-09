@@ -16,7 +16,7 @@ key_files:
   deleted: [crates/polyplug_abi/src/plugin/plugin_interface.rs]
 decisions:
   - id: D01-10-01
-    summary: "Plan superseded by restructuring - PluginInterface now uses u64 directly"
+    summary: "Plan superseded by restructuring - GuestContractInterface now uses u64 directly"
     rationale: "Restructuring eliminated PluginContractId entirely, using raw u64 for contract_id"
 metrics:
   duration: "1m"
@@ -30,7 +30,7 @@ metrics:
 
 ## One-liner
 
-Plan superseded by prior restructuring - target file deleted, PluginInterface uses raw u64 for contract_id.
+Plan superseded by prior restructuring - target file deleted, GuestContractInterface uses raw u64 for contract_id.
 
 ## Outcome
 
@@ -39,7 +39,7 @@ Plan superseded by prior restructuring - target file deleted, PluginInterface us
 The planned task was to update `crates/polyplug_abi/src/plugin/plugin_interface.rs` to use `GuestContractId` instead of deprecated `PluginContractId`. However, the codebase restructuring (performed in prior plans) has:
 
 1. **Deleted the target file** - `crates/polyplug_abi/src/plugin/plugin_interface.rs` no longer exists
-2. **Consolidated types** - `PluginInterface` struct now defined in `lib.rs` directly
+2. **Consolidated types** - `GuestContractInterface` struct now defined in `lib.rs` directly
 3. **Eliminated deprecated type** - Uses `pub contract_id: u64,` instead of any typed ID
 
 The restructuring has superseded this plan by eliminating the deprecated `PluginContractId` usage entirely.
@@ -90,9 +90,9 @@ The restructuring consolidated all ABI types into `lib.rs` and eliminated the `P
 $ grep -r "PluginContractId" crates/polyplug_abi/
 No matches found
 
-# Verify PluginInterface exists in lib.rs with u64 contract_id
-$ grep -A5 "pub struct PluginInterface" crates/polyplug_abi/src/lib.rs
-pub struct PluginInterface {
+# Verify GuestContractInterface exists in lib.rs with u64 contract_id
+$ grep -A5 "pub struct GuestContractInterface" crates/polyplug_abi/src/lib.rs
+pub struct GuestContractInterface {
     pub rt_ctx: *const HostContext,
     pub contract_id: u64,
     ...
@@ -101,5 +101,5 @@ pub struct PluginInterface {
 ## Self-Check: PASSED
 
 - PluginContractId eliminated from codebase
-- PluginInterface uses u64 for contract_id
+- GuestContractInterface uses u64 for contract_id
 - No deprecation warnings

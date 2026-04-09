@@ -77,8 +77,8 @@ Auto-generated from Rust ABI definitions using LuaJIT FFI:
 - `StringView` — UTF-8 string view (ffi.cdata)
 - `Buffer` — Byte buffer with host allocator
 - `AbiError` — Error code and message
-- `PluginHandle` — Opaque plugin reference
-- `PluginInterface` — Plugin vtable with dispatch mechanism
+- `GuestContractHandle` — Opaque plugin reference
+- `GuestContractInterface` — Plugin vtable with dispatch mechanism
 
 ### Host Library (`host/`)
 

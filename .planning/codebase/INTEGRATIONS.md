@@ -74,9 +74,9 @@
 - `polyplug_runtime_register_host_contract` - Register host contract
 
 **ABI Type Definitions (`polyplug_abi/src/`):**
-- `types.rs` - StringView, AbiError, PluginHandle
-- `plugin.rs` - PluginDescriptor, PluginInterface, DispatchType
-- `host/host_vtable.rs` - HostVTable callbacks
+- `types.rs` - StringView, AbiError, GuestContractHandle
+- `plugin.rs` - PluginDescriptor, GuestContractInterface, DispatchType
+- `host/host_vtable.rs` - HostInterface callbacks
 - `dispatch/` - Native vs VM dispatch structures
 - `tracking.rs` - Contract ID hashing (FNV-1a)
 

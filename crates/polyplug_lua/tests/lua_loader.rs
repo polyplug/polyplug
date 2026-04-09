@@ -15,7 +15,7 @@ use polyplug::runtime::RuntimeBuilder;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_lua::LuaConfig;
 use polyplug_lua::LuaLoader;
 
@@ -265,12 +265,12 @@ fn vtable_is_registered_after_load() {
         "registry must contain test.loader@1 after load"
     );
     let handle: GuestContractHandle = handle.expect("handle must be Ok");
-    let vtable_ptr: Result<*const PluginInterface, polyplug::error::RegistryError> =
+    let vtable_ptr: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
         runtime.registry().resolve(handle);
     assert!(vtable_ptr.is_ok(), "handle must resolve to a vtable");
     // SAFETY: vtable_ptr is a 'static pointer produced by LuaLoader; the Lua VM
-    // and leaked PluginInterface outlive this test.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
+    // and leaked GuestContractInterface outlive this test.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
     assert_eq!(
         vtable.function_count, 1,
         "valid_plugin_script has exactly one function"
@@ -292,10 +292,10 @@ fn vtable_function_count_matches_script() {
     let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(contract_id, 0);
     let handle: GuestContractHandle = handle.expect("test.two@1 must be registered");
-    let vtable_ptr: Result<*const PluginInterface, polyplug::error::RegistryError> =
+    let vtable_ptr: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
         runtime.registry().resolve(handle);
     // SAFETY: see vtable_is_registered_after_load.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
     assert_eq!(
         vtable.function_count, 2,
         "two_function_plugin_script must register 2 functions"
@@ -318,10 +318,10 @@ fn vtable_contract_id_matches_computed_hash() {
     let handle: Result<GuestContractHandle, polyplug::error::RegistryError> =
         runtime.registry().find(expected_cid, 0);
     let handle: GuestContractHandle = handle.expect("test.loader@1 must be registered");
-    let vtable_ptr: Result<*const PluginInterface, polyplug::error::RegistryError> =
+    let vtable_ptr: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
         runtime.registry().resolve(handle);
     // SAFETY: see vtable_is_registered_after_load.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr.expect("vtable must resolve") };
     assert_eq!(
         vtable.contract_id, expected_cid,
         "contract_id in vtable must match FNV-1a hash of 'test.loader@1'"
@@ -432,12 +432,12 @@ fn vtable_function_dispatch_returns_abi_ok() {
         .registry()
         .find(contract_id, 0)
         .expect("test.loader@1 must be registered");
-    let vtable_ptr: *const PluginInterface = runtime
+    let vtable_ptr: *const GuestContractInterface = runtime
         .registry()
         .resolve(handle)
         .expect("handle must resolve to vtable");
-    // SAFETY: vtable_ptr is a 'static leaked PluginInterface from LuaLoader.
-    let vtable: &PluginInterface = unsafe { &*vtable_ptr };
+    // SAFETY: vtable_ptr is a 'static leaked GuestContractInterface from LuaLoader.
+    let vtable: &GuestContractInterface = unsafe { &*vtable_ptr };
     assert!(
         vtable.function_count >= 1,
         "vtable must have at least one function"

@@ -11,7 +11,7 @@ requires:
   - phase: 03-instance-model
     provides: Instance-based plugin model with new ABI structure
 provides:
-  - Removed legacy aliases (PluginInterface, HostVTable, PluginDispatch)
+  - Removed legacy aliases (GuestContractInterface, HostInterface, PluginDispatch)
   - Renamed benchmark file (contract_dispatch.rs)
   - Renamed C# storage class (RuntimeAbiStorage)
   - Renamed C++ method (interface())
@@ -66,9 +66,9 @@ completed: 2026-04-04
 
 ## Accomplishments
 
-- Removed PluginInterface, HostVTable, PluginDispatch aliases from polyplug_abi
+- Removed GuestContractInterface, HostInterface, PluginDispatch aliases from polyplug_abi
 - Renamed benchmark file vtable_dispatch.rs -> contract_dispatch.rs
-- Renamed C# HostVTableStorage -> RuntimeAbiStorage
+- Renamed C# HostInterfaceStorage -> RuntimeAbiStorage
 - Renamed C++ vtable() method -> interface()
 - Updated Rust SDK imports with local backward-compat aliases
 - Updated all test fixtures to use new type names
@@ -83,7 +83,7 @@ Each task was committed atomically:
    - Included extensive deviation fixes for loader crates and SDK
 2. **Task 2: Rename Benchmark File** - `3a213fe` (feat)
    - Renamed and partially updated for new naming
-3. **Task 3: Rename C# HostVTableStorage** - `a5cd40a` (feat)
+3. **Task 3: Rename C# HostInterfaceStorage** - `a5cd40a` (feat)
 4. **Task 4: Rename C++ vtable() method** - `3401989` (feat)
 
 **Plan metadata:** Not yet created
@@ -94,7 +94,7 @@ Each task was committed atomically:
 - `crates/polyplug/src/lib.rs` - Added Runtime re-export
 - `crates/polyplug/benches/contract_dispatch.rs` - Renamed and updated naming
 - `crates/polyplug/Cargo.toml` - Updated benchmark name, added libloading dep
-- `sdks/csharp/guest/RuntimeAbiStorage.cs` - Renamed from HostVTableStorage
+- `sdks/csharp/guest/RuntimeAbiStorage.cs` - Renamed from HostInterfaceStorage
 - `sdks/cpp/guest/polyplug/contract.hpp` - Renamed vtable() to interface()
 - `crates/polyplug_native/src/loader.rs` - Fixed imports, HostContext, PluginContext
 - `crates/polyplug_lua/src/loader.rs` - Extensive ABI structure updates
@@ -125,7 +125,7 @@ Each task was committed atomically:
   - RuntimeAbi function names (register_contract, resolve_contract)
   - HostContext with host_abi_version field
   - PluginContext without host_abi_version field
-  - PluginHandle without generation field
+  - GuestContractHandle without generation field
 - **Files modified:** 20+ files across crates/polyplug_*, sdks/rust/guest, tests/fixtures
 - **Committed in:** `1947b1a` (Task 1 commit)
 

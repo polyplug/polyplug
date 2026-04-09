@@ -27,9 +27,9 @@ internal static class AbiSizeAssertions
         Debug.Assert(Marshal.SizeOf<AbiError>() == 24,
             $"AbiError size mismatch: {Marshal.SizeOf<AbiError>()} != 24");
 
-        // PluginHandle: uint(4) + uint(4) = 8 bytes
-        Debug.Assert(Marshal.SizeOf<PluginHandle>() == 8,
-            $"PluginHandle size mismatch: {Marshal.SizeOf<PluginHandle>()} != 8");
+        // GuestContractHandle: uint(4) + uint(4) = 8 bytes
+        Debug.Assert(Marshal.SizeOf<GuestContractHandle>() == 8,
+            $"GuestContractHandle size mismatch: {Marshal.SizeOf<GuestContractHandle>()} != 8");
 
         // HostContext: IntPtr(8) + ulong(8) = 16 bytes
         Debug.Assert(Marshal.SizeOf<HostContext>() == 16,

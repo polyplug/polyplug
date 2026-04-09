@@ -8,7 +8,7 @@ dependency_graph:
   provides: [host-callers-with-instance-wrappers]
   affects: [polyplugc-rust-generator]
 tech_stack:
-  added: [GuestContractInstance, PluginHandle.pack()]
+  added: [GuestContractInstance, GuestContractHandle.pack()]
   patterns: [RAII-instance-wrapper, create/destroy-factory]
 key_files:
   created: []
@@ -46,7 +46,7 @@ Generated RAII instance wrappers for host-side contract callers with create_inst
 - Added `use polyplug_abi::GuestContractInstance;` import
 - Added `use polyplug::ffi::polyplug_runtime_resolve_plugin;` import
 - Changed struct fields from `guard: PluginGuard` to:
-  - `interface: *const PluginInterface`
+  - `interface: *const GuestContractInterface`
   - `instance: GuestContractInstance`
   - `rt_ctx: *mut core::ffi::c_void`
 - Updated struct doc comment to reflect instance model
@@ -56,11 +56,11 @@ Generated RAII instance wrappers for host-side contract callers with create_inst
 **Files:** crates/polyplugc/src/generators/rust.rs
 
 **Changes:**
-- Updated new() signature: `pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self>`
+- Updated new() signature: `pub fn new(handle: GuestContractHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self>`
 - Calls `polyplug_runtime_resolve_plugin(rt_ctx, handle.pack())` to get interface
 - Calls `((*interface).create_instance)(rt_ctx, core::ptr::null())` to create instance
 - Returns None on null interface or null instance
-- Added PluginHandle.pack() method to polyplug_abi for FFI compatibility
+- Added GuestContractHandle.pack() method to polyplug_abi for FFI compatibility
 
 ### Task 3: Add Drop impl to call destroy_instance
 
@@ -106,13 +106,13 @@ The generated host caller now follows this pattern:
 
 ```rust
 pub struct TestAddContract {
-    interface: *const PluginInterface,
+    interface: *const GuestContractInterface,
     instance: GuestContractInstance,
     rt_ctx: *mut core::ffi::c_void,
 }
 
 impl TestAddContract {
-    pub fn new(handle: PluginHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, rt_ctx: *mut core::ffi::c_void) -> Option<Self> {
         let interface = unsafe { polyplug_runtime_resolve_plugin(rt_ctx, handle.pack()) };
         if interface.is_null() { return None; }
         let instance = unsafe { ((*interface).create_instance)(rt_ctx, core::ptr::null()) };

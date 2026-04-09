@@ -103,10 +103,10 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
-) -> PluginHandle {
+) -> GuestContractHandle {
     std::panic::catch_unwind(|| {
         // existing implementation
-    }).unwrap_or_else(|_| PluginHandle::null())
+    }).unwrap_or_else(|_| GuestContractHandle::null())
 }
 ```
 
@@ -123,7 +123,7 @@ pub unsafe fn register(
     interface_ptr: *const GuestContractInterface,
     contract_name: String,
     bundle_id: BundleId,
-) -> Result<PluginHandle, RegistryError> {
+) -> Result<GuestContractHandle, RegistryError> {
     if interface_ptr.is_null() {
         return Err(RegistryError::InvalidHandle { index: 0 }); // or specific error
     }
@@ -171,15 +171,15 @@ if let Some(old_library) = self.libraries.lock().unwrap().remove(&bundle_id) {
 ### IN-01: Duplicate Type Alias ContractHandle
 
 **File:** `crates/polyplug_abi/src/host/runtime_interface.rs:39` and `crates/polyplug_abi/src/host/host_interface.rs:39`
-**Issue:** Both files define `pub type ContractHandle = PluginHandle` with documentation saying "Will be replaced with ContractHandle in Phase 2." This is confusing - it's already named ContractHandle but says it will be replaced with itself. The documentation should clarify the transition plan or remove the alias.
+**Issue:** Both files define `pub type ContractHandle = GuestContractHandle` with documentation saying "Will be replaced with ContractHandle in Phase 2." This is confusing - it's already named ContractHandle but says it will be replaced with itself. The documentation should clarify the transition plan or remove the alias.
 
 **Fix:**
 ```rust
 // Update documentation:
 /// Type alias for backward compatibility during transition.
-/// PluginHandle will be renamed to ContractHandle in Phase 2.
-/// Currently PluginHandle == ContractHandle.
-pub type ContractHandle = PluginHandle;
+/// GuestContractHandle will be renamed to ContractHandle in Phase 2.
+/// Currently GuestContractHandle == ContractHandle.
+pub type ContractHandle = GuestContractHandle;
 ```
 
 ### IN-02: Missing Debug Implementations on FFI Structs

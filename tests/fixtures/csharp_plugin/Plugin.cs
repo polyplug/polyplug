@@ -23,7 +23,7 @@ public static class Plugin
     private const ulong TEST_ADD_CONTRACT_ID = 0xCC4232FAB0410D2BUL;
 
     private static readonly nint[] s_functions = new nint[4];
-    private static PluginInterface s_interface;
+    private static GuestContractInterface s_interface;
     private static readonly byte[] s_versionBytes = System.Text.Encoding.UTF8.GetBytes("1.0");
     private static readonly byte[] s_nameBytes = System.Text.Encoding.UTF8.GetBytes("csharp_test_adder");
     private static readonly byte[] s_contractBytes = System.Text.Encoding.UTF8.GetBytes("test.add");
@@ -42,7 +42,7 @@ public static class Plugin
             var handle = System.Runtime.InteropServices.GCHandle.Alloc(s_functions, GCHandleType.Pinned);
             s_functionsPtr = handle.AddrOfPinnedObject();
 
-            s_interface = new PluginInterface
+            s_interface = new GuestContractInterface
             {
                 RtCtx = nint.Zero,
                 ContractId = TEST_ADD_CONTRACT_ID,
@@ -122,13 +122,13 @@ public static class Plugin
             if (hostVTablePtr == nint.Zero)
                 return 1;
 
-            var hostVTable = (HostVTable*)hostVTablePtr;
-            var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, PluginInterface*, AbiError>)hostVTable->RegisterPlugin;
+            var hostVTable = (HostInterface*)hostVTablePtr;
+            var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, GuestContractInterface*, AbiError>)hostVTable->RegisterPlugin;
 
             s_interface.RtCtx = rtCtx;
 
             fixed (PluginDescriptor* descPtr = &s_descriptor)
-            fixed (PluginInterface* ifacePtr = &s_interface)
+            fixed (GuestContractInterface* ifacePtr = &s_interface)
             {
                 var result = registerPlugin(rtCtx, descPtr, ifacePtr);
                 return result.Code;

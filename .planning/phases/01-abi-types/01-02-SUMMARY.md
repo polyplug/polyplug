@@ -13,9 +13,9 @@ provides:
   - HostContractInstance opaque handle (8 bytes)
   - GuestContractInterface with create_instance/destroy_instance (56 bytes)
   - HostContractInterface with singleton field (64 bytes)
-  - RuntimeAbi renamed from HostVTable with call_method (64 bytes)
+  - RuntimeAbi renamed from HostInterface with call_method (64 bytes)
   - VmDispatch updated with instance parameter
-  - Legacy aliases PluginInterface, HostVTable for transition
+  - Legacy aliases GuestContractInterface, HostInterface for transition
 affects: [02-registry, 03-instance-model, 05-sdk-updates]
 
 # Tech tracking
@@ -50,9 +50,9 @@ key-decisions:
   - "HostContractInstance as opaque handle (8 bytes, #[repr(C)])"
   - "GuestContractInterface 56 bytes with create_instance/destroy_instance"
   - "HostContractInterface 64 bytes with singleton bool and instance factories"
-  - "RuntimeAbi renamed from HostVTable (64 bytes with call_method, get_host_contract)"
+  - "RuntimeAbi renamed from HostInterface (64 bytes with call_method, get_host_contract)"
   - "VmDispatch.call signature includes instance: GuestContractInstance"
-  - "Legacy aliases PluginInterface = GuestContractInterface, HostVTable = RuntimeAbi"
+  - "Legacy aliases GuestContractInterface = GuestContractInterface, HostInterface = RuntimeAbi"
 
 patterns-established:
   - "Instance-based model: interfaces have create_instance/destroy_instance factory functions"
@@ -81,7 +81,7 @@ completed: "2026-04-03"
 - Created GuestContractInstance and HostContractInstance opaque handles (8 bytes each)
 - Created GuestContractInterface with create_instance/destroy_instance factory fields (56 bytes)
 - Created HostContractInterface with singleton field for host-provided services (64 bytes)
-- Renamed HostVTable to RuntimeAbi and added call_method for cross-dispatch (64 bytes)
+- Renamed HostInterface to RuntimeAbi and added call_method for cross-dispatch (64 bytes)
 - Updated VmDispatch.call signature to include instance parameter
 - Added legacy aliases for backward compatibility during transition
 - Fixed layout tests across polyplug_abi crate to match actual struct sizes
@@ -94,7 +94,7 @@ Each task was committed atomically:
 2. **Task 2: Create HostContractInstance opaque handle** - `9dc7c5b` (feat)
 3. **Task 3: Create GuestContractInterface with instance factory** - `a7bb3b5` (feat)
 4. **Task 4: Create HostContractInterface with singleton field** - `1ea4b6f` (feat)
-5. **Task 5: Rename HostVTable to RuntimeAbi** - `60dd89b` (feat)
+5. **Task 5: Rename HostInterface to RuntimeAbi** - `60dd89b` (feat)
 6. **Task 6: Update VmDispatch with instance parameter** - `9d97acb` (feat)
 7. **Task 7: Update lib.rs exports** - `f54bed0` (feat)
 
@@ -107,7 +107,7 @@ Each task was committed atomically:
 - `crates/polyplug_abi/src/guest/guest_contract_interface.rs` - Interface with factories (56 bytes)
 - `crates/polyplug_abi/src/host/host_contract_instance.rs` - Opaque instance handle (8 bytes)
 - `crates/polyplug_abi/src/host/host_contract_interface.rs` - Interface with singleton (64 bytes)
-- `crates/polyplug_abi/src/host/runtime_abi.rs` - Runtime ABI renamed from HostVTable (64 bytes)
+- `crates/polyplug_abi/src/host/runtime_abi.rs` - Runtime ABI renamed from HostInterface (64 bytes)
 - `crates/polyplug_abi/src/host/mod.rs` - Updated exports
 - `crates/polyplug_abi/src/dispatch/vm_dispatch.rs` - Added instance parameter
 - `crates/polyplug_abi/src/lib.rs` - New exports and legacy aliases
@@ -123,8 +123,8 @@ Each task was committed atomically:
 - GuestContractInterface size 56 bytes (Version 12 bytes causes padding alignment)
 - HostContractInterface size 64 bytes (singleton bool causes padding cascade)
 - RuntimeAbi with call_method for cross-dispatch and get_host_contract for host services
-- ContractHandle as type alias to PluginHandle (Phase 2 will remove generation counter)
-- Legacy aliases for smooth transition: PluginInterface = GuestContractInterface, HostVTable = RuntimeAbi
+- ContractHandle as type alias to GuestContractHandle (Phase 2 will remove generation counter)
+- Legacy aliases for smooth transition: GuestContractInterface = GuestContractInterface, HostInterface = RuntimeAbi
 
 ## Deviations from Plan
 

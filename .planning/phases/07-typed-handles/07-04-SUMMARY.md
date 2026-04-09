@@ -36,7 +36,7 @@ key_files:
 decisions:
   - Runtime.as_context() returns RuntimeContext wrapping HostContext pointer
   - Codegen generates RuntimeContext struct definitions for all languages
-  - PluginHandle simplified to 4-byte opaque index (generations removed)
+  - GuestContractHandle simplified to 4-byte opaque index (generations removed)
   - HostContext expanded to 24 bytes with host_abi_version field
 metrics:
   duration: 2h
@@ -79,7 +79,7 @@ pub fn as_context(&self) -> RuntimeContext {
 
 ### Test Updates
 - Updated `integration_dispatch.rs` callback signatures to use RuntimeContext
-- Fixed `layout_calculations.rs` for PluginHandle (4 bytes) and HostContext (24 bytes) size changes
+- Fixed `layout_calculations.rs` for GuestContractHandle (4 bytes) and HostContext (24 bytes) size changes
 - Updated all test fixtures to use RuntimeContext
 
 ### Examples Regenerated
@@ -120,7 +120,7 @@ pub fn as_context(&self) -> RuntimeContext {
 
 **5. [Rule 1 - Bug] Layout test expecting wrong type sizes**
 - **Found during:** Task 9 - test failure
-- **Issue:** PluginHandle now 4 bytes (was 8), HostContext now 24 bytes (was 16)
+- **Issue:** GuestContractHandle now 4 bytes (was 8), HostContext now 24 bytes (was 16)
 - **Fix:** Updated layout_calculations.rs test expectations
 - **Files modified:** crates/polyplug_codegen/tests/layout_calculations.rs
 - **Commit:** 1418ece

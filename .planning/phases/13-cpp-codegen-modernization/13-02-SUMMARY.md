@@ -71,7 +71,7 @@ Created 7 test functions in `integration_codegen_cpp.rs`:
 | `test_cpp_codegen_host_contract_uses_interface` | Checks `HostContractInterface`, `interface_` member (not `vtable_`) |
 | `test_cpp_codegen_guest_instance_wrapper_exists` | Checks create_instance/destroy_instance stubs, instance lifecycle |
 | `test_cpp_codegen_factory_uses_inline_fields` | Checks inline HostContractInterface fields, no HostContractVTableHeader |
-| `test_cpp_codegen_no_legacy_vtable_naming` | Checks no PluginVTable or static HostVTable in generated code |
+| `test_cpp_codegen_no_legacy_vtable_naming` | Checks no PluginVTable or static HostInterface in generated code |
 
 ### SDK Validation (Task 2)
 

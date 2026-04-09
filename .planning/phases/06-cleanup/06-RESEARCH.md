@@ -19,9 +19,9 @@ Phase 6 focuses on removing legacy terminology ("vtable", "VTable", "VTABLE") an
 |------|----------|-----------|
 | 2026-04-03 | Remove "vtable" naming | Confusing terminology; use GuestContractInterface |
 | 2026-04-03 | Rename Plugin Contract -> Guest Contract | Clear Host/Guest separation |
-| 2026-04-03 | RuntimeAbi naming | Clearer than HostVTable (host != runtime) |
+| 2026-04-03 | RuntimeAbi naming | Clearer than HostInterface (host != runtime) |
 | 2026-04-03 | All public ABI structs repr(C) | Single source of truth, no *C types |
-| 2026-04-03 | Legacy aliases PluginInterface/HostVTable | Smooth transition for dependent code |
+| 2026-04-03 | Legacy aliases GuestContractInterface/HostInterface | Smooth transition for dependent code |
 
 ### Deferred Ideas (OUT OF SCOPE)
 
@@ -67,7 +67,7 @@ By location category:
 | `crates/polyplug_abi/src/host/runtime_abi.rs` | 3 | Doc comment about rename history |
 | `crates/polyplug_native/src/loader.rs` | 8 | Comments and variable names |
 | `sdks/cpp/guest/polyplug/contract.hpp` | 10 | Method name `vtable()` -> `interface()` |
-| `sdks/csharp/guest/HostVTableStorage.cs` | 5 | Class name -> `RuntimeAbiStorage` |
+| `sdks/csharp/guest/HostInterfaceStorage.cs` | 5 | Class name -> `RuntimeAbiStorage` |
 
 ### *C Suffix Types (CLN-02)
 
@@ -101,11 +101,11 @@ Phase 5 already renamed `RuntimeConfigC` to `RuntimeConfig` in all SDKs:
 
 /// Legacy alias for GuestContractInterface during transition.
 /// Will be removed in Phase 6.
-pub type PluginInterface = GuestContractInterface;
+pub type GuestContractInterface = GuestContractInterface;
 
 /// Legacy alias for RuntimeAbi during transition.
 /// Will be removed in Phase 6.
-pub type HostVTable = RuntimeAbi;
+pub type HostInterface = RuntimeAbi;
 
 /// Legacy alias for DispatchMechanisms during transition.
 /// Will be removed in Phase 6.
@@ -113,8 +113,8 @@ pub type PluginDispatch = DispatchMechanisms;
 ```
 
 **Impact:** Removing these requires updating all imports across workspace:
-- `PluginInterface` used in 1800+ locations
-- `HostVTable` used in 163+ locations
+- `GuestContractInterface` used in 1800+ locations
+- `HostInterface` used in 163+ locations
 - `PluginDispatch` used in 43+ locations
 
 ### PluginGuard (CLN-04)
@@ -135,14 +135,14 @@ pub type PluginDispatch = DispatchMechanisms;
 
 | File | Old Terminology | New Terminology |
 |------|-----------------|-----------------|
-| `docs/ABI_ARCHITECTURE.md` | vtable, PluginInterface | contract interface, GuestContractInterface |
+| `docs/ABI_ARCHITECTURE.md` | vtable, GuestContractInterface | contract interface, GuestContractInterface |
 | `docs/HOT_RELOAD_DESIGN.md` | VTableSlot, vtable swap | interface swap |
 | `docs/HOST_CONTRACTS.md` | host vtable | host contract interface |
-| `docs/HOST_CONTRACTS_API.md` | HostVTable | RuntimeAbi |
+| `docs/HOST_CONTRACTS_API.md` | HostInterface | RuntimeAbi |
 | `docs/PERFORMANCE.md` | vtable dispatch | contract dispatch |
-| `docs/PLUGIN_INTERFACE_DESIGN.md` | PluginInterface | GuestContractInterface |
+| `docs/PLUGIN_INTERFACE_DESIGN.md` | GuestContractInterface | GuestContractInterface |
 | `docs/abi_types.md` | vtable terminology | Guest/Host terminology |
-| `docs/ARCHITECTURE_CLARIFICATIONS.md` | PluginInterface, HostVTable | GuestContractInterface, RuntimeAbi |
+| `docs/ARCHITECTURE_CLARIFICATIONS.md` | GuestContractInterface, HostInterface | GuestContractInterface, RuntimeAbi |
 
 ## Standard Stack
 
@@ -150,8 +150,8 @@ pub type PluginDispatch = DispatchMechanisms;
 
 | Old Name | New Name | Source Location |
 |----------|----------|-----------------|
-| `PluginInterface` | `GuestContractInterface` | polyplug_abi/src/guest/ |
-| `HostVTable` | `RuntimeAbi` | polyplug_abi/src/host/ |
+| `GuestContractInterface` | `GuestContractInterface` | polyplug_abi/src/guest/ |
+| `HostInterface` | `RuntimeAbi` | polyplug_abi/src/host/ |
 | `PluginDispatch` | `DispatchMechanisms` | polyplug_abi/src/dispatch/ |
 | `PluginContractId` | `GuestContractId` | polyplug_utils/src/ids.rs |
 | `PluginGuard` | (removed) | Instance model replaces |
@@ -192,7 +192,7 @@ polyplug_abi (canonical types)
 
 ### Files That Depend on Legacy Aliases
 
-| Module | Uses PluginInterface | Uses HostVTable | Uses PluginDispatch |
+| Module | Uses GuestContractInterface | Uses HostInterface | Uses PluginDispatch |
 |--------|---------------------|-----------------|--------------------|
 | polyplug/tests | Yes (fixtures) | Yes (mocks) | Yes (dispatch) |
 | polyplug/benches | Yes (fixtures) | Yes (mocks) | Yes (dispatch) |
@@ -241,11 +241,11 @@ grep -ri "vtable\|VTable\|VTABLE" crates/ sdks/ --include="*.rs" --include="*.cs
 # Expected: 0 matches (except documentation references explaining rename history)
 
 # CLN-02: No *C suffix types
-grep -r "RuntimeConfigC\|PluginContextC\|HostVTableC" crates/ sdks/
+grep -r "RuntimeConfigC\|PluginContextC\|HostInterfaceC" crates/ sdks/
 # Expected: 0 matches (ReloadPhaseC renamed to ReloadPhaseFfi)
 
 # CLN-03: Documentation uses Guest/Host
-grep -r "PluginInterface\|HostVTable" docs/
+grep -r "GuestContractInterface\|HostInterface" docs/
 # Expected: Only in "renamed from" explanatory notes
 
 # CLN-04: No PluginGuard in source
@@ -257,7 +257,7 @@ grep -r "PluginGuard" crates/ sdks/ --include="*.rs" --include="*.cs" --include=
 
 | Criterion | Verification |
 |-----------|--------------|
-| Legacy aliases removed | `grep -r "pub type PluginInterface" crates/polyplug_abi/` returns 0 |
+| Legacy aliases removed | `grep -r "pub type GuestContractInterface" crates/polyplug_abi/` returns 0 |
 | All imports updated | `cargo build --workspace` succeeds |
 | Tests pass | `cargo test --workspace` succeeds |
 | Benchmarks renamed | `crates/polyplug/benches/vtable_dispatch.rs` renamed to `contract_dispatch.rs` |
@@ -271,7 +271,7 @@ grep -r "PluginGuard" crates/ sdks/ --include="*.rs" --include="*.cs" --include=
 **How to avoid:** Run `cargo build --workspace` after each staged removal to catch missing imports.
 
 ### Pitfall 2: Generated Code Not Regenerated
-**What goes wrong:** Old generated code in examples/ still uses PluginInterface.
+**What goes wrong:** Old generated code in examples/ still uses GuestContractInterface.
 **How to avoid:** Run `polyplugc generate` on all example bundles after codegen updates.
 
 ### Pitfall 3: Comment/Documentation Inconsistency
@@ -279,7 +279,7 @@ grep -r "PluginGuard" crates/ sdks/ --include="*.rs" --include="*.cs" --include=
 **How to avoid:** Include comment review in grep patterns; update simultaneously with code.
 
 ### Pitfall 4: Test Fixture Mock Interfaces
-**What goes wrong:** Test mock functions still return `PluginInterface` type.
+**What goes wrong:** Test mock functions still return `GuestContractInterface` type.
 **How to avoid:** Update all test fixture code to use `GuestContractInterface`.
 
 ## Code Examples
@@ -287,8 +287,8 @@ grep -r "PluginGuard" crates/ sdks/ --include="*.rs" --include="*.cs" --include=
 ### Current Legacy Pattern (to remove)
 ```rust
 // crates/polyplug_abi/src/lib.rs
-pub type PluginInterface = GuestContractInterface;  // REMOVE
-pub type HostVTable = RuntimeAbi;                   // REMOVE
+pub type GuestContractInterface = GuestContractInterface;  // REMOVE
+pub type HostInterface = RuntimeAbi;                   // REMOVE
 pub type PluginDispatch = DispatchMechanisms;       // REMOVE
 ```
 
@@ -304,7 +304,7 @@ pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch};
 ### Import Update Pattern
 ```rust
 // Before:
-use polyplug_abi::{PluginInterface, HostVTable, PluginDispatch};
+use polyplug_abi::{GuestContractInterface, HostInterface, PluginDispatch};
 
 // After:
 use polyplug_abi::{GuestContractInterface, RuntimeAbi, DispatchMechanisms};
@@ -365,8 +365,8 @@ All claims verified via grep searches in this session.
 
 ### Tertiary (grep verification)
 - `grep -r "vtable"` results - 223 occurrences in source
-- `grep -r "PluginInterface"` results - 1800 occurrences
-- `grep -r "HostVTable"` results - 163 occurrences
+- `grep -r "GuestContractInterface"` results - 1800 occurrences
+- `grep -r "HostInterface"` results - 163 occurrences
 - `grep -r "PluginGuard"` results - 15 occurrences
 
 ## Metadata

@@ -8,14 +8,14 @@
 
 ### Category: ABI Types
 
-- [x] **ABI-01**: Rename `PluginInterface` to `GuestContractInterface`
+- [x] **ABI-01**: Rename `GuestContractInterface` to `GuestContractInterface`
 - [x] **ABI-02**: Create `HostContractInterface` with `singleton` field
 - [x] **ABI-03**: Add `create_instance` and `destroy_instance` to `GuestContractInterface` returning `GuestContractInstance`
 - [x] **ABI-04**: Add `create_instance` and `destroy_instance` to `HostContractInterface` returning `HostContractInstance`
 - [x] **ABI-05**: Move `RuntimeConfig` from `polyplug` crate to `polyplug_abi`
 - [x] **ABI-06**: Create FFI-safe `ReloadPhaseData` struct in `polyplug_abi` (existing `ReloadPhase` enum with String fields stays in `polyplug` for internal Rust use)
 - [ ] **ABI-07**: Move `RuntimeCreateOptions` to `polyplug_abi` — **DEFERRED**: Type does not exist in current codebase; may be addressed in later phase if needed
-- [x] **ABI-08**: Rename `HostVTable` to `RuntimeAbi`
+- [x] **ABI-08**: Rename `HostInterface` to `RuntimeAbi`
 - [x] **ABI-09**: Update `VmDispatch` to include `GuestContractInstance` parameter
 - [x] **ABI-10**: Add `call_method` to `RuntimeAbi` with `GuestContractInstance` param
 - [x] **ABI-11**: Rename ID types: `PluginContractId` → `GuestContractId`

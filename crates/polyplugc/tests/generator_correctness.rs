@@ -251,7 +251,7 @@ fn interface_slots_are_sequential() {
     );
 }
 
-/// Verifies that the `function_count` field emitted in the PluginInterface
+/// Verifies that the `function_count` field emitted in the GuestContractInterface
 /// initialiser matches the number of functions declared in the contract.
 #[test]
 fn interface_function_count_matches_contract() {

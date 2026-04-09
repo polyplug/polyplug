@@ -51,7 +51,7 @@ Updated all 6 code generators to produce guest vtables with create_instance/dest
 - Added `_GuestContractInstance` parameter to ABI wrapper functions
 - Added `create_instance_stub` and `destroy_instance_stub` functions
 - Added `_CREATE_INSTANCE_FN_CTYPE` and `_DESTROY_INSTANCE_FN_CTYPE` callback types
-- Updated `PluginInterface` construction to use `dispatch.native.function_count` and `dispatch.native.functions`
+- Updated `GuestContractInterface` construction to use `dispatch.native.function_count` and `dispatch.native.functions`
 
 ### Lua Generator (`lua.rs`)
 - Added `create_instance_stub` and `destroy_instance_stub` functions
@@ -61,7 +61,7 @@ Updated all 6 code generators to produce guest vtables with create_instance/dest
 ### C++ Generator (`cpp.rs`)
 - Added `GuestContractInstance` parameter to ABI wrapper functions
 - Added `create_instance_stub` and `destroy_instance_stub` static functions
-- Updated `PluginInterface` structure construction
+- Updated `GuestContractInterface` structure construction
 - Updated `NativeDispatch` to include `function_count` field
 
 ### JS/QuickJS Generator (`js_quickjs.rs`)

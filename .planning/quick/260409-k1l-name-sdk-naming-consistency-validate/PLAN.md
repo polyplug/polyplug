@@ -10,12 +10,12 @@ validation: true
 ## Problem
 
 Python and Lua SDK `abi.py`/`abi.lua` files have:
-1. **Wrong type names**: `PluginInterface` → should be `GuestContractInterface`
-2. **Wrong type names**: `HostVTable` → should be `HostInterface`  
+1. **Wrong type names**: `GuestContractInterface` → should be `GuestContractInterface`
+2. **Wrong type names**: `HostInterface` → should be `HostInterface`  
 3. **Wrong struct fields**: Missing `create_instance`/`destroy_instance`, has non-existent `rt_ctx`/`function_count`
 4. **Size mismatch**: Would cause FFI corruption
 
-C++ SDK has backwards-compat alias `using HostVTable = RuntimeAbi;` but RuntimeAbi doesn't exist in Rust.
+C++ SDK has backwards-compat alias `using HostInterface = RuntimeAbi;` but RuntimeAbi doesn't exist in Rust.
 
 ## Scope
 
@@ -25,7 +25,7 @@ C++ SDK has backwards-compat alias `using HostVTable = RuntimeAbi;` but RuntimeA
 | `sdks/python/guest/polyplug_guest/__init__.py` | Imports wrong names | Update imports |
 | `sdks/lua/abi/polyplug_abi.lua` | Wrong struct definitions | Regenerate or rewrite |
 | `sdks/lua/guest/polyplug_guest.lua` | Uses wrong names | Update |
-| `sdks/cpp/guest/polyplug/guest.hpp` | Has `using HostVTable = RuntimeAbi` | Remove or update |
+| `sdks/cpp/guest/polyplug/guest.hpp` | Has `using HostInterface = RuntimeAbi` | Remove or update |
 
 ## Correct Rust ABI Types
 
@@ -63,16 +63,16 @@ pub struct HostInterface {
 
 ### Task 1: Fix Python SDK abi.py
 Rewrite `sdks/python/polyplug_abi/polyplug_abi/abi.py` with correct struct definitions:
-- Rename `PluginInterface` → `GuestContractInterface`
-- Rename `HostVTable` → `HostInterface`  
+- Rename `GuestContractInterface` → `GuestContractInterface`
+- Rename `HostInterface` → `HostInterface`  
 - Fix field layouts to match Rust ABI
 - Add `create_instance`/`destroy_instance` fields
 - Add type aliases for backwards compat if needed
 
 ### Task 2: Fix Python guest imports
 Update `sdks/python/guest/polyplug_guest/__init__.py`:
-- Import `GuestContractInterface` instead of `PluginInterface`
-- Import `HostInterface` instead of `HostVTable`
+- Import `GuestContractInterface` instead of `GuestContractInterface`
+- Import `HostInterface` instead of `HostInterface`
 - Update any code using these types
 
 ### Task 3: Fix Lua SDK abi.lua
@@ -85,7 +85,7 @@ Update `sdks/lua/guest/polyplug_guest.lua`:
 
 ### Task 5: Fix C++ SDK alias
 Update `sdks/cpp/guest/polyplug/guest.hpp`:
-- Remove or fix `using HostVTable = RuntimeAbi;`
+- Remove or fix `using HostInterface = RuntimeAbi;`
 - Should use `HostInterface` consistently
 
 ### Task 6: Verify tests pass
@@ -93,8 +93,8 @@ Run `cargo test --workspace` to verify no regressions
 
 ## Verification
 
-- `grep -r "PluginInterface" sdks/` returns 0 (except in comments/compat aliases)
-- `grep -r "HostVTable" sdks/` returns 0 (except in comments/compat aliases)
+- `grep -r "GuestContractInterface" sdks/` returns 0 (except in comments/compat aliases)
+- `grep -r "HostInterface" sdks/` returns 0 (except in comments/compat aliases)
 - All tests pass
 - Python SDK types match Rust ABI sizes
 

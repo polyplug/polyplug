@@ -13,7 +13,7 @@ Remove native coupling from the polyplug core crate and move it to polyplug_nati
 ## Discoveries
 
 - The codebase has pre-existing compilation errors from a WIP refactoring commit (commit `3c156e5 refactor(polyplug): WIP restructure crate modules and update imports`)
-- polyplug_abi was restructured - types are now in submodules (e.g., `polyplug_abi::host::host_vtable::HostVTable`, `polyplug_abi::plugin::PluginHandle`)
+- polyplug_abi was restructured - types are now in submodules (e.g., `polyplug_abi::host::host_vtable::HostInterface`, `polyplug_abi::plugin::GuestContractHandle`)
 - VTableSlot was missing from plugin_registry.rs - added it
 - RuntimeError was missing from error.rs - added as type alias for RuntimeError
 - HostContext needed to be defined in runtime.rs (the ABI version in polyplug_abi has different fields)

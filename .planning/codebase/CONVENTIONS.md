@@ -67,7 +67,7 @@
 6. Current module imports
 
 **Style:**
-- Grouped imports with braces: `use polyplug_abi::{ABI_OK, AbiError, HostVTable};`
+- Grouped imports with braces: `use polyplug_abi::{ABI_OK, AbiError, HostInterface};`
 - Types explicitly imported, not glob-imported in public API
 - Test files may use more glob imports for brevity
 
@@ -130,7 +130,7 @@
 - `Arc` for shared, thread-safe ownership
 - `Mutex` and `RwLock` for interior mutability
 - `RefCell` for thread-local test state
-- Raw pointers for FFI boundary (e.g., `*const PluginInterface`, `*mut c_void`)
+- Raw pointers for FFI boundary (e.g., `*const GuestContractInterface`, `*mut c_void`)
 
 **FFI Memory:**
 - Host allocator functions: `polyplug_host_alloc(size, align)` and `polyplug_host_free(ptr, size, align)`
@@ -168,12 +168,12 @@
 - `# Safety` section required for all unsafe functions (enforced by clippy lint)
 - Example safety documentation:
   ```rust
-  /// HostVTable.register_plugin callback — registers a plugin vtable with the runtime.
+  /// HostInterface.register_plugin callback — registers a plugin vtable with the runtime.
   ///
   /// # Safety
   /// - rt_ctx must be a valid pointer to a HostContext
   /// - descriptor must point to a valid PluginDescriptor
-  /// - vtable must point to a valid PluginInterface that remains valid for the Runtime lifetime
+  /// - vtable must point to a valid GuestContractInterface that remains valid for the Runtime lifetime
   pub(crate) unsafe extern "C" fn host_register_plugin(...)
   ```
 
@@ -203,7 +203,7 @@
 - Use Unicode dash separators: `// ─── Section Name ───────────────────────`
 - Example pattern:
   ```rust
-  // ─── HostVTable C ABI callbacks ───────────────────────────────────────────────
+  // ─── HostInterface C ABI callbacks ───────────────────────────────────────────────
   ```
 
 ## Function Design
@@ -223,7 +223,7 @@
 - `Result<T, E>` for fallible operations
 - `Option<T>` for nullable results
 - `AbiError` for FFI boundary returns
-- Handle packing for FFI: `u64` packed from `PluginHandle { index, generation }`
+- Handle packing for FFI: `u64` packed from `GuestContractHandle { index, generation }`
 
 ## Module Design
 

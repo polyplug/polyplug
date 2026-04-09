@@ -43,7 +43,7 @@ public:
     StringView decode(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.interface();
+        const GuestContractInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -101,7 +101,7 @@ public:
     StringView transform(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.interface();
+        const GuestContractInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -159,7 +159,7 @@ public:
     StringView encode(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.interface();
+        const GuestContractInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -217,7 +217,7 @@ public:
     StringView report(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.interface();
+        const GuestContractInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
@@ -275,7 +275,7 @@ public:
     StringView validate(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const PluginInterface* vtable = guard_.interface();
+        const GuestContractInterface* vtable = guard_.interface();
         if (!vtable) {
             static constexpr const char* err_msg = "vtable is null";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});

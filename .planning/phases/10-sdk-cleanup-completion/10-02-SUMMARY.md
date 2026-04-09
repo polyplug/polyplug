@@ -8,9 +8,9 @@ status: completed
 completed_at: 2026-04-06
 ---
 
-## Summary: HostVTable → RuntimeAbi Naming Fixes
+## Summary: HostInterface → RuntimeAbi Naming Fixes
 
-**Objective:** Fix HostVTable → RuntimeAbi naming in C++ guest SDK and C# test file to match polyplug_abi naming convention.
+**Objective:** Fix HostInterface → RuntimeAbi naming in C++ guest SDK and C# test file to match polyplug_abi naming convention.
 
 ### Completed Tasks
 
@@ -26,16 +26,16 @@ Updated naming to match polyplug_abi RuntimeAbi type across SDK files:
 
 1. **C++ guest SDK** (`sdks/cpp/guest/polyplug/guest.hpp`):
    - Section comment renamed: "Host VTable Storage" → "RuntimeAbi Storage"
-   - All function signatures updated: `HostVTable*` → `RuntimeAbi*`
-   - Backward compatibility typedef added: `using HostVTable = RuntimeAbi`
+   - All function signatures updated: `HostInterface*` → `RuntimeAbi*`
+   - Backward compatibility typedef added: `using HostInterface = RuntimeAbi`
 
 2. **C# ABI size tests** (`sdks/csharp/guest/AbiSizeTests.cs`):
-   - Comment updated: "HostVTable: 8 x..." → "RuntimeAbi: 8 x..."
-   - Marshal.SizeOf call updated: `<HostVTable>` → `<RuntimeAbi>`
+   - Comment updated: "HostInterface: 8 x..." → "RuntimeAbi: 8 x..."
+   - Marshal.SizeOf call updated: `<HostInterface>` → `<RuntimeAbi>`
    - Error message updated for RuntimeAbi naming
 
 3. **SDK build extractor** (`crates/polyplug_abi/build/extractor.rs`):
-   - ABI_TYPES array updated: `"HostVTable"` → `"RuntimeAbi"`
+   - ABI_TYPES array updated: `"HostInterface"` → `"RuntimeAbi"`
    - Enables correct SDK generation from polyplug_abi source
 
 ### Key Files Modified
@@ -47,9 +47,9 @@ Updated naming to match polyplug_abi RuntimeAbi type across SDK files:
 ### Verification Results
 
 - C++ guest.hpp contains 6 RuntimeAbi references ✓
-- C++ backward compatibility typedef present: `using HostVTable = RuntimeAbi` ✓
+- C++ backward compatibility typedef present: `using HostInterface = RuntimeAbi` ✓
 - C# AbiSizeTests.cs contains 3 RuntimeAbi references ✓
-- SDK build extractor has RuntimeAbi, no HostVTable in ABI_TYPES ✓
+- SDK build extractor has RuntimeAbi, no HostInterface in ABI_TYPES ✓
 
 ### Deviations
 

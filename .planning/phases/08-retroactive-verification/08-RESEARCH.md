@@ -43,7 +43,7 @@ gaps: []  # Only if status != passed
 | #   | Truth | Status | Evidence |
 | --- | ----- | ------ | -------- |
 | 1 | GuestContractInterface struct exists with create_instance/destroy_instance fields | VERIFIED | File exists at `crates/polyplug_abi/src/guest/guest_contract_interface.rs`, both fields present at lines 40-54 |
-| 2 | RuntimeAbi struct renamed from HostVTable with call_method field | VERIFIED | File exists at `crates/polyplug_abi/src/host/runtime_abi.rs`, call_method at lines 76-81 |
+| 2 | RuntimeAbi struct renamed from HostInterface with call_method field | VERIFIED | File exists at `crates/polyplug_abi/src/host/runtime_abi.rs`, call_method at lines 76-81 |
 ```
 
 ### Requirements Coverage Table Format
@@ -95,7 +95,7 @@ VERIFICATION.md answers: **"Did the phase succeed and what proves it?"**
 |-------------|----------------|---------------|-----------------|
 | REG-01 | 02-01-SUMMARY.md (lines 37: `requirements-completed: [REG-01, REG-02, REG-05]`) | plugin_registry.rs stores Arc directly | `registry_edge_cases.rs` |
 | REG-02 | 02-01-SUMMARY.md | PluginGuard deleted, resolve() returns pointer | `registry_edge_cases.rs` |
-| REG-03 | 02-03-PLAN.md (no SUMMARY exists - gap) | PluginHandle has only index field | `registry_edge_cases.rs` |
+| REG-03 | 02-03-PLAN.md (no SUMMARY exists - gap) | GuestContractHandle has only index field | `registry_edge_cases.rs` |
 | REG-04 | 02-02-SUMMARY.md | arc-swap removed, direct RwLock swap | `hot_reload_safety.rs` |
 | REG-05 | 02-01-SUMMARY.md | RegistrySlot simplified | `registry_edge_cases.rs` |
 | REG-06 | 02-03-PLAN.md (no SUMMARY exists - gap) | find_contract returns handle without generation | `registry_edge_cases.rs` |
@@ -115,7 +115,7 @@ VERIFICATION.md answers: **"Did the phase succeed and what proves it?"**
 | HC-02 | 03-03-SUMMARY.md (lines 46-50: `singleton-cache, double-check-locking`) | get_host_contract returns cached instance for singleton | singleton_contract_returns_cached_instance_on_multiple_calls test |
 | HC-03 | 03-03-SUMMARY.md | get_host_contract creates new instance for multi-instance | multi_instance_contract_creates_new_instance_on_each_call test |
 | HC-04 | 03-05-SUMMARY.md (lines 43: `Added singleton field extraction`) | Codegen generates host contract implementations with singleton field | cargo check -p polyplugc |
-| CG-02 | 03-04-SUMMARY.md | Codegen generates instance wrappers holding interface + instance pointer | rust.rs: `interface: *const PluginInterface, instance: GuestContractInstance` |
+| CG-02 | 03-04-SUMMARY.md | Codegen generates instance wrappers holding interface + instance pointer | rust.rs: `interface: *const GuestContractInterface, instance: GuestContractInstance` |
 | CG-03 | 03-04-SUMMARY.md | Generated wrappers hold interface + instance pointers | rust.rs struct fields |
 | CG-04 | 03-04-SUMMARY.md | Generated wrappers call create/destroy_instance | Drop impl generation |
 | CG-05 | 03-05-SUMMARY.md | Host contract vtable generation for HostContractInterface | All 6 generators updated |
@@ -252,7 +252,7 @@ grep -c "VTableSlot" crates/polyplug/src/registry/plugin_registry.rs
 grep -c "PluginGuard" crates/polyplug/src/registry/plugin_registry.rs
 # Expected: 0
 
-# REG-03: PluginHandle has only index
+# REG-03: GuestContractHandle has only index
 grep -c "generation" crates/polyplug_abi/src/plugin/plugin_handle.rs
 # Expected: 0
 

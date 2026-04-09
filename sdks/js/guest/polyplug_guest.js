@@ -81,7 +81,7 @@ export function getHostVtable() {
 /**
  * Opaque handle to a loaded plugin.
  * 
- * @typedef {Object} PluginHandle
+ * @typedef {Object} GuestContractHandle
  * @property {number} index - Plugin index
  * @property {number} generation - Generation counter for validity checking
  */
@@ -89,7 +89,7 @@ export function getHostVtable() {
 /**
  * Plugin interface — one per contract implemented by a plugin.
  * 
- * @typedef {Object} PluginInterface
+ * @typedef {Object} GuestContractInterface
  * @property {bigint} contract_id - Contract identifier (FNV-1a hash)
  * @property {number} contract_version - Version encoded as (major << 16) | (minor << 8) | patch
  * @property {number} function_count - Number of functions in the interface

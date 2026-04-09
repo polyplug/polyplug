@@ -94,8 +94,8 @@ Auto-generated from Rust ABI definitions. Contains:
 - `StringView` — UTF-8 string view (transcoded from UTF-16 at boundary)
 - `Buffer` — Byte buffer with host allocator
 - `AbiError` — Error code and message
-- `PluginHandle` — Opaque plugin reference
-- `PluginInterface` — Plugin vtable with dispatch mechanism
+- `GuestContractHandle` — Opaque plugin reference
+- `GuestContractInterface` — Plugin vtable with dispatch mechanism
 
 ### Host Library (`host/`)
 

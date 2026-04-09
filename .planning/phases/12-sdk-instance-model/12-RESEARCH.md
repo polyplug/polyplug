@@ -101,7 +101,7 @@ pub struct XxxContract {
 }
 
 impl XxxContract {
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         let interface = /* resolve handle */;
         let instance = unsafe { ((*interface).create_instance)(host, ptr::null()) };
         if instance.data.is_null() { return None; }
@@ -135,7 +135,7 @@ pub use polyplug_abi::HostInterface;
 ### Anti-Patterns to Avoid
 
 - **Duplicate type definitions:** Each SDK should not define its own `RuntimeConfig`, `StringView`, etc. - import from polyplug_abi
-- **Inconsistent naming:** Types should match `polyplug_abi` naming exactly (not `RuntimeConfigC`, `PluginInterface` vs `GuestContractInterface`)
+- **Inconsistent naming:** Types should match `polyplug_abi` naming exactly (not `RuntimeConfigC`, `GuestContractInterface` vs `GuestContractInterface`)
 
 ## Don't Hand-Roll
 
@@ -189,7 +189,7 @@ pub use types::{AbiError, AbiErrorCode, StringView, Version, Buffer, Array, Depe
 pub use dispatch::{DispatchType, DispatchMechanisms, NativeDispatch, VmDispatch, VmLoaderData};
 pub use guest::{GuestContractInterface, GuestContractInstance};
 pub use host::{HostContractInterface, HostContractInstance, HostInterface, RuntimeInterface};
-pub use plugin::{PluginHandle, PluginDescriptor, PluginContext};
+pub use plugin::{GuestContractHandle, PluginDescriptor, PluginContext};
 pub use polyplug_utils::{GuestContractId, HostContractId};
 ```
 
@@ -203,9 +203,9 @@ export { ReloadPhase } from "./host/polyplug/reload_phase.js";
 ```
 
 The JS SDK already exports TypeScript types from `abi/polyplug_abi.ts`. The types include:
-- `StringView`, `Buffer`, `AbiError`, `PluginHandle`, `HostContext`
-- `NativeDispatch`, `VmDispatch`, `PluginInterface` (should be `GuestContractInterface`)
-- `HostVTable` (should be `RuntimeAbi` or `HostInterface`)
+- `StringView`, `Buffer`, `AbiError`, `GuestContractHandle`, `HostContext`
+- `NativeDispatch`, `VmDispatch`, `GuestContractInterface` (should be `GuestContractInterface`)
+- `HostInterface` (should be `RuntimeAbi` or `HostInterface`)
 - `PluginContext`, `RuntimeConfig`
 
 ### Instance Wrapper C++ Codegen
@@ -227,14 +227,14 @@ Note: C++ codegen has stubs but not full RAII wrapper generation like Rust.
 
 | Old Approach | Current Approach | When Changed | Impact |
 |--------------|------------------|--------------|--------|
-| `PluginInterface` naming | `GuestContractInterface` | Phase 1 | Clearer host/guest distinction |
-| `HostVTable` naming | `HostInterface` (guest) / `RuntimeInterface` (host) | Phase 11 | Self-passing pattern |
+| `GuestContractInterface` naming | `GuestContractInterface` | Phase 1 | Clearer host/guest distinction |
+| `HostInterface` naming | `HostInterface` (guest) / `RuntimeInterface` (host) | Phase 11 | Self-passing pattern |
 | `RuntimeConfigC` suffix | `RuntimeConfig` | Phase 10 | Matches polyplug_abi exactly |
 | Manual instance management | Generated RAII wrappers | Phase 3 | Safer lifecycle management |
 
 **Deprecated/outdated:**
-- `PluginInterface`: Use `GuestContractInterface`
-- `HostVTable`: Use `HostInterface` (for guest parameter) or `RuntimeInterface` (for host implementation)
+- `GuestContractInterface`: Use `GuestContractInterface`
+- `HostInterface`: Use `HostInterface` (for guest parameter) or `RuntimeInterface` (for host implementation)
 - `RuntimeConfigC`: Use `RuntimeConfig`
 
 ## Assumptions Log

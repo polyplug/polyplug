@@ -32,7 +32,7 @@ key-files:
     - docs/PLUGIN_INTERFACE_DESIGN.md
 
 key-decisions:
-  - "Keep 'Previously called HostVTable' as valid historical type name context"
+  - "Keep 'Previously called HostInterface' as valid historical type name context"
 
 patterns-established:
   - "Historical type names documented in 'Previously called' format for clarity"
@@ -57,7 +57,7 @@ completed: 2026-04-09
 
 ## Accomplishments
 - Removed redundant "Previously called vtable" notes from terminology sections
-- Preserved "Previously called HostVTable" as valid historical type name context
+- Preserved "Previously called HostInterface" as valid historical type name context
 - Preserved conceptual C++ vtable pattern reference in PLUGIN_INTERFACE_DESIGN.md
 - Maintained consistent interface terminology throughout docs
 
@@ -76,7 +76,7 @@ completed: 2026-04-09
 - `docs/PLUGIN_INTERFACE_DESIGN.md` - Preserved C++ vtable pattern conceptual reference
 
 ## Decisions Made
-- Kept "Previously called HostVTable" references as valid historical type name context explaining evolution
+- Kept "Previously called HostInterface" references as valid historical type name context explaining evolution
 - Preserved C++ vtable pattern conceptual references (line 53 in PLUGIN_INTERFACE_DESIGN.md)
 
 ## Deviations from Plan

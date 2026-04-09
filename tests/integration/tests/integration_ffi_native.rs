@@ -59,8 +59,8 @@ fn test_native_loader_ffi_workflow() {
         "polyplug_runtime_resolve_plugin returned null: {}",
         read_last_error(rt)
     );
-    // SAFETY: resolve_handle is non-null and valid, vtable field is the PluginInterface pointer
-    let vtable: *const polyplug_abi::PluginInterface = unsafe { (*resolve_handle).vtable };
+    // SAFETY: resolve_handle is non-null and valid, vtable field is the GuestContractInterface pointer
+    let vtable: *const polyplug_abi::GuestContractInterface = unsafe { (*resolve_handle).vtable };
     assert!(!vtable.is_null(), "vtable must be non-null");
 
     // 4. Find all by contract

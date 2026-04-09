@@ -6,7 +6,7 @@
 -- because LuaJIT FFI callbacks cannot return structs by value (e.g. AbiError).
 -- Instead, polyplug_init populates _G._polyplug_handlers with pure Lua
 -- function implementations. The LuaLoader (Rust side) wraps these in
--- extern "C" trampolines and builds the PluginInterface itself.
+-- extern "C" trampolines and builds the GuestContractInterface itself.
 
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")

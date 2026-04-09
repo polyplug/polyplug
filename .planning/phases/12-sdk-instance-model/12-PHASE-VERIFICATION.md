@@ -70,7 +70,7 @@ human_verification: []
 | Requirement | Source Plan | Description | Status | Evidence |
 | --- | --- | --- | --- | --- |
 | SDK-01 | 12-01-PLAN | Rust SDK imports types from polyplug_abi without duplicates | SATISFIED | 12-VERIFICATION.md: 25 imports documented |
-| SDK-05 | 12-02-PLAN | JS SDK uses current polyplug_abi naming (GuestContractInterface, not PluginInterface) | SATISFIED | TypeScript file updated, deno check passes |
+| SDK-05 | 12-02-PLAN | JS SDK uses current polyplug_abi naming (GuestContractInterface, not GuestContractInterface) | SATISFIED | TypeScript file updated, deno check passes |
 | SDK-07 | 12-03a/03b-PLAN | All SDKs generate instance-based wrappers via codegen | SATISFIED | 6 generators have create_instance/destroy_instance |
 
 ### Anti-Patterns Found

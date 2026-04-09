@@ -19,8 +19,8 @@ affects: [02-registry, 03-instance-model, 05-sdk-updates]
 tech-stack:
   added: []
 patterns:
-  - "GuestContractInterface replaces PluginInterface in all imports"
-  - "RuntimeAbi replaces HostVTable in all imports"
+  - "GuestContractInterface replaces GuestContractInterface in all imports"
+  - "RuntimeAbi replaces HostInterface in all imports"
   - "GuestContractId replaces PluginContractId in all imports"
   - "Type constructors: GuestContractId::from_u64(), BundleId::from_u64() for ABI boundary"
 

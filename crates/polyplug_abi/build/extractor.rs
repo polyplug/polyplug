@@ -19,7 +19,7 @@ const ABI_TYPES: &[&str] = &[
     "StringView",
     "Buffer",
     "AbiError",
-    "PluginHandle",
+    "GuestContractHandle",
     "HostContext",
     "RuntimeContext",     // Opaque handle wrapping HostContext
     "VmLoaderData",       // Opaque handle for VM loader state
@@ -29,7 +29,7 @@ const ABI_TYPES: &[&str] = &[
     "NativeDispatch",
     "VmDispatch",
     "PluginDispatch",
-    "PluginInterface",
+    "GuestContractInterface",
     "RuntimeAbi",
     "PluginDescriptor",
     "PluginContext",

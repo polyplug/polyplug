@@ -8,7 +8,7 @@ dependencies:
   provides: [CLN-01-verification, CLN-04-verification]
 key_decisions:
   - FFI function names (store_host_vtable, get_host_vtable) preserved for API compatibility
-  - HostVTable type alias preserved for backwards compatibility
+  - HostInterface type alias preserved for backwards compatibility
   - Integration tests and benchmarks updated as deviation from original plan scope
 metrics:
   duration: ~45 minutes
@@ -65,7 +65,7 @@ Final grep audit and test verification for Phase 15 cleanup, with integration te
 **Documented exceptions preserved:**
 - `vtable_version` ABI field
 - `store_host_vtable`, `get_host_vtable`, `host_vtable_storage` FFI functions
-- `HostVTable` type alias for backwards compatibility
+- `HostInterface` type alias for backwards compatibility
 
 ### CLN-04 Verification
 
@@ -104,7 +104,7 @@ Final grep audit and test verification for Phase 15 cleanup, with integration te
 
 The following remain as documented exceptions:
 - FFI function names (`store_host_vtable`, `get_host_vtable`, `host_vtable_storage`)
-- `HostVTable` type alias in C++ SDK
+- `HostInterface` type alias in C++ SDK
 - `.planning/*` historical records
 
 ## Self-Check: PASSED

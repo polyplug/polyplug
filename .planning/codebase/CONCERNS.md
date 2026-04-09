@@ -8,7 +8,7 @@
 - ✅ Instance-based plugin model implemented
 - ✅ VTableSlot wrapper removed
 - ✅ PluginGuard removed
-- ✅ Generation counter removed from PluginHandle
+- ✅ Generation counter removed from GuestContractHandle
 - ✅ Guest/Host contract separation completed
 - ✅ Callback-based hot-reload implemented
 - ✅ All SDKs updated for new ABI

@@ -24,15 +24,15 @@ completed: null
 3. `AbiErrorCode` doesn't implement `Display` for error formatting
 
 **In test files (many files across crates):**
-- `polyplug_abi::PluginInterface` → `polyplug_abi::GuestContractInterface`
-- `polyplug_abi::HostVTable` → `polyplug_abi::RuntimeAbi`
+- `polyplug_abi::GuestContractInterface` → `polyplug_abi::GuestContractInterface`
+- `polyplug_abi::HostInterface` → `polyplug_abi::RuntimeAbi`
 - `polyplug_abi::HostContractVTable` → `polyplug_abi::HostContractInterface`
 - `polyplug_abi::ABI_OK` → removed (use `abi_error_ok()`)
 - `polyplug_abi::bundle_id()` → `polyplug_utils::bundle_id()`
 - `polyplug_abi::contract_id()` → `polyplug_utils::guest_contract_id()`
 - `NativeDispatch` now requires `function_count` field
 - `PluginDescriptor` uses `version: Version` instead of separate fields
-- `PluginHandle` no longer has `generation` field
+- `GuestContractHandle` no longer has `generation` field
 
 ## Commits
 

@@ -46,7 +46,7 @@ All SDKs verified clean:
 | Pattern | Result |
 |---------|--------|
 | `PluginContextC` | 0 matches |
-| `HostVTableC` | 0 matches |
+| `HostInterfaceC` | 0 matches |
 | `HandleC` | 0 matches |
 | `InstanceC` | 0 matches |
 | `ReloadPhaseC` | Found in ffi.rs and SDKs (addressed in Task 4) |
@@ -84,7 +84,7 @@ Found and renamed `ReloadPhaseC` to `ReloadPhaseFfi`:
 Final verification after all tasks:
 
 ```
-grep -r "RuntimeConfigC|PluginContextC|HostVTableC|ReloadPhaseC|ContractHandleC|InstanceC" crates/ sdks/
+grep -r "RuntimeConfigC|PluginContextC|HostInterfaceC|ReloadPhaseC|ContractHandleC|InstanceC" crates/ sdks/
 ```
 
 **Result:**

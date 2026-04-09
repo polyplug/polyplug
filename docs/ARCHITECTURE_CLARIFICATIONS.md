@@ -5,8 +5,8 @@
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "PluginInterface"
-- **RuntimeAbi**: Previously called "HostVTable"
+- **GuestContractInterface**: Previously called "GuestContractInterface"
+- **RuntimeAbi**: Previously called "HostInterface"
 
 The `VTableSlot` wrapper struct was removed in the instance model refactor. Interfaces are now stored directly in the registry.
 
@@ -59,7 +59,7 @@ pub struct PipelineValidatorContract {
 }
 
 impl PipelineValidatorContract {
-    pub fn new(handle: PluginHandle, runtime: &'static Runtime) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, runtime: &'static Runtime) -> Option<Self> {
         let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(PipelineValidatorContract { guard })  // New wrapper, SAME interface
     }
@@ -252,7 +252,7 @@ runtime.load_bundle("./plugins/validator_v1")?;
 runtime.load_bundle("./plugins/validator_v2")?;
 
 // Find ALL implementations
-let mut handles = [PluginHandle::null(); 16];
+let mut handles = [GuestContractHandle::null(); 16];
 let count = runtime.find_all_by_contract(VALIDATOR_ID, 1, &mut handles)?;
 // count == 2 (one from each bundle)
 

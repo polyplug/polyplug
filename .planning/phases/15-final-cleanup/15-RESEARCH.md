@@ -130,8 +130,8 @@ This phase addresses CLN-01 (remove all "vtable" naming) and CLN-04 (update test
 | `test_plugin/src/lib.rs` | Comments about vtable |
 | `memory_plugin/src/lib.rs` | Comments about vtable |
 | `error_plugin/src/lib.rs` | Comments about vtable |
-| `test_plugin_python/test_plugin.py` | `HostVTable` class, `_VTABLE` variable |
-| `csharp_plugin/Plugin.cs` | `HostVTable` type reference |
+| `test_plugin_python/test_plugin.py` | `HostInterface` class, `_VTABLE` variable |
+| `csharp_plugin/Plugin.cs` | `HostInterface` type reference |
 | `deno_host_test.ts` | `vtable()` method call |
 
 ## SDK Changes Required
@@ -143,13 +143,13 @@ This phase addresses CLN-01 (remove all "vtable" naming) and CLN-04 (update test
 | `guest/polyplug/guest.hpp` | `store_host_vtable()` -> `store_host_interface()`, `get_host_vtable()` -> `get_host_interface()` |
 | `host/polyplug/error.hpp` | Comment about "vtable dispatch" |
 
-**Note:** `using HostVTable = RuntimeAbi;` is an alias for backwards compatibility - may keep or remove.
+**Note:** `using HostInterface = RuntimeAbi;` is an alias for backwards compatibility - may keep or remove.
 
 ### Python SDK (sdks/python/)
 
 | File | Changes |
 |------|---------|
-| `polyplug_abi/polyplug_abi/abi.py` | `HostVTable` class name (check if this is from polyplug_abi crate) |
+| `polyplug_abi/polyplug_abi/abi.py` | `HostInterface` class name (check if this is from polyplug_abi crate) |
 | `guest/polyplug_guest/__init__.py` | `store_host_vtable()`, `get_host_vtable()` functions |
 | `host/polyplug/runtime.py` | Comments about "vtable swap" |
 
@@ -157,7 +157,7 @@ This phase addresses CLN-01 (remove all "vtable" naming) and CLN-04 (update test
 
 | File | Changes |
 |------|---------|
-| `abi/polyplug_abi.lua` | `HostVTable` in FFI cdef |
+| `abi/polyplug_abi.lua` | `HostInterface` in FFI cdef |
 | `guest/polyplug_guest.lua` | `store_host_vtable()`, `get_host_vtable()`, `cast_host_vtable()` |
 | `host/polyplug/reload_phase.lua` | Comments about "Before vtable swap" |
 
@@ -174,7 +174,7 @@ This phase addresses CLN-01 (remove all "vtable" naming) and CLN-04 (update test
 | `CLAUDE.md` | Multiple references to vtable in code examples and architecture docs |
 | `TRUST_MODEL.md` | References to "vtable" in security model |
 | `BENCHMARKS.md` | "vtable dispatch" -> "interface dispatch" |
-| `AGENTS.md` | References to HostVTable |
+| `AGENTS.md` | References to HostInterface |
 | `SUMMARY.md` | Historical notes about VTableSlot |
 
 **Note:** Some documentation may legitimately use "vtable" when explaining the C++ virtual table pattern (an established programming concept).

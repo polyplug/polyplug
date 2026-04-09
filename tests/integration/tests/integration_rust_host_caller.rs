@@ -6,8 +6,8 @@ use polyplug::runtime::Runtime;
 use polyplug_abi::ABI_OK;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
-use polyplug_abi::PluginHandle;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInterface;
 use polyplug_native::NativeLoader;
 
 const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
@@ -39,7 +39,7 @@ pub struct TestAddContract {
 
 impl TestAddContract {
     pub fn create(runtime: &'static Runtime, min_version: u32) -> Option<Self> {
-        let handle: PluginHandle = runtime
+        let handle: GuestContractHandle = runtime
             .find_by_contract(TEST_ADD_CONTRACT_ID, min_version)
             .ok()?;
         let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
@@ -60,10 +60,10 @@ impl TestAddContract {
         // SAFETY: args_ptr points to a valid AddArgs and out_ptr to a valid u32.
         let args_ptr: *const () = &args as *const AddArgs as *const ();
         let out_ptr: *mut () = &mut out_val as *mut u32 as *mut ();
-        let vtable_ptr: *const PluginInterface = self.guard.vtable();
+        let vtable_ptr: *const GuestContractInterface = self.guard.vtable();
         // SAFETY: vtable_ptr is valid for the duration of the call.
         let err: AbiError = unsafe {
-            let vtable: &PluginInterface = &*vtable_ptr;
+            let vtable: &GuestContractInterface = &*vtable_ptr;
             if 0_u32 >= vtable.function_count {
                 AbiError {
                     code: AbiErrorCode::FunctionNotAvailable as u32,

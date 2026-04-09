@@ -5,8 +5,8 @@ This document covers performance characteristics and optimization strategies for
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **GuestContractInterface**: Previously called "PluginInterface"
-- **RuntimeAbi**: Previously called "HostVTable"
+- **GuestContractInterface**: Previously called "GuestContractInterface"
+- **RuntimeAbi**: Previously called "HostInterface"
 
 ## Overview
 

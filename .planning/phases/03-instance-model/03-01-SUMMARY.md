@@ -64,7 +64,7 @@ completed: 2026-04-04
 - singleton: bool field added to ResolvedHostContract IR struct
 - singleton propagation in lower_api() function
 - polyplug_utils visibility fixed: modules made public, helper functions added
-- All generators verified to use PluginInterface (alias for GuestContractInterface)
+- All generators verified to use GuestContractInterface (alias for GuestContractInterface)
 
 ## Task Commits
 
@@ -109,7 +109,7 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 - Parser and IR ready for singleton field usage
-- Codegen generators verified to use correct naming (PluginInterface alias)
+- Codegen generators verified to use correct naming (GuestContractInterface alias)
 - Next: 03-02 will update generators to produce singleton-aware host contract factories
 
 ---

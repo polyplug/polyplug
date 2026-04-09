@@ -30,9 +30,9 @@
    - `host_vtable_storage` - Internal SDK naming
    - Locations: `sdks/*/guest/` files
 
-3. **`HostVTable` type alias** - Backwards compatibility alias
+3. **`HostInterface` type alias** - Backwards compatibility alias
    - Location: `sdks/cpp/guest/polyplug/guest.hpp`
-   - Definition: `using HostVTable = RuntimeAbi;`
+   - Definition: `using HostInterface = RuntimeAbi;`
 
 4. **`.planning/*` directory** - Historical records, not modified
 
@@ -99,7 +99,7 @@ These failures exist in the base state and are unrelated to the naming cleanup.
 
 - Source code tests and benchmarks updated to interface terminology
 - FFI function names preserved for API compatibility
-- `HostVTable` type alias preserved for backwards compatibility
+- `HostInterface` type alias preserved for backwards compatibility
 - Planning artifacts unchanged (historical records)
 
 ### CLN-04: COMPLETE

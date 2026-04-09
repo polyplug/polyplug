@@ -121,13 +121,13 @@ unsafe extern "C" fn noop_find_by_contract(
     _rt_ctx: *mut core::ffi::c_void,
     _contract_id: u64,
     _min_version: u32,
-) -> PluginHandle {
-    PluginHandle::null()
+) -> GuestContractHandle {
+    GuestContractHandle::null()
 }
 ```
 
 **What to Mock:**
-- HostVTable callbacks for plugin registration tests
+- HostInterface callbacks for plugin registration tests
 - BundleLoader trait implementations for runtime tests
 - Registry operations for cross-plugin dispatch tests
 
@@ -297,14 +297,14 @@ fn panic_during_init_is_caught() {
 **Thread-Local State Capture:**
 ```rust
 std::thread_local! {
-    static CAPTURED_VTABLE: core::cell::Cell<*const PluginInterface> =
+    static CAPTURED_VTABLE: core::cell::Cell<*const GuestContractInterface> =
         const { core::cell::Cell::new(core::ptr::null()) };
 }
 
 unsafe extern "C" fn capture_vtable_callback(
     _rt_ctx: *mut c_void,
     _descriptor: *const PluginDescriptor,
-    vtable: *const PluginInterface,
+    vtable: *const GuestContractInterface,
 ) -> AbiError {
     CAPTURED_VTABLE.with(|cell| cell.set(vtable));
     AbiError { code: ABI_OK, message: StringView::null() }
@@ -313,7 +313,7 @@ unsafe extern "C" fn capture_vtable_callback(
 #[test]
 fn test_vtable_capture() {
     // ... setup
-    let vtable_ptr: *const PluginInterface = CAPTURED_VTABLE.with(|cell| cell.get());
+    let vtable_ptr: *const GuestContractInterface = CAPTURED_VTABLE.with(|cell| cell.get());
     assert!(!vtable_ptr.is_null());
 }
 ```

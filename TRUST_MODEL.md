@@ -117,7 +117,7 @@ The transition is managed by a thread-local RAII guard called `BundleInitGuard`.
 - **Exit**: When `polyplug_init` returns, the guard is dropped, resetting `INIT_BUNDLE_ID` to 0.
 
 ### Why Hot-paths are Unchecked
-Once a plugin has successfully obtained a `PluginHandle` during Phase 1, it has effectively "cleared customs." Since the registry and the plugin's dependency set are immutable for the life of the process, there is no architectural reason to re-verify the same contract on every hot-path call.
+Once a plugin has successfully obtained a `GuestContractHandle` during Phase 1, it has effectively "cleared customs." Since the registry and the plugin's dependency set are immutable for the life of the process, there is no architectural reason to re-verify the same contract on every hot-path call.
 
 ## 5. Multi-impl Resolution
 
@@ -125,16 +125,16 @@ Polyplug allows multiple bundles to implement the same contract, enabling a rich
 
 ### Query APIs
 1. **`find_by_contract(contract_id, min_version)`**:
-   The standard lookup. It returns the `PluginHandle` for the **first registered** provider that satisfies the version requirement. This is deterministic based on the load order.
+   The standard lookup. It returns the `GuestContractHandle` for the **first registered** provider that satisfies the version requirement. This is deterministic based on the load order.
 2. **`find_by_bundle(bundle_id, contract_id, min_version)`**:
    A scoped lookup. This allows a caller to request an implementation from a specific provider bundle, bypassing the default resolution order.
 3. **`find_all_by_contract(contract_id, min_version)`**:
-   The enumeration API. It returns all providers for a contract. In the C ABI, the caller provides a pre-allocated buffer of `PluginHandle` elements which the host populates.
+   The enumeration API. It returns all providers for a contract. In the C ABI, the caller provides a pre-allocated buffer of `GuestContractHandle` elements which the host populates.
 
 ### Implementation Integrity
 - **DuplicateProvider Rule**: The same `bundle_id` cannot register the same `contract_id` twice. This prevents internal ambiguity within a single bundle.
 - **Cross-Bundle Multi-impl**: Different bundles *can* implement the same contract. The registry tracks these in a `Vec<u32>` of slot indices per contract ID.
-- **Stale Handle Protection**: Every `PluginHandle` contains a generation counter. The `resolve_guard` (or `resolve_plugin` in C) compares the handle's generation against the registry slot. If they mismatch (e.g., after a bundle is unloaded and a new one takes its slot), the resolution returns `ABI_ERROR_STALE_HANDLE`.
+- **Stale Handle Protection**: Every `GuestContractHandle` contains a generation counter. The `resolve_guard` (or `resolve_plugin` in C) compares the handle's generation against the registry slot. If they mismatch (e.g., after a bundle is unloaded and a new one takes its slot), the resolution returns `ABI_ERROR_STALE_HANDLE`.
 
 ### Multi-impl Scenario
 Consider an application that supports multiple audio decoders. Both `flac-bundle` and `mp3-bundle` might register the same `audio.Decoder` contract.
@@ -148,9 +148,9 @@ The following table summarizes the sizes and alignments of the core ABI types on
 
 | Type | Size (bytes) | Alignment (bytes) | Key Fields |
 |------|--------------|-------------------|------------|
-| `HostVTable` | 56 | 8 | 7 function pointers |
-| `PluginInterface` | 24 | 8 | `contract_id`, `functions` ptr |
-| `PluginHandle` | 8 | 4 | `index`, `generation` |
+| `HostInterface` | 56 | 8 | 7 function pointers |
+| `GuestContractInterface` | 24 | 8 | `contract_id`, `functions` ptr |
+| `GuestContractHandle` | 8 | 4 | `index`, `generation` |
 | `StringView` | 16 | 8 | `ptr`, `len` |
 | `Buffer` | 24 | 8 | `ptr`, `len`, `cap` |
 | `AbiError` | 24 | 8 | `code`, `message` (StringView) |
@@ -167,7 +167,7 @@ pub struct PluginGuard {
 }
 
 impl PluginGuard {
-    pub fn vtable(&self) -> *const PluginInterface {
+    pub fn vtable(&self) -> *const GuestContractInterface {
         self.slot.0
     }
 }
@@ -183,7 +183,7 @@ The polyplug trust model is a **Software Architecture Enforcement Tool**, not a 
 |-----------------|--------|-------------|
 | Undeclared Dependencies | **YES** | Caught during initialization lookup. |
 | Version Mismatches | **YES** | Rejected by `find_by_contract` if version < `min_version`. |
-| Use-after-Unload | **YES** | Caught by generational index checks in `PluginHandle`. |
+| Use-after-Unload | **YES** | Caught by generational index checks in `GuestContractHandle`. |
 | Malformed / corrupted binaries | **YES** | Invalid UTF-8, truncated, wrong magic, missing `init` — all return clean errors. |
 | Null pointer inputs to C facade | **YES** | All `polyplug_rt_*` functions null-check every pointer at entry. |
 | Double-free of host memory (debug) | **YES** | `TrackingAllocator` panics on double-free in `cfg(debug_assertions)`. ASan in CI. |
@@ -223,9 +223,9 @@ Even with trusted plugins, malformed or corrupted plugin binaries are a real sce
 
 `from_utf8_unchecked` is **never** used on data originating from a plugin binary or passed from a plugin across the ABI boundary. Such data always goes through `std::str::from_utf8` with a hard error on failure.
 
-### `PluginInterface` immutability
+### `GuestContractInterface` immutability
 
-`PluginInterface` pointers are treated as read-only after registration. Casting a `*const PluginInterface` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable in-process. It is a contract that trusted plugins must uphold.
+`GuestContractInterface` pointers are treated as read-only after registration. Casting a `*const GuestContractInterface` to `*mut` and writing to it is undefined behavior. polyplug does not enforce this at runtime — enforcement is bypassable in-process. It is a contract that trusted plugins must uphold.
 
 ## 7. ABI Freeze Notice
 
@@ -233,14 +233,14 @@ The core polyplug ABI is frozen as of Epic 9.7. This freeze ensures that bundles
 
 ### Frozen Surface Areas
 The following structures have fixed layouts and sizes. Any modification to these (e.g., adding a field or changing field order) is a breaking change.
-- **`HostVTable` (56 bytes)**: Contains 7 function pointers (`alloc`, `free`, `find_by_contract`, `find_by_bundle`, `find_all_by_contract`, `resolve_plugin`, `get_extension`).
-- **`PluginInterface` (24 bytes)**: Fixed header before the function pointer array.
-- **`PluginHandle` (8 bytes)**: 4-byte index, 4-byte generation.
+- **`HostInterface` (56 bytes)**: Contains 7 function pointers (`alloc`, `free`, `find_by_contract`, `find_by_bundle`, `find_all_by_contract`, `resolve_plugin`, `get_extension`).
+- **`GuestContractInterface` (24 bytes)**: Fixed header before the function pointer array.
+- **`GuestContractHandle` (8 bytes)**: 4-byte index, 4-byte generation.
 - **`StringView` (16 bytes)**: 8-byte pointer, 8-byte length.
 - **`Buffer` (24 bytes)**: 8-byte pointer, 8-byte length, 8-byte capacity.
 
 ### Extensibility via `get_extension`
-To support future features without breaking the ABI, the `HostVTable` includes `get_extension(extension_id)`. This allows the host to expose new capability-specific VTables to plugins that know how to ask for them.
+To support future features without breaking the ABI, the `HostInterface` includes `get_extension(extension_id)`. This allows the host to expose new capability-specific VTables to plugins that know how to ask for them.
 
 ## Hot-Reload Safety Guarantees
 
@@ -255,7 +255,7 @@ To support future features without breaking the ABI, the `HostVTable` includes `
 The trust model continues to evolve as polyplug expands its reach into more dynamic environments.
 
 ### Hot-Reload ✅ done (Epic 17)
-Hot-reload is implemented. The generation counter in `PluginHandle` detects stale handles. Arc-swap guards ensure the old vtable stays alive until all in-flight calls complete. Quiescence timeout is 5 seconds. See the Hot-Reload Safety Guarantees section above.
+Hot-reload is implemented. The generation counter in `GuestContractHandle` detects stale handles. Arc-swap guards ensure the old vtable stays alive until all in-flight calls complete. Quiescence timeout is 5 seconds. See the Hot-Reload Safety Guarantees section above.
 
 ### Scripting and JS Bindings ✅ done (Epics 10–11, 11.5)
 Python, Lua, JavaScript (QuickJS and Deno/V8) plugins are implemented. All respect the same trust model rules — scripted plugins have their own bundle ID and declare dependencies in `bundle.toml`. The runtime enforces these through the same `INIT_BUNDLE_ID` mechanism used by native code.
@@ -284,12 +284,12 @@ and communicate via IPC. polyplug does not provide this facility.
 
 
 // =============================================================================
-// ABI FROZEN — pre-v1.0 (HostVTable rt_ctx refactoring)
+// ABI FROZEN — pre-v1.0 (HostInterface rt_ctx refactoring)
 // =============================================================================
 //
 // The following types and function signatures constitute the frozen polyplug ABI.
 // NO CHANGES to #[repr(C)] structs, function pointer signatures, or the field
-// order of HostVTable are permitted after this point.
+// order of HostInterface are permitted after this point.
 //
 // All new functionality must go through the host contract mechanism (get_host_contract).
 // For rationale and trust model, see TRUST_MODEL.md.

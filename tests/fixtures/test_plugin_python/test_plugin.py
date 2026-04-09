@@ -16,7 +16,7 @@ from polyplug_guest import (
     ABI_OK,
     AbiError,
     PluginDescriptor,
-    PluginInterface,
+    GuestContractInterface,
     StringView,
 )
 from polyplug_abi import (
@@ -123,11 +123,11 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
     ctypes.cast(_FN_RESET, ctypes.c_void_p),
 )
 
-# ── HostVTable definition (matches polyplug_abi::HostVTable) ───────────────────
+# ── HostInterface definition (matches polyplug_abi::HostInterface) ───────────────────
 
 
-class HostVTable(ctypes.Structure):
-    """HostVTable passed to polyplug_init. 64 bytes (8 function pointers)."""
+class HostInterface(ctypes.Structure):
+    """HostInterface passed to polyplug_init. 64 bytes (8 function pointers)."""
 
     _fields_ = [
         ("register_plugin", ctypes.c_void_p),
@@ -148,7 +148,7 @@ _REGISTER_PLUGIN_FN_TYPE = ctypes.CFUNCTYPE(
     ctypes.POINTER(AbiError),  # sret: hidden pointer where caller expects AbiError
     ctypes.c_void_p,  # rt_ctx
     ctypes.POINTER(PluginDescriptor),  # descriptor
-    ctypes.POINTER(PluginInterface),  # interface
+    ctypes.POINTER(GuestContractInterface),  # interface
 )
 
 # ── Plugin interface ──────────────────────────────────────────────────
@@ -159,7 +159,7 @@ _native_dispatch = NativeDispatch(
 )
 _dispatch = PluginDispatch(native=_native_dispatch)
 
-_VTABLE = PluginInterface(
+_VTABLE = GuestContractInterface(
     rt_ctx=None,  # Will be set by host during registration
     contract_id=_TEST_ADD_CONTRACT_ID,
     contract_version=(0 << 16) | 0,  # minor=0, patch=0
@@ -198,8 +198,8 @@ def polyplug_init(rt_ctx: int, host_vtable: int, ctx_ptr: int) -> None:
     if host_vtable == 0:
         raise RuntimeError("host_vtable is null")
 
-    # Cast the host_vtable pointer to HostVTable structure
-    host = HostVTable.from_address(host_vtable)
+    # Cast the host_vtable pointer to HostInterface structure
+    host = HostInterface.from_address(host_vtable)
 
     # Cast the register_plugin function pointer to the correct type (sret convention)
     register_fn = ctypes.cast(host.register_plugin, _REGISTER_PLUGIN_FN_TYPE)

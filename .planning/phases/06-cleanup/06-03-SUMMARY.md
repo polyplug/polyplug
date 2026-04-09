@@ -40,7 +40,7 @@ metrics:
 
 # Phase 06 Plan 03: Update Documentation to Guest/Host Terminology Summary
 
-**One-liner:** Updated all documentation files to use GuestContractInterface/RuntimeAbi terminology, replacing old PluginInterface/HostVTable naming throughout.
+**One-liner:** Updated all documentation files to use GuestContractInterface/RuntimeAbi terminology, replacing old GuestContractInterface/HostInterface naming throughout.
 
 ## Completed Tasks
 
@@ -59,8 +59,8 @@ metrics:
 
 | Old Term | New Term | Context |
 |----------|----------|---------|
-| PluginInterface | GuestContractInterface | Contract implemented by plugins |
-| HostVTable | RuntimeAbi | Runtime's ABI provided to guests |
+| GuestContractInterface | GuestContractInterface | Contract implemented by plugins |
+| HostInterface | RuntimeAbi | Runtime's ABI provided to guests |
 | vtable | interface | When referring to contract interfaces |
 | vtable dispatch | contract dispatch | Dispatch mechanism terminology |
 | HostContractVTable | HostContractInterface | Host-provided services |
@@ -89,7 +89,7 @@ None - plan executed exactly as written.
 
 ```bash
 # Verified no old terminology in current descriptions
-grep -r "PluginInterface|HostVTable" docs/ --include="*.md"
+grep -r "GuestContractInterface|HostInterface" docs/ --include="*.md"
 # Only matches in terminology notes explaining the rename
 
 # Verified new terminology is present
@@ -102,7 +102,7 @@ grep -rE "GuestContractInterface|RuntimeAbi" docs/ --include="*.md"
 - [x] All 8 documentation files exist and are modified
 - [x] Commit c44c989 exists with correct message format
 - [x] Terminology notes added to all files
-- [x] No PluginInterface/HostVTable in current descriptions (only in rename notes)
+- [x] No GuestContractInterface/HostInterface in current descriptions (only in rename notes)
 - [x] New terminology used throughout
 
 ## Known Stubs

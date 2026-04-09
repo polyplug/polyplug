@@ -3,7 +3,7 @@
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **RuntimeAbi**: Previously called "HostVTable" - the runtime's ABI provided to guests
+- **RuntimeAbi**: Previously called "HostInterface" - the runtime's ABI provided to guests
 - **HostContractInterface**: Previously called "HostContractVTable" - a contract the host implements for guests
 
 ## Overview

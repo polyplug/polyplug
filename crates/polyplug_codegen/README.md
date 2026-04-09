@@ -92,7 +92,7 @@ pub struct ImageDecodeContract {
 impl ImageDecodeContract {
     /// Factory method - creates caller wrapper or None if plugin not found
     pub fn create(runtime: &'static Runtime, min_version: u32) -> Option<Self> {
-        let handle: PluginHandle = runtime.find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version).ok()?;
+        let handle: GuestContractHandle = runtime.find_by_contract(IMAGE_DECODE_CONTRACT_ID, min_version).ok()?;
         let guard: PluginGuard = runtime.registry().resolve_guard(handle).ok()?;
         Some(Self { guard })  // New wrapper, but points to SAME singleton vtable
     }
@@ -104,7 +104,7 @@ impl ImageDecodeContract {
     pub fn reset(&mut self) { /* no-op */ }
     
     pub fn decode(&self, input: &[u8]) -> Result<Vec<u8>, ContractError> {
-        let vtable_ptr: *const PluginInterface = self.guard.vtable();
+        let vtable_ptr: *const GuestContractInterface = self.guard.vtable();
         // ... ABI call through singleton implementation
     }
 }
@@ -152,7 +152,7 @@ public:
     void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
     
     std::string decode(std::string_view input) {
-        const PluginInterface* vt = guard_.vtable();
+        const GuestContractInterface* vt = guard_.vtable();
         // ... ABI call through singleton implementation
     }
     

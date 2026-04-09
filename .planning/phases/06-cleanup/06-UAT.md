@@ -27,7 +27,7 @@ details: |
   and documentation explaining rename history - both acceptable.
 
 ### 2. No *C Suffix FFI Types
-expected: grep for RuntimeConfigC, PluginContextC, HostVTableC, ReloadPhaseC returns 0 matches (except intentional FFI structs)
+expected: grep for RuntimeConfigC, PluginContextC, HostInterfaceC, ReloadPhaseC returns 0 matches (except intentional FFI structs)
 result: pass
 details: |
   Only ReloadPhaseCallback found (callback typedef, not *C suffix struct).

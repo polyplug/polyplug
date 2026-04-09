@@ -28,7 +28,7 @@ gaps: []
 | 6 | DependencyInfo struct exists | VERIFIED | crates/polyplug_abi/src/types/dependency_info.rs:41 - 24 bytes |
 | 7 | list_bundles ABI implemented | VERIFIED | crates/polyplug/src/runtime.rs:929 - host_list_bundles function exists |
 | 8 | get_dependencies ABI implemented | VERIFIED | crates/polyplug/src/runtime.rs:975 - host_get_dependencies uses TLS bundle_id |
-| 9 | find_all_by_contract returns Array | VERIFIED | crates/polyplug/src/runtime.rs:725 - Returns Array<PluginHandle> |
+| 9 | find_all_by_contract returns Array | VERIFIED | crates/polyplug/src/runtime.rs:725 - Returns Array<GuestContractHandle> |
 | 10 | Loaders updated to use HostInterface | VERIFIED | polyplug_python, polyplug_dotnet, polyplug_lua, polyplug_js use HostInterface |
 | 11 | Tests updated for self-passing pattern | VERIFIED | Tests and benchmarks use *const HostInterface |
 | 12 | Codegen updated for new calling convention | VERIFIED | Generators emit HostInterface parameter |

@@ -3,8 +3,8 @@
 ## Terminology Note
 
 This document uses terminology renamed in v1.1:
-- **RuntimeAbi**: Previously called "HostVTable"
-- **GuestContractInterface**: Previously called "PluginInterface"
+- **RuntimeAbi**: Previously called "HostInterface"
+- **GuestContractInterface**: Previously called "GuestContractInterface"
 
 ## Overview
 

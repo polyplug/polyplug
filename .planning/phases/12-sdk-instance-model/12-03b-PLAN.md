@@ -65,7 +65,7 @@ pub struct XxxContract {
 }
 
 impl XxxContract {
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         let interface = /* resolve handle */;
         let instance = unsafe { ((*interface).create_instance)(host, ptr::null()) };
         if instance.data.is_null() { return None; }
@@ -178,7 +178,7 @@ Key components to implement:
            private readonly HostInterface* _host;
            private bool _disposed;
            
-           public static XxxContract? Create(PluginHandle handle, HostInterface* host) {
+           public static XxxContract? Create(GuestContractHandle handle, HostInterface* host) {
                var iface = NativeMethods.polyplug_runtime_resolve_contract(host, handle);
                if (iface == null) return null;
                var inst = iface->create_instance(host, null);

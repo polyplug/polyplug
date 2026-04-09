@@ -57,7 +57,7 @@ This enables:
 | 2026-04-03 | Instance as first dispatch arg | Consistent for native and VM dispatch |
 | 2026-04-03 | Hot-reload via callback | Host destroys instances; no Arc quiescence pattern |
 | 2026-04-03 | Rename Plugin Contract → Guest Contract | Clear Host/Guest separation |
-| 2026-04-03 | `RuntimeAbi` naming | Clearer than `HostVTable` (host != runtime) |
+| 2026-04-03 | `RuntimeAbi` naming | Clearer than `HostInterface` (host != runtime) |
 | 2026-04-03 | All public ABI structs `#[repr(C)]` | Single source of truth, no `*C` types |
 | 2026-04-03 | Host contracts: singleton or multi-instance | Flexibility for host-provided services |
 | 2026-04-03 | `ContractHandle` without generation | Instances destroyed before hot-reload |

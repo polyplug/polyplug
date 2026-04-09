@@ -72,10 +72,10 @@ None - plan executed exactly as written.
 |-------------|-----------------|--------|
 | REG-01 | grep VTableSlot=0, RegistrySlot structure | VERIFIED |
 | REG-02 | grep PluginGuard=0, 02-01-SUMMARY.md | VERIFIED |
-| REG-03 | grep generation=0, PluginHandle struct | VERIFIED |
+| REG-03 | grep generation=0, GuestContractHandle struct | VERIFIED |
 | REG-04 | grep arc_swap=0, 02-02-SUMMARY.md | VERIFIED |
 | REG-05 | RegistrySlot simplified, 02-01-SUMMARY.md | VERIFIED |
-| REG-06 | PluginHandle.pack() returns index only | VERIFIED |
+| REG-06 | GuestContractHandle.pack() returns index only | VERIFIED |
 
 ## Next Phase Readiness
 

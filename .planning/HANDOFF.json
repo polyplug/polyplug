@@ -21,7 +21,7 @@
     "test_results": "polyplug: 95 passed, polyplugc: 182 passed"
   },
   "remaining_work": [
-    "Integration tests still need fixes (many use old API patterns like PluginInterface, ABI_OK)",
+    "Integration tests still need fixes (many use old API patterns like GuestContractInterface, ABI_OK)",
     "Run full verification to confirm Phase 06 completion",
     "Update VERIFICATION.md if all truths pass"
   ],
@@ -52,7 +52,7 @@
   "uncommitted_files": [],
   "commits_this_session": [
     "8741ccc: fix: resolve remaining ABI and test compilation issues",
-    "40b9c17: fix(tests): update test expectations for new PluginHandle and instance model",
+    "40b9c17: fix(tests): update test expectations for new GuestContractHandle and instance model",
     "6271983: fix(tests): update test expectations for new contract ID hash and interface names"
   ],
   "next_action": "Run /gsd-verify-work to verify Phase 06 completion against ROADMAP success criteria",

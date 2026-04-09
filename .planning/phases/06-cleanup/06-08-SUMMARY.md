@@ -17,17 +17,17 @@ Renamed test file and updated all test imports to use correct type names (GuestC
 - `vtable_factories_tests.rs` -> `interface_factories_tests.rs`
 
 ### polyplugc Tests
-- `smoke.rs`: Updated imports, PluginDescriptor, GuestContractInterface, PluginHandle, renamed CAPTURED_VTABLE -> CAPTURED_INTERFACE
+- `smoke.rs`: Updated imports, PluginDescriptor, GuestContractInterface, GuestContractHandle, renamed CAPTURED_VTABLE -> CAPTURED_INTERFACE
 - `integration_codegen_rust.rs`: Same updates as smoke.rs
 - `generator_correctness.rs`: Changed contract_id function reference
 - `integration_host_contracts.rs`: Updated type references
 
 ### polyplug Tests (26 files)
 All test files updated with:
-- Import updates: `PluginInterface` -> `GuestContractInterface`, `HostVTable` -> `RuntimeAbi`
+- Import updates: `GuestContractInterface` -> `GuestContractInterface`, `HostInterface` -> `RuntimeAbi`
 - PluginDescriptor: `version: Version { major, minor, patch }`
 - GuestContractInterface: Removed `rt_ctx`, added `create_instance`/`destroy_instance`
-- PluginHandle: Removed `generation` field
+- GuestContractHandle: Removed `generation` field
 - PluginContext: Removed `host_abi_version` field
 - NativeDispatch: Added `function_count` field
 - Error codes: `AbiErrorCode::*` enum instead of `ABI_*` constants
@@ -40,7 +40,7 @@ Added missing `singleton: false` field to all `ResolvedHostContract` initializer
 ## Verification
 
 - `cargo build -p polyplugc -p polyplug --tests` succeeds
-- No `PluginInterface` or `HostVTable` imports remain (except in historical comments)
+- No `GuestContractInterface` or `HostInterface` imports remain (except in historical comments)
 - Test file successfully renamed
 
 ## Commit

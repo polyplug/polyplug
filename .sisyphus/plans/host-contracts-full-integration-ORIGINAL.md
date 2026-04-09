@@ -406,7 +406,7 @@ class Program {
 using Polyplug.Generated;
 
 public string Report(string input) {
-    var logger = HostLoggerCaller.FromHost(PolyplugGuest.GetHostVTable(), 1);
+    var logger = HostLoggerCaller.FromHost(PolyplugGuest.GetHostInterface(), 1);
     
     if (logger?.IsValid == true) {
         logger.Log($"Starting report for: {input}");
@@ -1065,6 +1065,6 @@ Task 0 → Tasks 1-2 → Tasks 3-4 → Tasks 5-6 → Tasks 7-8 → Tasks 9-10 �
 
 1. **Order matters**: Host must register contract BEFORE loading plugins
 2. **Contract ID**: Use 0xF53EB5F2845853BB (from api.toml)
-3. **Thread safety**: HostVTable is static OnceLock - safe for guests to call
+3. **Thread safety**: HostInterface is static OnceLock - safe for guests to call
 4. **Null check**: Guests should check if logger.is_valid() before calling
 5. **Fallback**: If host doesn't register logger, guests should handle None gracefully

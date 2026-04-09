@@ -903,7 +903,7 @@ Max Concurrent: 4 (Wave 1), 5 (Wave 2), 6 (Wave 3)
     Preconditions: build/ module created
     Steps:
       1. Add test that parses src/lib.rs
-      2. Verify StringView, Buffer, PluginInterface are extracted
+      2. Verify StringView, Buffer, GuestContractInterface are extracted
     Expected Result: All frozen ABI types found
     Failure Indicators: Missing types, parsing errors
     Evidence: .sisyphus/evidence/task-6-extract-test.log
@@ -928,7 +928,7 @@ Max Concurrent: 4 (Wave 1), 5 (Wave 2), 6 (Wave 3)
     - For Python: `*const u8` → `ctypes.POINTER(ctypes.c_uint8)`, etc.
     - For Lua: `*const u8` → `const char*`, etc.
     - For JavaScript: `*const u8` → `Uint8Array`, etc.
-  - Handle special types: StringView, Buffer, PluginInterface, etc.
+  - Handle special types: StringView, Buffer, GuestContractInterface, etc.
   - Add hash function GenerationData (so all SDKs get fnv1a_64, contract_id, etc.)
 
   **Must NOT do**:

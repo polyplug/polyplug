@@ -83,8 +83,8 @@ Auto-generated from Rust ABI definitions:
 - `StringView` — UTF-8 string view
 - `Buffer` — Byte buffer with host allocator
 - `AbiError` — Error code and message
-- `PluginHandle` — Opaque plugin reference (lo/hi split for u64)
-- `PluginInterface` — Plugin vtable with dispatch mechanism
+- `GuestContractHandle` — Opaque plugin reference (lo/hi split for u64)
+- `GuestContractInterface` — Plugin vtable with dispatch mechanism
 
 ### Host Library (`host/`)
 

@@ -10,12 +10,12 @@ use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
-use polyplug_abi::PluginInterface;
+use polyplug_abi::GuestContractInterface;
 use polyplug_native::NativeLoader;
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let handle: polyplug_abi::PluginHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let vtable: *const PluginInterface = rt.resolve_plugin(handle).ok()?.vtable();
+    let handle: polyplug_abi::GuestContractHandle = rt.find_by_contract(contract_id, 0).ok()?;
+    let vtable: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?.vtable();
     // SAFETY: vtable is from resolve_plugin and points to a valid vtable while the
     // library is loaded; slot 0 is a compatible extern "C" fn in the fixtures.
     let fn_ptr: extern "C" fn() -> u32 = unsafe {

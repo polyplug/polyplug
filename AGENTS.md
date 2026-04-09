@@ -136,10 +136,10 @@ let value = map.get(&key).unwrap();
 let plugin = registry.get(id).expect("plugin must exist"); // FORBIDDEN outside tests
 
 // CORRECT — propagate with ?
-let plugin: PluginHandle = registry.get(id)?;
+let plugin: GuestContractHandle = registry.get(id)?;
 
 // CORRECT — handle explicitly
-let plugin: PluginHandle = match registry.get(id) {
+let plugin: GuestContractHandle = match registry.get(id) {
     Some(p) => p,
     None => return Err(RuntimeError::PluginNotFound { id }),
 };
@@ -275,18 +275,18 @@ Every generator (rust, python, lua, csharp, cpp, js_deno, js_quickjs) must gener
 1. **Uses the same `polyplug_init` signature:**
    ```rust
    // All generators must produce this signature (language-specific syntax):
-   fn polyplug_init(rt_ctx: *mut c_void, host: *const HostVTable, ctx: *const PluginContext) -> AbiError
+   fn polyplug_init(rt_ctx: *mut c_void, host: *const HostInterface, ctx: *const PluginContext) -> AbiError
    ```
 
 2. **Uses the same registration mechanism:**
    ```rust
-   // All generators must call register_plugin via the HostVTable:
+   // All generators must call register_plugin via the HostInterface:
    (host.register_plugin)(rt_ctx, &descriptor, &vtable)
    ```
 
 3. **Never uses global state or thread-locals in generated code.**
 
-**Why this matters:** Different registration mechanisms (e.g., `PluginRegistrar` vs `HostVTable.register_plugin`) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
+**Why this matters:** Different registration mechanisms (e.g., `PluginRegistrar` vs `HostInterface.register_plugin`) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
 
 **Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity.
 
@@ -467,7 +467,6 @@ polyplug/
 | global state / thread-locals for Runtime | all state owned by Runtime instance |
 | dependency version in crate `Cargo.toml` | version in workspace `Cargo.toml`, `{ workspace = true }` in crate |
 | `version = ...` alongside `workspace = true` | omit version in crate entirely — workspace owns it |
-| `PluginHandle`, `PluginInterface`, `HostVTable` | `GuestContractHandle`, `GuestContractInterface`, `HostInterface` |
 | type aliases for "convenience" (`pub type OldName = NewName`) | use canonical names everywhere |
 
 ---
@@ -565,53 +564,50 @@ let code = AbiErrorCode::Ok;
 
 ---
 
-### 15. ABI Type Naming Conventions
+### 15. Type Aliases Are FORBIDDEN
 
-**ALWAYS use the canonical names for ABI types. NEVER create type aliases or deprecated names.**
+**NEVER create type aliases. No exceptions.**
 
-**Canonical ABI Types:**
-- `GuestContractInterface` — NOT `PluginInterface` or `PluginVTable`
-- `GuestContractInstance` — NOT `PluginInstance`
-- `GuestContractHandle` — NOT `PluginHandle` or `ContractHandle`
-- `HostInterface` — NOT `HostVTable` or `RuntimeAbi`
-- `HostContractInterface` — NOT `HostContractVTable`
-- `HostContractInstance` — NOT `HostInstance`
+Type aliases obscure the actual type, create confusion, and make refactoring harder. Always use the real type directly.
 
 **FORBIDDEN:**
 ```rust
 // FORBIDDEN — type aliases for "convenience"
-pub type PluginHandle = GuestContractHandle;
-pub type PluginInterface = GuestContractInterface;
-pub type HostVTable = HostInterface;
-pub type ContractHandle = GuestContractHandle;
+pub type Handle = GuestContractHandle;
+pub type Result<T> = std::result::Result<T, MyError>;
+pub type PluginError = crate::error::Error;
+
+// FORBIDDEN — type aliases for "migration" or "backward compatibility"
+pub type OldName = NewName;
 
 // FORBIDDEN — deprecated aliases
-#[deprecated(note = "Use GuestContractHandle")]
-pub type PluginHandle = GuestContractHandle;
+#[deprecated(note = "Use NewName")]
+pub type OldName = NewName;
+
+// FORBIDDEN — even simple type aliases
+pub type MyResult<T> = Result<T, Error>;
 ```
 
 **CORRECT:**
 ```rust
-// CORRECT — use canonical names everywhere
-pub use polyplug_abi::GuestContractHandle;
-pub use polyplug_abi::GuestContractInterface;
-pub use polyplug_abi::HostInterface;
+// CORRECT — use the actual type directly
+fn do_something() -> std::result::Result<(), MyError> { }
+
+// CORRECT — import the type directly if needed
+use crate::error::Error;
+fn other_thing() -> Result<(), Error> { }
 ```
 
-**Naming Convention:**
-- Guest types: `GuestContract*` (implemented by plugins, called by host)
-- Host types: `Host*` or `HostContract*` (implemented by host, called by plugins)
-- No "Plugin" prefix in type names — use "Guest" or "Contract" instead
-
 **Why this matters:**
-- Type aliases create confusion about which name is canonical
-- They encourage inconsistent naming across the codebase
-- They make refactoring harder — changing the source requires updating all aliases
-- The canonical names clearly indicate ownership (Guest vs Host)
+- Type aliases hide the actual type, making code harder to understand
+- They create confusion about which name is "real"
+- They make global refactoring painful — must update all aliases
+- IDEs and tools show the alias, not the underlying type
+- This codebase does NOT maintain backward compatibility — use the canonical name
 
 ---
 
-### 15. Test Failures Must Be Fixed, Never Skipped
+### 16. Test Failures Must Be Fixed, Never Skipped
 
 **NEVER skip, ignore, or mark tests as `#[ignore]` to avoid fixing failures.**
 

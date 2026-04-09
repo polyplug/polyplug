@@ -91,14 +91,14 @@ impl TrackingAllocator {
         TrackingAllocator
     }
 
-    /// Returns a function pointer suitable for `HostVTable.alloc`.
+    /// Returns a function pointer suitable for `HostInterface.alloc`.
     ///
     /// The returned fn increments the thread-local alloc counter on each call.
     pub fn alloc_fn(&self) -> unsafe extern "C" fn(usize, usize) -> *mut u8 {
         tracking_alloc
     }
 
-    /// Returns a function pointer suitable for `HostVTable.free`.
+    /// Returns a function pointer suitable for `HostInterface.free`.
     ///
     /// The returned fn increments the thread-local free counter on each call.
     pub fn free_fn(&self) -> unsafe extern "C" fn(*mut u8, usize, usize) {

@@ -3,7 +3,7 @@ use crate::dispatch::{native_dispatch::NativeDispatch, vm_dispatch::VmDispatch};
 /// Union of dispatch mechanisms — use based on `dispatch_type`.
 ///
 /// # Safety
-/// Access the correct variant based on `PluginInterface::dispatch_type`:
+/// Access the correct variant based on `GuestContractInterface::dispatch_type`:
 /// - `dispatch_type == Native` → access `.native`
 /// - `dispatch_type == VirtualMachine` → access `.vm`
 #[repr(C)]

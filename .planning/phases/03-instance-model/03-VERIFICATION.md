@@ -84,7 +84,7 @@ gaps: []
 | HC-03 | 03-03 | get_host_contract creates new instance for multi-instance | VERIFIED | 03-03-SUMMARY.md: create_instance called each time for non-singleton contracts |
 | HC-04 | 03-05 | Update codegen for host contract implementations | VERIFIED | 03-05-SUMMARY.md: All 6 generators emit HostContractInterface with singleton, create/destroy_instance stubs |
 | CG-02 | 03-04 | Update codegen to generate instance wrappers | VERIFIED | 03-04-SUMMARY.md: GuestContractInstance wrappers with interface + instance pointers |
-| CG-03 | 03-04 | Generated instance wrappers hold interface + instance pointer | VERIFIED | 03-04-SUMMARY.md: struct fields: interface: *const PluginInterface, instance: GuestContractInstance, rt_ctx: *mut c_void |
+| CG-03 | 03-04 | Generated instance wrappers hold interface + instance pointer | VERIFIED | 03-04-SUMMARY.md: struct fields: interface: *const GuestContractInterface, instance: GuestContractInstance, rt_ctx: *mut c_void |
 | CG-04 | 03-04 | Generated wrappers call create_instance/destroy_instance | VERIFIED | 03-04-SUMMARY.md: new() calls create_instance, Drop impl calls destroy_instance |
 | CG-05 | 03-05 | Update host contract vtable generation for HostContractInterface | VERIFIED | 03-05-SUMMARY.md: HostContractInterface factory with singleton field, create/destroy_instance stubs for both NATIVE and VM dispatch |
 

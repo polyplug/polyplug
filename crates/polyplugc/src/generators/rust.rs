@@ -133,7 +133,7 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::HostInterface;\n");
         callers_out.push_str("use polyplug_abi::DispatchType;\n");
         callers_out.push_str("use polyplug_abi::StringView;\n");
-        callers_out.push_str("use polyplug_abi::PluginHandle;\n");
+        callers_out.push_str("use polyplug_abi::GuestContractHandle;\n");
         callers_out.push_str("use polyplug_abi::GuestContractInstance;\n");
         callers_out.push_str("use polyplug::ffi::polyplug_runtime_resolve_plugin;\n");
         callers_out.push_str("use super::types::*;\n\n");
@@ -1316,7 +1316,7 @@ fn generate_host_contract_caller(
     out.push_str("    /// # Returns\n");
     out.push_str("    /// - `Some(Self)` if interface found and instance created\n");
     out.push_str("    /// - `None` if interface not found or `create_instance` failed\n");
-    out.push_str("    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {\n");
+    out.push_str("    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {\n");
     out.push_str("        // Resolve the interface from the handle via FFI\n");
     out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
     out.push_str("            polyplug_runtime_resolve_plugin(host as *const _, handle.pack())\n");

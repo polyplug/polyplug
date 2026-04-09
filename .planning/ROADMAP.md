@@ -31,7 +31,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 **Success Criteria** (what must be TRUE):
 1. GuestContractInterface and HostContractInterface structs defined in polyplug_abi with create_instance/destroy_instance fields
 2. RuntimeConfig, Compatibility, and ReloadPhaseData moved from polyplug crate to polyplug_abi
-3. RuntimeAbi (renamed from HostVTable) contains all ABI functions including call_method
+3. RuntimeAbi (renamed from HostInterface) contains all ABI functions including call_method
 4. All ID types renamed: PluginContractId -> GuestContractId throughout codebase
 5. All public ABI structs are #[repr(C)] and compile successfully
 6. Workspace compiles (cargo build --workspace)
@@ -39,7 +39,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 
 Plans:
 - [x] 01-01-PLAN.md — Rename PluginContractId to GuestContractId in polyplug_utils
-- [x] 01-02-PLAN.md — Rename/extend core ABI types: PluginInterface->GuestContractInterface, HostVTable->RuntimeAbi, add instance handles
+- [x] 01-02-PLAN.md — Rename/extend core ABI types: GuestContractInterface->GuestContractInterface, HostInterface->RuntimeAbi, add instance handles
 - [x] 01-03-PLAN.md — Move RuntimeConfig, Compatibility to polyplug_abi; create ReloadPhaseData FFI struct
 - [x] 01-04-PLAN.md — Integration: update all imports across workspace, verify compilation
 - [x] 01-05-PLAN.md — Gap closure: Export AbiErrorCode and helper functions from polyplug_abi root
@@ -66,7 +66,7 @@ Plans:
 Plans:
 - [ ] 02-01-PLAN.md — Remove VTableSlot wrapper and PluginGuard, store interface directly
 - [ ] 02-02-PLAN.md — Remove ArcSwap pattern, update tests, remove quiescence tests
-- [ ] 02-03-PLAN.md — Remove generation counter from PluginHandle, simplify error handling
+- [ ] 02-03-PLAN.md — Remove generation counter from GuestContractHandle, simplify error handling
 
 ### Phase 3: Instance Model
 **Goal:** Host creates and owns plugin instances via factory pattern with generated RAII wrappers
@@ -212,13 +212,13 @@ Plans:
 **Success Criteria** (what must be TRUE):
 1. RuntimeConfigC renamed to RuntimeConfig in Python, C#, Lua, C++ SDKs
 2. C++ SDK PluginGuard removed
-3. C++ guest.hpp uses RuntimeAbi not HostVTable
+3. C++ guest.hpp uses RuntimeAbi not HostInterface
 4. All SDK naming consistent with polyplug_abi types
 **Plans:** 2/2 plans complete
 
 Plans:
 - [x] 10-01-PLAN.md — Create VERIFICATION.md for SDK-02, SDK-03, SDK-04, SDK-06, CLN-02 (already satisfied)
-- [x] 10-02-PLAN.md — Fix HostVTable → RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
+- [x] 10-02-PLAN.md — Fix HostInterface → RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
 
 ## Progress
 

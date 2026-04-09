@@ -60,7 +60,7 @@ pub struct XxxContract {
 }
 
 impl XxxContract {
-    pub fn new(handle: PluginHandle, host: *const HostInterface) -> Option<Self> {
+    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         let interface = /* resolve handle */;
         let instance = unsafe { ((*interface).create_instance)(host, ptr::null()) };
         if instance.data.is_null() { return None; }
@@ -115,7 +115,7 @@ Key components to implement:
        
        public:
            // Constructor: resolve handle + create_instance
-           static std::optional<XxxContract> create(PluginHandle handle, const HostInterface* host) {
+           static std::optional<XxxContract> create(GuestContractHandle handle, const HostInterface* host) {
                const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
                if (!iface) return std::nullopt;
                GuestContractInstance inst = iface->create_instance(host, nullptr);
@@ -166,7 +166,7 @@ Key components to implement:
     1. Generate wrapper class:
        ```python
        class XxxContract:
-           def __init__(self, handle: PluginHandle, host: ctypes.c_void_p):
+           def __init__(self, handle: GuestContractHandle, host: ctypes.c_void_p):
                self._interface = polyplug_runtime_resolve_contract(host, handle)
                if not self._interface:
                    raise ValueError("Contract not found")

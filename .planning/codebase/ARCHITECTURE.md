@@ -44,7 +44,7 @@
 - Purpose: Interface storage, handle validation, contract lookup
 - Location: `crates/polyplug/src/registry/plugin_registry.rs`
 - Contains: `PluginRegistry` with index-based slots, direct `Arc<GuestContractInterface>` storage
-- Depends on: ABI types (`GuestContractInterface`, `PluginHandle`)
+- Depends on: ABI types (`GuestContractInterface`, `GuestContractHandle`)
 - Used by: Runtime, Host callbacks
 
 **Loader Layer:**
@@ -57,7 +57,7 @@
 **ABI Layer:**
 - Purpose: C-compatible type definitions for host/plugin boundary
 - Location: `crates/polyplug_abi/src/`
-- Contains: `GuestContractInterface`, `HostContractInterface`, `RuntimeAbi`, `PluginHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
+- Contains: `GuestContractInterface`, `HostContractInterface`, `RuntimeAbi`, `GuestContractHandle`, `StringView`, `Buffer`, `AbiError`, `DispatchType`
 - Depends on: No internal dependencies (standalone)
 - Used by: All layers crossing FFI boundary
 
@@ -127,7 +127,7 @@
   - `dispatch_type`, `dispatch`
   - `create_instance`, `destroy_instance`
 
-### `PluginHandle`
+### `GuestContractHandle`
 - Purpose: Simple handle to registry slot
 - Location: `crates/polyplug_abi/src/plugin/plugin_handle.rs`
 - Pattern: `{ index: u32 }` - no generation counter (safety via callback contract)

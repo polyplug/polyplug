@@ -35,7 +35,7 @@ $ grep -c "pub use polyplug_abi::" sdks/rust/guest/src/lib.rs
 | `AbiError` | `polyplug_abi::types::AbiError` | 153 |
 | `Version` | `polyplug_abi::types::Version` | 156 |
 | `GuestContractInstance` | `polyplug_abi::guest::GuestContractInstance` | 162 |
-| `PluginHandle` | `polyplug_abi::PluginHandle` | 165 |
+| `GuestContractHandle` | `polyplug_abi::GuestContractHandle` | 165 |
 | `GuestContractInterface` | `polyplug_abi::GuestContractInterface` | 170 |
 | `DispatchType` | `polyplug_abi::dispatch::dispatch_type::DispatchType` | 176 |
 | `NativeDispatch` | `polyplug_abi::dispatch::native_dispatch::NativeDispatch` | 179 |
@@ -75,7 +75,7 @@ sdks/rust/guest/src/lib.rs
               └── pub use types::{StringView, Buffer, AbiError, ...}
               └── pub use guest::{GuestContractInterface, ...}
               └── pub use host::{HostContractInterface, ...}
-              └── pub use plugin::{PluginHandle, ...}
+              └── pub use plugin::{GuestContractHandle, ...}
 ```
 
 ---

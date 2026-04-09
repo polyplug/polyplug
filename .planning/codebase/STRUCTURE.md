@@ -45,7 +45,7 @@ polyplug/
 
 **`crates/polyplug_abi/`:**
 - Purpose: C-compatible ABI type definitions
-- Contains: `PluginInterface`, `HostVTable`, `PluginHandle`, `StringView`, `Buffer`, `AbiError`, dispatch types
+- Contains: `GuestContractInterface`, `HostInterface`, `GuestContractHandle`, `StringView`, `Buffer`, `AbiError`, dispatch types
 - Key files: `src/plugin/mod.rs`, `src/host/mod.rs`, `src/types/mod.rs`, `src/dispatch/mod.rs`
 
 **`crates/polyplug_native/`:**
@@ -242,7 +242,7 @@ lib.rs
   - dispatch/mod.rs            # Dispatch type definitions
   - ffi.rs                     # Allocator FFI functions
   - host/mod.rs                # Host-side types
-    - host_vtable/             # HostVTable definition
+    - host_vtable/             # HostInterface definition
     - host_context.rs          # Host context for callbacks
   - plugin/mod.rs              # Plugin-side types
     - plugin_context.rs        # Context passed to init

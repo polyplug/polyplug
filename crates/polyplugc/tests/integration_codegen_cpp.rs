@@ -379,13 +379,13 @@ fn test_cpp_codegen_no_legacy_vtable_naming() {
                 full_path.display()
             );
 
-            // Assert no HostVTable (legacy naming) - except in comments/docs
-            // Note: HostVTable might appear in abi.hpp which is included, but not in generated code
-            if content.contains("HostVTable") && !content.contains("abi.hpp") {
-                // Only check if HostVTable appears in actual generated code
+            // Assert no HostInterface (legacy naming) - except in comments/docs
+            // Note: HostInterface might appear in abi.hpp which is included, but not in generated code
+            if content.contains("HostInterface") && !content.contains("abi.hpp") {
+                // Only check if HostInterface appears in actual generated code
                 assert!(
-                    !content.contains("static HostVTable"),
-                    "{} must NOT contain static HostVTable declaration: {}",
+                    !content.contains("static HostInterface"),
+                    "{} must NOT contain static HostInterface declaration: {}",
                     rel_path,
                     full_path.display()
                 );
