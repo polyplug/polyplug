@@ -2122,7 +2122,7 @@ fn generate_python_enum(out: &mut String, e: &EnumDef) {
     }
 }
 
-// ─── Host VTable Factories Generation ─────────────────────────────────────────
+// ─── Host Interface Factories Generation ─────────────────────────────────────────
 
 /// Generate all host-side interface factories into a single file.
 fn generate_python_host_interface_factories_file(ir: &ValidatedIr) -> String {
