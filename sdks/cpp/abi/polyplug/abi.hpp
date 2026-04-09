@@ -6,23 +6,20 @@
 #define POLYPLUG_ABI_VERSION 1U
 
 /// ABI error codes — returned by all ABI functions.
-enum AbiErrorCode : uint32_t {
-    AbiErrorCode_Ok = 0,
-    AbiErrorCode_Generic = 1,
-    AbiErrorCode_BufferTooSmall = 2,
-    AbiErrorCode_Panic = 3,
-    AbiErrorCode_NotFound = 4,
-    AbiErrorCode_StaleHandle = 5,
-    AbiErrorCode_FunctionNotAvailable = 6,
-    AbiErrorCode_DuplicateProvider = 7,
-    AbiErrorCode_InvalidPointer = 8,
-    AbiErrorCode_HostContractNotFound = 100,
-    AbiErrorCode_HostContractVersionMismatch = 101,
-    AbiErrorCode_HostContractCallFailed = 102,
+enum class AbiErrorCode : uint32_t {
+    Ok = 0,
+    Generic = 1,
+    BufferTooSmall = 2,
+    Panic = 3,
+    NotFound = 4,
+    StaleHandle = 5,
+    FunctionNotAvailable = 6,
+    DuplicateProvider = 7,
+    InvalidPointer = 8,
+    HostContractNotFound = 100,
+    HostContractVersionMismatch = 101,
+    HostContractCallFailed = 102,
 };
-
-/// Convenience constant for success.
-constexpr uint32_t ABI_OK = AbiErrorCode_Ok;
 
 // FNV-1a hash constants
 constexpr uint64_t FNV_OFFSET = 0xcbf29ce484222325ULL;

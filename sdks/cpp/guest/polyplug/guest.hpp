@@ -15,7 +15,7 @@
 //   POLYPLUG_GUEST_MAIN {
 //       // registrar->register_plugin(registrar, &kDescriptor, &kVTable);
 //       AbiError err{};
-//       err.code        = AbiErrorCode_Ok;
+//       err.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
 //       err.message.ptr = nullptr;
 //       err.message.len = 0;
 //       return err;
@@ -156,7 +156,7 @@ inline const HostInterface* get_host_interface() noexcept {
 ///   POLYPLUG_GUEST_MAIN {
 ///       // register contracts via registrar->register_plugin(...)
 ///       AbiError ok{};
-///       ok.code        = AbiErrorCode_Ok;
+///       ok.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
 ///       ok.message.ptr = nullptr;
 ///       ok.message.len = 0;
 ///       return ok;
