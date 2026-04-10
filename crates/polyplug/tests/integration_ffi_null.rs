@@ -3,119 +3,99 @@
 //! Integration tests: null pointer safety of all C facade FFI functions.
 //! Every function that takes a pointer must handle null without panicking.
 
-use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
-use polyplug::ffi::polyplug_runtime_find_all_by_contract;
-use polyplug::ffi::polyplug_runtime_last_error;
-use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::ffi::polyplug_runtime_resolve_guest_contract;
+use polyplug_abi::HostInterface;
+use polyplug_abi::GuestContractHandle;
+
+// Import the host_* functions directly for null-host tests
+use polyplug::{host_load_bundle, host_get_last_error, host_get_error_len};
 
 #[test]
 fn test_runtime_free_null() {
     // polyplug_runtime_destroy(null) must be a no-op, not a crash
     // SAFETY: passing null is explicitly part of the null-safety contract being tested.
-    unsafe { polyplug_runtime_destroy(core::ptr::null_mut()) };
+    unsafe { polyplug_runtime_destroy(core::ptr::null()) };
 }
 
 #[test]
-fn test_load_bundle_null_rt() {
+fn test_load_bundle_null_host() {
     let path: &[u8] = b"/some/path";
-    // SAFETY: passing null rt is explicitly part of the null-safety contract being tested.
-    let rc: u32 =
-        unsafe { polyplug_runtime_load_bundle(core::ptr::null_mut(), path.as_ptr(), path.len()) };
-    assert_ne!(rc, 0, "load_bundle(null rt) must return non-zero");
+    // SAFETY: passing null host is explicitly part of the null-safety contract being tested.
+    // We call the underlying host_load_bundle function directly since we don't have a HostInterface.
+    let result: polyplug_abi::AbiError =
+        unsafe { host_load_bundle(core::ptr::null(), path.as_ptr(), path.len()) };
+    assert_eq!(result.code, polyplug_abi::AbiErrorCode::InvalidPointer, "load_bundle(null host) must return InvalidPointer");
 }
 
 #[test]
 fn test_load_bundle_null_path() {
-    // SAFETY: polyplug_runtime_create() returns a valid heap-allocated runtime or null on OOM.
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
-    assert!(!rt.is_null());
-    // SAFETY: rt is valid (asserted above); null path tests the null-safety contract.
-    let rc: u32 = unsafe { polyplug_runtime_load_bundle(rt, core::ptr::null(), 0) };
-    assert_ne!(rc, 0, "load_bundle(null path) must return non-zero");
-    // SAFETY: rt is valid and was allocated by polyplug_runtime_create().
-    unsafe { polyplug_runtime_destroy(rt) };
+    // SAFETY: polyplug_runtime_create() returns a valid HostInterface or null on OOM.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    assert!(!host.is_null());
+    // SAFETY: host is valid (asserted above); null path tests the null-safety contract.
+    let result: polyplug_abi::AbiError = unsafe { ((*host).load_bundle)(host, core::ptr::null(), 0) };
+    assert_eq!(result.code, polyplug_abi::AbiErrorCode::InvalidPointer, "load_bundle(null path) must return InvalidPointer");
+    // SAFETY: host is valid and was allocated by polyplug_runtime_create().
+    unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
-fn test_find_all_null_out_zero_cap() {
-    // out=null, cap=0 is the 'probe for count' pattern — must return 0, no error
-    // SAFETY: polyplug_runtime_create() returns a valid heap-allocated runtime or null on OOM.
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
-    assert!(!rt.is_null());
-    // SAFETY: rt is valid (asserted above); null out + cap=0 is the probe pattern being tested.
-    let count: usize = unsafe {
-        polyplug_runtime_find_all_by_contract(
-            rt as *const OpaqueRuntime,
-            0xDEAD_BEEF_u64,
-            0_u32,
-            core::ptr::null_mut(),
-            0,
-        )
-    };
-    // No plugins loaded, so count == 0. Point is: no crash, no panic.
-    let _ = count;
-    // SAFETY: rt is valid and was allocated by polyplug_runtime_create().
-    unsafe { polyplug_runtime_destroy(rt) };
+fn test_find_all_guest_contracts_empty_registry() {
+    // SAFETY: polyplug_runtime_create() returns a valid HostInterface or null on OOM.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    assert!(!host.is_null());
+    // SAFETY: host is valid (asserted above).
+    let arr: polyplug_abi::Array<GuestContractHandle> =
+        unsafe { ((*host).find_all_guest_contracts)(host, 0xDEAD_BEEF_u64, 0) };
+    // No plugins loaded, so len == 0. Point is: no crash, no panic.
+    assert_eq!(arr.len, 0, "find_all_guest_contracts on empty registry must return empty array");
+    // SAFETY: host is valid and was allocated by polyplug_runtime_create().
+    unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
-fn test_find_all_null_out_nonzero_cap() {
-    // out=null, cap=5 — must set last_error and return 0 (not UB write through null)
-    // SAFETY: polyplug_runtime_create() returns a valid heap-allocated runtime or null on OOM.
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
-    assert!(!rt.is_null());
-    // SAFETY: rt is valid (asserted above); null out + cap=5 tests the guard against null-deref writes.
-    let rc: usize = unsafe {
-        polyplug_runtime_find_all_by_contract(
-            rt as *const OpaqueRuntime,
-            0xDEAD_BEEF_u64,
-            0_u32,
-            core::ptr::null_mut(),
-            5,
-        )
-    };
-    assert_eq!(rc, 0, "find_all with null out + cap=5 must return 0");
-    // SAFETY: rt is valid and was allocated by polyplug_runtime_create().
-    unsafe { polyplug_runtime_destroy(rt) };
-}
-
-#[test]
-fn test_resolve_plugin_null_handle() {
-    // NULL_HANDLE (u64::MAX) — must return null ptr, must NOT set last_error
-    // SAFETY: polyplug_runtime_create() returns a valid heap-allocated runtime or null on OOM.
-    let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
-    assert!(!rt.is_null());
-    // SAFETY: rt is valid (asserted above); u64::MAX is the sentinel NULL_HANDLE value.
-    // polyplug_runtime_resolve_guest_contract returns *const GuestContractInterface now.
+fn test_resolve_guest_contract_null_handle() {
+    // NULL_HANDLE (GuestContractHandle::null()) — must return null ptr, must NOT set last_error
+    // SAFETY: polyplug_runtime_create() returns a valid HostInterface or null on OOM.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    assert!(!host.is_null());
+    // SAFETY: host is valid (asserted above); null handle is the sentinel value.
     let interface: *const polyplug_abi::GuestContractInterface =
-        unsafe { polyplug_runtime_resolve_guest_contract(rt as *const OpaqueRuntime, u64::MAX) };
+        unsafe { ((*host).resolve_guest_contract)(host, GuestContractHandle::null()) };
     assert!(
         interface.is_null(),
-        "resolve_plugin(NULL_HANDLE) must return null"
+        "resolve_guest_contract(null handle) must return null"
     );
     // Verify no last_error was set
-    let mut buf: [u8; 256] = [0_u8; 256];
-    // SAFETY: rt is valid; buf is a valid stack-allocated buffer; buf.len() matches the slice length exactly.
-    let n: usize = unsafe {
-        polyplug_runtime_last_error(rt as *const OpaqueRuntime, buf.as_mut_ptr(), buf.len())
-    };
-    assert_eq!(n, 0, "last_error must be empty after NULL_HANDLE resolve");
-    // SAFETY: rt is valid and was allocated by polyplug_runtime_create().
-    unsafe { polyplug_runtime_destroy(rt) };
+    let len: usize = unsafe { ((*host).get_error_len)(host) };
+    assert_eq!(len, 0, "error_len must be 0 after null handle resolve");
+    // SAFETY: host is valid and was allocated by polyplug_runtime_create().
+    unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
-fn test_last_error_null_rt() {
-    // polyplug_runtime_last_error(null rt, null buf, 0) returns 0 (no runtime to have an error)
-    // SAFETY: passing null rt and null buf with len=0 is explicitly part of the null-safety contract being tested.
+fn test_get_last_error_null_host() {
+    // get_last_error with null host returns 0 (no host to have an error)
+    // SAFETY: passing null host is explicitly part of the null-safety contract being tested.
+    // We call the underlying host_get_last_error function directly.
     let n: usize =
-        unsafe { polyplug_runtime_last_error(core::ptr::null(), core::ptr::null_mut(), 0) };
-    // With null runtime, we return 0 (no runtime to have an error)
+        unsafe { host_get_last_error(core::ptr::null(), core::ptr::null_mut(), 0) };
     assert_eq!(
         n, 0,
-        "last_error(null rt, null buf) must return 0 (no runtime to have an error)"
+        "get_last_error(null host) must return 0"
+    );
+}
+
+#[test]
+fn test_get_error_len_null_host() {
+    // SAFETY: passing null host is explicitly part of the null-safety contract being tested.
+    // We call the underlying host_get_error_len function directly.
+    let n: usize =
+        unsafe { host_get_error_len(core::ptr::null()) };
+    // Returns length of the null host error message
+    assert!(
+        n > 0,
+        "get_error_len(null host) must return a non-zero length"
     );
 }
