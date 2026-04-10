@@ -265,13 +265,13 @@ impl Runtime {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         });
         // SAFETY: We leak this HostInterface for the lifetime of the runtime.
         // This is acceptable because the pointer is used by guest contract instances
@@ -773,7 +773,7 @@ pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
 ///
 /// # Safety
 /// this must be a valid HostInterface pointer with valid runtime field.
-pub(crate) unsafe extern "C" fn host_resolve_guest_contract(
+pub unsafe extern "C" fn host_resolve_guest_contract(
     this: *const HostInterface,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -1074,89 +1074,253 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
     Array::new(ptr, count)
 }
 
-// ─── HostInterface stub functions (18-01 placeholder) ───────────────────────────
-// These stubs allow HostInterface construction while the actual implementations
-// are developed in plan 18-02. They return appropriate error/empty values.
+// ─── HostInterface operation functions (18-02 implementation) ───────────────────
+// These functions implement the HostInterface operation fields for host applications.
 
-/// Stub for HostInterface.load_bundle — placeholder until 18-02.
+/// HostInterface.load_bundle callback — loads a plugin bundle from a path.
+///
+/// Host applications call this to load a bundle at runtime.
 ///
 /// # Safety
-/// Always returns NotImplemented error.
-pub(crate) unsafe extern "C" fn host_load_bundle_stub(
-    _this: *const HostInterface,
-    _path: *const u8,
-    _path_len: usize,
+/// - this must be a valid HostInterface pointer with valid runtime field
+/// - path must point to path_len valid UTF-8 bytes for the duration of the call
+pub unsafe extern "C" fn host_load_bundle(
+    this: *const HostInterface,
+    path: *const u8,
+    path_len: usize,
 ) -> polyplug_abi::AbiError {
-    polyplug_abi::AbiError {
-        code: polyplug_abi::AbiErrorCode::Generic,
-        message: polyplug_abi::StringView::from_static(b"load_bundle stub"),
+    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
+
+    if this.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null HostInterface in load_bundle"),
+        };
+    }
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    if path.is_null() {
+        runtime.set_last_error("null path pointer in load_bundle");
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null path pointer in load_bundle"),
+        };
+    }
+
+    // SAFETY: path is non-null and points to path_len valid bytes per ABI contract.
+    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(path, path_len) };
+    let s: &str = match core::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            return AbiError {
+                code: AbiErrorCode::Generic,
+                message: StringView::null(),
+            };
+        }
+    };
+
+    match runtime.load_bundle(std::path::Path::new(s)) {
+        Ok(()) => AbiError::ok(),
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            AbiError {
+                code: AbiErrorCode::Generic,
+                message: StringView::null(),
+            }
+        }
     }
 }
 
-/// Stub for HostInterface.reload_bundle — placeholder until 18-02.
+/// HostInterface.reload_bundle callback — hot-reloads a plugin bundle.
+///
+/// Replaces the bundle's contracts with new versions from the updated binary.
 ///
 /// # Safety
-/// Always returns NotImplemented error.
-pub(crate) unsafe extern "C" fn host_reload_bundle_stub(
-    _this: *const HostInterface,
-    _path: *const u8,
-    _path_len: usize,
+/// - this must be a valid HostInterface pointer with valid runtime field
+/// - path must point to path_len valid UTF-8 bytes for the duration of the call
+pub unsafe extern "C" fn host_reload_bundle(
+    this: *const HostInterface,
+    path: *const u8,
+    path_len: usize,
 ) -> polyplug_abi::AbiError {
-    polyplug_abi::AbiError {
-        code: polyplug_abi::AbiErrorCode::Generic,
-        message: polyplug_abi::StringView::from_static(b"reload_bundle stub"),
+    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
+
+    if this.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null HostInterface in reload_bundle"),
+        };
+    }
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    if path.is_null() {
+        runtime.set_last_error("null path pointer in reload_bundle");
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null path pointer in reload_bundle"),
+        };
+    }
+
+    // SAFETY: path is non-null and points to path_len valid bytes per ABI contract.
+    let bytes: &[u8] = unsafe { core::slice::from_raw_parts(path, path_len) };
+    let s: &str = match core::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            return AbiError {
+                code: AbiErrorCode::Generic,
+                message: StringView::null(),
+            };
+        }
+    };
+
+    match runtime.reload_bundle(std::path::Path::new(s)) {
+        Ok(()) => AbiError::ok(),
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            AbiError {
+                code: AbiErrorCode::Generic,
+                message: StringView::null(),
+            }
+        }
     }
 }
 
-/// Stub for HostInterface.register_host_contract — placeholder until 18-02.
+/// HostInterface.register_host_contract callback — registers a host contract interface.
+///
+/// Host applications register their contracts for plugins to consume.
 ///
 /// # Safety
-/// Always returns NotImplemented error.
-pub(crate) unsafe extern "C" fn host_register_host_contract_stub(
-    _this: *const HostInterface,
-    _interface: *const polyplug_abi::HostContractInterface,
+/// - this must be a valid HostInterface pointer with valid runtime field
+/// - interface must be a valid HostContractInterface pointer that remains valid for runtime lifetime
+pub(crate) unsafe extern "C" fn host_register_host_contract(
+    this: *const HostInterface,
+    interface: *const polyplug_abi::HostContractInterface,
 ) -> polyplug_abi::AbiError {
-    polyplug_abi::AbiError {
-        code: polyplug_abi::AbiErrorCode::Generic,
-        message: polyplug_abi::StringView::from_static(b"register_host_contract stub"),
+    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
+
+    if this.is_null() || interface.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null pointer in register_host_contract"),
+        };
+    }
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    // SAFETY: interface is a valid HostContractInterface pointer. Caller guarantees it remains valid for runtime lifetime.
+    let interface_ref: &'static polyplug_abi::HostContractInterface = unsafe { &*interface };
+
+    match runtime.register_host_contract(interface_ref.contract_id.id(), interface_ref) {
+        Ok(()) => AbiError::ok(),
+        Err(crate::error::HostContractError::DuplicateContract { .. }) => AbiError {
+            code: AbiErrorCode::Generic,
+            message: StringView::from_static(b"duplicate host contract registration"),
+        },
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            AbiError {
+                code: AbiErrorCode::Generic,
+                message: StringView::null(),
+            }
+        }
     }
 }
 
-/// Stub for HostInterface.register_loader — placeholder until 18-02.
+/// HostInterface.register_loader callback — registers a language loader.
+///
+/// Host applications register loaders for each runtime language they support.
 ///
 /// # Safety
-/// Always returns NotImplemented error.
-pub(crate) unsafe extern "C" fn host_register_loader_stub(
-    _this: *const HostInterface,
+/// - this must be a valid HostInterface pointer with valid runtime field
+/// - loader_ptr must be a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib
+///   compiled against the same polyplug rlib
+pub(crate) unsafe extern "C" fn host_register_loader(
+    this: *const HostInterface,
     _runtime_name: polyplug_abi::StringView,
-    _loader_ptr: *mut core::ffi::c_void,
+    loader_ptr: *mut core::ffi::c_void,
 ) -> polyplug_abi::AbiError {
-    polyplug_abi::AbiError {
-        code: polyplug_abi::AbiErrorCode::Generic,
-        message: polyplug_abi::StringView::from_static(b"register_loader stub"),
+    use polyplug_abi::{AbiError, AbiErrorCode, StringView};
+
+    if this.is_null() || loader_ptr.is_null() {
+        return AbiError {
+            code: AbiErrorCode::InvalidPointer,
+            message: StringView::from_static(b"null pointer in register_loader"),
+        };
+    }
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
+    // We need mutable access to register the loader.
+    let runtime: &mut Runtime = unsafe { &mut *((*this).runtime as *mut Runtime) };
+
+    // SAFETY: loader_ptr is a *mut Box<dyn BundleLoader> erased to *mut c_void by a loader cdylib
+    // compiled against the same polyplug rlib. Reconstituting via Box::from_raw is valid.
+    let loader: Box<dyn BundleLoader> =
+        unsafe { *Box::from_raw(loader_ptr as *mut Box<dyn BundleLoader>) };
+
+    match runtime.register_guest_contract_loader(loader) {
+        Ok(()) => AbiError::ok(),
+        Err(e) => {
+            runtime.set_last_error(e.to_string());
+            AbiError {
+                code: AbiErrorCode::Generic,
+                message: StringView::null(),
+            }
+        }
     }
 }
 
-/// Stub for HostInterface.get_last_error — placeholder until 18-02.
+/// HostInterface.get_last_error callback — gets the last error message.
+///
+/// Copies up to buf_len bytes into buf. Clears error after read.
 ///
 /// # Safety
-/// Returns 0 (no bytes written).
-pub(crate) unsafe extern "C" fn host_get_last_error_stub(
-    _this: *const HostInterface,
-    _buf: *mut u8,
-    _buf_len: usize,
+/// - this must be a valid HostInterface pointer with valid runtime field
+/// - buf must be valid for writes of buf_len bytes when non-null
+pub unsafe extern "C" fn host_get_last_error(
+    this: *const HostInterface,
+    buf: *mut u8,
+    buf_len: usize,
 ) -> usize {
-    0
+    if this.is_null() {
+        return 0;
+    }
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+
+    if buf.is_null() {
+        let len = runtime.last_error_len();
+        runtime.clear_last_error();
+        return len;
+    }
+    if buf_len == 0 {
+        runtime.clear_last_error();
+        return 0;
+    }
+    // SAFETY: buf is valid for buf_len bytes per ABI contract.
+    let buf_slice: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(buf, buf_len) };
+    let len = runtime.get_last_error(buf_slice);
+    runtime.clear_last_error();
+    len
 }
 
-/// Stub for HostInterface.get_error_len — placeholder until 18-02.
+/// HostInterface.get_error_len callback — gets the last error message length.
+///
+/// Use to allocate buffer before calling get_last_error.
 ///
 /// # Safety
-/// Returns 0 (no error).
-pub(crate) unsafe extern "C" fn host_get_error_len_stub(
-    _this: *const HostInterface,
+/// - this must be a valid HostInterface pointer with valid runtime field
+pub unsafe extern "C" fn host_get_error_len(
+    this: *const HostInterface,
 ) -> usize {
-    0
+    if this.is_null() {
+        // Return length of the null runtime error message
+        return b"null HostInterface pointer".len();
+    }
+    // SAFETY: this is a valid HostInterface pointer. (*this).runtime contains a valid pointer to Runtime.
+    let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
+    runtime.last_error_len()
 }
 
 #[cfg(test)]
@@ -1229,13 +1393,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
@@ -1904,13 +2068,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -1944,13 +2108,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -2051,13 +2215,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         };
 
         // First call - creates instance
@@ -2127,13 +2291,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         };
 
         // First call - creates instance (counter becomes 101)
@@ -2208,13 +2372,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: host_load_bundle_stub,
-            reload_bundle: host_reload_bundle_stub,
-            register_host_contract: host_register_host_contract_stub,
-            register_loader: host_register_loader_stub,
-            get_last_error: host_get_last_error_stub,
-            get_error_len: host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: host_load_bundle,
+            reload_bundle: host_reload_bundle,
+            register_host_contract: host_register_host_contract,
+            register_loader: host_register_loader,
+            get_last_error: host_get_last_error,
+            get_error_len: host_get_error_len,
         };
 
         // Call singleton twice - should get same instance

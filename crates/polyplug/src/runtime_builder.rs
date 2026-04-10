@@ -115,13 +115,13 @@ impl RuntimeBuilder {
             resolve_host_contract_interface: crate::runtime::host_resolve_host_contract_interface,
             list_bundles: crate::runtime::host_list_bundles,
             get_dependencies: crate::runtime::host_get_dependencies,
-            // Stub fields for new operations (implemented in 18-02)
-            load_bundle: crate::runtime::host_load_bundle_stub,
-            reload_bundle: crate::runtime::host_reload_bundle_stub,
-            register_host_contract: crate::runtime::host_register_host_contract_stub,
-            register_loader: crate::runtime::host_register_loader_stub,
-            get_last_error: crate::runtime::host_get_last_error_stub,
-            get_error_len: crate::runtime::host_get_error_len_stub,
+            // Host operations (implemented in 18-02)
+            load_bundle: crate::runtime::host_load_bundle,
+            reload_bundle: crate::runtime::host_reload_bundle,
+            register_host_contract: crate::runtime::host_register_host_contract,
+            register_loader: crate::runtime::host_register_loader,
+            get_last_error: crate::runtime::host_get_last_error,
+            get_error_len: crate::runtime::host_get_error_len,
         }));
 
         let mut loader_map: HashMap<String, Box<dyn BundleLoader>> = HashMap::new();
