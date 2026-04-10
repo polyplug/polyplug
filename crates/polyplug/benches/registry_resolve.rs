@@ -14,7 +14,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::PluginRegistry;
+use polyplug::registry::ContractRegistry;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
@@ -88,7 +88,7 @@ fn make_interface(id: u64) -> GuestContractInterface {
 // ─── Benchmark: resolve with single slot ─────────────────────────────────────
 
 fn bench_registry_resolve_single(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
@@ -116,7 +116,7 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
 // ─── Benchmark: resolve with multiple slots ──────────────────────────────────
 
 fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     // Use leaked Box to get 'static interfaces
     let interfaces: Vec<Box<GuestContractInterface>> = (0..100_u64)
@@ -166,7 +166,7 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
 // ─── Benchmark: resolve with stale handle ────────────────────────────────────
 
 fn bench_registry_resolve_stale(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.

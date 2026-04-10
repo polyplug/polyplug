@@ -12,7 +12,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::Array;
@@ -53,7 +53,7 @@ struct FillArgs {
 // ─── Thread-local registry and captured interface state ────────────────────────
 
 thread_local! {
-    static BENCH_REGISTRY: RefCell<Option<PluginRegistry>> = RefCell::new(Some(PluginRegistry::new()));
+    static BENCH_REGISTRY: RefCell<Option<ContractRegistry>> = RefCell::new(Some(ContractRegistry::new()));
     static LAST_INTERFACE: core::cell::Cell<*const GuestContractInterface> = const { core::cell::Cell::new(core::ptr::null()) };
     static LAST_CONTRACT_ID: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
@@ -87,7 +87,7 @@ unsafe extern "C" fn bench_register_callback(
         core::str::from_utf8_unchecked(bytes) // SAFETY: see comment above
     };
 
-    let result: Result<GuestContractHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+    let result: Result<GuestContractHandle, _> = BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         let borrowed = cell.borrow();
         let registry = borrowed.as_ref().expect("registry not initialized");
@@ -138,7 +138,7 @@ unsafe extern "C" fn bench_find_by_contract(
     contract_id: u64,
     min_version: u32,
 ) -> GuestContractHandle {
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
         let registry = cell.borrow();
         let reg = registry.as_ref().expect("registry not initialized");
         reg.find(polyplug_utils::GuestContractId::from_u64(contract_id), min_version)
@@ -166,7 +166,7 @@ unsafe extern "C" fn bench_resolve_contract(
     _this: *const HostInterface,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
         cell.borrow()
             .as_ref()
             .expect("registry not initialized")
@@ -248,12 +248,12 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         unsafe { libloading::Library::new(path).expect("failed to load plugin") };
 
     // SAFETY: polyplug_init matches the expected 2-arg ABI:
-    // unsafe extern "C" fn(host: *const HostInterface, ctx: *const PluginContext) -> AbiError
+    // unsafe extern "C" fn(host: *const HostInterface, ctx: *const BundleInitContext) -> AbiError
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const polyplug_abi::PluginContext,
+            *const polyplug_abi::BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -275,7 +275,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         get_dependencies: bench_get_dependencies,
     };
 
-    let plugin_ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+    let plugin_ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -284,7 +284,7 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
     let result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &plugin_ctx as *const polyplug_abi::PluginContext,
+            &plugin_ctx as *const polyplug_abi::BundleInitContext,
         )
     };
 
@@ -321,8 +321,8 @@ fn get_interface_fn(fn_id: usize) -> unsafe extern "C" fn(*const (), *mut ()) ->
 /// Isolates the raw dispatch overhead with no meaningful computation.
 fn bench_dispatch_noop(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
-        *cell.borrow_mut() = Some(PluginRegistry::new());
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
+        *cell.borrow_mut() = Some(ContractRegistry::new());
     });
 
     let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
@@ -360,8 +360,8 @@ fn bench_dispatch_noop(c: &mut Criterion) {
 /// The buffer is allocated ONCE before the loop — only dispatch overhead is measured.
 fn bench_dispatch_buffer_arg(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
-        *cell.borrow_mut() = Some(PluginRegistry::new());
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
+        *cell.borrow_mut() = Some(ContractRegistry::new());
     });
 
     let _library: libloading::Library = load_and_init_plugin(MEMORY_PLUGIN_SO);
@@ -417,8 +417,8 @@ fn bench_dispatch_buffer_arg(c: &mut Criterion) {
 /// dead-code elimination of the computation inside the plugin.
 fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
-        *cell.borrow_mut() = Some(PluginRegistry::new());
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
+        *cell.borrow_mut() = Some(ContractRegistry::new());
     });
 
     let _library: libloading::Library = load_and_init_plugin(TEST_PLUGIN_SO);
@@ -463,8 +463,8 @@ fn bench_dispatch_struct_arg_and_return(c: &mut Criterion) {
 /// Uses memory_plugin fn 2 (echo_string_view) as the target — no allocation.
 fn bench_dispatch_cross_plugin(c: &mut Criterion) {
     // Reset registry for a clean slate.
-    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<PluginRegistry>>| {
-        *cell.borrow_mut() = Some(PluginRegistry::new());
+    BENCH_REGISTRY.with(|cell: &core::cell::RefCell<Option<ContractRegistry>>| {
+        *cell.borrow_mut() = Some(ContractRegistry::new());
     });
 
     // Load memory_plugin into BENCH_REGISTRY so find_by_contract can locate it.

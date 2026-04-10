@@ -14,7 +14,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::PluginRegistry;
+use polyplug::registry::ContractRegistry;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
@@ -88,7 +88,7 @@ fn make_interface(id: u64) -> GuestContractInterface {
 // ─── Benchmark: find_by_contract with single slot ────────────────────────────
 
 fn bench_registry_find_by_contract_single(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
@@ -118,7 +118,7 @@ fn bench_registry_find_by_contract_single(c: &mut Criterion) {
 // ─── Benchmark: find_by_contract with multiple slots (same contract) ─────────
 
 fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     // Use leaked Box to get 'static interfaces
     let interfaces: Vec<Box<GuestContractInterface>> = (0..10_usize)
@@ -166,7 +166,7 @@ fn bench_registry_find_by_contract_multi_impl(c: &mut Criterion) {
 // ─── Benchmark: find_by_contract with many different contracts ──────────────
 
 fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     // Use leaked Box to get 'static interfaces
     let interfaces: Vec<Box<GuestContractInterface>> = (0..100_u64)
@@ -216,7 +216,7 @@ fn bench_registry_find_by_contract_many_contracts(c: &mut Criterion) {
 // ─── Benchmark: find_by_contract not found ───────────────────────────────────
 
 fn bench_registry_find_by_contract_not_found(c: &mut Criterion) {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
