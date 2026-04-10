@@ -19,7 +19,9 @@ use polyplug_abi::HostInterface;
 use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::StringView;
 use polyplug_abi::AbiErrorCode;
+use std::ffi::c_void;
 use polyplug_codegen::{GenerateConfig, Lang, Side};
 use polyplugc::generate;
 
@@ -236,7 +238,7 @@ unsafe extern "C" fn stub_free(
     }
 }
 
-unsafe extern "C" fn stub_find_by_contract(
+unsafe extern "C" fn stub_find_guest_contract(
     _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -244,7 +246,7 @@ unsafe extern "C" fn stub_find_by_contract(
     GuestContractHandle { index: u32::MAX }
 }
 
-unsafe extern "C" fn stub_find_all_by_contract(
+unsafe extern "C" fn stub_find_all_guest_contracts(
     _host: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -252,7 +254,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
     Array::empty()
 }
 
-unsafe extern "C" fn stub_resolve_contract(
+unsafe extern "C" fn stub_resolve_guest_contract(
     _host: *const HostInterface,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -298,6 +300,51 @@ unsafe extern "C" fn stub_get_dependencies(
     _host: *const HostInterface,
 ) -> Array<DependencyInfo> {
     Array::empty()
+}
+
+unsafe extern "C" fn stub_load_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+unsafe extern "C" fn stub_reload_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+unsafe extern "C" fn stub_register_host_contract(
+    _this: *const HostInterface,
+    _interface: *const polyplug_abi::HostContractInterface,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+unsafe extern "C" fn stub_register_loader(
+    _this: *const HostInterface,
+    _runtime_name: StringView,
+    _loader_ptr: *mut c_void,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+unsafe extern "C" fn stub_get_last_error(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+unsafe extern "C" fn stub_get_error_len(
+    _this: *const HostInterface,
+) -> usize {
+    0
 }
 
 // ─── Test ─────────────────────────────────────────────────────────────────────
@@ -377,14 +424,20 @@ fn test_rust_codegen_compile_and_run() {
         register_contract: capture_interface_callback,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_contract: stub_resolve_contract,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
         get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.

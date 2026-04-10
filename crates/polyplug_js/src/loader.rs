@@ -270,7 +270,7 @@ fn register_host_functions<'js>(
             let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static HostInterface data.
             let handle: GuestContractHandle =
-                unsafe { ((*hvt).find_by_contract)(hvt, contract_id, min_ver) };
+                unsafe { ((*hvt).find_guest_contract)(hvt, contract_id, min_ver) };
             pack_handle(handle)
         },
     )
@@ -323,9 +323,9 @@ fn register_host_functions<'js>(
                 None => return 0_u32,
             };
             // SAFETY: hvt points to 'static HostInterface data.
-            // find_all_by_contract returns Array<GuestContractHandle>.
+            // find_all_guest_contracts returns Array<GuestContractHandle>.
             let handles: polyplug_abi::types::Array<GuestContractHandle> =
-                unsafe { ((*hvt).find_all_by_contract)(hvt, contract_id, min_ver) };
+                unsafe { ((*hvt).find_all_guest_contracts)(hvt, contract_id, min_ver) };
             handles.len as u32
         },
     )
@@ -352,7 +352,7 @@ fn register_host_functions<'js>(
             let hvt: *const HostInterface = get_host_interface_from_globals(&ctx)?;
             // SAFETY: hvt points to 'static HostInterface data.
             let vtable_ptr: *const GuestContractInterface =
-                unsafe { ((*hvt).resolve_contract)(hvt, handle) };
+                unsafe { ((*hvt).resolve_guest_contract)(hvt, handle) };
             if vtable_ptr.is_null() {
                 None
             } else {

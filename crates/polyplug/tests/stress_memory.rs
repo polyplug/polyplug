@@ -151,6 +151,57 @@ unsafe extern "C" fn stub_resolve_host_contract_interface(
     core::ptr::null()
 }
 
+/// Stub load_bundle callback.
+unsafe extern "C" fn stub_load_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+/// Stub reload_bundle callback.
+unsafe extern "C" fn stub_reload_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+/// Stub register_host_contract callback.
+unsafe extern "C" fn stub_register_host_contract(
+    _this: *const HostInterface,
+    _interface: *const polyplug_abi::HostContractInterface,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+/// Stub register_loader callback.
+unsafe extern "C" fn stub_register_loader(
+    _this: *const HostInterface,
+    _runtime_name: StringView,
+    _loader_ptr: *mut core::ffi::c_void,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Ok, message: StringView::null() }
+}
+
+/// Stub get_last_error callback.
+unsafe extern "C" fn stub_get_last_error(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+/// Stub get_error_len callback.
+unsafe extern "C" fn stub_get_error_len(
+    _this: *const HostInterface,
+) -> usize {
+    0
+}
+
 /// Stub alloc callback.
 unsafe extern "C" fn stub_alloc(
     _this: *const HostInterface,
@@ -274,6 +325,12 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
         get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
 
     let ctx: BundleInitContext = BundleInitContext {
@@ -654,6 +711,12 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
         list_bundles: stub_list_bundles,
         get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
 
     let args: AllocArgs = AllocArgs {

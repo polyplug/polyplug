@@ -111,12 +111,12 @@ extern "C" fn error_chain_propagate(args: *const (), out: *mut ()) -> AbiError {
     let chain_args: &ChainArgs = unsafe { &*(args as *const ChainArgs) };
     // SAFETY: chain_args.host is a valid HostInterface pointer provided by the host runtime.
     let host: &HostInterface = unsafe { &*chain_args.host };
-    // SAFETY: host.find_by_contract is a valid function pointer set by the host runtime.
+    // SAFETY: host.find_guest_contract is a valid function pointer set by the host runtime.
     let plugin: GuestContractHandle =
-        unsafe { (host.find_by_contract)(chain_args.host, chain_args.target_contract_id, 0_u32) };
-    // SAFETY: host.resolve_contract returns a 'static GuestContractInterface pointer for the handle.
+        unsafe { (host.find_guest_contract)(chain_args.host, chain_args.target_contract_id, 0_u32) };
+    // SAFETY: host.resolve_guest_contract returns a 'static GuestContractInterface pointer for the handle.
     let iface_ptr: *const GuestContractInterface =
-        unsafe { (host.resolve_contract)(chain_args.host, plugin) };
+        unsafe { (host.resolve_guest_contract)(chain_args.host, plugin) };
     // Dispatch through the interface if non-null and fn_id is in range.
     let inner_result: AbiError = if iface_ptr.is_null() {
         AbiError {

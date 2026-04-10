@@ -129,6 +129,69 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
     core::ptr::null()
 }
 
+/// No-op load_bundle callback.
+unsafe extern "C" fn noop_load_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
+}
+
+/// No-op reload_bundle callback.
+unsafe extern "C" fn noop_reload_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
+}
+
+/// No-op register_host_contract callback.
+unsafe extern "C" fn noop_register_host_contract(
+    _this: *const HostInterface,
+    _interface: *const polyplug_abi::HostContractInterface,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
+}
+
+/// No-op register_loader callback.
+unsafe extern "C" fn noop_register_loader(
+    _this: *const HostInterface,
+    _runtime_name: StringView,
+    _loader_ptr: *mut core::ffi::c_void,
+) -> AbiError {
+    AbiError {
+        code: AbiErrorCode::Ok,
+        message: StringView::null(),
+    }
+}
+
+/// No-op get_last_error callback.
+unsafe extern "C" fn noop_get_last_error(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+/// No-op get_error_len callback.
+unsafe extern "C" fn noop_get_error_len(
+    _this: *const HostInterface,
+) -> usize {
+    0
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -177,6 +240,12 @@ fn rust_plugin_receives_bundle_path() {
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
+        load_bundle: noop_load_bundle,
+        reload_bundle: noop_reload_bundle,
+        register_host_contract: noop_register_host_contract,
+        register_loader: noop_register_loader,
+        get_last_error: noop_get_last_error,
+        get_error_len: noop_get_error_len,
     };
 
     // Build a BundleInitContext with a known bundle_path string.

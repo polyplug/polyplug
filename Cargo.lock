@@ -1027,6 +1027,7 @@ dependencies = [
  "polyplug_lua",
  "polyplug_native",
  "polyplug_python",
+ "polyplug_utils",
  "tempfile",
  "toml",
 ]

@@ -358,14 +358,14 @@ mod tests {
 
     #[test]
     fn layout_host_interface() {
-        // HostInterface: runtime pointer (8 bytes) + 18 extern "C" fn pointers (144 bytes).
-        // Total: 152 bytes (19 pointer-sized fields)
-        // Fields: register_contract, alloc, free, find_guest_contract, find_all_guest_contracts,
-        //         resolve_guest_contract, call_guest_method, get_host_contract,
-        //         resolve_host_contract_interface, list_bundles, get_dependencies,
-        //         load_bundle, reload_bundle, register_host_contract, register_loader,
-        //         get_last_error, get_error_len
-        assert_eq!(size_of::<HostInterface>(), 152);
+        // HostInterface: runtime pointer (8 bytes) + 17 extern "C" fn pointers (136 bytes).
+        // Total: 144 bytes (18 pointer-sized fields)
+        // Fields: runtime, register_contract, alloc, free, find_guest_contract,
+        //         find_all_guest_contracts, resolve_guest_contract, call_guest_method,
+        //         get_host_contract, resolve_host_contract_interface, list_bundles,
+        //         get_dependencies, load_bundle, reload_bundle, register_host_contract,
+        //         register_loader, get_last_error, get_error_len
+        assert_eq!(size_of::<HostInterface>(), 144);
         assert_eq!(align_of::<HostInterface>(), 8);
         // Existing fields (unchanged offsets)
         assert_eq!(offset_of!(HostInterface, runtime), 0);
