@@ -241,7 +241,7 @@ Plans:
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 0/2 | Pending | — |
-| 18. Consolidate FFI to HostInterface | 4/5 | In Progress|  |
+| 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
 
 ## Dependencies
 
@@ -437,7 +437,7 @@ Plans:
 5. All 5 SDKs updated to use HostInterface pointer
 6. All 7 code generators updated for HostInterface API
 7. All tests pass with unified API
-**Plans:** 4/5 plans executed
+**Plans:** 5/5 plans complete
 
 Wave Structure:
 - Wave 1: HostInterface struct changes (Plan 01) - add fields, rename fields
@@ -450,7 +450,7 @@ Plans:
 - [x] 18-02-PLAN.md — FFI deletions + Runtime implementation + create returns HostInterface* [Wave 2]
 - [x] 18-03-PLAN.md — Python + C# SDK updates for HostInterface API [Wave 3]
 - [x] 18-04-PLAN.md — Lua + JS + C++ SDK updates for HostInterface API [Wave 3]
-- [ ] 18-05-PLAN.md — Code generators + test updates + verification [Wave 4]
+- [x] 18-05-PLAN.md — Code generators + test updates + verification [Wave 4]
 
 ---
 *Roadmap created: 2026-04-03*
