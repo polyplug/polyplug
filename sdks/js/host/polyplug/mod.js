@@ -1,10 +1,11 @@
 /**
  * @file polyplug.js
  * @description Host library for polyplug JavaScript/TypeScript hosts.
- * 
- * This module provides ABI types and helpers for hosting polyplug plugins
- * in JavaScript. Works with Deno FFI runtime.
- * 
+ *
+ * Updated for HostInterface-based API (18-04 refactor).
+ * All operations are accessed through HostInterface struct fields,
+ * not via separate FFI functions.
+ *
  * @module polyplug
  */
 
@@ -18,11 +19,11 @@ if (typeof Deno === "undefined") {
 
 import { ReloadPhase } from "./reload_phase.js";
 
-export { 
-  getPlatformIdentifier, 
-  getNativeLibraryFilename, 
-  loadNativeLibrary, 
-  openNativeLibrary 
+export {
+  getPlatformIdentifier,
+  getNativeLibraryFilename,
+  loadNativeLibrary,
+  openNativeLibrary
 } from "./native-loader.ts";
 
 /** @type {bigint} */
@@ -40,29 +41,39 @@ const FNV_PRIME = 0x00000100000001B3n;
 /** 64-bit mask */
 const MASK_64 = 0xFFFFFFFFFFFFFFFFn;
 
+// ─── FFI Symbols: Only create and destroy ───────────────────────────────────────
+// All operations are accessed through HostInterface struct fields.
 const SYMBOLS = {
   polyplug_runtime_create: { parameters: [], result: "pointer" },
-  polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
-  polyplug_runtime_load_bundle: { parameters: ["pointer", "pointer", "usize"], result: "u32" },
-  polyplug_runtime_reload_bundle: { parameters: ["pointer", "pointer", "usize"], result: "u32" },
-  polyplug_runtime_find_by_contract: { parameters: ["pointer", "u64", "u32"], result: "u64" },
-  polyplug_runtime_find_by_bundle: { parameters: ["pointer", "u64", "u64", "u32"], result: "u64" },
-  polyplug_runtime_find_all_by_contract: { parameters: ["pointer", "u64", "u32", "pointer", "usize"], result: "usize" },
-  polyplug_runtime_resolve_plugin: { parameters: ["pointer", "u64"], result: "pointer" },
-  polyplug_runtime_release_plugin: { parameters: ["pointer"], result: "void" },
-  polyplug_runtime_last_error: { parameters: ["pointer", "pointer", "usize"], result: "usize" },
-  polyplug_runtime_error_message_len: { parameters: ["pointer"], result: "usize" },
   polyplug_runtime_create_with_options: { parameters: ["pointer"], result: "pointer" },
-  polyplug_runtime_register_host_contract: { parameters: ["pointer", "pointer"], result: "u32" },
-  polyplug_host_free: { parameters: ["pointer", "usize", "usize"], result: "void" },
+  polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
+};
+
+// HostInterface struct offsets (144 bytes, 18 pointer fields)
+// Each field is a function pointer (8 bytes)
+const HOST_INTERFACE_OFFSETS = {
+  runtime: 0,
+  register_contract: 8,
+  alloc: 16,
+  free: 24,
+  find_guest_contract: 32,
+  find_all_guest_contracts: 40,
+  resolve_guest_contract: 48,
+  call_guest_method: 56,
+  get_host_contract: 64,
+  resolve_host_contract_interface: 72,
+  list_bundles: 80,
+  get_dependencies: 88,
+  load_bundle: 96,
+  reload_bundle: 104,
+  register_host_contract: 112,
+  register_loader: 120,
+  get_last_error: 128,
+  get_error_len: 136,
 };
 
 // Module-level caches for hot path performance
 const _funcCache = new Map();
-const _DISPATCH_FN_DEF = {
-    parameters: ["pointer", "pointer"],
-    result: { struct: ["u32", "u32", "pointer", "usize"] }
-};
 const _encoder = new TextEncoder();
 const _decoder = new TextDecoder();
 
@@ -126,23 +137,6 @@ export function bundleId(name) {
 }
 
 /**
- * Convert StringView to JavaScript string.
- * @param {{ ptr: bigint; len: number }} sv - StringView from polyplug ABI
- * @returns {string} JavaScript string
- */
-export function toStr(sv) {
-    if (!sv || sv.ptr === 0n || sv.len === 0) return '';
-    return new Deno.UnsafePointerView(sv.ptr).getUtf8String(sv.len);
-}
-
-/**
- * Alias for toStr().
- * @param {{ ptr: bigint; len: number }} sv - StringView
- * @returns {string} JavaScript string
- */
-export const toString = toStr;
-
-/**
  * Register a callback to be invoked during hot-reload operations.
  * Must be called BEFORE creating a Runtime instance.
  * @param {function(ReloadPhase): void} callback - Callback function
@@ -171,33 +165,67 @@ export function setConfig(config) {
     };
 }
 
+/**
+ * Read a function pointer from HostInterface at given offset.
+ * @param {Deno.PointerValue} hostPtr - HostInterface pointer
+ * @param {number} offset - Byte offset in struct
+ * @returns {Deno.PointerValue} Function pointer
+ */
+function readHostField(hostPtr, offset) {
+  const view = new Deno.UnsafePointerView(hostPtr);
+  return view.getBigUint64(offset);
+}
+
+/**
+ * Call a HostInterface method with self-passing pattern.
+ * @param {Deno.PointerValue} hostPtr - HostInterface pointer
+ * @param {number} fieldOffset - Offset of the function pointer field
+ * @param {Array} paramTypes - FFI parameter types
+ * @param {string} resultType - FFI result type
+ * @param {Array} args - Arguments to pass (first arg is always hostPtr)
+ * @returns {*} Result from FFI call
+ */
+function callHostMethod(hostPtr, fieldOffset, paramTypes, resultType, args) {
+  const funcPtr = readHostField(hostPtr, fieldOffset);
+  if (funcPtr === 0n) {
+    throw new Error(`HostInterface field at offset ${fieldOffset} is null`);
+  }
+
+  // Create function definition for this call
+  const fnDef = { parameters: paramTypes, result: resultType };
+
+  // Call through the function pointer
+  const func = new Deno.UnsafeFnPointer(funcPtr, fnDef);
+  return func.call(...args);
+}
+
+/**
+ * Runtime class using HostInterface-based API.
+ * All operations call through HostInterface struct fields.
+ */
 export class Runtime {
   #lib;
-  #ptr;
+  #host;  // HostInterface pointer
 
   /**
    * @param {Deno.DynamicLibrary} lib - Dynamic library instance
-   * @param {Deno.PointerValue} ptr - Runtime pointer
+   * @param {Deno.PointerValue} host - HostInterface pointer
    */
-  constructor(lib, ptr) {
+  constructor(lib, host) {
     this.#lib = lib;
-    this.#ptr = ptr;
-  }
-
-  registerNativeLoader() {
-    // Native loader is built-in to the runtime
+    this.#host = host;
   }
 
   [Symbol.dispose]() {
-    this.#lib.symbols.polyplug_runtime_destroy(this.#ptr);
+    this.#lib.symbols.polyplug_runtime_destroy(this.#host);
   }
 
   /**
-   * Get runtime pointer.
+   * Get HostInterface pointer.
    * @returns {Deno.PointerValue}
    */
-  ptr() {
-    return this.#ptr;
+  host() {
+    return this.#host;
   }
 
   /**
@@ -210,112 +238,227 @@ export class Runtime {
 
   /**
    * Get last error message.
+   * Calls through HostInterface.get_last_error and get_error_len fields.
    * @returns {string}
    */
   lastError() {
-    const len = Number(this.#lib.symbols.polyplug_runtime_error_message_len(this.#ptr));
+    // Get error length via get_error_len
+    const len = Number(callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.get_error_len,
+      ["pointer"],
+      "usize",
+      [this.#host]
+    ));
+
     if (len === 0) return "";
+
+    // Get error message via get_last_error
     const buf = new Uint8Array(len);
-    const ptr = Deno.UnsafePointer.of(buf);
-    this.#lib.symbols.polyplug_runtime_last_error(this.#ptr, ptr, BigInt(len));
+    const bufPtr = Deno.UnsafePointer.of(buf);
+    callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.get_last_error,
+      ["pointer", "pointer", "usize"],
+      "usize",
+      [this.#host, bufPtr, BigInt(len)]
+    );
+
     return _decoder.decode(buf);
   }
 
   /**
    * Load a plugin bundle.
+   * Calls through HostInterface.load_bundle field.
    * @param {string} path - Path to bundle directory
    */
   loadBundle(path) {
     const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
-    const result = this.#lib.symbols.polyplug_runtime_load_bundle(this.#ptr, ptr, BigInt(encoded.length));
-    if (result !== 0) throw new Error(`polyplug_runtime_load_bundle failed: ${this.lastError()}`);
+    const result = callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.load_bundle,
+      ["pointer", "pointer", "usize"],
+      "u32",
+      [this.#host, ptr, BigInt(encoded.length)]
+    );
+    if (result !== 0) {
+      throw new Error(`loadBundle failed: ${this.lastError()}`);
+    }
   }
 
   /**
-   * Reload a plugin bundle.
+   * Reload a plugin bundle (hot-reload).
+   * Calls through HostInterface.reload_bundle field.
    * @param {string} path - Path to bundle directory
    */
   reloadBundle(path) {
     const encoded = _encoder.encode(path);
     const ptr = Deno.UnsafePointer.of(encoded);
-    const result = this.#lib.symbols.polyplug_runtime_reload_bundle(this.#ptr, ptr, BigInt(encoded.length));
-    if (result !== 0) throw new Error(`polyplug_runtime_reload_bundle failed: ${this.lastError()}`);
+    const result = callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.reload_bundle,
+      ["pointer", "pointer", "usize"],
+      "u32",
+      [this.#host, ptr, BigInt(encoded.length)]
+    );
+    if (result !== 0) {
+      throw new Error(`reloadBundle failed: ${this.lastError()}`);
+    }
   }
 
   /**
-   * Find plugin by contract ID.
+   * Find guest contract by contract ID.
+   * Calls through HostInterface.find_guest_contract field.
    * @param {bigint} contractId - Contract identifier
    * @param {number} [minVersion=0] - Minimum version
    * @returns {bigint} Plugin handle
    */
-  findByContract(contractId, minVersion = 0) {
-    return this.#lib.symbols.polyplug_runtime_find_by_contract(this.#ptr, contractId, minVersion);
+  findGuestContract(contractId, minVersion = 0) {
+    return callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.find_guest_contract,
+      ["pointer", "u64", "u32"],
+      "u64",
+      [this.#host, contractId, minVersion]
+    );
   }
 
   /**
-   * Find plugin by bundle ID and contract ID.
+   * Find plugin by bundle ID (deprecated, not in HostInterface).
+   * Returns NULL_HANDLE since this was removed from FFI surface.
    * @param {bigint} bundleId - Bundle identifier
    * @param {bigint} contractId - Contract identifier
    * @param {number} [minVersion=0] - Minimum version
-   * @returns {bigint} Plugin handle
+   * @returns {bigint} NULL_HANDLE (not implemented)
    */
   findByBundle(bundleId, contractId, minVersion = 0) {
-    return this.#lib.symbols.polyplug_runtime_find_by_bundle(this.#ptr, bundleId, contractId, minVersion);
+    // Note: find_by_bundle is not in HostInterface (18-02 removed from FFI surface)
+    return NULL_HANDLE;
   }
 
   /**
-   * Find all plugins by contract ID.
+   * Find all guest contracts by contract ID.
+   * Calls through HostInterface.find_all_guest_contracts field.
    * @param {bigint} contractId - Contract identifier
    * @param {number} [minVersion=0] - Minimum version
    * @param {number} [cap=64] - Buffer capacity
    * @returns {bigint[]} Array of plugin handles
    */
-  findAllByContract(contractId, minVersion = 0, cap = 64) {
-    const buf = new BigUint64Array(cap);
-    const ptr = Deno.UnsafePointer.of(buf);
-    const count = Number(this.#lib.symbols.polyplug_runtime_find_all_by_contract(this.#ptr, contractId, minVersion, ptr, BigInt(cap)));
-    return Array.from(buf.slice(0, Math.min(count, cap)));
-  }
+  findAllGuestContracts(contractId, minVersion = 0, cap = 64) {
+    // The function returns Array<GuestContractHandle> struct { ptr, len }
+    // We need to call and then read the result struct
+    const resultPtr = callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.find_all_guest_contracts,
+      ["pointer", "u64", "u32"],
+      "pointer",
+      [this.#host, contractId, minVersion]
+    );
 
-  /**
-   * Register a host contract interface with the runtime.
-   * This allows VM-based hosts (JavaScript) to register host contract implementations.
-   * @param {Deno.PointerValue} hostInterface - Pointer to a HostContractInterface struct
-   * @throws {Error} If registration fails (null pointer, duplicate, or other error)
-   */
-  registerHostContract(hostInterface) {
-    const result = this.#lib.symbols.polyplug_runtime_register_host_contract(this.#ptr, hostInterface);
-    if (result === 1) {
-      throw new Error("registerHostContract failed: null runtime or interface pointer");
+    // Read Array struct: { ptr: pointer, len: usize }
+    const view = new Deno.UnsafePointerView(resultPtr);
+    const arrPtr = view.getPointer(0);
+    const arrLen = Number(view.getBigUint64(8));
+
+    if (arrPtr === null || arrLen === 0) {
+      return [];
     }
-    if (result === 2) {
-      throw new Error("registerHostContract failed: duplicate contract registration");
+
+    // Read handles from array
+    const handles = [];
+    const arrView = new Deno.UnsafePointerView(arrPtr);
+    for (let i = 0; i < Math.min(arrLen, cap); i++) {
+      handles.push(arrView.getBigUint64(i * 8));
     }
-    if (result === 3) {
-      throw new Error(`registerHostContract failed: ${this.lastError()}`);
+
+    // Free the array via HostInterface.free
+    if (arrLen > 0) {
+      callHostMethod(
+        this.#host,
+        HOST_INTERFACE_OFFSETS.free,
+        ["pointer", "pointer", "usize", "usize"],
+        "void",
+        [this.#host, arrPtr, BigInt(arrLen * 8), BigInt(8)]
+      );
     }
-    if (result !== 0) {
-      throw new Error(`registerHostContract failed: unknown error code ${result}`);
-    }
+
+    return handles;
   }
 
   /**
    * Resolve plugin handle to raw pointer.
-   * Returns the resolve handle pointer for instance-based model.
-   * Host creates instances via interface.create_instance, calls methods,
-   * and destroys instances via interface.destroy_instance before hot-reload.
+   * Calls through HostInterface.resolve_guest_contract field.
    * @param {bigint} packedHandle - Packed plugin handle
    * @returns {Deno.PointerValue} Resolve handle pointer
    */
-  resolvePlugin(packedHandle) {
+  resolveGuestContract(packedHandle) {
     if (packedHandle === NULL_HANDLE) {
       return null;
     }
-    return this.lib().symbols.polyplug_runtime_resolve_plugin(
-      this.ptr(),
-      packedHandle
+    return callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.resolve_guest_contract,
+      ["pointer", "u64"],
+      "pointer",
+      [this.#host, packedHandle]
     );
+  }
+
+  /**
+   * Register a host contract interface with the runtime.
+   * Calls through HostInterface.register_host_contract field.
+   * @param {Deno.PointerValue} hostInterface - Pointer to HostContractInterface struct
+   */
+  registerHostContract(hostInterface) {
+    const result = callHostMethod(
+      this.#host,
+      HOST_INTERFACE_OFFSETS.register_host_contract,
+      ["pointer", "pointer"],
+      "u32",
+      [this.#host, hostInterface]
+    );
+    if (result === 1) {
+      throw new Error("registerHostContract: null interface pointer");
+    } else if (result === 2) {
+      throw new Error("registerHostContract: duplicate contract registration");
+    } else if (result !== 0) {
+      throw new Error(`registerHostContract failed: ${this.lastError()}`);
+    }
+  }
+
+  // ─── Backward Compatibility Aliases ───────────────────────────────────────────
+
+  /**
+   * Alias for findGuestContract (deprecated).
+   * @deprecated Use findGuestContract instead.
+   */
+  findByContract(contractId, minVersion = 0) {
+    return this.findGuestContract(contractId, minVersion);
+  }
+
+  /**
+   * Alias for findAllGuestContracts (deprecated).
+   * @deprecated Use findAllGuestContracts instead.
+   */
+  findAllByContract(contractId, minVersion = 0, cap = 64) {
+    return this.findAllGuestContracts(contractId, minVersion, cap);
+  }
+
+  /**
+   * Alias for resolveGuestContract (deprecated).
+   * @deprecated Use resolveGuestContract instead.
+   */
+  resolvePlugin(packedHandle) {
+    return this.resolveGuestContract(packedHandle);
+  }
+
+  /**
+   * Get runtime pointer (deprecated).
+   * @deprecated Use host() instead.
+   */
+  ptr() {
+    return this.#host;
   }
 }
 
@@ -330,11 +473,12 @@ export function openPolyplug(soPath) {
 
 /**
  * Create new runtime instance.
+ * Uses HostInterface-based API: polyplug_runtime_create returns HostInterface*.
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @returns {Runtime}
  */
 export function runtimeNew(lib) {
-  let ptr;
+  let host;
 
   if (_pendingConfig || _pendingReloadCallback) {
     const optionsBuf = new Uint8Array(24);
@@ -362,7 +506,7 @@ export function runtimeNew(lib) {
 
     if (_pendingReloadCallback) {
       const callback = _pendingReloadCallback;
-      _ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE, 
+      _ffiReloadCallback = new Deno.UnsafeCallback(_RELOAD_CALLBACK_TYPE,
         (phaseType, bundleId, bundleNamePtr, bundleNameLen, retryCount, reasonPtr, reasonLen) => {
           let bundleName = "";
           if (bundleNamePtr !== 0n && bundleNameLen > 0) {
@@ -380,13 +524,13 @@ export function runtimeNew(lib) {
     }
 
     const optionsPtr = Deno.UnsafePointer.of(optionsBuf);
-    ptr = lib.symbols.polyplug_runtime_create_with_options(optionsPtr);
+    host = lib.symbols.polyplug_runtime_create_with_options(optionsPtr);
   } else {
-    ptr = lib.symbols.polyplug_runtime_create();
+    host = lib.symbols.polyplug_runtime_create();
   }
 
-  if (ptr === null) {
-    throw new Error("polyplug_runtime_create failed: unable to create runtime (no runtime pointer available for error details)");
+  if (host === null) {
+    throw new Error("polyplug_runtime_create failed: unable to create runtime (returned null HostInterface)");
   }
-  return new Runtime(lib, ptr);
+  return new Runtime(lib, host);
 }

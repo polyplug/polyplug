@@ -1,26 +1,54 @@
 -- sdks/lua/host/polyplug/runtime.lua
--- Runtime class with hot-reload notification support.
+-- Runtime class with HostInterface-based API (18-04 refactor).
 
 local ffi = require('ffi')
 local abi = require('polyplug_abi')
 local reload_phase = require('polyplug.reload_phase')
 
+-- ─── HostInterface FFI Definition ───────────────────────────────────────────────
+-- HostInterface struct (144 bytes, 18 pointer fields)
+-- All operations are accessed through this struct, not via separate FFI functions.
 ffi.cdef([[
-    typedef struct OpaqueRuntime OpaqueRuntime;
+    // HostInterface struct — 144 bytes, 18 pointer fields
+    // Field order must match Rust #[repr(C)] layout exactly (ABI stability)
+    typedef struct HostInterface {
+        void* runtime;                          // offset 0
+        void* register_contract;               // offset 8
+        void* alloc;                           // offset 16
+        void* free;                            // offset 24
+        void* find_guest_contract;             // offset 32
+        void* find_all_guest_contracts;        // offset 40
+        void* resolve_guest_contract;          // offset 48
+        void* call_guest_method;               // offset 56
+        void* get_host_contract;               // offset 64
+        void* resolve_host_contract_interface; // offset 72
+        void* list_bundles;                    // offset 80
+        void* get_dependencies;                // offset 88
+        void* load_bundle;                     // offset 96
+        void* reload_bundle;                   // offset 104
+        void* register_host_contract;          // offset 112
+        void* register_loader;                 // offset 120
+        void* get_last_error;                  // offset 128
+        void* get_error_len;                   // offset 136
+    } HostInterface;
+
     typedef struct ResolveHandle ResolveHandle;
 
-    OpaqueRuntime* polyplug_runtime_create(void);
-    void polyplug_runtime_destroy(OpaqueRuntime* rt);
-    uint32_t polyplug_runtime_load_bundle(OpaqueRuntime* rt, const uint8_t* path, size_t path_len);
-    uint32_t polyplug_runtime_reload_bundle(OpaqueRuntime* rt, const uint8_t* path, size_t path_len);
-    uint64_t polyplug_runtime_find_guest_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version);
-    uint64_t polyplug_runtime_find_by_bundle(const OpaqueRuntime* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
-    size_t polyplug_runtime_find_all_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
-    const ResolveHandle* polyplug_runtime_resolve_guest_contract(const OpaqueRuntime* rt, uint64_t packed_handle);
-    void polyplug_runtime_release_plugin(const ResolveHandle* handle);
-    size_t polyplug_runtime_error_message_len(void);
-    void polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
-    void polyplug_host_free(void* ptr, size_t size, size_t align);
+    // Only three FFI exports: create, create_with_options, destroy
+    const HostInterface* polyplug_runtime_create(void);
+    const HostInterface* polyplug_runtime_create_with_options(const void* options);
+    void polyplug_runtime_destroy(const HostInterface* host);
+
+    // RuntimeConfig for create_with_options (24 bytes)
+    typedef struct {
+        uint8_t hot_reload_enabled;        // offset 0
+        uint8_t _pad1[3];                  // padding for alignment
+        uint32_t hot_reload_max_retries;   // offset 4
+        uint64_t hot_reload_retry_interval_ms; // offset 8
+        uint8_t hot_reload_abort_on_max_retries; // offset 16
+        uint8_t _pad2[3];                  // padding for alignment
+        uint32_t compatibility;            // offset 20 (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
+    } RuntimeConfig;
 
     typedef void (*ReloadPhaseCallback)(
         uint32_t phase_type,
@@ -33,21 +61,9 @@ ffi.cdef([[
     );
 
     typedef struct {
-        uint8_t hot_reload_enabled;        // offset 0
-        uint8_t _pad1[3];                  // padding for alignment
-        uint32_t hot_reload_max_retries;   // offset 4
-        uint64_t hot_reload_retry_interval_ms; // offset 8
-        uint8_t hot_reload_abort_on_max_retries; // offset 16
-        uint8_t _pad2[3];                  // padding for alignment
-        uint32_t compatibility;            // offset 20 (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
-    } RuntimeConfig;
-
-    typedef struct {
         const RuntimeConfig* config;
         ReloadPhaseCallback on_reload;
     } RuntimeCreateOptions;
-
-    OpaqueRuntime* polyplug_runtime_create_with_options(const RuntimeCreateOptions* options);
 
     // Host Contract Interface types
     typedef struct HostContractInterfaceHeader {
@@ -77,8 +93,6 @@ ffi.cdef([[
         HostContractInterfaceHeader header;
         HostContractDispatch dispatch;
     } HostContractInterface;
-
-    uint32_t polyplug_runtime_register_host_contract(OpaqueRuntime* rt, const HostContractInterface* interface);
 ]])
 
 local M = {}
@@ -126,14 +140,22 @@ function M.load_lib(so_path)
     return M._lib
 end
 
-function M.last_error(lib)
+--- Get last error message from HostInterface.
+-- @param host HostInterface*  The host interface pointer.
+-- @param lib                  The library handle.
+-- @return string              The error message, or empty string.
+function M.last_error(host, lib)
     lib = lib or get_lib()
-    local len = lib.polyplug_runtime_error_message_len()
+    -- Cast and call through HostInterface.get_error_len field
+    local get_error_len_fn = ffi.cast("size_t(*)(const HostInterface*)", host.get_error_len)
+    local len = get_error_len_fn(host)
     if len == 0 then
         return ""
     end
     local buf = ffi.new("uint8_t[?]", len)
-    lib.polyplug_runtime_last_error(buf, len)
+    -- Cast and call through HostInterface.get_last_error field
+    local get_last_error_fn = ffi.cast("size_t(*)(const HostInterface*, uint8_t*, size_t)", host.get_last_error)
+    get_last_error_fn(host, buf, len)
     return ffi.string(buf, len)
 end
 
@@ -151,9 +173,12 @@ function M.set_config(config)
     M._pending_config = config
 end
 
+--- Create a new Runtime instance.
+-- Uses HostInterface-based API: polyplug_runtime_create returns HostInterface*.
+-- @return Runtime             The runtime instance.
 function M.Runtime.new()
     local lib = get_lib()
-    local rt_ptr
+    local host_ptr
 
     if M._pending_config or M._pending_reload_callback then
         local options = ffi.new("RuntimeCreateOptions")
@@ -194,17 +219,27 @@ function M.Runtime.new()
             options.on_reload = M._ffi_reload_callback
         end
 
-        rt_ptr = lib.polyplug_runtime_create_with_options(options)
+        host_ptr = lib.polyplug_runtime_create_with_options(options)
     else
-        rt_ptr = lib.polyplug_runtime_create()
+        host_ptr = lib.polyplug_runtime_create()
     end
 
-    if rt_ptr == nil then
-        error("polyplug_runtime_create failed")
+    if host_ptr == nil then
+        error("polyplug_runtime_create failed: returned null HostInterface")
     end
-    local self = { _ptr = rt_ptr, _lib = lib, _destroyed = false }
+
+    -- Dereference HostInterface struct from pointer
+    local host = host_ptr[0]
+    local self = {
+        _host = host_ptr,      -- HostInterface* pointer (for FFI calls)
+        _host_struct = host,   -- Dereferenced struct (for field access)
+        _lib = lib,
+        _destroyed = false
+    }
     local obj = setmetatable(self, M.Runtime)
-    ffi.gc(rt_ptr, function(ptr)
+
+    -- Finalizer: destroy HostInterface when GC collects
+    ffi.gc(host_ptr, function(ptr)
         if not self._destroyed and ptr ~= nil then
             lib.polyplug_runtime_destroy(ptr)
         end
@@ -212,84 +247,153 @@ function M.Runtime.new()
     return obj
 end
 
+--- Load a plugin bundle from path.
+-- Calls through HostInterface.load_bundle field.
+-- @param path string  Path to bundle directory.
 function M.Runtime:load_bundle(path)
-    local lib = self._lib
     local path_str = tostring(path)
-    local result = lib.polyplug_runtime_load_bundle(self._ptr, path_str, #path_str)
+    local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
+    -- Cast function pointer and call with self-passing pattern
+    local fn = ffi.cast("uint32_t(*)(const HostInterface*, const uint8_t*, size_t)", self._host_struct.load_bundle)
+    local result = fn(self._host, path_bytes, #path_str)
     if result ~= 0 then
-        error("polyplug_runtime_load_bundle failed: " .. result)
+        error("load_bundle failed: " .. M.last_error(self._host, self._lib))
     end
 end
 
+--- Reload a plugin bundle (hot-reload).
+-- Calls through HostInterface.reload_bundle field.
+-- @param path string  Path to bundle directory.
 function M.Runtime:reload_bundle(path)
-    local lib = self._lib
     local path_str = tostring(path)
-    local result = lib.polyplug_runtime_reload_bundle(self._ptr, path_str, #path_str)
+    local path_bytes = ffi.new("uint8_t[?]", #path_str, path_str)
+    -- Cast function pointer and call with self-passing pattern
+    local fn = ffi.cast("uint32_t(*)(const HostInterface*, const uint8_t*, size_t)", self._host_struct.reload_bundle)
+    local result = fn(self._host, path_bytes, #path_str)
     if result ~= 0 then
-        error("polyplug_runtime_reload_bundle failed: " .. result)
+        error("reload_bundle failed: " .. M.last_error(self._host, self._lib))
     end
 end
 
-function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
-    local lib = self._lib
-    return lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
-end
-
+--- Find guest contract by contract_id and minimum version.
+-- Calls through HostInterface.find_guest_contract field.
+-- @param contract_id number  Contract identifier hash.
+-- @param min_version number  Minimum version required.
+-- @return number             Packed handle, or NULL_HANDLE if not found.
 function M.Runtime:find_guest_contract(contract_id, min_version)
-    local lib = self._lib
-    return lib.polyplug_runtime_find_guest_contract(self._ptr, contract_id, min_version)
+    -- Cast function pointer and call with self-passing pattern
+    local fn = ffi.cast("uint64_t(*)(const HostInterface*, uint64_t, uint32_t)", self._host_struct.find_guest_contract)
+    return fn(self._host, contract_id, min_version)
 end
 
-function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
+--- Find guest contract by bundle_id and contract_id.
+-- Note: This method is NOT in HostInterface (removed from FFI surface).
+-- It's a convenience wrapper that would require different backend support.
+-- For now, returns NULL_HANDLE to indicate unimplemented.
+-- @param bundle_id number    Bundle identifier.
+-- @param contract_id number  Contract identifier hash.
+-- @param min_version number  Minimum version required.
+-- @return number             Packed handle, or NULL_HANDLE.
+function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
+    -- Note: find_by_bundle is not in HostInterface (18-02 removed it from FFI surface)
+    -- This method is deprecated and returns NULL_HANDLE
+    -- TODO: Implement via list_bundles + find_guest_contract if needed
+    return M.NULL_HANDLE
+end
+
+--- Find all guest contracts matching contract_id and minimum version.
+-- Calls through HostInterface.find_all_guest_contracts field.
+-- @param contract_id number  Contract identifier hash.
+-- @param min_version number  Minimum version required.
+-- @param cap number          Maximum results to return (default 64).
+-- @return table              Array of packed handles.
+function M.Runtime:find_all_guest_contracts(contract_id, min_version, cap)
     cap = cap or 64
-    local lib = self._lib
-    local out = ffi.new("uint64_t[?]", cap)
-    local count = lib.polyplug_runtime_find_all_by_contract(self._ptr, contract_id, min_version, out, cap)
+    -- Cast function pointer and call with self-passing pattern
+    -- Returns Array<GuestContractHandle> struct with ptr and len
+    local fn = ffi.cast("struct { uint64_t* ptr; size_t len; }(*)(const HostInterface*, uint64_t, uint32_t)", self._host_struct.find_all_guest_contracts)
+    local arr = fn(self._host, contract_id, min_version)
     local result = {}
-    for i = 0, math.min(count, cap) - 1 do
-        table.insert(result, out[i])
+    for i = 0, math.min(arr.len, cap) - 1 do
+        table.insert(result, arr.ptr[i])
+    end
+    -- Free the array via HostInterface.free
+    if arr.ptr ~= nil and arr.len > 0 then
+        local free_fn = ffi.cast("void(*)(const HostInterface*, void*, size_t, size_t)", self._host_struct.free)
+        free_fn(self._host, arr.ptr, arr.len * 8, 8)
     end
     return result
 end
 
-function M.Runtime:register_host_contract(interface)
-    local lib = self._lib
-    local result = lib.polyplug_runtime_register_host_contract(self._ptr, interface)
-    if result == 1 then
-        error("polyplug_runtime_register_host_contract: null runtime or interface pointer")
-    elseif result == 2 then
-        error("polyplug_runtime_register_host_contract: duplicate contract registration")
-    elseif result == 3 then
-        local err_msg = M.last_error(lib)
-        error("polyplug_runtime_register_host_contract failed: " .. err_msg)
-    end
-end
-
+--- Resolve a packed handle to a resolve_handle pointer.
+-- Calls through HostInterface.resolve_guest_contract field.
+-- @param packed_handle number  Packed handle from find_guest_contract.
+-- @return cdata                ResolveHandle* pointer, or nil if invalid.
 function M.Runtime:resolve_guest_contract(packed_handle)
-    -- Instance-based model: returns raw resolve_handle (cdata) for host to use directly.
-    -- Host should:
-    --   1. Get resolve_handle from resolve_plugin
-    --   2. Access GuestContractInterface via FFI (ResolveHandle first field)
-    --   3. Call create_instance on interface
-    --   4. Make dispatch calls with instance
-    --   5. Call destroy_instance before hot-reload
     if packed_handle == M.NULL_HANDLE then
         return nil, "null handle"
     end
-    local lib = self._lib
-    local resolve_handle = lib.polyplug_runtime_resolve_guest_contract(self._ptr, packed_handle)
+    -- Cast function pointer and call with self-passing pattern
+    local fn = ffi.cast("const ResolveHandle*(*)(const HostInterface*, uint64_t)", self._host_struct.resolve_guest_contract)
+    local resolve_handle = fn(self._host, packed_handle)
     if resolve_handle == nil then
-        return nil, M.last_error(lib)
+        return nil, M.last_error(self._host, self._lib)
     end
     return resolve_handle
 end
 
-function M.Runtime:destroy()
-    if self._ptr ~= nil and not self._destroyed then
-        self._lib.polyplug_runtime_destroy(self._ptr)
-        self._destroyed = true
-        self._ptr = nil
+--- Register a host contract interface with the runtime.
+-- Calls through HostInterface.register_host_contract field.
+-- @param interface HostContractInterface*  Pointer to host contract interface.
+function M.Runtime:register_host_contract(interface)
+    if interface == nil then
+        error("register_host_contract: null interface pointer")
     end
+    -- Cast function pointer and call with self-passing pattern
+    local fn = ffi.cast("uint32_t(*)(const HostInterface*, const HostContractInterface*)", self._host_struct.register_host_contract)
+    local result = fn(self._host, interface)
+    if result == 1 then
+        error("register_host_contract: null interface pointer")
+    elseif result == 2 then
+        error("register_host_contract: duplicate contract registration")
+    elseif result ~= 0 then
+        error("register_host_contract failed: " .. M.last_error(self._host, self._lib))
+    end
+end
+
+--- Get the HostInterface pointer.
+-- @return HostInterface*  The host interface pointer.
+function M.Runtime:host()
+    return self._host
+end
+
+--- Destroy the runtime explicitly.
+-- Call polyplug_runtime_destroy on the HostInterface.
+function M.Runtime:destroy()
+    if self._host ~= nil and not self._destroyed then
+        self._lib.polyplug_runtime_destroy(self._host)
+        self._destroyed = true
+        self._host = nil
+    end
+end
+
+-- ─── Backward Compatibility Aliases ─────────────────────────────────────────────
+-- These aliases allow old code to work with the new HostInterface-based API.
+-- Deprecated: Use find_guest_contract, find_all_guest_contracts, resolve_guest_contract instead.
+
+--- Alias for find_guest_contract (deprecated).
+function M.Runtime:find(contract_id, min_version)
+    return self:find_guest_contract(contract_id, min_version)
+end
+
+--- Alias for find_all_guest_contracts (deprecated).
+function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
+    return self:find_all_guest_contracts(contract_id, min_version, cap)
+end
+
+--- Alias for resolve_guest_contract (deprecated).
+function M.Runtime:resolve_plugin(packed_handle)
+    return self:resolve_guest_contract(packed_handle)
 end
 
 return M
