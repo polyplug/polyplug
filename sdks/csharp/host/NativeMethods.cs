@@ -118,79 +118,118 @@ internal static partial class NativeMethods
         public const uint Yolo = 2;
     }
 
-    // Lifecycle (init-time only, no SuppressGCTransition needed)
+    /// <summary>
+    /// Options for creating a runtime instance.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct RuntimeCreateOptions
+    {
+        /// <summary>
+        /// Pointer to RuntimeConfig, or null for default config.
+        /// </summary>
+        public nint Config;
+
+        /// <summary>
+        /// Reload callback function pointer, or null for no callback.
+        /// </summary>
+        public nint OnReload;
+    }
+
+    // ─── HostInterface Structure (18-03) ─────────────────────────────────────────
+    // FFI HostInterface matching polyplug_abi::HostInterface (144 bytes)
+    // Layout verified in polyplug_abi/tests: offset_of checks
+
+    /// <summary>
+    /// HostInterface struct matching polyplug_abi::HostInterface (144 bytes).
+    /// Contains runtime pointer and 18 function pointer fields.
+    /// All function pointers use self-passing pattern (receive HostInterface* as first param).
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct HostInterface
+    {
+        // offset 0: runtime (*mut c_void)
+        public nint Runtime;
+
+        // offset 8: register_contract
+        public nint RegisterContract;
+
+        // offset 16: alloc
+        public nint Alloc;
+
+        // offset 24: free
+        public nint Free;
+
+        // offset 32: find_guest_contract
+        public nint FindGuestContract;
+
+        // offset 40: find_all_guest_contracts
+        public nint FindAllGuestContracts;
+
+        // offset 48: resolve_guest_contract
+        public nint ResolveGuestContract;
+
+        // offset 56: call_guest_method
+        public nint CallGuestMethod;
+
+        // offset 64: get_host_contract
+        public nint GetHostContract;
+
+        // offset 72: resolve_host_contract_interface
+        public nint ResolveHostContractInterface;
+
+        // offset 80: list_bundles
+        public nint ListBundles;
+
+        // offset 88: get_dependencies
+        public nint GetDependencies;
+
+        // offset 96: load_bundle
+        public nint LoadBundle;
+
+        // offset 104: reload_bundle
+        public nint ReloadBundle;
+
+        // offset 112: register_host_contract
+        public nint RegisterHostContract;
+
+        // offset 120: register_loader
+        public nint RegisterLoader;
+
+        // offset 128: get_last_error
+        public nint GetLastError;
+
+        // offset 136: get_error_len
+        public nint GetErrorLen;
+    }
+
+    // ─── FFI Entry Points (18-02: Only 2 exports) ─────────────────────────────────
+
+    /// <summary>
+    /// Creates a new runtime instance with default configuration.
+    /// Returns a HostInterface pointer that provides all runtime operations.
+    /// </summary>
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nint PolyplugRuntimeCreate();
+    internal static partial nint PolyplugRuntimeCreate();
 
+    /// <summary>
+    /// Creates a new runtime instance with the specified options.
+    /// Returns a HostInterface pointer that provides all runtime operations.
+    /// </summary>
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_create_with_options")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial nint PolyplugRuntimeCreateWithOptions(nint options);
+
+    /// <summary>
+    /// Destroys a runtime instance.
+    /// Takes HostInterface pointer returned by polyplug_runtime_create.
+    /// </summary>
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial void PolyplugRuntimeDestroy(nint rt);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_load_bundle")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeLoadBundle(nint rt, nint path, nuint pathLen);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_reload_bundle")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeReloadBundle(nint rt, nint path, nuint pathLen);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_loader")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeRegisterLoader(nint rt, nint loaderPtr);
-
-    // Hot path — SuppressGCTransition for zero-overhead
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_guest_contract")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial ulong PolyplugRuntimeFindGuestContract(nint rt, ulong contractId, uint minVersion);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_bundle")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial ulong PolyplugRuntimeFindByBundle(nint rt, ulong bundleId, ulong contractId, uint minVersion);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_all_by_contract")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial nuint PolyplugRuntimeFindAllByContract(
-        nint rt,
-        ulong contractId,
-        uint minVersion,
-        nint outHandles,
-        nuint outCap
-    );
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_resolve_guest_contract")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial nint PolyplugRuntimeResolveGuestContract(nint rt, ulong packedHandle);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_release_plugin")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial void PolyplugRuntimeReleasePlugin(nint resolveHandle);
-
-    // Error handling (error path only, no SuppressGCTransition)
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_last_error")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nuint PolyplugRuntimeLastError(nint buf, nuint bufLen);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_error_message_len")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial nuint PolyplugRuntimeErrorMessageLen();
-
-    // Memory — NO SuppressGCTransition (may trigger GC per PRD)
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_host_free")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial void PolyplugHostFree(nint ptr, nuint len, nuint align);
+    internal static partial void PolyplugRuntimeDestroy(nint host);
 
     // Hot-reload configuration (must be called before runtime creation)
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_on_reload")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeOnReload(nint callback);
-
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_set_config")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeSetConfig(ref RuntimeConfig config);
-
-    // Host contract registration
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_register_host_contract")]
-    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
-    public static partial uint PolyplugRuntimeRegisterHostContract(nint rt, nint hostInterface);
+    internal static partial uint PolyplugRuntimeOnReload(nint callback);
 }

@@ -1,11 +1,10 @@
 """
 polyplug Python Host Library
 
-Supports two FFI backends:
-- cffi ABI mode (faster, ~380ns/call) - used if cffi is installed
-- ctypes (slower, ~670ns/call) - fallback, always available
+After 18-02/18-03: All operations go through HostInterface struct fields.
+Only two FFI exports remain: polyplug_runtime_create, polyplug_runtime_destroy.
 
-Install cffi for better performance: pip install cffi
+The Runtime class holds a HostInterface pointer and calls methods through struct fields.
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ COMPATIBILITY_YOLO: int = 2     # Any version accepted
 
 # ─── RuntimeConfig Structure ─────────────────────────────────────────────────────
 # FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes)
-# Layout verified in polyplug_abi/tests: offset_of checks
 
 
 class RuntimeConfig(ctypes.Structure):
@@ -65,8 +63,60 @@ class RuntimeCreateOptionsC(ctypes.Structure):
     ]
 
 
+# ─── HostInterface Structure (18-03) ─────────────────────────────────────────────
+# FFI HostInterface matching polyplug_abi::HostInterface (144 bytes)
+
+
+class HostInterface(ctypes.Structure):
+    """FFI HostInterface matching polyplug_abi::HostInterface (144 bytes).
+
+    Contains runtime pointer and function pointers for all operations.
+    All function pointers use self-passing pattern (receive HostInterface* as first param).
+
+    Layout (18 fields, 144 bytes):
+        offset 0: runtime (*mut c_void)
+        offset 8: register_contract
+        offset 16: alloc
+        offset 24: free
+        offset 32: find_guest_contract
+        offset 40: find_all_guest_contracts
+        offset 48: resolve_guest_contract
+        offset 56: call_guest_method
+        offset 64: get_host_contract
+        offset 72: resolve_host_contract_interface
+        offset 80: list_bundles
+        offset 88: get_dependencies
+        offset 96: load_bundle
+        offset 104: reload_bundle
+        offset 112: register_host_contract
+        offset 120: register_loader
+        offset 128: get_last_error
+        offset 136: get_error_len
+    """
+
+    _fields_ = [
+        ("runtime", ctypes.c_void_p),                      # offset 0
+        ("register_contract", ctypes.c_void_p),            # offset 8
+        ("alloc", ctypes.c_void_p),                        # offset 16
+        ("free", ctypes.c_void_p),                         # offset 24
+        ("find_guest_contract", ctypes.c_void_p),         # offset 32
+        ("find_all_guest_contracts", ctypes.c_void_p),    # offset 40
+        ("resolve_guest_contract", ctypes.c_void_p),      # offset 48
+        ("call_guest_method", ctypes.c_void_p),           # offset 56
+        ("get_host_contract", ctypes.c_void_p),           # offset 64
+        ("resolve_host_contract_interface", ctypes.c_void_p), # offset 72
+        ("list_bundles", ctypes.c_void_p),                # offset 80
+        ("get_dependencies", ctypes.c_void_p),            # offset 88
+        ("load_bundle", ctypes.c_void_p),                 # offset 96
+        ("reload_bundle", ctypes.c_void_p),               # offset 104
+        ("register_host_contract", ctypes.c_void_p),      # offset 112
+        ("register_loader", ctypes.c_void_p),             # offset 120
+        ("get_last_error", ctypes.c_void_p),              # offset 128
+        ("get_error_len", ctypes.c_void_p),               # offset 136
+    ]
+
+
 # ─── Host Contract Interface Structures ─────────────────────────────────────────────
-# These structures match the Rust ABI exactly for VM-based host contract registration.
 
 
 class HostContractInterfaceHeader(ctypes.Structure):
@@ -117,197 +167,77 @@ _cffi_available: bool = False
 
 try:
     import cffi
-
     _cffi_available = True
     _BACKEND = "cffi"
 except ImportError:
     pass
 
 
+# ─── Backend Protocol (18-03: HostInterface-based) ─────────────────────────────────
+
 @runtime_checkable
 class Backend(Protocol):
-    """Protocol defining the common interface for FFI backends."""
+    """Protocol for HostInterface-based FFI backend.
 
-    def create_runtime(self) -> int: ...
-    def destroy_runtime(self, rt: int) -> None: ...
-    def load_bundle(self, rt: int, path: bytes) -> int: ...
-    def reload_bundle(self, rt: int, path: bytes) -> int: ...
-    def find_guest_contract(self, rt: int, contract_id: int, min_version: int) -> int: ...
-    def find_by_bundle(
-        self, rt: int, bundle_id: int, contract_id: int, min_version: int
-    ) -> int: ...
-    def find_all_by_contract(
-        self, rt: int, contract_id: int, min_version: int, out: Any, cap: int
-    ) -> int: ...
-    def resolve_guest_contract(self, rt: int, handle: int) -> int: ...
-    def release_plugin(self, handle: int) -> None: ...
-    def last_error(self, rt: int, buf: Any, buf_len: int) -> int: ...
-    def error_message_len(self) -> int: ...
-    def register_host_contract(self, rt: int, interface_ptr: int) -> int: ...
+    Only two FFI bindings needed: create and destroy.
+    All operations go through HostInterface struct fields.
+    """
+
+    def create_host_interface(self) -> int: ...
+    def destroy_host_interface(self, host: int) -> None: ...
+    def load_host_interface(self, host: int) -> HostInterface: ...
+    def create_uint64_array(self, cap: int) -> Any: ...
 
 
 class CTypesBackend:
-    """ctypes-based FFI backend (always available, ~670ns/call)."""
+    """ctypes-based FFI backend for HostInterface operations."""
 
     def __init__(self, lib_path: str) -> None:
-        import ctypes
-        import ctypes.util
-
         self.ctypes = ctypes
         self.lib: ctypes.CDLL = ctypes.CDLL(lib_path)
         self._setup_bindings()
 
     def _setup_bindings(self) -> None:
+        # Only two FFI exports (18-02)
         self.lib.polyplug_runtime_create.argtypes = []
         self.lib.polyplug_runtime_create.restype = self.ctypes.c_void_p
 
         self.lib.polyplug_runtime_destroy.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_destroy.restype = None
 
-        self.lib.polyplug_runtime_load_bundle.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.POINTER(self.ctypes.c_uint8),
-            self.ctypes.c_size_t,
+        # Options-based create for hot-reload config
+        self.lib.polyplug_runtime_create_with_options.argtypes = [
+            self.ctypes.POINTER(RuntimeCreateOptionsC)
         ]
-        self.lib.polyplug_runtime_load_bundle.restype = self.ctypes.c_uint32
+        self.lib.polyplug_runtime_create_with_options.restype = self.ctypes.c_void_p
 
-        self.lib.polyplug_runtime_reload_bundle.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.POINTER(self.ctypes.c_uint8),
-            self.ctypes.c_size_t,
-        ]
-        self.lib.polyplug_runtime_reload_bundle.restype = self.ctypes.c_uint32
-
-        self.lib.polyplug_runtime_find_guest_contract.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.c_uint64,
-            self.ctypes.c_uint32,
-        ]
-        self.lib.polyplug_runtime_find_guest_contract.restype = self.ctypes.c_uint64
-
-        self.lib.polyplug_runtime_find_by_bundle.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.c_uint64,
-            self.ctypes.c_uint64,
-            self.ctypes.c_uint32,
-        ]
-        self.lib.polyplug_runtime_find_by_bundle.restype = self.ctypes.c_uint64
-
-        self.lib.polyplug_runtime_find_all_by_contract.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.c_uint64,
-            self.ctypes.c_uint32,
-            self.ctypes.POINTER(self.ctypes.c_uint64),
-            self.ctypes.c_size_t,
-        ]
-        self.lib.polyplug_runtime_find_all_by_contract.restype = self.ctypes.c_size_t
-
-        self.lib.polyplug_runtime_resolve_guest_contract.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.c_uint64,
-        ]
-        self.lib.polyplug_runtime_resolve_guest_contract.restype = self.ctypes.c_void_p
-
-        self.lib.polyplug_runtime_release_plugin.argtypes = [
-            self.ctypes.c_void_p,
-        ]
-        self.lib.polyplug_runtime_release_plugin.restype = None
-
-        self.lib.polyplug_runtime_last_error.argtypes = [
-            self.ctypes.POINTER(self.ctypes.c_uint8),
-            self.ctypes.c_size_t,
-        ]
-        self.lib.polyplug_runtime_last_error.restype = self.ctypes.c_size_t
-
-        self.lib.polyplug_runtime_error_message_len.argtypes = []
-        self.lib.polyplug_runtime_error_message_len.restype = self.ctypes.c_size_t
-
-        self.lib.polyplug_runtime_register_host_contract.argtypes = [
-            self.ctypes.c_void_p,
-            self.ctypes.c_void_p,
-        ]
-        self.lib.polyplug_runtime_register_host_contract.restype = self.ctypes.c_uint32
-
-    def create_runtime(self) -> int:
+    def create_host_interface(self) -> int:
+        """Create runtime and return HostInterface pointer."""
         return self.lib.polyplug_runtime_create() or 0
 
-    def destroy_runtime(self, rt: int) -> None:
-        self.lib.polyplug_runtime_destroy(rt)
+    def create_host_interface_with_options(self, options: RuntimeCreateOptionsC) -> int:
+        """Create runtime with options and return HostInterface pointer."""
+        return self.lib.polyplug_runtime_create_with_options(self.ctypes.byref(options)) or 0
 
-    def load_bundle(self, rt: int, path: bytes) -> int:
-        buf = (self.ctypes.c_uint8 * len(path))(*path)
-        return self.lib.polyplug_runtime_load_bundle(rt, buf, len(path))
+    def destroy_host_interface(self, host: int) -> None:
+        """Destroy HostInterface and runtime."""
+        self.lib.polyplug_runtime_destroy(host)
 
-    def reload_bundle(self, rt: int, path: bytes) -> int:
-        buf = (self.ctypes.c_uint8 * len(path))(*path)
-        return self.lib.polyplug_runtime_reload_bundle(rt, buf, len(path))
-
-    def find_guest_contract(self, rt: int, contract_id: int, min_version: int) -> int:
-        return self.lib.polyplug_runtime_find_guest_contract(
-            rt, self.ctypes.c_uint64(contract_id), self.ctypes.c_uint32(min_version)
-        )
-
-    def find_by_bundle(
-        self, rt: int, bundle_id: int, contract_id: int, min_version: int
-    ) -> int:
-        return self.lib.polyplug_runtime_find_by_bundle(
-            rt,
-            self.ctypes.c_uint64(bundle_id),
-            self.ctypes.c_uint64(contract_id),
-            self.ctypes.c_uint32(min_version),
-        )
-
-    def find_all_by_contract(
-        self, rt: int, contract_id: int, min_version: int, out: Any, cap: int
-    ) -> int:
-        return self.lib.polyplug_runtime_find_all_by_contract(
-            rt,
-            self.ctypes.c_uint64(contract_id),
-            self.ctypes.c_uint32(min_version),
-            out,
-            self.ctypes.c_size_t(cap),
-        )
-
-    def resolve_guest_contract(self, rt: int, handle: int) -> int:
-        return (
-            self.lib.polyplug_runtime_resolve_guest_contract(rt, self.ctypes.c_uint64(handle))
-            or 0
-        )
-
-    def release_plugin(self, handle: int) -> None:
-        if handle != 0:
-            self.lib.polyplug_runtime_release_plugin(handle)
-
-    def last_error(self, rt: int, buf: Any, buf_len: int) -> int:
-        return self.lib.polyplug_runtime_last_error(buf, buf_len)
-
-    def error_message_len(self) -> int:
-        return self.lib.polyplug_runtime_error_message_len()
-
-    def register_host_contract(self, rt: int, interface_ptr: int) -> int:
-        return self.lib.polyplug_runtime_register_host_contract(rt, interface_ptr)
+    def load_host_interface(self, host: int) -> HostInterface:
+        """Load HostInterface struct from pointer."""
+        return HostInterface.from_address(host)
 
     def create_uint64_array(self, cap: int) -> Any:
         return (self.ctypes.c_uint64 * cap)()
 
 
 class CFFIBackend:
-    """cffi ABI mode backend (~380ns/call, 1.7x faster than ctypes)."""
+    """cffi ABI mode backend for HostInterface operations."""
 
     CDEF = """
         void* polyplug_runtime_create(void);
-        void polyplug_runtime_destroy(void* rt);
-        uint32_t polyplug_runtime_load_bundle(void* rt, const uint8_t* path, size_t path_len);
-        uint32_t polyplug_runtime_reload_bundle(void* rt, const uint8_t* path, size_t path_len);
-        uint64_t polyplug_runtime_find_guest_contract(void* rt, uint64_t contract_id, uint32_t min_version);
-        uint64_t polyplug_runtime_find_by_bundle(void* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
-        size_t polyplug_runtime_find_all_by_contract(void* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
-        void* polyplug_runtime_resolve_guest_contract(void* rt, uint64_t packed_handle);
-        void polyplug_runtime_release_plugin(void* handle);
-        size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
-        size_t polyplug_runtime_error_message_len(void);
-        uint32_t polyplug_runtime_register_loader(void* rt, void* loader_ptr);
-        uint32_t polyplug_runtime_register_host_contract(void* rt, const void* vtable);
+        void polyplug_runtime_destroy(void* host);
+        void* polyplug_runtime_create_with_options(const void* options);
 
         typedef struct {
             uint8_t hot_reload_enabled;
@@ -319,88 +249,47 @@ class CFFIBackend:
             uint32_t compatibility;
         } RuntimeConfig;
 
-        typedef void (*ReloadPhaseCallback)(
-            uint32_t phase_type,
-            uint64_t bundle_id,
-            const uint8_t* bundle_name,
-            size_t bundle_name_len,
-            uint32_t retry_count,
-            const uint8_t* reason,
-            size_t reason_len
-        );
-
         typedef struct {
             const RuntimeConfig* config;
             void (*on_reload)(uint32_t, uint64_t, const uint8_t*, size_t, uint32_t, const uint8_t*, size_t);
         } RuntimeCreateOptions;
-
-        void* polyplug_runtime_create_with_options(const RuntimeCreateOptions* options);
     """
 
     def __init__(self, lib_path: str) -> None:
         import cffi
-
         self.ffi = cffi.FFI()
         self.ffi.cdef(self.CDEF)
         self.lib = self.ffi.dlopen(lib_path)
 
-    def create_runtime(self) -> int:
+    def create_host_interface(self) -> int:
+        """Create runtime and return HostInterface pointer."""
         return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create())
 
-    def destroy_runtime(self, rt: int) -> None:
-        self.lib.polyplug_runtime_destroy(self.ffi.cast("void*", rt))
+    def create_host_interface_with_options(self, options: RuntimeCreateOptionsC) -> int:
+        """Create runtime with options and return HostInterface pointer."""
+        # Convert ctypes struct to cffi
+        opts_ptr = self.ffi.new("RuntimeCreateOptions*")
+        if options.config:
+            config_cffi = self.ffi.new("RuntimeConfig*")
+            config_ptr = self.ctypes.cast(options.config, self.ctypes.POINTER(RuntimeConfig))
+            config = config_ptr.contents
+            config_cffi.hot_reload_enabled = config.hot_reload_enabled
+            config_cffi.hot_reload_max_retries = config.hot_reload_max_retries
+            config_cffi.hot_reload_retry_interval_ms = config.hot_reload_retry_interval_ms
+            config_cffi.hot_reload_abort_on_max_retries = config.hot_reload_abort_on_max_retries
+            config_cffi.compatibility = config.compatibility
+            opts_ptr.config = config_cffi
+        if options.on_reload:
+            opts_ptr.on_reload = self.ffi.cast("void*", options.on_reload)
+        return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create_with_options(opts_ptr))
 
-    def load_bundle(self, rt: int, path: bytes) -> int:
-        cpath = self.ffi.new("uint8_t[]", path)
-        return self.lib.polyplug_runtime_load_bundle(
-            self.ffi.cast("void*", rt), cpath, len(path)
-        )
+    def destroy_host_interface(self, host: int) -> None:
+        """Destroy HostInterface and runtime."""
+        self.lib.polyplug_runtime_destroy(self.ffi.cast("void*", host))
 
-    def reload_bundle(self, rt: int, path: bytes) -> int:
-        cpath = self.ffi.new("uint8_t[]", path)
-        return self.lib.polyplug_runtime_reload_bundle(
-            self.ffi.cast("void*", rt), cpath, len(path)
-        )
-
-    def find_guest_contract(self, rt: int, contract_id: int, min_version: int) -> int:
-        return self.lib.polyplug_runtime_find_guest_contract(
-            self.ffi.cast("void*", rt), contract_id, min_version
-        )
-
-    def find_by_bundle(
-        self, rt: int, bundle_id: int, contract_id: int, min_version: int
-    ) -> int:
-        return self.lib.polyplug_runtime_find_by_bundle(
-            self.ffi.cast("void*", rt), bundle_id, contract_id, min_version
-        )
-
-    def find_all_by_contract(
-        self, rt: int, contract_id: int, min_version: int, out: Any, cap: int
-    ) -> int:
-        return self.lib.polyplug_runtime_find_all_by_contract(
-            self.ffi.cast("void*", rt), contract_id, min_version, out, cap
-        )
-
-    def resolve_guest_contract(self, rt: int, handle: int) -> int:
-        result = self.lib.polyplug_runtime_resolve_guest_contract(
-            self.ffi.cast("void*", rt), handle
-        )
-        return int(self.ffi.cast("uintptr_t", result))
-
-    def release_plugin(self, handle: int) -> None:
-        if handle != 0:
-            self.lib.polyplug_runtime_release_plugin(self.ffi.cast("void*", handle))
-
-    def last_error(self, rt: int, buf: Any, buf_len: int) -> int:
-        return self.lib.polyplug_runtime_last_error(buf, buf_len)
-
-    def error_message_len(self) -> int:
-        return self.lib.polyplug_runtime_error_message_len()
-
-    def register_host_contract(self, rt: int, interface_ptr: int) -> int:
-        return self.lib.polyplug_runtime_register_host_contract(
-            self.ffi.cast("void*", rt), self.ffi.cast("void*", interface_ptr)
-        )
+    def load_host_interface(self, host: int) -> HostInterface:
+        """Load HostInterface struct from pointer (via ctypes)."""
+        return HostInterface.from_address(host)
 
     def create_uint64_array(self, cap: int) -> Any:
         return self.ffi.new("uint64_t[]", cap)
@@ -417,7 +306,6 @@ def _resolve_lib_path() -> str:
         return env_path
 
     import ctypes.util
-
     found: str | None = ctypes.util.find_library(_LIB_NAME)
     if found is None:
         return "libpolyplug.so"
@@ -431,45 +319,87 @@ def _create_backend(lib_path: str) -> Backend:
     return CTypesBackend(lib_path)
 
 
-def _last_error(backend: Backend) -> str:
-    msg_len: int = backend.error_message_len()
-    if msg_len == 0:
-        return ""
-
-    if hasattr(backend, "ffi"):
-        buf = backend.ffi.new("uint8_t[]", msg_len)
-        written: int = backend.last_error(0, buf, msg_len)
-        if written <= 0:
-            return ""
-        return backend.ffi.buffer(buf, written)[:].decode("utf-8", errors="replace")
-    else:
-        buf = backend.create_uint64_array((msg_len + 7) // 8)
-        written: int = backend.last_error(0, buf, msg_len)
-        if written <= 0:
-            return ""
-        return bytes(buf[:written]).decode("utf-8", errors="replace")
-
-
-def _check_error_code(backend: Backend, code: int, context: str) -> None:
-    if code == 0:
-        return
-    msg: str = _last_error(backend)
-    if msg:
-        raise RuntimeError(msg)
-    raise RuntimeError(f"{context} failed with code {code}")
-
-
 def _read_c_string(ptr: int, length: int) -> str:
     """Read a C string from a pointer and length."""
     if ptr == 0 or length == 0:
         return ""
-    import ctypes
-
     return ctypes.string_at(ptr, length).decode("utf-8", errors="replace")
 
 
+# ─── Function pointer types for HostInterface calls ───────────────────────────────
+
+# load_bundle: fn(host: *const HostInterface, path: *const u8, path_len: usize) -> AbiError
+_LOAD_BUNDLE_FN = ctypes.CFUNCTYPE(
+    ctypes.c_uint32,  # AbiError.code
+    ctypes.c_void_p,  # HostInterface*
+    ctypes.POINTER(ctypes.c_uint8),  # path
+    ctypes.c_size_t,  # path_len
+)
+
+# reload_bundle: fn(host: *const HostInterface, path: *const u8, path_len: usize) -> AbiError
+_RELOAD_BUNDLE_FN = ctypes.CFUNCTYPE(
+    ctypes.c_uint32,
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+)
+
+# find_guest_contract: fn(host: *const HostInterface, contract_id: u64, min_version: u32) -> GuestContractHandle
+_FIND_GUEST_CONTRACT_FN = ctypes.CFUNCTYPE(
+    ctypes.c_uint64,  # GuestContractHandle (packed)
+    ctypes.c_void_p,
+    ctypes.c_uint64,
+    ctypes.c_uint32,
+)
+
+# find_all_guest_contracts: fn(host: *const HostInterface, contract_id: u64, min_version: u32) -> Array<Handle>
+_FIND_ALL_GUEST_CONTRACTS_FN = ctypes.CFUNCTYPE(
+    ctypes.c_void_p,  # Array<GuestContractHandle> pointer
+    ctypes.c_void_p,
+    ctypes.c_uint64,
+    ctypes.c_uint32,
+)
+
+# resolve_guest_contract: fn(host: *const HostInterface, handle: GuestContractHandle) -> *const GuestContractInterface
+_RESOLVE_GUEST_CONTRACT_FN = ctypes.CFUNCTYPE(
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_uint64,
+)
+
+# get_last_error: fn(host: *const HostInterface, buf: *mut u8, buf_len: usize) -> usize
+_GET_LAST_ERROR_FN = ctypes.CFUNCTYPE(
+    ctypes.c_size_t,
+    ctypes.c_void_p,
+    ctypes.POINTER(ctypes.c_uint8),
+    ctypes.c_size_t,
+)
+
+# get_error_len: fn(host: *const HostInterface) -> usize
+_GET_ERROR_LEN_FN = ctypes.CFUNCTYPE(
+    ctypes.c_size_t,
+    ctypes.c_void_p,
+)
+
+# register_host_contract: fn(host: *const HostInterface, interface: *const HostContractInterface) -> AbiError
+_REGISTER_HOST_CONTRACT_FN = ctypes.CFUNCTYPE(
+    ctypes.c_uint32,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+)
+
+# free: fn(host: *const HostInterface, ptr: *mut u8, size: usize, align: usize)
+_FREE_FN = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_size_t,
+    ctypes.c_size_t,
+)
+
+
 class ReloadPhaseFfi(ctypes.Structure):
-    """FFI-safe struct for ReloadPhase - mirrors ffi::ReloadPhaseFfi (not a 'C suffix' type)."""
+    """FFI-safe struct for ReloadPhase."""
 
     _fields_ = [
         ("phase_type", ctypes.c_uint32),
@@ -481,7 +411,10 @@ class ReloadPhaseFfi(ctypes.Structure):
 
 
 class Runtime:
-    """polyplug runtime for loading and managing plugins."""
+    """polyplug runtime for loading and managing plugins.
+
+    Holds HostInterface pointer and calls methods through struct fields.
+    """
 
     _on_reload_cb: Optional[Callable[[ReloadPhase], None]] = None
     _config: Optional["RuntimeConfig"] = None
@@ -489,16 +422,31 @@ class Runtime:
     def __init__(self) -> None:
         lib_path: str = os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path()
         self._backend: Backend = _create_backend(lib_path)
+        self.ctypes = ctypes
 
+        # Create HostInterface (options or default)
         if self._on_reload_cb is not None or self._config is not None:
-            rt_ptr: int = self._create_runtime_with_options()
+            host_ptr: int = self._create_runtime_with_options()
         else:
-            rt_ptr = self._backend.create_runtime()
+            host_ptr = self._backend.create_host_interface()
 
-        if rt_ptr == 0:
-            msg: str = _last_error(self._backend)
-            raise RuntimeError(msg or "polyplug_runtime_create failed")
-        self._runtime: int = rt_ptr
+        if host_ptr == 0:
+            raise RuntimeError("polyplug_runtime_create returned null")
+
+        # Store HostInterface pointer and load struct
+        self._host: int = host_ptr
+        self._host_struct: HostInterface = self._backend.load_host_interface(host_ptr)
+
+        # Cache function pointer wrappers
+        self._load_bundle_fn = _LOAD_BUNDLE_FN(self._host_struct.load_bundle)
+        self._reload_bundle_fn = _RELOAD_BUNDLE_FN(self._host_struct.reload_bundle)
+        self._find_guest_contract_fn = _FIND_GUEST_CONTRACT_FN(self._host_struct.find_guest_contract)
+        self._find_all_fn = _FIND_ALL_GUEST_CONTRACTS_FN(self._host_struct.find_all_guest_contracts)
+        self._resolve_fn = _RESOLVE_GUEST_CONTRACT_FN(self._host_struct.resolve_guest_contract)
+        self._get_last_error_fn = _GET_LAST_ERROR_FN(self._host_struct.get_last_error)
+        self._get_error_len_fn = _GET_ERROR_LEN_FN(self._host_struct.get_error_len)
+        self._register_host_contract_fn = _REGISTER_HOST_CONTRACT_FN(self._host_struct.register_host_contract)
+        self._free_fn = _FREE_FN(self._host_struct.free)
 
     def _create_runtime_with_options(self) -> int:
         """Create runtime using polyplug_runtime_create_with_options."""
@@ -510,10 +458,8 @@ class Runtime:
                 hot_reload_enabled=1 if self._config.hot_reload_enabled else 0,
                 hot_reload_max_retries=self._config.hot_reload_max_retries,
                 hot_reload_retry_interval_ms=self._config.hot_reload_retry_interval_ms,
-                hot_reload_abort_on_max_retries=1
-                if self._config.hot_reload_abort_on_max_retries
-                else 0,
-                compatibility=COMPATIBILITY_STRICT,  # Default to Strict mode
+                hot_reload_abort_on_max_retries=1 if self._config.hot_reload_abort_on_max_retries else 0,
+                compatibility=COMPATIBILITY_STRICT,
             )
             options.config = ctypes.pointer(config_c)
 
@@ -522,34 +468,20 @@ class Runtime:
                 Runtime._c_callback = self._make_c_callback()
             options.on_reload = ctypes.cast(Runtime._c_callback, ctypes.c_void_p)
 
-        lib = ctypes.CDLL(os.environ.get("POLYPLUG_LIB_PATH") or _resolve_lib_path())
-        lib.polyplug_runtime_create_with_options.argtypes = [
-            ctypes.POINTER(RuntimeCreateOptionsC)
-        ]
-        lib.polyplug_runtime_create_with_options.restype = ctypes.c_void_p
-
-        return lib.polyplug_runtime_create_with_options(ctypes.byref(options)) or 0
+        return self._backend.create_host_interface_with_options(options)
 
     def __del__(self) -> None:
-        rt_ptr: int = getattr(self, "_runtime", 0)
+        host_ptr: int = getattr(self, "_host", 0)
         backend: Backend = getattr(self, "_backend", None)
-        if rt_ptr != 0 and backend is not None:
-            backend.destroy_runtime(rt_ptr)
-            self._runtime = 0
+        if host_ptr != 0 and backend is not None:
+            backend.destroy_host_interface(host_ptr)
+            self._host = 0
 
     @classmethod
     def on_reload(cls, callback: Callable[[ReloadPhase], None]) -> None:
         """Register a callback for hot-reload notifications.
 
-        The callback is invoked at each phase of a hot-reload:
-        - PREPARING: Before interface swap, includes retry count
-        - RELOADED: After successful interface swap
-        - FAILED: When reload fails, includes reason string
-
         Must be called before creating a Runtime instance.
-
-        Args:
-            callback: Function that receives ReloadPhase objects.
         """
         cls._on_reload_cb = callback
 
@@ -558,16 +490,12 @@ class Runtime:
         """Set runtime configuration for subsequently created runtimes.
 
         Must be called before creating a Runtime instance.
-
-        Args:
-            config: RuntimeConfig with hot-reload settings.
         """
         cls._config = config
 
     @classmethod
-    def _make_c_callback(cls) -> "ctypes.CFUNCTYPE":
+    def _make_c_callback(cls) -> ctypes.CFUNCTYPE:
         """Internal: Create a C-compatible callback wrapper."""
-        import ctypes
 
         @ctypes.CFUNCTYPE(
             None,
@@ -594,97 +522,101 @@ class Runtime:
                     bundle_id=bundle_id,
                     bundle_name=_read_c_string(bundle_name_ptr, bundle_name_len),
                     retry_count=retry_count,
-                    reason=_read_c_string(reason_ptr, reason_len)
-                    if reason_len > 0
-                    else None,
+                    reason=_read_c_string(reason_ptr, reason_len) if reason_len > 0 else None,
                 )
                 cls._on_reload_cb(phase)
 
         return c_callback
 
-    def _ensure_runtime(self) -> int:
-        if self._runtime == 0:
+    def _ensure_host(self) -> int:
+        if self._host == 0:
             raise RuntimeError("Runtime is closed")
-        return self._runtime
+        return self._host
+
+    def _get_error(self) -> str:
+        """Get last error message from HostInterface."""
+        host: int = self._ensure_host()
+        error_len: int = self._get_error_len_fn(host)
+        if error_len == 0:
+            return ""
+
+        buf = (ctypes.c_uint8 * error_len)()
+        written: int = self._get_last_error_fn(host, buf, error_len)
+        if written <= 0:
+            return ""
+        return bytes(buf[:written]).decode("utf-8", errors="replace")
+
+    def _check_error(self, code: int, context: str) -> None:
+        """Check error code and raise if non-zero."""
+        if code == 0:
+            return
+        msg: str = self._get_error()
+        if msg:
+            raise RuntimeError(msg)
+        raise RuntimeError(f"{context} failed with code {code}")
 
     def load_bundle(self, path: str | Path) -> None:
-        runtime_ptr: int = self._ensure_runtime()
+        """Load a plugin bundle from path."""
+        host: int = self._ensure_host()
         path_bytes: bytes = str(Path(path)).encode("utf-8")
-        code: int = self._backend.load_bundle(runtime_ptr, path_bytes)
-        _check_error_code(self._backend, code, "polyplug_runtime_load_bundle")
+        buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
+        code: int = self._load_bundle_fn(host, buf, len(path_bytes))
+        self._check_error(code, "load_bundle")
 
     def reload_bundle(self, path: str | Path) -> None:
-        runtime_ptr: int = self._ensure_runtime()
+        """Hot-reload a plugin bundle."""
+        host: int = self._ensure_host()
         path_bytes: bytes = str(Path(path)).encode("utf-8")
-        code: int = self._backend.reload_bundle(runtime_ptr, path_bytes)
-        _check_error_code(self._backend, code, "polyplug_runtime_reload_bundle")
+        buf = (ctypes.c_uint8 * len(path_bytes))(*path_bytes)
+        code: int = self._reload_bundle_fn(host, buf, len(path_bytes))
+        self._check_error(code, "reload_bundle")
 
     def find_guest_contract(self, contract_id: int, min_version: int) -> int:
-        runtime_ptr: int = self._ensure_runtime()
-        return self._backend.find_guest_contract(runtime_ptr, contract_id, min_version)
-
-    def find_by_bundle(self, bundle_id: int, contract_id: int, min_version: int) -> int:
-        runtime_ptr: int = self._ensure_runtime()
-        return self._backend.find_by_bundle(
-            runtime_ptr, bundle_id, contract_id, min_version
-        )
+        """Find a guest contract by contract_id and minimum version."""
+        host: int = self._ensure_host()
+        return self._find_guest_contract_fn(host, contract_id, min_version)
 
     def find_all_by_contract(self, contract_id: int, min_version: int) -> list[int]:
-        runtime_ptr: int = self._ensure_runtime()
-        cap: int = 16
-        while True:
-            out = self._backend.create_uint64_array(cap)
-            count: int = self._backend.find_all_by_contract(
-                runtime_ptr, contract_id, min_version, out, cap
-            )
-            if count < cap:
-                if hasattr(self._backend, "ffi"):
-                    return [out[i] for i in range(count)]
-                else:
-                    return [int(out[i]) for i in range(count)]
-            cap = cap * 2
+        """Find all guest contracts matching contract_id."""
+        host: int = self._ensure_host()
+        # Array struct: { data: *mut T, len: usize }
+        array_ptr = self._find_all_fn(host, contract_id, min_version)
+        if array_ptr == 0:
+            return []
+
+        # Read Array<GuestContractHandle> from pointer
+        # Array layout: data (8 bytes), len (8 bytes)
+        array_data = ctypes.c_void_p.from_address(array_ptr).value
+        array_len = ctypes.c_size_t.from_address(array_ptr + 8).value
+
+        if array_len == 0 or array_data == 0:
+            return []
+
+        # Read handles from array
+        handles = []
+        for i in range(array_len):
+            handle = ctypes.c_uint64.from_address(array_data + i * 8).value
+            handles.append(handle)
+
+        # Free the array via host->free
+        self._free_fn(host, array_data, array_len * 8, 8)
+
+        return handles
 
     def resolve_guest_contract(self, packed_handle: int) -> int:
-        """Resolve a packed handle to a raw resolve_handle.
-
-        Returns the raw resolve_handle (int) that can be used to access
-        the plugin interface. The caller is responsible for calling
-        release_plugin(handle) when done, especially before hot-reload.
-
-        NOTE: In the instance-based model, callers should:
-        1. Get the interface via resolve_guest_contract (returns raw handle)
-        2. Use create_instance/destroy_instance for stateful access
-        3. Call release_plugin when done with the handle
-
-        Args:
-            packed_handle: The packed handle from find_guest_contract.
-
-        Returns:
-            Raw resolve_handle (int) for the plugin.
-
-        Raises:
-            RuntimeError: If packed_handle is null or resolution fails.
-        """
+        """Resolve a packed handle to a GuestContractInterface pointer."""
         if packed_handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
-        runtime_ptr: int = self._ensure_runtime()
-        resolve_handle: int = self._backend.resolve_guest_contract(runtime_ptr, packed_handle)
-        return resolve_handle
+        host: int = self._ensure_host()
+        return self._resolve_fn(host, packed_handle)
 
     def release_plugin(self, resolve_handle: int) -> None:
-        """Release a resolve_handle obtained from resolve_guest_contract.
-
-        Must be called when the caller is done with the handle,
-        especially before hot-reload to avoid stale references.
-
-        Args:
-            resolve_handle: The raw handle from resolve_guest_contract.
-        """
-        if resolve_handle != 0:
-            self._backend.release_plugin(resolve_handle)
+        """Release a resolve handle (no-op in HostInterface model, managed by registry)."""
+        # In HostInterface model, resolve handles are borrowed references
+        # No explicit release needed - the registry manages lifetimes
+        pass
 
     def get_extension(self, extension_id: int) -> None:
-        _ = extension_id
         return None
 
     def register_host_contract(
@@ -695,30 +627,15 @@ class Runtime:
         function_count: int,
         impl: Callable[[int, int, int], None],
     ) -> None:
-        """Register a host contract implementation.
+        """Register a host contract implementation."""
+        host: int = self._ensure_host()
 
-        Args:
-            contract_id: The FNV-1a hash of the host contract name
-                (e.g., fnv1a_64("host_contract:logger@1".encode()))
-            contract_major: Major version of the contract
-            contract_minor: Minor version of the contract
-            function_count: Number of functions in the contract
-            impl: Python callable that receives (fn_id, args_ptr, out_ptr)
-                and implements the host contract functions
-
-        Raises:
-            RuntimeError: If registration fails (duplicate contract or other error)
-        """
-        runtime_ptr: int = self._ensure_runtime()
-
-        # Store the implementation in a class-level dict to keep it alive
+        # Store implementation to keep it alive
         if not hasattr(Runtime, "_host_contract_impls"):
-            Runtime._host_contract_impls: dict[
-                int, Callable[[int, int, int], None]
-            ] = {}
+            Runtime._host_contract_impls: dict[int, Callable[[int, int, int], None]] = {}
         Runtime._host_contract_impls[contract_id] = impl
 
-        # Create a ctypes callback for the dispatch function
+        # Create dispatch callback
         @ctypes.CFUNCTYPE(
             ctypes.c_uint32,
             ctypes.c_void_p,
@@ -726,16 +643,8 @@ class Runtime:
             ctypes.c_void_p,
             ctypes.c_void_p,
         )
-        def dispatch_callback(
-            bridge_data: int,
-            fn_id: int,
-            args_ptr: int,
-            out_ptr: int,
-        ) -> int:
-            # Look up the implementation and call it
-            impl_func: Callable[[int, int, int], None] = (
-                Runtime._host_contract_impls.get(contract_id)
-            )
+        def dispatch_callback(bridge_data: int, fn_id: int, args_ptr: int, out_ptr: int) -> int:
+            impl_func = Runtime._host_contract_impls.get(contract_id)
             if impl_func is None:
                 return AbiErrorCode.HostContractNotFound
             try:
@@ -744,13 +653,13 @@ class Runtime:
             except Exception:
                 return AbiErrorCode.HostContractCallFailed
 
-        # Store the callback to keep it alive
+        # Store callback
         if not hasattr(Runtime, "_host_contract_callbacks"):
             Runtime._host_contract_callbacks: dict[int, ctypes.CFUNCTYPE] = {}
         Runtime._host_contract_callbacks[contract_id] = dispatch_callback
 
-        # Create the HostContractInterface structure
-        interface: HostContractInterface = HostContractInterface()
+        # Create HostContractInterface
+        interface = HostContractInterface()
         interface.header.interface_version = 1
         interface.header.contract_id = contract_id
         interface.header.contract_major = contract_major
@@ -758,22 +667,16 @@ class Runtime:
         interface.header.function_count = function_count
         interface.header.dispatch_type = DISPATCH_TYPE_VIRTUAL_MACHINE
         interface.dispatch.vm.call = ctypes.cast(dispatch_callback, ctypes.c_void_p)
-        interface.dispatch.vm.bridge_data = 0  # Not used for Python
+        interface.dispatch.vm.bridge_data = 0
 
-        # Store the interface to keep it alive
+        # Store interface
         if not hasattr(Runtime, "_host_contract_interfaces"):
             Runtime._host_contract_interfaces: dict[int, HostContractInterface] = {}
         Runtime._host_contract_interfaces[contract_id] = interface
 
-        # Get pointer to the interface
-        interface_ptr: int = ctypes.addressof(interface)
-
-        # Call the FFI to register
-        code: int = self._backend.register_host_contract(runtime_ptr, interface_ptr)
+        # Register via HostInterface
+        interface_ptr = ctypes.addressof(interface)
+        code: int = self._register_host_contract_fn(host, interface_ptr)
         if code == 2:
-            raise RuntimeError(
-                f"duplicate host contract registration: contract_id={contract_id}"
-            )
-        elif code != 0:
-            msg: str = _last_error(self._backend)
-            raise RuntimeError(msg or f"register_host_contract failed with code {code}")
+            raise RuntimeError(f"duplicate host contract: contract_id={contract_id}")
+        self._check_error(code, "register_host_contract")

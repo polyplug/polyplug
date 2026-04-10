@@ -11,11 +11,79 @@ public sealed class Runtime
     private static GCHandle s_reloadCallbackHandle;
     private static readonly object s_lock = new();
 
-    public nint Handle { get; private set; }
+    // HostInterface pointer and loaded struct (18-03)
+    private nint _host;
+    private NativeMethods.HostInterface _hostStruct;
 
-    public Runtime(nint handle)
+    // Cached function pointer delegates (18-03)
+    private LoadBundleDelegate? _loadBundleFn;
+    private ReloadBundleDelegate? _reloadBundleFn;
+    private FindGuestContractDelegate? _findGuestContractFn;
+    private FindAllGuestContractsDelegate? _findAllFn;
+    private ResolveGuestContractDelegate? _resolveFn;
+    private GetLastErrorDelegate? _getLastErrorFn;
+    private GetErrorLenDelegate? _getErrorLenFn;
+    private RegisterHostContractDelegate? _registerHostContractFn;
+    private FreeDelegate? _freeFn;
+
+    // ─── Function pointer delegate types (18-03) ─────────────────────────────────
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate uint LoadBundleDelegate(nint host, nint path, nuint pathLen);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate uint ReloadBundleDelegate(nint host, nint path, nuint pathLen);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate ulong FindGuestContractDelegate(nint host, ulong contractId, uint minVersion);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate nint FindAllGuestContractsDelegate(nint host, ulong contractId, uint minVersion);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate nint ResolveGuestContractDelegate(nint host, ulong packedHandle);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate nuint GetLastErrorDelegate(nint host, nint buf, nuint bufLen);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate nuint GetErrorLenDelegate(nint host);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate uint RegisterHostContractDelegate(nint host, nint interfacePtr);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void FreeDelegate(nint host, nint ptr, nuint size, nuint align);
+
+    /// <summary>
+    /// Create a new Runtime instance with default configuration.
+    /// Gets HostInterface pointer from FFI and caches struct fields.
+    /// </summary>
+    public Runtime()
     {
-        Handle = handle;
+        _host = NativeMethods.PolyplugRuntimeCreate();
+        if (_host == nint.Zero)
+        {
+            ThrowLastError("Failed to create runtime.");
+        }
+        _hostStruct = Marshal.PtrToStructure<NativeMethods.HostInterface>(_host);
+        CacheFunctionPointers();
+    }
+
+    /// <summary>
+    /// Create a Runtime from an existing HostInterface pointer.
+    /// Used by RuntimeBuilder after creating the HostInterface.
+    /// </summary>
+    /// <param name="hostInterfacePtr">HostInterface pointer from polyplug_runtime_create.</param>
+    internal Runtime(nint hostInterfacePtr)
+    {
+        if (hostInterfacePtr == nint.Zero)
+        {
+            throw new InvalidOperationException("HostInterface pointer is null.");
+        }
+        _host = hostInterfacePtr;
+        _hostStruct = Marshal.PtrToStructure<NativeMethods.HostInterface>(_host);
+        CacheFunctionPointers();
     }
 
     /// <summary>
@@ -52,38 +120,6 @@ public sealed class Runtime
                 s_reloadCallbackHandle.Free();
                 ThrowLastError("Failed to register reload callback.");
             }
-        }
-    }
-
-    /// <summary>
-    /// Set runtime configuration for subsequently created runtimes.
-    /// Must be called BEFORE creating a Runtime instance.
-    /// </summary>
-    /// <param name="hotReloadEnabled">Enable hot-reload (default false).</param>
-    /// <param name="hotReloadMaxRetries">Max retry attempts (default 3).</param>
-    /// <param name="hotReloadRetryIntervalMs">Retry interval in ms (default 3000).</param>
-    /// <param name="hotReloadAbortOnMaxRetries">Abort on max retries (default true).</param>
-    /// <param name="compatibility">Compatibility mode (default Strict).</param>
-    public static void SetConfig(
-        bool hotReloadEnabled = false,
-        uint hotReloadMaxRetries = 3,
-        ulong hotReloadRetryIntervalMs = 3000,
-        bool hotReloadAbortOnMaxRetries = true,
-        uint compatibility = NativeMethods.CompatibilityMode.Strict)
-    {
-        NativeMethods.RuntimeConfig configC = new NativeMethods.RuntimeConfig
-        {
-            HotReloadEnabled = hotReloadEnabled ? (byte)1 : (byte)0,
-            HotReloadMaxRetries = hotReloadMaxRetries,
-            HotReloadRetryIntervalMs = hotReloadRetryIntervalMs,
-            HotReloadAbortOnMaxRetries = hotReloadAbortOnMaxRetries ? (byte)1 : (byte)0,
-            Compatibility = compatibility,
-        };
-
-        uint result = NativeMethods.PolyplugRuntimeSetConfig(ref configC);
-        if (result != 0u)
-        {
-            ThrowLastError("Failed to set runtime config.");
         }
     }
 
@@ -124,19 +160,32 @@ public sealed class Runtime
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void ReloadCallbackNative(NativeMethods.ReloadPhaseFfi phase);
 
+    private void CacheFunctionPointers()
+    {
+        _loadBundleFn = Marshal.GetDelegateForFunctionPointer<LoadBundleDelegate>(_hostStruct.LoadBundle);
+        _reloadBundleFn = Marshal.GetDelegateForFunctionPointer<ReloadBundleDelegate>(_hostStruct.ReloadBundle);
+        _findGuestContractFn = Marshal.GetDelegateForFunctionPointer<FindGuestContractDelegate>(_hostStruct.FindGuestContract);
+        _findAllFn = Marshal.GetDelegateForFunctionPointer<FindAllGuestContractsDelegate>(_hostStruct.FindAllGuestContracts);
+        _resolveFn = Marshal.GetDelegateForFunctionPointer<ResolveGuestContractDelegate>(_hostStruct.ResolveGuestContract);
+        _getLastErrorFn = Marshal.GetDelegateForFunctionPointer<GetLastErrorDelegate>(_hostStruct.GetLastError);
+        _getErrorLenFn = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(_hostStruct.GetErrorLen);
+        _registerHostContractFn = Marshal.GetDelegateForFunctionPointer<RegisterHostContractDelegate>(_hostStruct.RegisterHostContract);
+        _freeFn = Marshal.GetDelegateForFunctionPointer<FreeDelegate>(_hostStruct.Free);
+    }
+
     ~Runtime()
     {
-        if (Handle != nint.Zero)
+        if (_host != nint.Zero)
         {
-            NativeMethods.PolyplugRuntimeDestroy(Handle);
-            Handle = nint.Zero;
+            NativeMethods.PolyplugRuntimeDestroy(_host);
+            _host = nint.Zero;
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureHandle()
+    private void EnsureHost()
     {
-        if (Handle != nint.Zero)
+        if (_host != nint.Zero)
         {
             return;
         }
@@ -144,34 +193,96 @@ public sealed class Runtime
         throw new ObjectDisposedException(nameof(Runtime));
     }
 
-    public uint RegisterLoader(nint loaderPtr)
+    private string GetLastError()
     {
-        EnsureHandle();
+        EnsureHost();
+        nuint len = _getErrorLenFn!(_host);
+        ulong length = len.ToUInt64();
+        if (length == 0ul)
+        {
+            return string.Empty;
+        }
 
-        return NativeMethods.PolyplugRuntimeRegisterLoader(Handle, loaderPtr);
+        if (length > int.MaxValue)
+        {
+            return "polyplug error message too large";
+        }
+
+        byte[] buffer = new byte[(int)length];
+        GCHandle pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+        try
+        {
+            nuint written = _getLastErrorFn!(_host, pinned.AddrOfPinnedObject(), (nuint)buffer.Length);
+            int count = (int)written.ToUInt64();
+            if (count == 0)
+            {
+                return string.Empty;
+            }
+            return Encoding.UTF8.GetString(buffer, 0, count);
+        }
+        finally
+        {
+            pinned.Free();
+        }
     }
 
-    /// <summary>
-    /// Register a host contract interface with the runtime.
-    /// </summary>
-    /// <param name="hostInterface">Pointer to a HostContractInterface structure.</param>
-    public void RegisterHostContract(nint hostInterface)
+    public static void ThrowLastError(string fallbackMessage)
     {
-        EnsureHandle();
-
-        uint result = NativeMethods.PolyplugRuntimeRegisterHostContract(Handle, hostInterface);
-        if (result != 0u)
+        // Create a temporary HostInterface to get error (global state)
+        nint tempHost = NativeMethods.PolyplugRuntimeCreate();
+        if (tempHost == nint.Zero)
         {
-            ThrowLastError("Failed to register host contract.");
+            throw new InvalidOperationException(fallbackMessage);
+        }
+
+        try
+        {
+            NativeMethods.HostInterface tempStruct = Marshal.PtrToStructure<NativeMethods.HostInterface>(tempHost);
+            GetErrorLenDelegate getLen = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(tempStruct.GetErrorLen);
+            GetLastErrorDelegate getErr = Marshal.GetDelegateForFunctionPointer<GetLastErrorDelegate>(tempStruct.GetLastError);
+
+            nuint len = getLen(tempHost);
+            ulong length = len.ToUInt64();
+            if (length == 0ul)
+            {
+                throw new InvalidOperationException(fallbackMessage);
+            }
+
+            if (length > int.MaxValue)
+            {
+                throw new InvalidOperationException("polyplug error message too large");
+            }
+
+            byte[] buffer = new byte[(int)length];
+            GCHandle pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            try
+            {
+                nuint written = getErr(tempHost, pinned.AddrOfPinnedObject(), (nuint)buffer.Length);
+                int count = (int)written.ToUInt64();
+                if (count == 0)
+                {
+                    throw new InvalidOperationException(fallbackMessage);
+                }
+                string message = Encoding.UTF8.GetString(buffer, 0, count);
+                throw new InvalidOperationException(string.IsNullOrEmpty(message) ? fallbackMessage : message);
+            }
+            finally
+            {
+                pinned.Free();
+            }
+        }
+        finally
+        {
+            NativeMethods.PolyplugRuntimeDestroy(tempHost);
         }
     }
 
     public void LoadBundle(string path)
     {
-        EnsureHandle();
+        EnsureHost();
         InvokeWithUtf8(path, (ptr, len) =>
         {
-            uint result = NativeMethods.PolyplugRuntimeLoadBundle(Handle, ptr, (nuint)len);
+            uint result = _loadBundleFn!(_host, ptr, len);
             if (result != 0u)
             {
                 ThrowLastError("Failed to load bundle.");
@@ -181,10 +292,10 @@ public sealed class Runtime
 
     public void ReloadBundle(string path)
     {
-        EnsureHandle();
+        EnsureHost();
         InvokeWithUtf8(path, (ptr, len) =>
         {
-            uint result = NativeMethods.PolyplugRuntimeReloadBundle(Handle, ptr, len);
+            uint result = _reloadBundleFn!(_host, ptr, len);
             if (result != 0u)
             {
                 ThrowLastError("Failed to reload bundle.");
@@ -195,80 +306,64 @@ public sealed class Runtime
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ulong FindGuestContract(ulong contractId, uint minVersion)
     {
-        EnsureHandle();
-        return NativeMethods.PolyplugRuntimeFindGuestContract(Handle, contractId, minVersion);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ulong FindByBundle(ulong bundleId, ulong contractId, uint minVersion)
-    {
-        EnsureHandle();
-        return NativeMethods.PolyplugRuntimeFindByBundle(Handle, bundleId, contractId, minVersion);
+        EnsureHost();
+        return _findGuestContractFn!(_host, contractId, minVersion);
     }
 
     public ulong[] FindAllByContract(ulong contractId, uint minVersion)
     {
-        EnsureHandle();
+        EnsureHost();
 
-        int capacity = 16;
-        while (true)
+        // Call find_all_guest_contracts which returns Array<GuestContractHandle>*
+        nint arrayPtr = _findAllFn!(_host, contractId, minVersion);
+        if (arrayPtr == nint.Zero)
         {
-            ulong[] handles = new ulong[capacity];
-            GCHandle pinned = GCHandle.Alloc(handles, GCHandleType.Pinned);
-            try
-            {
-                nint outPtr = pinned.AddrOfPinnedObject();
-                nuint written = NativeMethods.PolyplugRuntimeFindAllByContract(
-                    Handle,
-                    contractId,
-                    minVersion,
-                    outPtr,
-                    (nuint)handles.Length
-                );
-                ulong count = written.ToUInt64();
-                if (count == 0ul)
-                {
-                    return [];
-                }
-                if (count < (ulong)handles.Length)
-                {
-                    ulong[] result = new ulong[count];
-                    Array.Copy(handles, result, (long)count);
-                    return result;
-                }
-            }
-            finally
-            {
-                pinned.Free();
-            }
-            capacity = checked(capacity * 2);
+            return [];
         }
+
+        // Array layout: data (nint), len (nuint)
+        nint dataPtr = Marshal.ReadIntPtr(arrayPtr);
+        nuint arrayLen = Marshal.PtrToStructure<nuint>(arrayPtr + IntPtr.Size);
+
+        if (arrayLen == nuint.Zero || dataPtr == nint.Zero)
+        {
+            return [];
+        }
+
+        int count = checked((int)arrayLen.ToUInt64());
+        ulong[] handles = new ulong[count];
+        for (int i = 0; i < count; i++)
+        {
+            handles[i] = Marshal.PtrToStructure<ulong>(dataPtr + i * 8);
+        }
+
+        // Free the array via host->free
+        _freeFn!(_host, dataPtr, (nuint)(count * 8), 8);
+
+        return handles;
     }
 
-    /// <summary>
-    /// Resolve a plugin handle to get the raw resolve handle.
-    ///
-    /// In the instance-based model (Phase 3), the host:
-    /// 1. Gets resolve handle via ResolveGuestContract (this method)
-    /// 2. Calls create_instance on the GuestContractInterface
-    /// 3. Makes dispatch calls with the instance
-    /// 4. Calls destroy_instance before hot-reload (via ReloadPhase callback)
-    ///
-    /// The returned nint is a raw resolve handle. The caller must NOT
-    /// cache this beyond hot-reload boundaries.
-    /// </summary>
-    /// <param name="packedHandle">Packed contract handle from FindGuestContract.</param>
-    /// <returns>Raw resolve handle (nint.Zero if not found).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public nint ResolveGuestContract(ulong packedHandle)
     {
-        EnsureHandle();
+        EnsureHost();
         if (packedHandle == ulong.MaxValue)
         {
             return nint.Zero;
         }
 
-        return NativeMethods.PolyplugRuntimeResolveGuestContract(Handle, packedHandle);
+        return _resolveFn!(_host, packedHandle);
+    }
+
+    public void RegisterHostContract(nint hostInterface)
+    {
+        EnsureHost();
+
+        uint result = _registerHostContractFn!(_host, hostInterface);
+        if (result != 0u)
+        {
+            ThrowLastError("Failed to register host contract.");
+        }
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)
@@ -293,49 +388,6 @@ public sealed class Runtime
         finally
         {
             Marshal.FreeHGlobal(ptr);
-        }
-    }
-
-    public static void ThrowLastError(string fallbackMessage)
-    {
-        string message = GetLastError();
-        if (string.IsNullOrEmpty(message))
-        {
-            message = fallbackMessage;
-        }
-
-        throw new InvalidOperationException(message);
-    }
-
-    private static string GetLastError()
-    {
-        nuint len = NativeMethods.PolyplugRuntimeErrorMessageLen();
-        ulong length = len.ToUInt64();
-        if (length == 0ul)
-        {
-            return string.Empty;
-        }
-
-        if (length > int.MaxValue)
-        {
-            return "polyplug error message too large";
-        }
-
-        byte[] buffer = new byte[(int)length];
-        GCHandle pinned = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-        try
-        {
-            nuint written = NativeMethods.PolyplugRuntimeLastError(pinned.AddrOfPinnedObject(), (nuint)buffer.Length);
-            int count = (int)written.ToUInt64();
-            if (count == 0)
-            {
-                return string.Empty;
-            }
-            return Encoding.UTF8.GetString(buffer, 0, count);
-        }
-        finally
-        {
-            pinned.Free();
         }
     }
 }
