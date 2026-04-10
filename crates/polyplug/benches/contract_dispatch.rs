@@ -133,7 +133,7 @@ unsafe extern "C" fn bench_destroy_instance(
 ///
 /// # Safety
 /// Must only be called from a bench thread where BENCH_REGISTRY is initialised.
-unsafe extern "C" fn bench_find_by_contract(
+unsafe extern "C" fn bench_find_guest_contract(
     _this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
@@ -150,7 +150,7 @@ unsafe extern "C" fn bench_find_by_contract(
 ///
 /// # Safety
 /// Always safe to call; returns empty array.
-unsafe extern "C" fn bench_find_all_by_contract(
+unsafe extern "C" fn bench_find_all_guest_contracts(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -162,7 +162,7 @@ unsafe extern "C" fn bench_find_all_by_contract(
 ///
 /// # Safety
 /// The returned pointer is valid and 'static — the library is kept alive via mem::forget.
-unsafe extern "C" fn bench_resolve_contract(
+unsafe extern "C" fn bench_resolve_guest_contract(
     _this: *const HostInterface,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -275,9 +275,9 @@ fn load_and_init_plugin(path: &str) -> libloading::Library {
         register_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
-        find_by_contract: bench_find_by_contract,
-        find_all_by_contract: bench_find_all_by_contract,
-        resolve_contract: bench_resolve_contract,
+        find_guest_contract: bench_find_guest_contract,
+        find_all_guest_contracts: bench_find_all_guest_contracts,
+        resolve_guest_contract: bench_resolve_guest_contract,
         call_guest_method: bench_call_guest_method,
         get_host_contract: bench_get_host_contract,
         resolve_host_contract_interface: bench_resolve_host_contract_interface,
@@ -493,9 +493,9 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
         register_contract: bench_register_callback,
         alloc: bench_alloc,
         free: bench_free,
-        find_by_contract: bench_find_by_contract,
-        find_all_by_contract: bench_find_all_by_contract,
-        resolve_contract: bench_resolve_contract,
+        find_guest_contract: bench_find_guest_contract,
+        find_all_guest_contracts: bench_find_all_guest_contracts,
+        resolve_guest_contract: bench_resolve_guest_contract,
         call_guest_method: bench_call_guest_method,
         get_host_contract: bench_get_host_contract,
         resolve_host_contract_interface: bench_resolve_host_contract_interface,
@@ -516,18 +516,18 @@ fn bench_dispatch_cross_plugin(c: &mut Criterion) {
 
     group.bench_function(BenchmarkId::new("cross_plugin", "find+call"), |b| {
         b.iter(|| {
-            // SAFETY: bench_find_by_contract is a valid extern C fn backed by BENCH_REGISTRY.
+            // SAFETY: bench_find_guest_contract is a valid extern C fn backed by BENCH_REGISTRY.
             let handle: GuestContractHandle = unsafe {
-                black_box((host_interface.find_by_contract)(
+                black_box((host_interface.find_guest_contract)(
                     &host_interface as *const HostInterface,
                     memory_contract_id,
                     0,
                 ))
             };
 
-            // SAFETY: bench_resolve_contract returns a 'static GuestContractInterface pointer.
+            // SAFETY: bench_resolve_guest_contract returns a 'static GuestContractInterface pointer.
             let interface_ptr: *const GuestContractInterface =
-                unsafe { black_box((host_interface.resolve_contract)(&host_interface as *const HostInterface, handle)) };
+                unsafe { black_box((host_interface.resolve_guest_contract)(&host_interface as *const HostInterface, handle)) };
 
             // SAFETY: interface_ptr is non-null (plugin is registered), fn 2 is in range.
             // fn 2 = memory_echo_string_view(args: *const StringView, out: *mut StringView).

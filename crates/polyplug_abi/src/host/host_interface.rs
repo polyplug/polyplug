@@ -124,7 +124,7 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// GuestContractHandle for the first matching contract, or null handle.
-    pub find_by_contract: unsafe extern "C" fn(
+    pub find_guest_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
         min_version: u32,
@@ -141,7 +141,7 @@ pub struct HostInterface {
     ///
     /// # Returns
     /// Array of GuestContractHandle. Caller owns and must free.
-    pub find_all_by_contract: unsafe extern "C" fn(
+    pub find_all_guest_contracts: unsafe extern "C" fn(
         this: *const HostInterface,
         contract_id: u64,
         min_version: u32,
@@ -152,11 +152,11 @@ pub struct HostInterface {
     ///
     /// # Arguments
     /// - `this`: HostInterface pointer (self-passing)
-    /// - `handle`: GuestContractHandle from find_by_contract
+    /// - `handle`: GuestContractHandle from find_guest_contract
     ///
     /// # Returns
     /// Pointer to GuestContractInterface, or null if invalid/stale.
-    pub resolve_contract: unsafe extern "C" fn(
+    pub resolve_guest_contract: unsafe extern "C" fn(
         this: *const HostInterface,
         handle: GuestContractHandle,
     ) -> *const GuestContractInterface,
@@ -265,8 +265,8 @@ mod tests {
     #[test]
     fn layout_host_interface() {
         // HostInterface: runtime pointer (8 bytes) + 11 extern "C" fn pointers (88 bytes).
-        // Fields: register_contract, alloc, free, find_by_contract, find_all_by_contract,
-        //         resolve_contract, call_guest_method, get_host_contract,
+        // Fields: register_contract, alloc, free, find_guest_contract, find_all_guest_contracts,
+        //         resolve_guest_contract, call_guest_method, get_host_contract,
         //         resolve_host_contract_interface, list_bundles, get_dependencies
         assert_eq!(size_of::<HostInterface>(), 96);
         assert_eq!(align_of::<HostInterface>(), 8);
@@ -274,9 +274,9 @@ mod tests {
         assert_eq!(offset_of!(HostInterface, register_contract), 8);
         assert_eq!(offset_of!(HostInterface, alloc), 16);
         assert_eq!(offset_of!(HostInterface, free), 24);
-        assert_eq!(offset_of!(HostInterface, find_by_contract), 32);
-        assert_eq!(offset_of!(HostInterface, find_all_by_contract), 40);
-        assert_eq!(offset_of!(HostInterface, resolve_contract), 48);
+        assert_eq!(offset_of!(HostInterface, find_guest_contract), 32);
+        assert_eq!(offset_of!(HostInterface, find_all_guest_contracts), 40);
+        assert_eq!(offset_of!(HostInterface, resolve_guest_contract), 48);
         assert_eq!(offset_of!(HostInterface, call_guest_method), 56);
         assert_eq!(offset_of!(HostInterface, get_host_contract), 64);
         assert_eq!(offset_of!(HostInterface, resolve_host_contract_interface), 72);

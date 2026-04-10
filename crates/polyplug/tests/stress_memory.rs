@@ -74,7 +74,7 @@ struct ZeroResult {
 ///
 /// # Safety
 /// Always safe to call; returns a sentinel null handle.
-unsafe extern "C" fn stub_find_by_contract(
+unsafe extern "C" fn stub_find_guest_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -86,7 +86,7 @@ unsafe extern "C" fn stub_find_by_contract(
 ///
 /// # Safety
 /// Always safe to call; returns empty array.
-unsafe extern "C" fn stub_find_all_by_contract(
+unsafe extern "C" fn stub_find_all_guest_contracts(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -98,7 +98,7 @@ unsafe extern "C" fn stub_find_all_by_contract(
 ///
 /// # Safety
 /// Always safe to call; returns null pointer.
-unsafe extern "C" fn stub_resolve_contract(
+unsafe extern "C" fn stub_resolve_guest_contract(
     _this: *const HostInterface,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -266,9 +266,9 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_contract: stub_resolve_contract,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,
@@ -646,9 +646,9 @@ fn stress_plugin_allocates_returns_to_host_then_host_frees() {
         register_contract: registry_register_callback,
         alloc: tracking_alloc_wrapper,
         free: tracking_free_wrapper,
-        find_by_contract: stub_find_by_contract,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_contract: stub_resolve_contract,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,

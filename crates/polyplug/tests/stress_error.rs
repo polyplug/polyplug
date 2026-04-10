@@ -50,7 +50,7 @@ std::thread_local! {
 ///
 /// # Safety
 /// Must only be called when ERROR_REGISTRY has been populated on this thread.
-unsafe extern "C" fn chain_find_by_contract(
+unsafe extern "C" fn chain_find_guest_contract(
     _this: *const HostInterface,
     contract_id: u64,
     _min_version: u32,
@@ -68,7 +68,7 @@ unsafe extern "C" fn chain_find_by_contract(
 ///
 /// # Safety
 /// Always safe to call.
-unsafe extern "C" fn chain_find_all_by_contract(
+unsafe extern "C" fn chain_find_all_guest_contracts(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -80,7 +80,7 @@ unsafe extern "C" fn chain_find_all_by_contract(
 ///
 /// # Safety
 /// The returned pointer is 'static (error_plugin library is kept alive via mem::forget).
-unsafe extern "C" fn chain_resolve_contract(
+unsafe extern "C" fn chain_resolve_guest_contract(
     _this: *const HostInterface,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -143,7 +143,7 @@ unsafe extern "C" fn stub_free(
 }
 
 /// No-op find_by_contract callback.
-unsafe extern "C" fn noop_find_by_contract(
+unsafe extern "C" fn noop_find_guest_contract(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -152,7 +152,7 @@ unsafe extern "C" fn noop_find_by_contract(
 }
 
 /// No-op find_all_by_contract callback.
-unsafe extern "C" fn noop_find_all_by_contract(
+unsafe extern "C" fn noop_find_all_guest_contracts(
     _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
@@ -161,7 +161,7 @@ unsafe extern "C" fn noop_find_all_by_contract(
 }
 
 /// No-op resolve_contract callback.
-unsafe extern "C" fn noop_resolve_contract(
+unsafe extern "C" fn noop_resolve_guest_contract(
     _this: *const HostInterface,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -272,9 +272,9 @@ fn make_host_interface() -> HostInterface {
         register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: noop_find_by_contract,
-        find_all_by_contract: noop_find_all_by_contract,
-        resolve_contract: noop_resolve_contract,
+        find_guest_contract: noop_find_guest_contract,
+        find_all_guest_contracts: noop_find_all_guest_contracts,
+        resolve_guest_contract: noop_resolve_guest_contract,
         call_guest_method: noop_call_guest_method,
         get_host_contract: noop_get_host_contract,
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
@@ -479,9 +479,9 @@ fn stress_error_chain_b_errors_a_propagates() {
         register_contract: registry_register_callback,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: chain_find_by_contract,
-        find_all_by_contract: chain_find_all_by_contract,
-        resolve_contract: chain_resolve_contract,
+        find_guest_contract: chain_find_guest_contract,
+        find_all_guest_contracts: chain_find_all_guest_contracts,
+        resolve_guest_contract: chain_resolve_guest_contract,
         call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
         resolve_host_contract_interface: stub_resolve_host_contract_interface,

@@ -257,9 +257,9 @@ impl Runtime {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
@@ -695,7 +695,7 @@ pub(crate) unsafe extern "C" fn host_free(
 ///
 /// # Safety
 /// this must be a valid HostInterface pointer with valid runtime field.
-pub(crate) unsafe extern "C" fn host_find_by_contract(
+pub(crate) unsafe extern "C" fn host_find_guest_contract(
     this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
@@ -723,7 +723,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
 ///
 /// # Safety
 /// - this must be a valid HostInterface pointer with valid runtime field
-pub(crate) unsafe extern "C" fn host_find_all_by_contract(
+pub(crate) unsafe extern "C" fn host_find_all_guest_contracts(
     this: *const HostInterface,
     contract_id: u64,
     min_version: u32,
@@ -766,7 +766,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
 ///
 /// # Safety
 /// this must be a valid HostInterface pointer with valid runtime field.
-pub(crate) unsafe extern "C" fn host_resolve_contract(
+pub(crate) unsafe extern "C" fn host_resolve_guest_contract(
     this: *const HostInterface,
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn host_callbacks_use_host_interface_self_passing() {
         // All host callback functions (host_register_contract, host_alloc, host_free,
-        // host_find_by_contract, host_find_all_by_contract, host_resolve_contract,
+        // host_find_guest_contract, host_find_all_guest_contracts, host_resolve_guest_contract,
         // host_call_method, host_get_host_contract) use *const HostInterface as first parameter.
         //
         // This is verified by the function signatures in this file using HostInterface.
@@ -1104,13 +1104,13 @@ mod tests {
     }
 
     #[test]
-    fn host_find_by_contract_null_this_returns_null() {
-        // SAFETY: host_find_by_contract handles null HostInterface gracefully
+    fn host_find_guest_contract_null_this_returns_null() {
+        // SAFETY: host_find_guest_contract handles null HostInterface gracefully
         let handle: GuestContractHandle =
-            unsafe { host_find_by_contract(core::ptr::null(), 0_u64, 0_u32) };
+            unsafe { host_find_guest_contract(core::ptr::null(), 0_u64, 0_u32) };
         assert!(
             handle.is_null(),
-            "host_find_by_contract must return null when this is null"
+            "host_find_guest_contract must return null when this is null"
         );
     }
 
@@ -1129,9 +1129,9 @@ mod tests {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
@@ -1141,7 +1141,7 @@ mod tests {
 
         // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
         let handle: GuestContractHandle =
-            unsafe { host_find_by_contract(&host_interface as *const HostInterface, 0x1111_2222_3333_4444_u64, 0_u32) };
+            unsafe { host_find_guest_contract(&host_interface as *const HostInterface, 0x1111_2222_3333_4444_u64, 0_u32) };
         assert!(
             handle.is_null(),
             "dep enforcement must return null for undeclared contract during init phase"
@@ -1797,9 +1797,9 @@ mod tests {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
@@ -1830,9 +1830,9 @@ mod tests {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
@@ -1930,9 +1930,9 @@ mod tests {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
@@ -1999,9 +1999,9 @@ mod tests {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
@@ -2073,9 +2073,9 @@ mod tests {
             register_contract: host_register_contract,
             alloc: host_alloc,
             free: host_free,
-            find_by_contract: host_find_by_contract,
-            find_all_by_contract: host_find_all_by_contract,
-            resolve_contract: host_resolve_contract,
+            find_guest_contract: host_find_guest_contract,
+            find_all_guest_contracts: host_find_all_guest_contracts,
+            resolve_guest_contract: host_resolve_guest_contract,
             call_guest_method: host_call_method,
             get_host_contract: host_get_host_contract,
             resolve_host_contract_interface: host_resolve_host_contract_interface,
