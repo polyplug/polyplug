@@ -140,9 +140,9 @@ internal static partial class NativeMethods
     public static partial uint PolyplugRuntimeRegisterLoader(nint rt, nint loaderPtr);
 
     // Hot path — SuppressGCTransition for zero-overhead
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_contract")]
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_guest_contract")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial ulong PolyplugRuntimeFindByContract(nint rt, ulong contractId, uint minVersion);
+    public static partial ulong PolyplugRuntimeFindGuestContract(nint rt, ulong contractId, uint minVersion);
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_find_by_bundle")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
@@ -158,9 +158,9 @@ internal static partial class NativeMethods
         nuint outCap
     );
 
-    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_resolve_plugin")]
+    [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_resolve_guest_contract")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]
-    public static partial nint PolyplugRuntimeResolvePlugin(nint rt, ulong packedHandle);
+    public static partial nint PolyplugRuntimeResolveGuestContract(nint rt, ulong packedHandle);
 
     [LibraryImport(NativeLib, EntryPoint = "polyplug_runtime_release_plugin")]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl), typeof(CallConvSuppressGCTransition)])]

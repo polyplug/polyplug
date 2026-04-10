@@ -13,10 +13,10 @@ ffi.cdef([[
     void polyplug_runtime_destroy(OpaqueRuntime* rt);
     uint32_t polyplug_runtime_load_bundle(OpaqueRuntime* rt, const uint8_t* path, size_t path_len);
     uint32_t polyplug_runtime_reload_bundle(OpaqueRuntime* rt, const uint8_t* path, size_t path_len);
-    uint64_t polyplug_runtime_find_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version);
+    uint64_t polyplug_runtime_find_guest_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version);
     uint64_t polyplug_runtime_find_by_bundle(const OpaqueRuntime* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
     size_t polyplug_runtime_find_all_by_contract(const OpaqueRuntime* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
-    const ResolveHandle* polyplug_runtime_resolve_plugin(const OpaqueRuntime* rt, uint64_t packed_handle);
+    const ResolveHandle* polyplug_runtime_resolve_guest_contract(const OpaqueRuntime* rt, uint64_t packed_handle);
     void polyplug_runtime_release_plugin(const ResolveHandle* handle);
     size_t polyplug_runtime_error_message_len(void);
     void polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
@@ -235,9 +235,9 @@ function M.Runtime:find_by_bundle(bundle_id, contract_id, min_version)
     return lib.polyplug_runtime_find_by_bundle(self._ptr, bundle_id, contract_id, min_version)
 end
 
-function M.Runtime:find_by_contract(contract_id, min_version)
+function M.Runtime:find_guest_contract(contract_id, min_version)
     local lib = self._lib
-    return lib.polyplug_runtime_find_by_contract(self._ptr, contract_id, min_version)
+    return lib.polyplug_runtime_find_guest_contract(self._ptr, contract_id, min_version)
 end
 
 function M.Runtime:find_all_by_contract(contract_id, min_version, cap)
@@ -265,7 +265,7 @@ function M.Runtime:register_host_contract(interface)
     end
 end
 
-function M.Runtime:resolve_plugin(packed_handle)
+function M.Runtime:resolve_guest_contract(packed_handle)
     -- Instance-based model: returns raw resolve_handle (cdata) for host to use directly.
     -- Host should:
     --   1. Get resolve_handle from resolve_plugin
@@ -277,7 +277,7 @@ function M.Runtime:resolve_plugin(packed_handle)
         return nil, "null handle"
     end
     local lib = self._lib
-    local resolve_handle = lib.polyplug_runtime_resolve_plugin(self._ptr, packed_handle)
+    local resolve_handle = lib.polyplug_runtime_resolve_guest_contract(self._ptr, packed_handle)
     if resolve_handle == nil then
         return nil, M.last_error(lib)
     end

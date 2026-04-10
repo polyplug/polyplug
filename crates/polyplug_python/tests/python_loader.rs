@@ -155,7 +155,7 @@ _FreeFn = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size
 _FindByContractFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 _FindByBundleFn = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint32)
 _FindAllByContractFn = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t)
-_ResolvePluginFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
+_ResolveGuestContractFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64)
 _GetHostContractFn = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
 
 class _HostInterface(ctypes.Structure):
@@ -166,7 +166,7 @@ class _HostInterface(ctypes.Structure):
         ("find_by_contract", _FindByContractFn),
         ("find_by_bundle", _FindByBundleFn),
         ("find_all_by_contract", _FindAllByContractFn),
-        ("resolve_plugin", _ResolvePluginFn),
+        ("resolve_guest_contract", _ResolveGuestContractFn),
         ("get_host_contract", _GetHostContractFn),
     ]
 

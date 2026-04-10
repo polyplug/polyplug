@@ -193,10 +193,10 @@ public sealed class Runtime
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ulong FindByContract(ulong contractId, uint minVersion)
+    public ulong FindGuestContract(ulong contractId, uint minVersion)
     {
         EnsureHandle();
-        return NativeMethods.PolyplugRuntimeFindByContract(Handle, contractId, minVersion);
+        return NativeMethods.PolyplugRuntimeFindGuestContract(Handle, contractId, minVersion);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -249,7 +249,7 @@ public sealed class Runtime
     /// Resolve a plugin handle to get the raw resolve handle.
     ///
     /// In the instance-based model (Phase 3), the host:
-    /// 1. Gets resolve handle via ResolvePlugin (this method)
+    /// 1. Gets resolve handle via ResolveGuestContract (this method)
     /// 2. Calls create_instance on the GuestContractInterface
     /// 3. Makes dispatch calls with the instance
     /// 4. Calls destroy_instance before hot-reload (via ReloadPhase callback)
@@ -257,10 +257,10 @@ public sealed class Runtime
     /// The returned nint is a raw resolve handle. The caller must NOT
     /// cache this beyond hot-reload boundaries.
     /// </summary>
-    /// <param name="packedHandle">Packed contract handle from FindByContract.</param>
+    /// <param name="packedHandle">Packed contract handle from FindGuestContract.</param>
     /// <returns>Raw resolve handle (nint.Zero if not found).</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public nint ResolvePlugin(ulong packedHandle)
+    public nint ResolveGuestContract(ulong packedHandle)
     {
         EnsureHandle();
         if (packedHandle == ulong.MaxValue)
@@ -268,7 +268,7 @@ public sealed class Runtime
             return nint.Zero;
         }
 
-        return NativeMethods.PolyplugRuntimeResolvePlugin(Handle, packedHandle);
+        return NativeMethods.PolyplugRuntimeResolveGuestContract(Handle, packedHandle);
     }
 
     private static void InvokeWithUtf8(string value, Action<nint, nuint> action)

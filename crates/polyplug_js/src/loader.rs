@@ -345,7 +345,7 @@ fn register_host_functions<'js>(
             })
         })?;
 
-    let resolve_plugin_fn: Function<'js> =
+    let resolve_guest_contract_fn: Function<'js> =
         Function::new(ctx.clone(), |ctx: Ctx<'js>, packed: u64| -> Option<u64> {
             let index: u32 = packed as u32;
             let handle: GuestContractHandle = GuestContractHandle { index };
@@ -362,16 +362,16 @@ fn register_host_functions<'js>(
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: resolvePlugin function creation failed: {e}"),
+                error: format!("JS runtime js-quickjs error: resolveGuestContract function creation failed: {e}"),
             })
         })?;
 
     polyplug_obj
-        .set("resolvePlugin", resolve_plugin_fn)
+        .set("resolveGuestContract", resolve_guest_contract_fn)
         .map_err(|e: rquickjs::Error| {
             RuntimeError::Loader(LoaderError::InitFailed {
                 bundle: bundle_name.to_owned(),
-                error: format!("JS runtime js-quickjs error: resolvePlugin set failed: {e}"),
+                error: format!("JS runtime js-quickjs error: resolveGuestContract set failed: {e}"),
             })
         })?;
 

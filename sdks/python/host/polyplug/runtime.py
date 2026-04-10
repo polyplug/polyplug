@@ -132,14 +132,14 @@ class Backend(Protocol):
     def destroy_runtime(self, rt: int) -> None: ...
     def load_bundle(self, rt: int, path: bytes) -> int: ...
     def reload_bundle(self, rt: int, path: bytes) -> int: ...
-    def find_by_contract(self, rt: int, contract_id: int, min_version: int) -> int: ...
+    def find_guest_contract(self, rt: int, contract_id: int, min_version: int) -> int: ...
     def find_by_bundle(
         self, rt: int, bundle_id: int, contract_id: int, min_version: int
     ) -> int: ...
     def find_all_by_contract(
         self, rt: int, contract_id: int, min_version: int, out: Any, cap: int
     ) -> int: ...
-    def resolve_plugin(self, rt: int, handle: int) -> int: ...
+    def resolve_guest_contract(self, rt: int, handle: int) -> int: ...
     def release_plugin(self, handle: int) -> None: ...
     def last_error(self, rt: int, buf: Any, buf_len: int) -> int: ...
     def error_message_len(self) -> int: ...
@@ -178,12 +178,12 @@ class CTypesBackend:
         ]
         self.lib.polyplug_runtime_reload_bundle.restype = self.ctypes.c_uint32
 
-        self.lib.polyplug_runtime_find_by_contract.argtypes = [
+        self.lib.polyplug_runtime_find_guest_contract.argtypes = [
             self.ctypes.c_void_p,
             self.ctypes.c_uint64,
             self.ctypes.c_uint32,
         ]
-        self.lib.polyplug_runtime_find_by_contract.restype = self.ctypes.c_uint64
+        self.lib.polyplug_runtime_find_guest_contract.restype = self.ctypes.c_uint64
 
         self.lib.polyplug_runtime_find_by_bundle.argtypes = [
             self.ctypes.c_void_p,
@@ -202,11 +202,11 @@ class CTypesBackend:
         ]
         self.lib.polyplug_runtime_find_all_by_contract.restype = self.ctypes.c_size_t
 
-        self.lib.polyplug_runtime_resolve_plugin.argtypes = [
+        self.lib.polyplug_runtime_resolve_guest_contract.argtypes = [
             self.ctypes.c_void_p,
             self.ctypes.c_uint64,
         ]
-        self.lib.polyplug_runtime_resolve_plugin.restype = self.ctypes.c_void_p
+        self.lib.polyplug_runtime_resolve_guest_contract.restype = self.ctypes.c_void_p
 
         self.lib.polyplug_runtime_release_plugin.argtypes = [
             self.ctypes.c_void_p,
@@ -242,8 +242,8 @@ class CTypesBackend:
         buf = (self.ctypes.c_uint8 * len(path))(*path)
         return self.lib.polyplug_runtime_reload_bundle(rt, buf, len(path))
 
-    def find_by_contract(self, rt: int, contract_id: int, min_version: int) -> int:
-        return self.lib.polyplug_runtime_find_by_contract(
+    def find_guest_contract(self, rt: int, contract_id: int, min_version: int) -> int:
+        return self.lib.polyplug_runtime_find_guest_contract(
             rt, self.ctypes.c_uint64(contract_id), self.ctypes.c_uint32(min_version)
         )
 
@@ -268,9 +268,9 @@ class CTypesBackend:
             self.ctypes.c_size_t(cap),
         )
 
-    def resolve_plugin(self, rt: int, handle: int) -> int:
+    def resolve_guest_contract(self, rt: int, handle: int) -> int:
         return (
-            self.lib.polyplug_runtime_resolve_plugin(rt, self.ctypes.c_uint64(handle))
+            self.lib.polyplug_runtime_resolve_guest_contract(rt, self.ctypes.c_uint64(handle))
             or 0
         )
 
@@ -299,10 +299,10 @@ class CFFIBackend:
         void polyplug_runtime_destroy(void* rt);
         uint32_t polyplug_runtime_load_bundle(void* rt, const uint8_t* path, size_t path_len);
         uint32_t polyplug_runtime_reload_bundle(void* rt, const uint8_t* path, size_t path_len);
-        uint64_t polyplug_runtime_find_by_contract(void* rt, uint64_t contract_id, uint32_t min_version);
+        uint64_t polyplug_runtime_find_guest_contract(void* rt, uint64_t contract_id, uint32_t min_version);
         uint64_t polyplug_runtime_find_by_bundle(void* rt, uint64_t bundle_id, uint64_t contract_id, uint32_t min_version);
         size_t polyplug_runtime_find_all_by_contract(void* rt, uint64_t contract_id, uint32_t min_version, uint64_t* out, size_t out_cap);
-        void* polyplug_runtime_resolve_plugin(void* rt, uint64_t packed_handle);
+        void* polyplug_runtime_resolve_guest_contract(void* rt, uint64_t packed_handle);
         void polyplug_runtime_release_plugin(void* handle);
         size_t polyplug_runtime_last_error(uint8_t* buf, size_t buf_len);
         size_t polyplug_runtime_error_message_len(void);
@@ -362,8 +362,8 @@ class CFFIBackend:
             self.ffi.cast("void*", rt), cpath, len(path)
         )
 
-    def find_by_contract(self, rt: int, contract_id: int, min_version: int) -> int:
-        return self.lib.polyplug_runtime_find_by_contract(
+    def find_guest_contract(self, rt: int, contract_id: int, min_version: int) -> int:
+        return self.lib.polyplug_runtime_find_guest_contract(
             self.ffi.cast("void*", rt), contract_id, min_version
         )
 
@@ -381,8 +381,8 @@ class CFFIBackend:
             self.ffi.cast("void*", rt), contract_id, min_version, out, cap
         )
 
-    def resolve_plugin(self, rt: int, handle: int) -> int:
-        result = self.lib.polyplug_runtime_resolve_plugin(
+    def resolve_guest_contract(self, rt: int, handle: int) -> int:
+        result = self.lib.polyplug_runtime_resolve_guest_contract(
             self.ffi.cast("void*", rt), handle
         )
         return int(self.ffi.cast("uintptr_t", result))
@@ -619,9 +619,9 @@ class Runtime:
         code: int = self._backend.reload_bundle(runtime_ptr, path_bytes)
         _check_error_code(self._backend, code, "polyplug_runtime_reload_bundle")
 
-    def find_by_contract(self, contract_id: int, min_version: int) -> int:
+    def find_guest_contract(self, contract_id: int, min_version: int) -> int:
         runtime_ptr: int = self._ensure_runtime()
-        return self._backend.find_by_contract(runtime_ptr, contract_id, min_version)
+        return self._backend.find_guest_contract(runtime_ptr, contract_id, min_version)
 
     def find_by_bundle(self, bundle_id: int, contract_id: int, min_version: int) -> int:
         runtime_ptr: int = self._ensure_runtime()
@@ -644,7 +644,7 @@ class Runtime:
                     return [int(out[i]) for i in range(count)]
             cap = cap * 2
 
-    def resolve_plugin(self, packed_handle: int) -> int:
+    def resolve_guest_contract(self, packed_handle: int) -> int:
         """Resolve a packed handle to a raw resolve_handle.
 
         Returns the raw resolve_handle (int) that can be used to access
@@ -652,12 +652,12 @@ class Runtime:
         release_plugin(handle) when done, especially before hot-reload.
 
         NOTE: In the instance-based model, callers should:
-        1. Get the interface via resolve_plugin (returns raw handle)
+        1. Get the interface via resolve_guest_contract (returns raw handle)
         2. Use create_instance/destroy_instance for stateful access
         3. Call release_plugin when done with the handle
 
         Args:
-            packed_handle: The packed handle from find_by_contract.
+            packed_handle: The packed handle from find_guest_contract.
 
         Returns:
             Raw resolve_handle (int) for the plugin.
@@ -668,17 +668,17 @@ class Runtime:
         if packed_handle == _NULL_HANDLE:
             raise RuntimeError("null plugin handle")
         runtime_ptr: int = self._ensure_runtime()
-        resolve_handle: int = self._backend.resolve_plugin(runtime_ptr, packed_handle)
+        resolve_handle: int = self._backend.resolve_guest_contract(runtime_ptr, packed_handle)
         return resolve_handle
 
     def release_plugin(self, resolve_handle: int) -> None:
-        """Release a resolve_handle obtained from resolve_plugin.
+        """Release a resolve_handle obtained from resolve_guest_contract.
 
         Must be called when the caller is done with the handle,
         especially before hot-reload to avoid stale references.
 
         Args:
-            resolve_handle: The raw handle from resolve_plugin.
+            resolve_handle: The raw handle from resolve_guest_contract.
         """
         if resolve_handle != 0:
             self._backend.release_plugin(resolve_handle)
