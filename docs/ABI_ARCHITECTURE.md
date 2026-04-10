@@ -26,7 +26,7 @@ uint32_t polyplug_abi_version(void);
 
 ### `polyplug_init`
 ```c
-AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx);
+AbiError polyplug_init(PluginRegistrar* registrar, const BundleInitContext* ctx);
 ```
 **Called by:** Host immediately after dlopen
 **Parameters:**
@@ -34,12 +34,12 @@ AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx);
 - `ctx`: Context containing bundle_path and future extensibility
 **Purpose:** Plugin constructor - registers contracts with the runtime
 
-### PluginContext
+### BundleInitContext
 ```c
 typedef struct {
     StringView bundle_path;      // Absolute path to plugin directory
     uint32_t host_abi_version;   // Host's ABI version for negotiation (Option C)
-} PluginContext;
+} BundleInitContext;
 ```
 
 ## Host ABI (libpolyplug.so Exports)
@@ -171,7 +171,7 @@ polyplug_runtime_destroy()
 
 The core ABI is frozen per §7 of AGENTS.md:
 - `PluginRegistrar` layout cannot change
-- `PluginContext` can add fields but not remove
+- `BundleInitContext` can add fields but not remove
 - `polyplug_init` signature is fixed (2 params)
 - All additions go through extension system
 
@@ -179,5 +179,5 @@ The core ABI is frozen per §7 of AGENTS.md:
 
 New functionality should use:
 1. Extension interfaces via `RuntimeAbi.get_extension()`
-2. New fields in `PluginContext` (backward compatible)
+2. New fields in `BundleInitContext` (backward compatible)
 3. New host ABI functions (doesn't break plugins)

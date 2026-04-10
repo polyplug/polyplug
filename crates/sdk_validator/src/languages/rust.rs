@@ -213,12 +213,12 @@ pub fn to_str(sv: StringView) -> &'static str {
         let rust_code: &str = r#"
 //! polyplug guest library
 
-pub fn alloc_string(s: &str) -> Result<StringView, PluginError> {
+pub fn alloc_string(s: &str) -> Result<StringView, GuestError> {
     let bytes: &[u8] = s.as_bytes();
     let ptr: *mut u8 = polyplug_host_alloc(bytes.len(), 1);
     if ptr.is_null() {
-        return Err(PluginError {
-            code: ABI_ERROR_GENERIC,
+        return Err(GuestError {
+            code: AbiErrorCode::Generic,
             message: "allocation failed".to_string(),
         });
     }

@@ -527,7 +527,7 @@ polyplug.loadBundle(rt, "./plugins/my_plugin");
 - Plugin entry point macro / attribute
 - Host allocator hookup (all allocations go through host_alloc)
 - Panic / exception boundary (plugin crash cannot take down host)
-- ABI primitive types (StringView, Buffer, AbiError, PluginError)
+- ABI primitive types (StringView, Buffer, AbiError, GuestError)
 - Basic FFI safety helpers
 
 ```
@@ -1407,11 +1407,11 @@ JS/TS     bundlePath: string  (passed as plain string to JS init, not a struct)
 
 **Level 2 — Unrecoverable:** panics/exceptions caught at ABI boundary by generated wrapper, converted to AbiError. A crashing plugin cannot take down the host.
 
-**PluginError — defined once in guest lib, never generated:**
+**GuestError — defined once in guest lib, never generated:**
 
 ```rust
-pub struct PluginError {
-    pub code:    u32,
+pub struct GuestError {
+    pub code:    AbiErrorCode,
     pub message: String,
 }
 ```
@@ -1419,10 +1419,10 @@ pub struct PluginError {
 **Per language native style:**
 
 ```
-Rust    Result<T, polyplug_guest::PluginError>
-C++     throws PolyplugException
-C#      throws PluginException
-Python  raises PluginError
+Rust    Result<T, polyplug_guest::GuestError>
+C++     throws HostException
+C#      throws HostException
+Python  raises GuestError
 Lua     returns (value, err) multiple return
 ```
 
@@ -1603,7 +1603,7 @@ polyplugc generate --bundle bundle.toml --lang rust --out ./src/generated
 // Rust
 struct MyDecoder;
 impl ImageDecodeContract for MyDecoder {
-    fn decode(&self, raw: &Buffer) -> Result<Image, polyplug_guest::PluginError> {
+    fn decode(&self, raw: &Buffer) -> Result<Image, polyplug_guest::GuestError> {
         // pure business logic
     }
     fn supported_formats(&self) -> StringView {

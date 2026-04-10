@@ -144,12 +144,12 @@ The plugin accesses the host contract through the generated caller:
 // Plugin implementation (Rust)
 use generated::contracts::ExampleWorkerPlugin;
 use generated::host_contract_callers::HostLoggerCaller;
-use polyplug_guest::{StringView, PluginError};
+use polyplug_guest::{StringView, GuestError};
 
 struct WorkerPlugin;
 
 impl ExampleWorkerPlugin for WorkerPlugin {
-    fn do_work(&self, input: StringView) -> Result<StringView, PluginError> {
+    fn do_work(&self, input: StringView) -> Result<StringView, GuestError> {
         // Get the host contract caller
         let logger = unsafe {
             HostLoggerCaller::from_host(
