@@ -21,3 +21,12 @@ pub use runtime::{set_init_bundle_id, clear_init_bundle_id, get_init_bundle_id};
 
 // Re-export Runtime for loader crates
 pub use runtime::Runtime;
+
+// Re-export host_* functions for null-host testing (used by integration tests)
+pub use runtime::{
+    host_load_bundle,
+    host_reload_bundle,
+    host_get_last_error,
+    host_get_error_len,
+    host_resolve_guest_contract,
+};
