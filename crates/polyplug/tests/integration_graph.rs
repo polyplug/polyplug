@@ -179,6 +179,51 @@ unsafe extern "C" fn fake_destroy_instance(
 ) {
 }
 
+// ─── Stub functions for new HostInterface fields (18-01 placeholders) ────────
+
+unsafe extern "C" fn noop_load_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Generic, message: StringView::null() }
+}
+
+unsafe extern "C" fn noop_reload_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Generic, message: StringView::null() }
+}
+
+unsafe extern "C" fn noop_register_host_contract(
+    _this: *const HostInterface,
+    _interface: *const polyplug_abi::HostContractInterface,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Generic, message: StringView::null() }
+}
+
+unsafe extern "C" fn noop_register_loader(
+    _this: *const HostInterface,
+    _runtime_name: StringView,
+    _loader_ptr: *mut core::ffi::c_void,
+) -> AbiError {
+    AbiError { code: AbiErrorCode::Generic, message: StringView::null() }
+}
+
+unsafe extern "C" fn noop_get_last_error(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+unsafe extern "C" fn noop_get_error_len(_this: *const HostInterface) -> usize {
+    0
+}
+
 std::thread_local! {
     static GRAPH_REGISTRY: core::cell::RefCell<RuntimeStore> =
         core::cell::RefCell::new(RuntimeStore::new());
@@ -218,6 +263,13 @@ fn load_and_init_plugin() -> libloading::Library {
         resolve_host_contract_interface: noop_resolve_host_contract_interface,
         list_bundles: noop_list_bundles,
         get_dependencies: noop_get_dependencies,
+        // Stub fields for new operations (implemented in 18-02)
+        load_bundle: noop_load_bundle,
+        reload_bundle: noop_reload_bundle,
+        register_host_contract: noop_register_host_contract,
+        register_loader: noop_register_loader,
+        get_last_error: noop_get_last_error,
+        get_error_len: noop_get_error_len,
     };
 
     let ctx: BundleInitContext = BundleInitContext {

@@ -31,7 +31,7 @@ use polyplug_utils::BundleId;
 use crate::{
     guest::{GuestContractInterface, GuestContractInstance},
     plugin::{PluginDescriptor, GuestContractHandle},
-    types::{AbiError, Array, DependencyInfo},
+    types::{AbiError, Array, DependencyInfo, StringView},
 };
 
 /// Host Interface — function table passed to guests during initialization.
@@ -243,6 +243,100 @@ pub struct HostInterface {
     pub get_dependencies: unsafe extern "C" fn(
         this: *const HostInterface,
     ) -> Array<DependencyInfo>,
+    /// Load a plugin bundle from a path.
+    ///
+    /// Host applications call this to load a bundle at runtime.
+    /// The loader matching the bundle's runtime type is used.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `path`: UTF-8 path to bundle directory (not null-terminated)
+    /// - `path_len`: Length of path in bytes
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
+    pub load_bundle: unsafe extern "C" fn(
+        this: *const HostInterface,
+        path: *const u8,
+        path_len: usize,
+    ) -> AbiError,
+    /// Reload a plugin bundle (hot-reload).
+    ///
+    /// Replaces the bundle's contracts with new versions from the updated binary.
+    /// All instances must be destroyed before calling this.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `path`: UTF-8 path to bundle directory (not null-terminated)
+    /// - `path_len`: Length of path in bytes
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
+    pub reload_bundle: unsafe extern "C" fn(
+        this: *const HostInterface,
+        path: *const u8,
+        path_len: usize,
+    ) -> AbiError,
+    /// Register a host contract interface.
+    ///
+    /// Host applications register their contracts for plugins to consume.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `interface`: HostContractInterface to register
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
+    pub register_host_contract: unsafe extern "C" fn(
+        this: *const HostInterface,
+        interface: *const crate::host::HostContractInterface,
+    ) -> AbiError,
+    /// Register a language loader.
+    ///
+    /// Host applications register loaders for each runtime language they support.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `runtime_name`: Name of the runtime (e.g., "rust", "python")
+    /// - `loader_ptr`: Opaque pointer to the loader implementation
+    ///
+    /// # Returns
+    /// AbiError::OK on success, error code on failure.
+    pub register_loader: unsafe extern "C" fn(
+        this: *const HostInterface,
+        runtime_name: StringView,
+        loader_ptr: *mut c_void,
+    ) -> AbiError,
+    /// Get last error message.
+    ///
+    /// Returns the most recent error message from this runtime.
+    /// Copies up to buf_len bytes into buf.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    /// - `buf`: Buffer to write error message into
+    /// - `buf_len`: Maximum bytes to write
+    ///
+    /// # Returns
+    /// Number of bytes written (0 if no error or buffer too small).
+    pub get_last_error: unsafe extern "C" fn(
+        this: *const HostInterface,
+        buf: *mut u8,
+        buf_len: usize,
+    ) -> usize,
+    /// Get last error message length.
+    ///
+    /// Returns the byte length of the most recent error message.
+    /// Use to allocate buffer before calling get_last_error.
+    ///
+    /// # Arguments
+    /// - `this`: HostInterface pointer (self-passing)
+    ///
+    /// # Returns
+    /// Length of last error message (0 if no error).
+    pub get_error_len: unsafe extern "C" fn(
+        this: *const HostInterface,
+    ) -> usize,
 }
 
 // SAFETY: HostInterface contains an opaque pointer and function pointers.
@@ -264,16 +358,21 @@ mod tests {
 
     #[test]
     fn layout_host_interface() {
-        // HostInterface: runtime pointer (8 bytes) + 11 extern "C" fn pointers (88 bytes).
+        // HostInterface: runtime pointer (8 bytes) + 18 extern "C" fn pointers (144 bytes).
+        // Total: 152 bytes (19 pointer-sized fields)
         // Fields: register_contract, alloc, free, find_guest_contract, find_all_guest_contracts,
         //         resolve_guest_contract, call_guest_method, get_host_contract,
-        //         resolve_host_contract_interface, list_bundles, get_dependencies
-        assert_eq!(size_of::<HostInterface>(), 96);
+        //         resolve_host_contract_interface, list_bundles, get_dependencies,
+        //         load_bundle, reload_bundle, register_host_contract, register_loader,
+        //         get_last_error, get_error_len
+        assert_eq!(size_of::<HostInterface>(), 152);
         assert_eq!(align_of::<HostInterface>(), 8);
+        // Existing fields (unchanged offsets)
         assert_eq!(offset_of!(HostInterface, runtime), 0);
         assert_eq!(offset_of!(HostInterface, register_contract), 8);
         assert_eq!(offset_of!(HostInterface, alloc), 16);
         assert_eq!(offset_of!(HostInterface, free), 24);
+        // Renamed fields (same offsets)
         assert_eq!(offset_of!(HostInterface, find_guest_contract), 32);
         assert_eq!(offset_of!(HostInterface, find_all_guest_contracts), 40);
         assert_eq!(offset_of!(HostInterface, resolve_guest_contract), 48);
@@ -282,6 +381,13 @@ mod tests {
         assert_eq!(offset_of!(HostInterface, resolve_host_contract_interface), 72);
         assert_eq!(offset_of!(HostInterface, list_bundles), 80);
         assert_eq!(offset_of!(HostInterface, get_dependencies), 88);
+        // New fields (appended at end)
+        assert_eq!(offset_of!(HostInterface, load_bundle), 96);
+        assert_eq!(offset_of!(HostInterface, reload_bundle), 104);
+        assert_eq!(offset_of!(HostInterface, register_host_contract), 112);
+        assert_eq!(offset_of!(HostInterface, register_loader), 120);
+        assert_eq!(offset_of!(HostInterface, get_last_error), 128);
+        assert_eq!(offset_of!(HostInterface, get_error_len), 136);
     }
 
     /// Verify HostInterface has runtime: *mut c_void field at offset 0.

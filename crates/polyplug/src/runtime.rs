@@ -265,6 +265,13 @@ impl Runtime {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         });
         // SAFETY: We leak this HostInterface for the lifetime of the runtime.
         // This is acceptable because the pointer is used by guest contract instances
@@ -1067,6 +1074,91 @@ pub(crate) unsafe extern "C" fn host_get_dependencies(
     Array::new(ptr, count)
 }
 
+// ─── HostInterface stub functions (18-01 placeholder) ───────────────────────────
+// These stubs allow HostInterface construction while the actual implementations
+// are developed in plan 18-02. They return appropriate error/empty values.
+
+/// Stub for HostInterface.load_bundle — placeholder until 18-02.
+///
+/// # Safety
+/// Always returns NotImplemented error.
+pub(crate) unsafe extern "C" fn host_load_bundle_stub(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> polyplug_abi::AbiError {
+    polyplug_abi::AbiError {
+        code: polyplug_abi::AbiErrorCode::Generic,
+        message: polyplug_abi::StringView::from_static(b"load_bundle stub"),
+    }
+}
+
+/// Stub for HostInterface.reload_bundle — placeholder until 18-02.
+///
+/// # Safety
+/// Always returns NotImplemented error.
+pub(crate) unsafe extern "C" fn host_reload_bundle_stub(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> polyplug_abi::AbiError {
+    polyplug_abi::AbiError {
+        code: polyplug_abi::AbiErrorCode::Generic,
+        message: polyplug_abi::StringView::from_static(b"reload_bundle stub"),
+    }
+}
+
+/// Stub for HostInterface.register_host_contract — placeholder until 18-02.
+///
+/// # Safety
+/// Always returns NotImplemented error.
+pub(crate) unsafe extern "C" fn host_register_host_contract_stub(
+    _this: *const HostInterface,
+    _interface: *const polyplug_abi::HostContractInterface,
+) -> polyplug_abi::AbiError {
+    polyplug_abi::AbiError {
+        code: polyplug_abi::AbiErrorCode::Generic,
+        message: polyplug_abi::StringView::from_static(b"register_host_contract stub"),
+    }
+}
+
+/// Stub for HostInterface.register_loader — placeholder until 18-02.
+///
+/// # Safety
+/// Always returns NotImplemented error.
+pub(crate) unsafe extern "C" fn host_register_loader_stub(
+    _this: *const HostInterface,
+    _runtime_name: polyplug_abi::StringView,
+    _loader_ptr: *mut core::ffi::c_void,
+) -> polyplug_abi::AbiError {
+    polyplug_abi::AbiError {
+        code: polyplug_abi::AbiErrorCode::Generic,
+        message: polyplug_abi::StringView::from_static(b"register_loader stub"),
+    }
+}
+
+/// Stub for HostInterface.get_last_error — placeholder until 18-02.
+///
+/// # Safety
+/// Returns 0 (no bytes written).
+pub(crate) unsafe extern "C" fn host_get_last_error_stub(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+/// Stub for HostInterface.get_error_len — placeholder until 18-02.
+///
+/// # Safety
+/// Returns 0 (no error).
+pub(crate) unsafe extern "C" fn host_get_error_len_stub(
+    _this: *const HostInterface,
+) -> usize {
+    0
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -1137,6 +1229,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, TLS bundle_id is set
@@ -1805,6 +1904,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -1838,6 +1944,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         };
 
         // SAFETY: host_interface is valid with runtime pointer, runtime is live
@@ -1938,6 +2051,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         };
 
         // First call - creates instance
@@ -2007,6 +2127,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         };
 
         // First call - creates instance (counter becomes 101)
@@ -2081,6 +2208,13 @@ mod tests {
             resolve_host_contract_interface: host_resolve_host_contract_interface,
             list_bundles: host_list_bundles,
             get_dependencies: host_get_dependencies,
+            // Stub fields for new operations (implemented in 18-02)
+            load_bundle: host_load_bundle_stub,
+            reload_bundle: host_reload_bundle_stub,
+            register_host_contract: host_register_host_contract_stub,
+            register_loader: host_register_loader_stub,
+            get_last_error: host_get_last_error_stub,
+            get_error_len: host_get_error_len_stub,
         };
 
         // Call singleton twice - should get same instance
