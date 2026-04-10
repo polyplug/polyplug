@@ -36,8 +36,8 @@ fn write_manifest(dir: &Path, name: &str, runtime: &str, file: &str) {
 
 #[test]
 fn test_truncated_so() {
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("truncated");
     let mut so: Vec<u8> = vec![0x7f_u8, b'E', b'L', b'F'];
@@ -47,14 +47,14 @@ fn test_truncated_so() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8 path"));
     assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "truncated .so must produce error");
     cleanup(&dir);
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
 fn test_wrong_magic_bytes() {
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("wrong_magic");
     let garbage: Vec<u8> = b"NOTANELF\x00".iter().cycle().take(512).cloned().collect();
@@ -63,15 +63,15 @@ fn test_wrong_magic_bytes() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
     assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "wrong magic bytes must produce error");
     cleanup(&dir);
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
 fn test_missing_init_symbol() {
     let dir: &str = env!("NO_INIT_PLUGIN_DIR");
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir);
     assert_ne!(
@@ -87,28 +87,28 @@ fn test_missing_init_symbol() {
         "error message should mention missing symbol, got: {}",
         msg
     );
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
 fn test_so_file_missing_from_bundle() {
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("missing_so");
     write_manifest(&dir, "missing_so", "native", "nonexistent.so");
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
     assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "missing .so file must produce error");
     cleanup(&dir);
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
 fn test_unknown_runtime() {
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let dir: PathBuf = make_tmpdir("unknown_runtime");
     fs::write(dir.join("dummy.so"), b"notareal").expect("write dummy");
@@ -116,6 +116,6 @@ fn test_unknown_runtime() {
     let rc: polyplug_abi::AbiError = load_bundle_path(host, dir.to_str().expect("valid utf8"));
     assert_ne!(rc.code, polyplug_abi::AbiErrorCode::Ok, "unknown runtime must produce error");
     cleanup(&dir);
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }

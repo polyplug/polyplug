@@ -41,7 +41,7 @@ fn test_resolve_plugin_null_host() {
 #[test]
 fn test_resolve_plugin_null_handle() {
     // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is valid; null handle is the sentinel.
@@ -61,7 +61,7 @@ fn test_resolve_plugin_null_handle() {
 #[test]
 fn test_resolve_plugin_stale_handle() {
     // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // Load a plugin to get a valid slot
@@ -102,7 +102,7 @@ fn test_resolve_plugin_stale_handle() {
 #[test]
 fn test_find_all_guest_contracts_empty_registry() {
     // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // SAFETY: host is valid.
@@ -119,7 +119,7 @@ fn test_find_all_guest_contracts_empty_registry() {
 #[test]
 fn test_find_all_guest_contracts_single_plugin() {
     // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // Load reload_plugin_v1 which provides "reload.test@1"
@@ -161,7 +161,7 @@ fn test_find_all_guest_contracts_multiple_plugins() {
     }
 
     // SAFETY: polyplug_runtime_create returns a valid HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     // Load test_plugin (Rust) which provides "test.add@1"

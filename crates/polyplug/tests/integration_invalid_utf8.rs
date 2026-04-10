@@ -17,8 +17,8 @@ fn read_last_error(host: *const HostInterface) -> String {
 
 #[test]
 fn test_load_bundle_invalid_utf8_path() {
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime_new must succeed");
     // Construct a path with invalid UTF-8: \xff\xfe are invalid UTF-8 lead bytes
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8, b'/', b'p', b'a', b't', b'h'];
@@ -33,14 +33,14 @@ fn test_load_bundle_invalid_utf8_path() {
         !err.is_empty(),
         "last_error must be set after invalid UTF-8 path"
     );
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
 
 #[test]
 fn test_reload_bundle_invalid_utf8_path() {
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime_new must succeed");
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8, b'/', b'p', b'l', b'u', b'g'];
     // SAFETY: host is non-null, bad_path.as_ptr() valid for bad_path.len() bytes.
@@ -54,7 +54,7 @@ fn test_reload_bundle_invalid_utf8_path() {
         !err.is_empty(),
         "last_error must be set after invalid UTF-8 path"
     );
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }
 
@@ -63,8 +63,8 @@ fn test_runtime_healthy_after_invalid_utf8() {
     // After a failed load, runtime must still accept a valid load attempt.
     // We test this by attempting a second load with a valid (but non-existent) ASCII path.
     // The second call should fail with a 'file not found' error, NOT a panic.
-    // SAFETY: polyplug_runtime_create() has no preconditions.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    // SAFETY: polyplug_runtime_create(core::ptr::null()) has no preconditions.
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null());
     let bad_path: &[u8] = &[0xff_u8, 0xfe_u8];
     // SAFETY: host non-null, bad_path valid for 2 bytes.
@@ -80,6 +80,6 @@ fn test_runtime_healthy_after_invalid_utf8() {
         "runtime must be healthy and set last_error on second call"
     );
     let _ = result2;
-    // SAFETY: host was returned by polyplug_runtime_create().
+    // SAFETY: host was returned by polyplug_runtime_create(core::ptr::null()).
     unsafe { polyplug_runtime_destroy(host) };
 }

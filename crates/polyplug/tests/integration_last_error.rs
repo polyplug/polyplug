@@ -50,7 +50,7 @@ fn trigger_error(host: *const HostInterface) {
 #[test]
 fn last_error_empty_on_fresh_runtime() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -69,7 +69,7 @@ fn last_error_empty_on_fresh_runtime() {
 #[test]
 fn last_error_cleared_after_read() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -100,7 +100,7 @@ fn last_error_cleared_after_read() {
 #[test]
 fn error_len_does_not_clear_error() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -137,7 +137,7 @@ fn error_len_does_not_clear_error() {
 #[test]
 fn last_error_truncates_to_buf_len() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -183,7 +183,7 @@ fn last_error_truncates_to_buf_len() {
 #[test]
 fn last_error_zero_buf_len_clears_error() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -220,7 +220,7 @@ fn last_error_zero_buf_len_clears_error() {
 #[test]
 fn last_error_null_buf_zero_len_clears_error() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -249,9 +249,9 @@ fn last_error_null_buf_zero_len_clears_error() {
 #[test]
 fn last_error_per_runtime_isolation() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host1: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host1: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host1.is_null(), "runtime 1 creation must succeed");
-    let host2: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host2: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host2.is_null(), "runtime 2 creation must succeed");
 
     clear_error(host1);
@@ -293,7 +293,7 @@ fn last_error_per_runtime_isolation() {
 #[test]
 fn last_error_no_write_when_empty() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -323,7 +323,7 @@ fn last_error_no_write_when_empty() {
 #[test]
 fn last_error_exact_buf_len_writes_full_message() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);
@@ -357,7 +357,7 @@ fn last_error_exact_buf_len_writes_full_message() {
 #[test]
 fn last_error_large_message_handling() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "polyplug_runtime_create must succeed");
 
     clear_error(host);
@@ -405,7 +405,7 @@ fn last_error_large_message_handling() {
 #[test]
 fn last_error_repeated_cycles_independent() {
     // SAFETY: polyplug_runtime_create returns a HostInterface or null on OOM.
-    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
     assert!(!host.is_null(), "runtime creation must succeed");
 
     clear_error(host);

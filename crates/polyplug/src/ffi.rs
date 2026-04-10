@@ -152,51 +152,12 @@ pub struct RuntimeCreateOptions {
 
 // ─── FFI Entry Points (18-02: Only 2 exports) ─────────────────────────────────
 
-/// Creates a new runtime instance with default configuration.
+/// Creates a new runtime instance.
 ///
 /// Returns a HostInterface pointer that provides all runtime operations.
 /// Callers use the HostInterface fields (load_bundle, find_guest_contract, etc.)
 /// instead of separate FFI functions.
-///
-/// # Safety
-/// Safe to call from any thread. No pointer arguments are required.
-/// Returns null on allocation failure or panic.
-///
-/// # Returns
-/// Pointer to HostInterface on success, null on failure.
-/// The HostInterface is valid until destroyed via `polyplug_runtime_destroy`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_create() -> *const HostInterface {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        match Runtime::builder().build() {
-            Ok(rt) => {
-                // Box the Runtime so it can be stored and reclaimed later
-                let runtime_box: Box<Runtime> = Box::new(rt);
-                let runtime_ptr: *mut Runtime = Box::into_raw(runtime_box);
-
-                // Get the HostInterface from the Runtime
-                // SAFETY: runtime_ptr is valid and points to a properly constructed Runtime
-                let host_abi: &'static HostInterface = unsafe { (*runtime_ptr).host_abi() };
-
-                // Store the Runtime pointer in the HostInterface so destroy can reclaim it
-                // SAFETY: host_abi.runtime is a *mut c_void that we can write to,
-                // even though host_abi itself is 'static
-                unsafe {
-                    (*(host_abi as *const HostInterface as *mut HostInterface)).runtime =
-                        runtime_ptr as *mut core::ffi::c_void;
-                }
-
-                host_abi
-            }
-            Err(_) => core::ptr::null(),
-        }
-    }))
-    .unwrap_or(core::ptr::null())
-}
-
-/// Creates a new runtime instance with the specified options.
-///
-/// Returns a HostInterface pointer that provides all runtime operations.
+/// Pass null for options to use defaults.
 ///
 /// # Safety
 /// - If `options` is non-null, it must point to a valid `RuntimeCreateOptions` struct.
@@ -206,8 +167,9 @@ pub unsafe extern "C" fn polyplug_runtime_create() -> *const HostInterface {
 ///
 /// # Returns
 /// Pointer to HostInterface on success, null on failure.
+/// The HostInterface is valid until destroyed via `polyplug_runtime_destroy`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_create_with_options(
+pub unsafe extern "C" fn polyplug_runtime_create(
     options: *const RuntimeCreateOptions,
 ) -> *const HostInterface {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -297,7 +259,7 @@ mod tests {
     #[test]
     fn test_runtime_new_and_free() {
         // SAFETY: polyplug_runtime_create has no pointer preconditions.
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
         // SAFETY: host was returned by polyplug_runtime_create and is non-null.
         unsafe { polyplug_runtime_destroy(host) };
@@ -305,8 +267,8 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_are_isolated() {
-        let host1: *const HostInterface = unsafe { polyplug_runtime_create() };
-        let host2: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host1: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
+        let host2: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host1.is_null());
         assert!(!host2.is_null());
         assert_ne!(host1, host2);
@@ -340,8 +302,8 @@ mod tests {
             on_reload: None,
         };
 
-        let host1: *const HostInterface = unsafe { polyplug_runtime_create_with_options(&opts1) };
-        let host2: *const HostInterface = unsafe { polyplug_runtime_create_with_options(&opts2) };
+        let host1: *const HostInterface = unsafe { polyplug_runtime_create(&opts1) };
+        let host2: *const HostInterface = unsafe { polyplug_runtime_create(&opts2) };
 
         assert!(!host1.is_null());
         assert!(!host2.is_null());
@@ -355,7 +317,7 @@ mod tests {
 
     #[test]
     fn host_interface_load_bundle_returns_error_on_null() {
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, testing null path handling
@@ -369,7 +331,7 @@ mod tests {
 
     #[test]
     fn host_interface_find_guest_contract_returns_null_on_empty_registry() {
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, testing empty registry behavior
@@ -383,7 +345,7 @@ mod tests {
 
     #[test]
     fn host_interface_get_error_len_on_clean_runtime() {
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, no error set yet
@@ -408,7 +370,7 @@ mod tests {
                 let success: Arc<AtomicUsize> = Arc::clone(&success_count);
                 thread::spawn(move || {
                     for _ in 0..10 {
-                        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+                        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
                         if !host.is_null() {
                             success.fetch_add(1, Ordering::SeqCst);
                             unsafe { polyplug_runtime_destroy(host) };
@@ -427,15 +389,15 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_lifecycle_interleaved() {
-        let host1: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host1: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host1.is_null());
         unsafe { polyplug_runtime_destroy(host1) };
 
-        let host2: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host2: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host2.is_null());
         unsafe { polyplug_runtime_destroy(host2) };
 
-        let host3: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host3: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host3.is_null());
         unsafe { polyplug_runtime_destroy(host3) };
     }
@@ -443,7 +405,7 @@ mod tests {
     #[test]
     fn ffi_runtime_create_with_null_options() {
         let host: *const HostInterface =
-            unsafe { polyplug_runtime_create_with_options(core::ptr::null()) };
+            unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
         unsafe { polyplug_runtime_destroy(host) };
     }
@@ -467,7 +429,7 @@ mod tests {
                 let success: Arc<AtomicUsize> = Arc::clone(&success_count);
                 let errors: Arc<AtomicUsize> = Arc::clone(&error_count);
                 thread::spawn(move || {
-                    let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+                    let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
                     if host.is_null() {
                         return;
                     }
@@ -500,7 +462,7 @@ mod tests {
 
     #[test]
     fn host_interface_resolve_guest_contract_returns_null_on_null_handle() {
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, testing null handle behavior
@@ -515,7 +477,7 @@ mod tests {
 
     #[test]
     fn host_interface_has_runtime_pointer() {
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, checking runtime pointer is set
@@ -527,7 +489,7 @@ mod tests {
 
     #[test]
     fn host_interface_has_all_operation_fields() {
-        let host: *const HostInterface = unsafe { polyplug_runtime_create() };
+        let host: *const HostInterface = unsafe { polyplug_runtime_create(core::ptr::null()) };
         assert!(!host.is_null());
 
         // SAFETY: host is valid, verifying all fields are non-null function pointers
