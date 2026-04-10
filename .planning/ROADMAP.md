@@ -241,6 +241,7 @@ Plans:
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 0/2 | Pending | — |
+| 18. Consolidate FFI to HostInterface | 0/5 | Pending | — |
 
 ## Dependencies
 
@@ -294,6 +295,9 @@ Phase 16 (Milestone Gap Closure)
         |
         v
 Phase 17 (RuntimeStore Refactor)
+        |
+        v
+Phase 18 (Consolidate FFI to HostInterface)
 ```
 
 ### Phase 12: SDK Instance Model Completion
@@ -420,6 +424,34 @@ Plans:
 - [ ] 17-01-PLAN.md — Pass 1: Rename ContractRegistry to RuntimeStore and all methods/fields [Wave 1]
 - [ ] 17-02-PLAN.md — Pass 2: Add BundleData, BundleDescriptor, bundle_name_index, new APIs [Wave 2]
 
+### Phase 18: Consolidate FFI to HostInterface
+
+**Goal:** Reduce FFI exports from 13 functions to 2 (create/destroy). All operations move into HostInterface struct fields. Host apps AND plugins use same HostInterface API.
+**Requirements:** D-18-01 through D-18-34
+**Depends on:** Phase 17
+**Success Criteria** (what must be TRUE):
+1. Only 2 FFI exports: polyplug_runtime_create and polyplug_runtime_destroy
+2. polyplug_runtime_create returns HostInterface* (not OpaqueRuntime*)
+3. HostInterface contains ALL operations (load_bundle, reload_bundle, find_guest_contract, etc.)
+4. Host apps AND plugins both call HostInterface methods
+5. All 5 SDKs updated to use HostInterface pointer
+6. All 7 code generators updated for HostInterface API
+7. All tests pass with unified API
+**Plans:** 5 plans
+
+Wave Structure:
+- Wave 1: HostInterface struct changes (Plan 01) - add fields, rename fields
+- Wave 2: FFI deletions + Runtime implementation (Plan 02)
+- Wave 3: SDK updates - Python/C# (Plan 03) + Lua/JS/C++ (Plan 04)
+- Wave 4: Code generators + tests + verification (Plan 05)
+
+Plans:
+- [ ] 18-01-PLAN.md — HostInterface struct changes: add 6 fields, rename 3 fields [Wave 1]
+- [ ] 18-02-PLAN.md — FFI deletions + Runtime implementation + create returns HostInterface* [Wave 2]
+- [ ] 18-03-PLAN.md — Python + C# SDK updates for HostInterface API [Wave 3]
+- [ ] 18-04-PLAN.md — Lua + JS + C++ SDK updates for HostInterface API [Wave 3]
+- [ ] 18-05-PLAN.md — Code generators + test updates + verification [Wave 4]
+
 ---
 *Roadmap created: 2026-04-03*
 *Phase 1 plans added: 2026-04-03*
@@ -440,4 +472,6 @@ Plans:
 *Phase 13 plans added: 2026-04-08*
 *Phase 15 plans added: 2026-04-08*
 *Phase 15 plan 04b added for polyplugc tests: 2026-04-08*
-*Phase 16 added for milestone gap closure: 2026-04-09**Phase 17 plans added: 2026-04-10*
+*Phase 16 added for milestone gap closure: 2026-04-09*
+*Phase 17 plans added: 2026-04-10*
+*Phase 18 plans added: 2026-04-10*
