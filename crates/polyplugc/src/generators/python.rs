@@ -638,10 +638,10 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("        Raises:\n");
     out.push_str("            ValueError: If interface not found or create_instance failed\n");
     out.push_str("        \"\"\"\n");
-    out.push_str("        # Resolve the interface from the handle via FFI\n");
-    out.push_str(&format!(
-        "        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)\n"
-    ));
+    out.push_str("        # Resolve the interface from the handle via HostInterface method\n");
+    out.push_str("        # Cast host to HostInterface pointer and call resolve_guest_contract\n");
+    out.push_str("        host_iface: ctypes.POINTER(HostInterface) = ctypes.cast(host, ctypes.POINTER(HostInterface))\n");
+    out.push_str("        self._interface: ctypes.c_void_p = host_iface.contents.resolve_guest_contract(host, handle)\n");
     out.push_str("        if not self._interface:\n");
     out.push_str("            raise ValueError(\"Contract not found\")\n");
     out.push_str("        # Cast to GuestContractInterface pointer\n");

@@ -1064,10 +1064,8 @@ fn generate_cpp_host_contract(
         "    static std::optional<{}> create(uint64_t handle, const HostInterface* host) noexcept {{\n",
         class_name
     ));
-    out.push_str("        // Resolve the interface from the handle via FFI\n");
-    out.push_str(&format!(
-        "        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);\n"
-    ));
+    out.push_str("        // Resolve the interface from the handle via HostInterface method\n");
+    out.push_str("        const GuestContractInterface* iface = host->resolve_guest_contract(host, handle);\n");
     out.push_str("        if (!iface) {\n");
     out.push_str("            return std::nullopt;\n");
     out.push_str("        }\n");

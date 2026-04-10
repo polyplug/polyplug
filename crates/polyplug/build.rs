@@ -14,10 +14,13 @@ fn main() {
     let manifest_dir: PathBuf =
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
 
-    // Workspace root is one level up from crates/polyplug
+    // Workspace root is two levels up from crates/polyplug
+    // crates/polyplug -> crates -> polyplug (workspace root)
     let workspace_root: PathBuf = manifest_dir
         .parent()
         .expect("parent of crates/polyplug")
+        .parent()
+        .expect("parent of crates")
         .to_path_buf();
 
     let fixtures_dir: PathBuf = workspace_root.join("tests").join("fixtures");

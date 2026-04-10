@@ -135,7 +135,6 @@ impl CodeGenerator for RustGenerator {
         callers_out.push_str("use polyplug_abi::StringView;\n");
         callers_out.push_str("use polyplug_abi::GuestContractHandle;\n");
         callers_out.push_str("use polyplug_abi::GuestContractInstance;\n");
-        callers_out.push_str("use polyplug::ffi::polyplug_runtime_resolve_guest_contract;\n");
         callers_out.push_str("use super::types::*;\n\n");
         callers_out.push_str("/// Host-side error type for contract calls.\n");
         callers_out.push_str("#[derive(Debug)]\n");
@@ -1317,9 +1316,10 @@ fn generate_host_contract_caller(
     out.push_str("    /// - `Some(Self)` if interface found and instance created\n");
     out.push_str("    /// - `None` if interface not found or `create_instance` failed\n");
     out.push_str("    pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {\n");
-    out.push_str("        // Resolve the interface from the handle via FFI\n");
+    out.push_str("        // Resolve the interface from the handle via HostInterface method\n");
     out.push_str("        let interface: *const GuestContractInterface = unsafe {\n");
-    out.push_str("            polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack())\n");
+    out.push_str("            let iface: &HostInterface = host.as_ref()?;\n");
+    out.push_str("            (iface.resolve_guest_contract)(host, handle)\n");
     out.push_str("        };\n");
     out.push_str("        if interface.is_null() {\n");
     out.push_str("            return None;\n");
