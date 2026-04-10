@@ -241,7 +241,7 @@ Plans:
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 0/2 | Pending | — |
-| 18. Consolidate FFI to HostInterface | 0/5 | Pending | — |
+| 18. Consolidate FFI to HostInterface | 4/5 | In Progress|  |
 
 ## Dependencies
 
@@ -437,7 +437,7 @@ Plans:
 5. All 5 SDKs updated to use HostInterface pointer
 6. All 7 code generators updated for HostInterface API
 7. All tests pass with unified API
-**Plans:** 5 plans
+**Plans:** 4/5 plans executed
 
 Wave Structure:
 - Wave 1: HostInterface struct changes (Plan 01) - add fields, rename fields
@@ -446,10 +446,10 @@ Wave Structure:
 - Wave 4: Code generators + tests + verification (Plan 05)
 
 Plans:
-- [ ] 18-01-PLAN.md — HostInterface struct changes: add 6 fields, rename 3 fields [Wave 1]
-- [ ] 18-02-PLAN.md — FFI deletions + Runtime implementation + create returns HostInterface* [Wave 2]
-- [ ] 18-03-PLAN.md — Python + C# SDK updates for HostInterface API [Wave 3]
-- [ ] 18-04-PLAN.md — Lua + JS + C++ SDK updates for HostInterface API [Wave 3]
+- [x] 18-01-PLAN.md — HostInterface struct changes: add 6 fields, rename 3 fields [Wave 1]
+- [x] 18-02-PLAN.md — FFI deletions + Runtime implementation + create returns HostInterface* [Wave 2]
+- [x] 18-03-PLAN.md — Python + C# SDK updates for HostInterface API [Wave 3]
+- [x] 18-04-PLAN.md — Lua + JS + C++ SDK updates for HostInterface API [Wave 3]
 - [ ] 18-05-PLAN.md — Code generators + test updates + verification [Wave 4]
 
 ---
