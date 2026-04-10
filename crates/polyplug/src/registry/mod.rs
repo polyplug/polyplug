@@ -1,3 +1,3 @@
-pub mod contract_registry;
+pub mod runtime_store;
 
-pub use contract_registry::ContractRegistry;
+pub use runtime_store::RuntimeStore;

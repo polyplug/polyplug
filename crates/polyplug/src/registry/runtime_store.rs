@@ -1,13 +1,13 @@
-//! Registry — interface storage and contract handle management.
+//! RuntimeStore — interface storage and contract handle management.
 //!
 //! Simple index-based registry: each slot holds an interface pointer.
 //! GuestContractHandle validation checks for out-of-bounds indices only.
 //! Hosts must destroy instances before hot-reload via callback.
 //!
-//! Multi-impl support: different bundles may register different implementations of
-//! the same contract. contract_index maps contract_id -> Vec<slot_index> to support
-//! find_all_by_contract(). DuplicateProvider is only raised when the SAME bundle_id
-//! tries to register the SAME contract_id twice.
+//! Multi-impl support: different bundles may register_guest_contract different implementations of
+//! the same contract. guest_contract_index maps contract_id -> Vec<slot_index> to support
+//! find_all_guest_contracts(). DuplicateProvider is only raised when the SAME bundle_id
+//! tries to register_guest_contract the SAME contract_id twice.
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -20,7 +20,7 @@ use polyplug_utils::{BundleId, GuestContractId};
 use crate::error::RegistryError;
 
 /// Live plugin registration data.
-pub(crate) struct RegistryEntry {
+pub(crate) struct PluginEntry {
     /// Plugin metadata — used by other crates for introspection.
     pub descriptor: PluginDescriptor,
     /// Full contract name string for collision detection.
@@ -30,9 +30,9 @@ pub(crate) struct RegistryEntry {
 }
 
 /// A single slot in the registry's storage array.
-pub(crate) struct RegistrySlot {
+pub(crate) struct PluginSlot {
     /// Slot contents — None if vacant (after unload).
-    pub entry: Option<RegistryEntry>,
+    pub entry: Option<PluginEntry>,
     /// Interface pointer — direct Arc storage without wrapper.
     /// The callback-based hot-reload model ensures hosts destroy instances before swap.
     pub interface: Option<Arc<GuestContractInterface>>,
@@ -42,25 +42,25 @@ pub(crate) struct RegistrySlot {
 ///
 /// This structure groups all mutable registry state together to enable
 /// single-lock acquisition on the hot path, reducing lock overhead.
-struct RegistryData {
+struct RuntimeStoreData {
     /// Slot storage — each slot holds a plugin registration or is vacant.
-    slots: Vec<RegistrySlot>,
-    /// Maps contract_id to the Vec of registered slot indices (multi-impl support).
-    contract_index: HashMap<GuestContractId, Vec<u32>>,
-    /// Maps bundle_id to the first slot index registered for that bundle.
-    bundle_index: HashMap<BundleId, u32>,
+    slots: Vec<PluginSlot>,
+    /// Maps contract_id to the Vec of register_guest_contracted slot indices (multi-impl support).
+    guest_contract_index: HashMap<GuestContractId, Vec<u32>>,
+    /// Maps bundle_id to the first slot index register_guest_contracted for that bundle.
+    bundle_slots_index: HashMap<BundleId, u32>,
     /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
-    declared_deps: HashMap<BundleId, HashSet<GuestContractId>>,
+    bundle_declared_deps: HashMap<BundleId, HashSet<GuestContractId>>,
 }
 
-impl RegistryData {
+impl RuntimeStoreData {
     /// Create empty registry data.
     fn new() -> Self {
         Self {
             slots: Vec::new(),
-            contract_index: HashMap::new(),
-            bundle_index: HashMap::new(),
-            declared_deps: HashMap::new(),
+            guest_contract_index: HashMap::new(),
+            bundle_slots_index: HashMap::new(),
+            bundle_declared_deps: HashMap::new(),
         }
     }
 }
@@ -69,17 +69,17 @@ impl RegistryData {
 //
 //  Uses a single RwLock to protect all mutable state, reducing lock acquisition
 //  overhead on the hot path. Writes (registration/unload) are rare, so contention
-//  is minimal. Reads (find, resolve) take a read guard and are concurrent.
-pub struct ContractRegistry {
+//  is minimal. Reads (find, resolve_guest_contract) take a read guard and are concurrent.
+pub struct RuntimeStore {
     /// Single RwLock protecting all mutable registry state.
-    data: RwLock<RegistryData>,
+    data: RwLock<RuntimeStoreData>,
 }
 
-impl ContractRegistry {
+impl RuntimeStore {
     /// Create an empty registry.
-    pub fn new() -> ContractRegistry {
-        ContractRegistry {
-            data: RwLock::new(RegistryData::new()),
+    pub fn new() -> RuntimeStore {
+        RuntimeStore {
+            data: RwLock::new(RuntimeStoreData::new()),
         }
     }
 
@@ -94,11 +94,11 @@ impl ContractRegistry {
     //  The contract_id is read directly from the interface pointer.
     //
     //  Returns Err if:
-    //  - contract_id is already registered to a DIFFERENT contract_name (hash collision)
-    //  - contract_id is already registered by the SAME bundle_id (duplicate provider)
+    //  - contract_id is already register_guest_contracted to a DIFFERENT contract_name (hash collision)
+    //  - contract_id is already register_guest_contracted by the SAME bundle_id (duplicate provider)
     //
-    //  Different bundles MAY register the same contract_id (multi-impl).
-    pub unsafe fn register(
+    //  Different bundles MAY register_guest_contract the same contract_id (multi-impl).
+    pub unsafe fn register_guest_contract(
         &self,
         descriptor: PluginDescriptor,
         interface_ptr: *const GuestContractInterface,
@@ -109,16 +109,16 @@ impl ContractRegistry {
         // The ABI contract requires the pointer to remain valid for the library lifetime.
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
 
-        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
 
         // Check existing slots for this contract_id
-        if let Some(existing_indices) = data.contract_index.get(&contract_id) {
+        if let Some(existing_indices) = data.guest_contract_index.get(&contract_id) {
             for &existing_idx in existing_indices.iter() {
-                let existing_slot: &RegistrySlot = &data.slots[existing_idx as usize];
+                let existing_slot: &PluginSlot = &data.slots[existing_idx as usize];
                 if let Some(ref existing_entry) = existing_slot.entry {
                     // Hash collision: same contract_id, different contract_name
                     if existing_entry.contract_name != contract_name {
@@ -142,15 +142,15 @@ impl ContractRegistry {
             .map(|i| i as u32)
             .unwrap_or_else(|| {
                 let new_idx: u32 = data.slots.len() as u32;
-                data.slots.push(RegistrySlot {
+                data.slots.push(PluginSlot {
                     entry: None,
                     interface: None,
                 });
                 new_idx
             });
 
-        let slot: &mut RegistrySlot = &mut data.slots[slot_idx as usize];
-        slot.entry = Some(RegistryEntry {
+        let slot: &mut PluginSlot = &mut data.slots[slot_idx as usize];
+        slot.entry = Some(PluginEntry {
             descriptor,
             contract_name,
             bundle_id,
@@ -160,32 +160,32 @@ impl ContractRegistry {
         slot.interface = Some(Arc::new(unsafe { (*interface_ptr).clone() }));
 
         // Update contract_index: push slot_idx into the Vec for this contract_id
-        data.contract_index
+        data.guest_contract_index
             .entry(contract_id)
             .or_default()
             .push(slot_idx);
 
         // Update bundle_index: record first slot for this bundle_id
-        data.bundle_index.entry(bundle_id).or_insert(slot_idx);
+        data.bundle_slots_index.entry(bundle_id).or_insert(slot_idx);
 
         Ok(GuestContractHandle { index: slot_idx })
     }
 
     /// Declare dependency contract_ids for a bundle.
     ///
-    /// Must be called before the bundle resolves any cross-bundle contracts.
+    /// Must be called before the bundle resolve_guest_contracts any cross-bundle contracts.
     /// Prevents undeclared dependency resolution at runtime.
-    pub fn declare_deps(
+    pub fn declare_bundle_dependencies(
         &self,
         bundle_id: BundleId,
         contract_ids: Vec<GuestContractId>,
     ) -> Result<(), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let set: &mut HashSet<GuestContractId> = data.declared_deps.entry(bundle_id).or_default();
+        let set: &mut HashSet<GuestContractId> = data.bundle_declared_deps.entry(bundle_id).or_default();
         for cid in contract_ids {
             set.insert(cid);
         }
@@ -193,33 +193,33 @@ impl ContractRegistry {
     }
 
     /// Returns true if `bundle_id` has declared `contract_id` as a dependency.
-    pub(crate) fn is_dependency_declared(&self, bundle_id: BundleId, contract_id: GuestContractId) -> bool {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+    pub(crate) fn is_bundle_dependency_declared(&self, bundle_id: BundleId, contract_id: GuestContractId) -> bool {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        data.declared_deps
+        data.bundle_declared_deps
             .get(&bundle_id)
             .is_some_and(|s| s.contains(&contract_id))
     }
 
-    /// Find any registered plugin satisfying the given contract_id and minimum version.
+    /// Find any register_guest_contracted plugin satisfying the given contract_id and minimum version.
     //
     //  Returns the first slot whose interface.contract_version >= min_version.
     //  Pass min_version=0 to accept any version.
-    pub fn find_by_contract(
+    pub fn find_guest_contract(
         &self,
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
             None => {
                 return Err(RegistryError::PluginNotFound {
@@ -230,7 +230,7 @@ impl ContractRegistry {
         };
 
         for &slot_idx in indices.iter() {
-            let slot: &RegistrySlot = &data.slots[slot_idx as usize];
+            let slot: &PluginSlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref interface) = slot.interface
             {
@@ -248,20 +248,20 @@ impl ContractRegistry {
         })
     }
 
-    /// Find the plugin registered by a specific bundle_id that satisfies contract_id + min_version.
-    pub fn find_by_bundle(
+    /// Find the plugin register_guest_contracted by a specific bundle_id that satisfies contract_id + min_version.
+    pub fn find_guest_contract_by_bundle(
         &self,
         bundle_id: BundleId,
         contract_id: GuestContractId,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
 
-        let &slot_idx: &u32 = match data.bundle_index.get(&bundle_id) {
+        let &slot_idx: &u32 = match data.bundle_slots_index.get(&bundle_id) {
             Some(i) => i,
             None => {
                 return Err(RegistryError::PluginNotFound {
@@ -271,7 +271,7 @@ impl ContractRegistry {
             }
         };
 
-        let slot: &RegistrySlot = &data.slots[slot_idx as usize];
+        let slot: &PluginSlot = &data.slots[slot_idx as usize];
         if let Some(ref entry) = slot.entry
             && let Some(ref interface) = slot.interface
         {
@@ -291,19 +291,19 @@ impl ContractRegistry {
     }
 
     /// Find all plugins satisfying the given contract_id and minimum version.
-    pub fn find_all_by_contract(
+    pub fn find_all_guest_contracts(
         &self,
         contract_id: GuestContractId,
         min_version: u32,
         out: &mut [GuestContractHandle],
     ) -> usize {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -316,7 +316,7 @@ impl ContractRegistry {
             if write_count >= out.len() {
                 break;
             }
-            let slot: &RegistrySlot = &data.slots[slot_idx as usize];
+            let slot: &PluginSlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref interface) = slot.interface
             {
@@ -335,24 +335,24 @@ impl ContractRegistry {
     /// Find all plugins satisfying the given contract_id and minimum version,
     /// packing handles directly into a u64 buffer.
     ///
-    /// This is an optimized version of `find_all_by_contract` that avoids
+    /// This is an optimized version of `find_all_guest_contracts` that avoids
     /// intermediate allocation by packing handles directly during iteration.
     /// Each handle is packed as: `index as u64`.
     ///
     /// Returns the number of packed handles written to `out`.
-    pub fn find_all_by_contract_packed(
+    pub fn find_all_guest_contracts_packed(
         &self,
         contract_id: GuestContractId,
         min_version: u32,
         out: &mut [u64],
     ) -> usize {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
 
-        let indices: &Vec<u32> = match data.contract_index.get(&contract_id) {
+        let indices: &Vec<u32> = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
             None => return 0usize,
         };
@@ -365,7 +365,7 @@ impl ContractRegistry {
             if write_count >= out.len() {
                 break;
             }
-            let slot: &RegistrySlot = &data.slots[slot_idx as usize];
+            let slot: &PluginSlot = &data.slots[slot_idx as usize];
             if slot.entry.is_some()
                 && let Some(ref interface) = slot.interface
             {
@@ -383,13 +383,13 @@ impl ContractRegistry {
     }
 
     /// Count plugins satisfying the given contract_id and minimum version.
-    pub fn count_by_contract(&self, contract_id: GuestContractId, min_version: u32) -> usize {
+    pub fn count_guest_contracts(&self, contract_id: GuestContractId, min_version: u32) -> usize {
         let data = self.data.read().unwrap_or_else(|e| {
             eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
             e.into_inner()
         });
 
-        let indices = match data.contract_index.get(&contract_id) {
+        let indices = match data.guest_contract_index.get(&contract_id) {
             Some(v) => v,
             None => return 0,
         };
@@ -408,22 +408,22 @@ impl ContractRegistry {
 
     /// Find all plugins and write handles into the provided slice.
     /// Returns the number of handles written.
-    pub fn find_all_by_contract_into(
+    pub fn find_all_guest_contracts_into(
         &self,
         contract_id: GuestContractId,
         min_version: u32,
         out: &mut [GuestContractHandle],
     ) -> usize {
-        self.find_all_by_contract(contract_id, min_version, out)
+        self.find_all_guest_contracts(contract_id, min_version, out)
     }
 
     /// Find a plugin by contract_id and minimum version.
     //
-    //  Delegates to find_by_contract(). Kept for API compatibility.
+    //  Delegates to find_guest_contract(). Kept for API compatibility.
     //  min_version encoding: (minor << 16 | patch), same as GuestContractInterface::contract_version.
     //  Pass 0 to accept any version.
     pub fn find(&self, contract_id: GuestContractId, min_version: u32) -> Result<GuestContractHandle, RegistryError> {
-        self.find_by_contract(contract_id, min_version)
+        self.find_guest_contract(contract_id, min_version)
     }
 
     /// Validate a GuestContractHandle and return its interface pointer directly.
@@ -431,8 +431,8 @@ impl ContractRegistry {
     /// Returns Err(InvalidHandle) if:
     /// - handle.index is out of bounds
     /// - the slot has no interface
-    pub fn resolve(&self, handle: GuestContractHandle) -> Result<*const GuestContractInterface, RegistryError> {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+    pub fn resolve_guest_contract(&self, handle: GuestContractHandle) -> Result<*const GuestContractInterface, RegistryError> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
@@ -443,7 +443,7 @@ impl ContractRegistry {
             return Err(RegistryError::InvalidHandle { index: handle.index });
         }
 
-        let slot: &RegistrySlot = &data.slots[slot_idx];
+        let slot: &PluginSlot = &data.slots[slot_idx];
         match slot.interface {
             Some(ref interface) => Ok(interface.as_ref() as *const GuestContractInterface),
             None => Err(RegistryError::InvalidHandle { index: handle.index }),
@@ -458,12 +458,12 @@ impl ContractRegistry {
     /// # Errors
     /// Returns `Err(RegistryError::InvalidHandle)` if `slot_index` is out of bounds
     /// or the slot has no interface.
-    pub fn swap_interface(
+    pub fn swap_guest_contract_interface(
         &self,
         slot_index: u32,
         new_interface: Arc<GuestContractInterface>,
     ) -> Result<(), RegistryError> {
-        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
@@ -472,7 +472,7 @@ impl ContractRegistry {
         if slot_idx >= data.slots.len() {
             return Err(RegistryError::InvalidHandle { index: slot_index });
         }
-        let slot: &mut RegistrySlot = &mut data.slots[slot_idx];
+        let slot: &mut PluginSlot = &mut data.slots[slot_idx];
         if slot.interface.is_none() {
             return Err(RegistryError::InvalidHandle { index: slot_index });
         }
@@ -480,12 +480,12 @@ impl ContractRegistry {
         Ok(())
     }
 
-    /// Find all slot indices that were registered by `bundle_id`.
+    /// Find all slot indices that were register_guest_contracted by `bundle_id`.
     ///
-    /// Returns an empty `Vec` if the bundle has no registered slots.
+    /// Returns an empty `Vec` if the bundle has no register_guest_contracted slots.
     /// Used by `reload_bundle()` to locate every interface slot to swap.
-    pub fn find_slots_by_bundle(&self, bundle_id: BundleId) -> Vec<u32> {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+    pub fn get_bundle_plugin_slots(&self, bundle_id: BundleId) -> Vec<u32> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
@@ -503,26 +503,26 @@ impl ContractRegistry {
 
     /// Get the contract_id for the interface currently stored in `slot_index`.
     /// Returns None if the slot is empty or has no interface.
-    pub(crate) fn get_slot_contract_id(&self, slot_index: u32) -> Option<GuestContractId> {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+    pub(crate) fn get_slot_guest_contract_id(&self, slot_index: u32) -> Option<GuestContractId> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
+        let slot: &PluginSlot = data.slots.get(slot_index as usize)?;
         let interface: &Arc<GuestContractInterface> = slot.interface.as_ref()?;
         Some(interface.contract_id)
     }
 
     /// Get a clone of the Arc<GuestContractInterface> for `slot_index` to check strong_count.
     /// Returns None if the slot is empty or has no interface.
-    pub(crate) fn get_interface_arc(&self, slot_index: u32) -> Option<Arc<GuestContractInterface>> {
-        let data: std::sync::RwLockReadGuard<'_, RegistryData> =
+    pub(crate) fn get_guest_contract_interface_arc(&self, slot_index: u32) -> Option<Arc<GuestContractInterface>> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let slot: &RegistrySlot = data.slots.get(slot_index as usize)?;
+        let slot: &PluginSlot = data.slots.get(slot_index as usize)?;
         slot.interface.as_ref().map(|arc| Arc::clone(arc))
     }
 
@@ -531,21 +531,21 @@ impl ContractRegistry {
     /// This is only available in test builds to allow test isolation.
     #[cfg(test)]
     pub fn clear_for_test(&self) {
-        let mut data: std::sync::RwLockWriteGuard<'_, RegistryData> =
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
             self.data.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
         data.slots.clear();
-        data.contract_index.clear();
-        data.bundle_index.clear();
-        data.declared_deps.clear();
+        data.guest_contract_index.clear();
+        data.bundle_slots_index.clear();
+        data.bundle_declared_deps.clear();
     }
 }
 
-impl Default for ContractRegistry {
-    fn default() -> ContractRegistry {
-        ContractRegistry::new()
+impl Default for RuntimeStore {
+    fn default() -> RuntimeStore {
+        RuntimeStore::new()
     }
 }
 
@@ -598,13 +598,13 @@ mod tests {
     }
 
     #[test]
-    fn register_and_find() {
-        let registry: ContractRegistry = ContractRegistry::new();
+    fn register_guest_contract_and_find() {
+        let registry: RuntimeStore = RuntimeStore::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "image.decode");
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
         // SAFETY: interface is a local value, but we're just testing registration
         let handle: GuestContractHandle = unsafe {
-            registry.register(
+            registry.register_guest_contract(
                 descriptor,
                 &interface,
                 "image.decode".to_owned(),
@@ -622,13 +622,13 @@ mod tests {
 
     #[test]
     fn invalid_handle_detection() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "audio.decode");
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
         // SAFETY: interface is a local value, but we're just testing registration
         let _handle: GuestContractHandle = unsafe {
-            registry.register(
+            registry.register_guest_contract(
                 descriptor,
                 &interface,
                 "image.decode".to_owned(),
@@ -639,7 +639,7 @@ mod tests {
 
         // Use a handle with out-of-bounds index
         let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
-        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve(invalid);
+        let result: Result<*const GuestContractInterface, RegistryError> = registry.resolve_guest_contract(invalid);
         assert!(
             matches!(result, Err(RegistryError::InvalidHandle { .. })),
             "expected InvalidHandle error"
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn duplicate_provider_allowed() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "image.decode");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "image.decode");
         let bundle_id = BundleId::from_u64(0);
@@ -657,13 +657,13 @@ mod tests {
         // SAFETY: interface is a local value
         unsafe {
             registry
-                .register(d1, &interface, "image.decode".to_owned(), bundle_id)
+                .register_guest_contract(d1, &interface, "image.decode".to_owned(), bundle_id)
                 .expect("first registration should succeed");
         }
 
         let result: Result<GuestContractHandle, RegistryError> =
             // SAFETY: interface is a local value
-            unsafe { registry.register(d2, &interface, "image.decode".to_owned(), bundle_id) };
+            unsafe { registry.register_guest_contract(d2, &interface, "image.decode".to_owned(), bundle_id) };
         // Second registration should succeed (multi-impl allowed)
         assert!(
             result.is_ok(),
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn collision_detection() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
         let d1: PluginDescriptor = make_descriptor("plugin_a", "contract.a");
         let d2: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
         let bundle_id_a = BundleId::from_u64(10);
@@ -683,13 +683,13 @@ mod tests {
         // SAFETY: interface is a local value
         unsafe {
             registry
-                .register(d1, &interface, "contract.a".to_owned(), bundle_id_a)
+                .register_guest_contract(d1, &interface, "contract.a".to_owned(), bundle_id_a)
                 .expect("first registration should succeed");
         }
 
         let result: Result<GuestContractHandle, RegistryError> =
             // SAFETY: interface is a local value
-            unsafe { registry.register(d2, &interface, "contract.b".to_owned(), bundle_id_b) };
+            unsafe { registry.register_guest_contract(d2, &interface, "contract.b".to_owned(), bundle_id_b) };
         assert!(
             matches!(result, Err(RegistryError::ContractIdCollision { .. })),
             "expected ContractIdCollision error"
@@ -697,14 +697,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_returns_interface_pointer() {
-        let registry: ContractRegistry = ContractRegistry::new();
+    fn resolve_guest_contract_returns_interface_pointer() {
+        let registry: RuntimeStore = RuntimeStore::new();
         let descriptor: PluginDescriptor = make_descriptor("test_plugin", "test.contract");
         let interface = mock_interface(0x1234_5678_9ABC_DEF0);
 
         // SAFETY: interface is a local value
         let handle: GuestContractHandle = unsafe {
-            registry.register(
+            registry.register_guest_contract(
                 descriptor,
                 &interface,
                 "image.decode".to_owned(),
@@ -714,29 +714,29 @@ mod tests {
         .expect("registration should succeed");
 
         let interface_ptr: *const GuestContractInterface =
-            registry.resolve(handle).expect("resolve should succeed");
+            registry.resolve_guest_contract(handle).expect("resolve_guest_contract should succeed");
         // SAFETY: interface_ptr points to a valid GuestContractInterface
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
         assert_eq!(contract_id, interface.contract_id);
     }
 
     #[test]
-    fn declare_deps_and_query() {
-        let registry: ContractRegistry = ContractRegistry::new();
+    fn declare_bundle_dependencies_and_query() {
+        let registry: RuntimeStore = RuntimeStore::new();
         let bundle_id = BundleId::from_u64(42);
         let contract_a = GuestContractId::from_u64(0x1111_2222_3333_4444);
         let contract_b = GuestContractId::from_u64(0x5555_6666_7777_8888);
 
         registry
-            .declare_deps(bundle_id, vec![contract_a])
-            .expect("declare_deps should succeed");
+            .declare_bundle_dependencies(bundle_id, vec![contract_a])
+            .expect("declare_bundle_dependencies should succeed");
 
         assert!(
-            registry.is_dependency_declared(bundle_id, contract_a),
+            registry.is_bundle_dependency_declared(bundle_id, contract_a),
             "declared dep should be found"
         );
         assert!(
-            !registry.is_dependency_declared(bundle_id, contract_b),
+            !registry.is_bundle_dependency_declared(bundle_id, contract_b),
             "undeclared dep should not be found"
         );
     }
