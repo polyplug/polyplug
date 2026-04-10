@@ -33,7 +33,7 @@ use crate::loader::BundleLoader;
 use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
-use crate::registry::ContractRegistry;
+use crate::registry::RuntimeStore;
 use crate::runtime_builder::RuntimeBuilder;
 use crate::RuntimeConfig;
 
@@ -81,12 +81,12 @@ pub struct LoadOptions {
 
 /// The runtime instance.
 pub struct Runtime {
-    pub(crate) registry: Arc<ContractRegistry>,
+    pub(crate) registry: Arc<RuntimeStore>,
     /// Loaded bundles, never dropped.
     pub(crate) _bundles: Vec<LoadedBundle>,
     /// The static HostInterface given to plugins. Must be 'static.
     pub(crate) host_abi: &'static HostInterface,
-    /// All registered loaders, keyed by runtime_name. Immutable after build().
+    /// All register_guest_contracted loaders, keyed by runtime_name. Immutable after build().
     pub(crate) loaders: HashMap<String, Box<dyn BundleLoader>>,
     /// ManifestData for all loaded bundles, keyed by bundle_name.
     /// Used by reload_bundle() for cascade detection.
@@ -120,19 +120,19 @@ impl Runtime {
         contract_id: u64,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
-        self.registry.find_by_contract(GuestContractId::from_u64(contract_id), min_version)
+        self.registry.find_guest_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 
     /// Find a specific bundle's provider of a contract.
     #[inline(always)]
-    pub fn find_by_bundle(
+    pub fn find_guest_contract_by_bundle(
         &self,
         bundle_id: u64,
         contract_id: u64,
         min_version: u32,
     ) -> Result<GuestContractHandle, RegistryError> {
         self.registry
-            .find_by_bundle(BundleId::from_u64(bundle_id), GuestContractId::from_u64(contract_id), min_version)
+            .find_guest_contract_by_bundle(BundleId::from_u64(bundle_id), GuestContractId::from_u64(contract_id), min_version)
     }
 
     /// Find all providers of a contract.
@@ -144,7 +144,7 @@ impl Runtime {
         out: &mut [GuestContractHandle],
     ) -> usize {
         self.registry
-            .find_all_by_contract(GuestContractId::from_u64(contract_id), min_version, out)
+            .find_all_guest_contracts(GuestContractId::from_u64(contract_id), min_version, out)
     }
 
     /// Find all providers of a contract, packing handles directly into a u64 buffer.
@@ -156,20 +156,20 @@ impl Runtime {
         out: &mut [u64],
     ) -> usize {
         self.registry
-            .find_all_by_contract_packed(GuestContractId::from_u64(contract_id), min_version, out)
+            .find_all_guest_contracts_packed(GuestContractId::from_u64(contract_id), min_version, out)
     }
 
     /// Resolve a plugin handle to its interface pointer directly.
     #[inline(always)]
-    pub fn resolve_plugin(
+    pub fn resolve_guest_contract_plugin(
         &self,
         handle: GuestContractHandle,
     ) -> Result<*const GuestContractInterface, RegistryError> {
-        self.registry.resolve(handle)
+        self.registry.resolve_guest_contract(handle)
     }
 
     /// Register a host contract interface.
-    /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
+    /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already register_guest_contracted.
     pub fn register_host_contract(
         &self,
         contract_id: u64,
@@ -187,9 +187,9 @@ impl Runtime {
         Ok(())
     }
 
-    /// Unregister a host contract interface.
-    /// Returns `true` if the contract was registered and removed, `false` if it was not found.
-    pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
+    /// Unregister_guest_contract a host contract interface.
+    /// Returns `true` if the contract was register_guest_contracted and removed, `false` if it was not found.
+    pub fn unregister_guest_contract_host_contract(&self, contract_id: u64) -> bool {
         let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>> =
             self.host_contracts.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
@@ -273,7 +273,7 @@ impl Runtime {
     }
 
     #[inline(always)]
-    pub fn registry(&self) -> &Arc<ContractRegistry> {
+    pub fn registry(&self) -> &Arc<RuntimeStore> {
         &self.registry
     }
 
@@ -289,7 +289,7 @@ impl Runtime {
         &self.on_reload_cb
     }
 
-    /// Emit a warning message via the registered warning callback, or to stderr if none.
+    /// Emit a warning message via the register_guest_contracted warning callback, or to stderr if none.
     pub fn emit_warning(&self, msg: &str) {
         match &self.warning_cb {
             Some(cb) => cb(msg),
@@ -348,7 +348,7 @@ impl Runtime {
     /// free the loader after a successful call.
     ///
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
-    /// loader for the same runtime name is already registered.
+    /// loader for the same runtime name is already register_guest_contracted.
     pub fn register_loader(&mut self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
         let names: Vec<String> = loader.runtime_names();
         for name in &names {
@@ -484,9 +484,9 @@ pub(crate) fn validate_bundle_compatibility(
 
     for (path, manifest) in manifests {
         // Check version compatibility for each dependency
-        let resolved: Vec<ManifestDependency> =
+        let resolve_guest_contractd: Vec<ManifestDependency> =
             manifest.resolved_dependencies();
-        for dep in &resolved {
+        for dep in &resolve_guest_contractd {
             let (dep_contract, dep_min_version_str): (&str, &str) = match dep {
                 ManifestDependency::ByContract {
                     contract,
@@ -609,7 +609,7 @@ fn string_view_to_string_owned(sv: &polyplug_abi::types::StringView) -> String {
 
 // ─── HostInterface C ABI callbacks ───────────────────────────────────────────────
 
-/// HostInterface.register_contract callback — registers a guest contract implementation with the runtime.
+/// HostInterface.register_contract callback — register_guest_contracts a guest contract implementation with the runtime.
 ///
 /// Uses TLS for bundle_id during init phase (dependency enforcement).
 ///
@@ -631,7 +631,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     // SAFETY: this is a valid HostInterface pointer passed during polyplug_init.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &ContractRegistry = &runtime.registry;
+    let registry: &RuntimeStore = &runtime.registry;
     // Get bundle_id from TLS (set by loader before calling polyplug_init)
     let bundle_id: u64 = get_init_bundle_id();
 
@@ -651,7 +651,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     let contract_name: String = string_view_to_string_owned(&desc.contract_name);
 
     // SAFETY: interface is a valid 'static GuestContractInterface from the plugin binary
-    match unsafe { registry.register(desc, interface, contract_name, BundleId::from_u64(bundle_id)) } {
+    match unsafe { registry.register_guest_contract(desc, interface, contract_name, BundleId::from_u64(bundle_id)) } {
         Ok(_handle) => polyplug_abi::types::AbiError::ok(),
         Err(e) => {
             eprintln!("[polyplug] registration failed for bundle {bundle_id}: {e}");
@@ -706,14 +706,14 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &ContractRegistry = &runtime.registry;
+    let registry: &RuntimeStore = &runtime.registry;
     // Get bundle_id from TLS for dependency enforcement during init phase
     let caller_bundle_id: u64 = get_init_bundle_id();
 
-    if caller_bundle_id != 0 && !registry.is_dependency_declared(BundleId::from_u64(caller_bundle_id), GuestContractId::from_u64(contract_id)) {
+    if caller_bundle_id != 0 && !registry.is_bundle_dependency_declared(BundleId::from_u64(caller_bundle_id), GuestContractId::from_u64(contract_id)) {
         return plugin_handle_null();
     }
-    match registry.find_by_contract(GuestContractId::from_u64(contract_id), min_version) {
+    match registry.find_guest_contract(GuestContractId::from_u64(contract_id), min_version) {
         Ok(h) => h,
         Err(_) => plugin_handle_null(),
     }
@@ -736,10 +736,10 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &ContractRegistry = &runtime.registry;
+    let registry: &RuntimeStore = &runtime.registry;
 
     // First, count matching contracts
-    let count = registry.count_by_contract(GuestContractId::from_u64(contract_id), min_version);
+    let count = registry.count_guest_contracts(GuestContractId::from_u64(contract_id), min_version);
 
     if count == 0 {
         return Array::empty();
@@ -757,7 +757,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
 
     // Fill array with matching handles
     let slice = unsafe { core::slice::from_raw_parts_mut(ptr, count) };
-    let actual = registry.find_all_by_contract_into(GuestContractId::from_u64(contract_id), min_version, slice);
+    let actual = registry.find_all_guest_contracts_into(GuestContractId::from_u64(contract_id), min_version, slice);
 
     Array::new(ptr, actual)
 }
@@ -776,9 +776,9 @@ pub(crate) unsafe extern "C" fn host_resolve_contract(
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &ContractRegistry = &runtime.registry;
+    let registry: &RuntimeStore = &runtime.registry;
 
-    match registry.resolve(handle) {
+    match registry.resolve_guest_contract(handle) {
         Ok(ptr) => ptr,
         Err(_) => core::ptr::null(),
     }
@@ -1172,7 +1172,7 @@ mod tests {
     }
 
     fn register_contract(
-        registry: &crate::registry::ContractRegistry,
+        registry: &crate::registry::RuntimeStore,
         contract_id: u64,
         bundle_id: u64,
     ) -> GuestContractHandle {
@@ -1210,10 +1210,10 @@ mod tests {
         };
         // SAFETY: interface is leaked and lives for the process lifetime.
         let result: Result<GuestContractHandle, crate::error::RegistryError> =
-            unsafe { registry.register(descriptor, interface, "stub.contract".to_owned(), BundleId::from_u64(bundle_id)) };
+            unsafe { registry.register_guest_contract(descriptor, interface, "stub.contract".to_owned(), BundleId::from_u64(bundle_id)) };
         match result {
             Ok(handle) => handle,
-            Err(e) => panic!("failed to register contract: {e}"),
+            Err(e) => panic!("failed to register_guest_contract contract: {e}"),
         }
     }
 
@@ -1425,7 +1425,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<ContractRegistry> = runtime.registry();
+        let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xBEEF_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
@@ -1460,7 +1460,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<ContractRegistry> = runtime.registry();
+        let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xCAFE_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
@@ -1530,7 +1530,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<ContractRegistry> = runtime.registry();
+        let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xABCD_u64);
         {
             let mut guard: std::sync::MutexGuard<'_, ReentrantState> = match state.lock() {
@@ -1585,7 +1585,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<ContractRegistry> = runtime.registry();
+        let registry: &Arc<RuntimeStore> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xFACE_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(outer_bundle.as_path());
@@ -1648,7 +1648,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_host_contracts_register_and_lookup() {
+    fn runtime_host_contracts_register_guest_contract_and_lookup() {
         let runtime: Runtime = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
@@ -1657,7 +1657,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         let result: Result<(), HostContractError> =
-            runtime.register_host_contract(contract_id, interface);
+            runtime.register_guest_contract_host_contract(contract_id, interface);
         assert!(result.is_ok(), "registration should succeed");
 
         let found: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
@@ -1678,11 +1678,11 @@ mod tests {
         let interface2: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 1);
 
         let result1: Result<(), HostContractError> =
-            runtime.register_host_contract(contract_id, interface1);
+            runtime.register_guest_contract_host_contract(contract_id, interface1);
         assert!(result1.is_ok(), "first registration should succeed");
 
         let result2: Result<(), HostContractError> =
-            runtime.register_host_contract(contract_id, interface2);
+            runtime.register_guest_contract_host_contract(contract_id, interface2);
         assert!(result2.is_err(), "duplicate registration should fail");
         match result2 {
             Err(HostContractError::DuplicateContract { contract_id: id }) => {
@@ -1694,7 +1694,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_host_contracts_unregister() {
+    fn runtime_host_contracts_unregister_guest_contract() {
         let runtime: Runtime = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
@@ -1703,25 +1703,25 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
-            .register_host_contract(contract_id, interface)
+            .register_guest_contract_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
-        let removed: bool = runtime.unregister_host_contract(contract_id);
+        let removed: bool = runtime.unregister_guest_contract_host_contract(contract_id);
         assert!(
             removed,
-            "unregister should return true for existing contract"
+            "unregister_guest_contract should return true for existing contract"
         );
 
-        let removed_again: bool = runtime.unregister_host_contract(contract_id);
+        let removed_again: bool = runtime.unregister_guest_contract_host_contract(contract_id);
         assert!(
             !removed_again,
-            "unregister should return false for non-existent contract"
+            "unregister_guest_contract should return false for non-existent contract"
         );
 
         let found: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
         assert!(
             found.is_none(),
-            "contract should not be found after unregister"
+            "contract should not be found after unregister_guest_contract"
         );
     }
 
@@ -1735,7 +1735,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 2, 5);
 
         runtime
-            .register_host_contract(contract_id, interface)
+            .register_guest_contract_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         let found_low: Option<&'static HostContractInterface> =
@@ -1779,7 +1779,7 @@ mod tests {
     }
 
     #[test]
-    fn host_get_host_contract_callback_returns_registered_contract() {
+    fn host_get_host_contract_callback_returns_register_guest_contracted_contract() {
         let runtime: Runtime = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
@@ -1788,7 +1788,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
-            .register_host_contract(contract_id, interface)
+            .register_guest_contract_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
@@ -1812,12 +1812,12 @@ mod tests {
             unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(
             !instance.data.is_null(),
-            "callback should return non-null instance for registered contract"
+            "callback should return non-null instance for register_guest_contracted contract"
         );
     }
 
     #[test]
-    fn host_get_host_contract_callback_returns_null_for_unregistered() {
+    fn host_get_host_contract_callback_returns_null_for_unregister_guest_contracted() {
         let runtime: Runtime = Runtime::builder()
             .build()
             .expect("runtime build should succeed");
@@ -1845,7 +1845,7 @@ mod tests {
             unsafe { host_get_host_contract(&host_interface as *const HostInterface, contract_id, 0) };
         assert!(
             instance.data.is_null(),
-            "callback should return null instance for unregistered contract"
+            "callback should return null instance for unregister_guest_contracted contract"
         );
     }
 
@@ -1921,7 +1921,7 @@ mod tests {
             create_counting_host_contract_interface(contract_id, 1, true);  // singleton=true
 
         runtime
-            .register_host_contract(contract_id, interface)
+            .register_guest_contract_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
@@ -1990,7 +1990,7 @@ mod tests {
             create_counting_host_contract_interface(contract_id, 1, false);  // singleton=false
 
         runtime
-            .register_host_contract(contract_id, interface)
+            .register_guest_contract_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
@@ -2061,10 +2061,10 @@ mod tests {
             create_counting_host_contract_interface(multi_id, 1, false);
 
         runtime
-            .register_host_contract(singleton_id, singleton_interface)
+            .register_guest_contract_host_contract(singleton_id, singleton_interface)
             .expect("singleton registration should succeed");
         runtime
-            .register_host_contract(multi_id, multi_interface)
+            .register_guest_contract_host_contract(multi_id, multi_interface)
             .expect("multi-instance registration should succeed");
 
         // Create a HostInterface with runtime pointer

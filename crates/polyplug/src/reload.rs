@@ -111,7 +111,7 @@ impl Runtime {
         let bundle_id: BundleId = BundleId::new(&manifest.name);
 
         // Store slot indices before reload (for warning check and interface swap)
-        let slot_indices: Vec<u32> = self.registry.find_slots_by_bundle(bundle_id);
+        let slot_indices: Vec<u32> = self.registry.get_bundle_plugin_slots(bundle_id);
 
         // Fire Preparing callback
         if let Some(cb) = self.on_reload_cb() {
@@ -126,7 +126,7 @@ impl Runtime {
         // Check Arc::strong_count after Preparing callback returned.
         // If > 1, host may not have destroyed all instances - emit UB warning.
         for slot_idx in &slot_indices {
-            if let Some(arc) = self.registry.get_interface_arc(*slot_idx) {
+            if let Some(arc) = self.registry.get_guest_contract_interface_arc(*slot_idx) {
                 if Arc::strong_count(&arc) > 1 {
                     self.emit_warning(&format!(
                         "Potential UB: Arc refs still exist for bundle '{}' after Preparing callback. \
@@ -150,7 +150,7 @@ impl Runtime {
                 for slot_idx in &slot_indices {
                     // Get contract_id for this slot (stable across reload)
                     let contract_id: GuestContractId = self.registry
-                        .get_slot_contract_id(*slot_idx)
+                        .get_slot_guest_contract_id(*slot_idx)
                         .ok_or_else(|| RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
                             index: *slot_idx
                         }))?;
@@ -158,17 +158,17 @@ impl Runtime {
                     // Find NEW interface handle (registered during init)
                     // find_by_contract returns handle pointing to NEW registration
                     let new_handle: polyplug_abi::plugin::GuestContractHandle = self.registry
-                        .find_by_contract(contract_id, 0)?;
+                        .find_guest_contract(contract_id, 0)?;
 
                     // Get Arc to NEW interface
                     let new_interface: Arc<GuestContractInterface> = self.registry
-                        .get_interface_arc(new_handle.index)
+                        .get_guest_contract_interface_arc(new_handle.index)
                         .ok_or_else(|| RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
                             index: new_handle.index
                         }))?;
 
                     // Atomic swap - old slot now points to new interface
-                    self.registry.swap_interface(*slot_idx, new_interface)?;
+                    self.registry.swap_guest_contract_interface(*slot_idx, new_interface)?;
                 }
 
                 // Fire Reloaded callback
@@ -202,7 +202,7 @@ impl Runtime {
         contract_id: u64,
         min_version: u32,
     ) -> Result<polyplug_abi::plugin::GuestContractHandle, crate::error::RegistryError> {
-        self.registry().find_by_contract(GuestContractId::from_u64(contract_id), min_version)
+        self.registry().find_guest_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 }
 

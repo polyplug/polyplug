@@ -353,7 +353,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_by_bundle(
         let runtime: &OpaqueRuntime = unsafe { &*rt };
         match runtime
             .0
-            .find_by_bundle(bundle_id, contract_id, min_version)
+            .find_guest_contract_by_bundle(bundle_id, contract_id, min_version)
         {
             Ok(h) => pack_handle(h),
             Err(_) => u64::MAX,
@@ -423,7 +423,7 @@ pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
         let handle: GuestContractHandle = unpack_handle(packed_handle);
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
-        match runtime.0.registry().resolve(handle) {
+        match runtime.0.registry().resolve_guest_contract(handle) {
             Ok(interface_ptr) => interface_ptr,
             Err(e) => {
                 runtime.0.set_last_error(e.to_string());
