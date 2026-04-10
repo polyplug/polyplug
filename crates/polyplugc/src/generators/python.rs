@@ -633,7 +633,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     out.push_str("    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:\n");
     out.push_str("        \"\"\"Create instance wrapper from handle and host interface.\n\n");
     out.push_str("        Args:\n");
-    out.push_str("            handle: Contract handle from find_by_contract\n");
+    out.push_str("            handle: Contract handle from find_guest_contract\n");
     out.push_str("            host: Host interface pointer\n\n");
     out.push_str("        Raises:\n");
     out.push_str("            ValueError: If interface not found or create_instance failed\n");
@@ -668,7 +668,7 @@ fn generate_host_caller_class(out: &mut String, contract: &ResolvedContract) {
     ));
     out.push_str("        \"\"\"Factory method - creates instance or None if failed.\n\n");
     out.push_str("        Args:\n");
-    out.push_str("            handle: Contract handle from find_by_contract\n");
+    out.push_str("            handle: Contract handle from find_guest_contract\n");
     out.push_str("            host: Host interface pointer\n\n");
     out.push_str("        Returns:\n");
     out.push_str("            Self if interface found and instance created, None otherwise\n");

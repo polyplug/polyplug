@@ -482,7 +482,7 @@ fn generate_host_contract_caller(out: &mut String, contract: &ResolvedContract) 
         contract_struct = contract_struct
     ));
     out.push_str(&format!(
-        "    local handle = runtime:find_by_contract({contract_id_const}, 0)\n"
+        "    local handle = runtime:find_guest_contract({contract_id_const}, 0)\n"
     ));
     out.push_str("    if handle == nil then\n");
     out.push_str("        return nil\n");

@@ -861,7 +861,7 @@ fn generate_cs_host_callers(ir: &ValidatedIr) -> String {
             "    public static {caller_name}? Create(Runtime rt, HostInterface* host) {{\n"
         ));
         out.push_str(&format!(
-            "        var handle = rt.FindByContract({class_name}Constants.{contract_upper}_CONTRACT_ID, 0);\n"
+            "        var handle = rt.FindGuestContract({class_name}Constants.{contract_upper}_CONTRACT_ID, 0);\n"
         ));
         out.push_str("        if (handle == ulong.MaxValue) { return null; }\n");
         out.push_str("        var iface = rt.ResolveContract(handle);\n");
