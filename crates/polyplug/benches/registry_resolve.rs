@@ -14,7 +14,7 @@ use criterion::Throughput;
 use criterion::criterion_group;
 use criterion::criterion_main;
 
-use polyplug::registry::ContractRegistry;
+use polyplug::registry::RuntimeStore;
 use polyplug_abi::DispatchType;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::GuestContractInstance;
@@ -88,13 +88,13 @@ fn make_interface(id: u64) -> GuestContractInterface {
 // ─── Benchmark: resolve with single slot ─────────────────────────────────────
 
 fn bench_registry_resolve_single(c: &mut Criterion) {
-    let registry: ContractRegistry = ContractRegistry::new();
+    let registry: RuntimeStore = RuntimeStore::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let handle: GuestContractHandle = unsafe {
         registry
-            .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register_guest_contract(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 
@@ -105,7 +105,7 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("resolve", "single_slot"), |b| {
         b.iter(|| {
             let result: Result<*const GuestContractInterface, _> =
-                registry.resolve(black_box(handle));
+                registry.resolve_guest_contract(black_box(handle));
             let _ = black_box(result);
         });
     });
@@ -116,7 +116,7 @@ fn bench_registry_resolve_single(c: &mut Criterion) {
 // ─── Benchmark: resolve with multiple slots ──────────────────────────────────
 
 fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
-    let registry: ContractRegistry = ContractRegistry::new();
+    let registry: RuntimeStore = RuntimeStore::new();
 
     // Use leaked Box to get 'static interfaces
     let interfaces: Vec<Box<GuestContractInterface>> = (0..100_u64)
@@ -138,7 +138,7 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
         // SAFETY: interface is 'static (leaked), pointer is valid for Registry lifetime.
         unsafe {
             registry
-                .register(descriptor, *interface, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
+                .register_guest_contract(descriptor, *interface, format!("contract.{}", i_u64), BundleId::from_u64(i_u64))
                 .expect("registration should succeed");
         }
     }
@@ -155,7 +155,7 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("resolve", "100_slots"), |b| {
         b.iter(|| {
             let result: Result<*const GuestContractInterface, _> =
-                registry.resolve(black_box(handle));
+                registry.resolve_guest_contract(black_box(handle));
             let _ = black_box(result);
         });
     });
@@ -166,13 +166,13 @@ fn bench_registry_resolve_multiple_slots(c: &mut Criterion) {
 // ─── Benchmark: resolve with stale handle ────────────────────────────────────
 
 fn bench_registry_resolve_stale(c: &mut Criterion) {
-    let registry: ContractRegistry = ContractRegistry::new();
+    let registry: RuntimeStore = RuntimeStore::new();
     let descriptor: PluginDescriptor = make_descriptor("bench_plugin", "bench.contract");
 
     // SAFETY: BENCH_INTERFACE is 'static, pointer is valid for Registry lifetime.
     let _handle: GuestContractHandle = unsafe {
         registry
-            .register(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
+            .register_guest_contract(descriptor, &BENCH_INTERFACE, "bench.contract".to_owned(), BundleId::from_u64(0u64))
             .expect("registration should succeed")
     };
 
@@ -186,7 +186,7 @@ fn bench_registry_resolve_stale(c: &mut Criterion) {
     group.bench_function(BenchmarkId::new("resolve", "stale_handle"), |b| {
         b.iter(|| {
             let result: Result<*const GuestContractInterface, _> =
-                registry.resolve(black_box(stale_handle));
+                registry.resolve_guest_contract(black_box(stale_handle));
             let _ = black_box(result);
         });
     });

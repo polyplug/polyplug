@@ -19,7 +19,7 @@ use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{DispatchType, GuestContractInterface, HostInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
 use polyplug_utils::BundleId;
@@ -132,8 +132,8 @@ fn make_hot_reload_runtime() -> Runtime {
 }
 
 fn resolve_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
-    let handle: polyplug_abi::GuestContractHandle = rt.find_by_contract(contract_id, 0).ok()?;
-    let interface_ptr: *const GuestContractInterface = rt.resolve_plugin(handle).ok()?;
+    let handle: polyplug_abi::GuestContractHandle = rt.find_guest_contract(contract_id, 0).ok()?;
+    let interface_ptr: *const GuestContractInterface = rt.resolve_guest_contract(handle).ok()?;
     let fn_ptr: extern "C" fn() -> u32 = unsafe {
         let fns: *const *const () = (*interface_ptr).dispatch.native.functions;
         core::mem::transmute(*fns)
@@ -198,7 +198,7 @@ fn stress_rapid_reload_cycles_100() {
 fn stress_memory_interface_swap_cycles() {
     const CYCLES: usize = 50_usize;
 
-    let registry: ContractRegistry = ContractRegistry::new();
+    let registry: RuntimeStore = RuntimeStore::new();
 
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"stress-mem-plugin"),
@@ -209,7 +209,7 @@ fn stress_memory_interface_swap_cycles() {
     // SAFETY: INTERFACE_MEM_A is 'static and valid for the lifetime of this test.
     let handle: polyplug_abi::GuestContractHandle = unsafe {
         registry
-            .register(
+            .register_guest_contract(
                 descriptor,
                 &INTERFACE_MEM_A,
                 "stress.mem.contract".to_owned(),
@@ -227,7 +227,7 @@ fn stress_memory_interface_swap_cycles() {
 
         let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
         registry
-            .swap_interface(handle.index, new_arc)
+            .swap_guest_contract_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at cycle {cycle}: {e}"));
     }
 }
@@ -239,7 +239,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     const READER_THREADS: usize = 8_usize;
     const SWAP_ROUNDS: usize = 50_usize;
 
-    let registry: Arc<ContractRegistry> = Arc::new(ContractRegistry::new());
+    let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
 
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"swap-load-plugin"),
@@ -250,7 +250,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     // SAFETY: INTERFACE_QU_A is 'static and valid for the test lifetime.
     let handle: polyplug_abi::GuestContractHandle = unsafe {
         registry
-            .register(
+            .register_guest_contract(
                 descriptor,
                 &INTERFACE_QU_A,
                 "swap.load.contract".to_owned(),
@@ -265,7 +265,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     let mut reader_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(READER_THREADS);
 
     for _thread_idx in 0_usize..READER_THREADS {
-        let reg_clone: Arc<ContractRegistry> = Arc::clone(&registry);
+        let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
         let stop_clone: Arc<core::sync::atomic::AtomicBool> = Arc::clone(&stop_flag);
 
         let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
@@ -273,12 +273,12 @@ fn stress_direct_swap_under_concurrent_reader_load() {
                 let find_result: Result<
                     polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
-                > = reg_clone.find_by_contract(GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64), 0_u32);
+                > = reg_clone.find_guest_contract(GuestContractId::from_u64(0xCAFE_BABE_0000_0001_u64), 0_u32);
                 if let Ok(resolved_handle) = find_result {
                     let resolve_result: Result<
                         *const GuestContractInterface,
                         polyplug::error::RegistryError,
-                    > = reg_clone.resolve(resolved_handle);
+                    > = reg_clone.resolve_guest_contract(resolved_handle);
                     if let Ok(interface_ptr) = resolve_result {
                         // SAFETY: interface_ptr is valid
                         let version: &Version = unsafe { &(*interface_ptr).contract_version };
@@ -306,7 +306,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
 
         let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
         registry
-            .swap_interface(handle.index, new_arc)
+            .swap_guest_contract_interface(handle.index, new_arc)
             .unwrap_or_else(|e| panic!("swap_interface failed at round {round}: {e}"));
     }
 
@@ -350,13 +350,13 @@ fn stress_interface_handoff_correctness_no_torn_reads() {
                 let handle_result: Result<
                     polyplug_abi::GuestContractHandle,
                     polyplug::error::RegistryError,
-                > = rt_clone.find_by_contract(contract_id, 0_u32);
+                > = rt_clone.find_guest_contract(contract_id, 0_u32);
 
                 if let Ok(plugin_handle) = handle_result {
                     let resolve_result: Result<
                         *const GuestContractInterface,
                         polyplug::error::RegistryError,
-                    > = rt_clone.resolve_plugin(plugin_handle);
+                    > = rt_clone.resolve_guest_contract(plugin_handle);
 
                     if let Ok(vt_ptr) = resolve_result {
                         let version: u32 = unsafe {

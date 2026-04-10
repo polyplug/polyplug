@@ -6,7 +6,7 @@
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostInterface;
@@ -91,9 +91,9 @@ unsafe extern "C" fn registry_register_callback(
 
     // Register with thread-local Registry.
     let result: Result<GuestContractHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, interface, contract_name.to_owned(), polyplug_utils::BundleId::from_u64(vt.contract_id.id())) }
+        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), polyplug_utils::BundleId::from_u64(vt.contract_id.id())) }
     });
 
     match result {
@@ -213,8 +213,8 @@ fn make_host_interface() -> HostInterface {
 }
 
 std::thread_local! {
-    static CPP_DISPATCH_REGISTRY: core::cell::RefCell<ContractRegistry> =
-        core::cell::RefCell::new(ContractRegistry::new());
+    static CPP_DISPATCH_REGISTRY: core::cell::RefCell<RuntimeStore> =
+        core::cell::RefCell::new(RuntimeStore::new());
 }
 
 /// `AddArgs` — mirrors the C++ struct in the test plugin (`#[repr(C)]`).
@@ -351,7 +351,7 @@ fn test_cpp_plugin_dispatch() {
 
     // ── 3. Reset the thread-local registry ───────────────────────────────────
     CPP_DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     // ── 4. Build HostInterface + call polyplug_init ──────────────────────────
@@ -379,7 +379,7 @@ fn test_cpp_plugin_dispatch() {
 
     let interface_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
-            .resolve(handle)
+            .resolve_guest_contract(handle)
             .expect("interface must be resolvable from handle")
     });
 
@@ -451,7 +451,7 @@ fn test_cpp_host_loads_rust_plugin() {
     };
 
     CPP_DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     let host_interface: HostInterface = make_host_interface();
@@ -480,7 +480,7 @@ fn test_cpp_host_loads_rust_plugin() {
 
     let interface_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY.with(|cell| {
         cell.borrow()
-            .resolve(handle)
+            .resolve_guest_contract(handle)
             .expect("interface must be resolvable")
     });
 
@@ -549,7 +549,7 @@ fn test_exception_isolation_cpp() {
     };
 
     CPP_DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     let host_interface: HostInterface = make_host_interface();
@@ -577,7 +577,7 @@ fn test_exception_isolation_cpp() {
     });
 
     let interface_ptr: *const GuestContractInterface = CPP_DISPATCH_REGISTRY
-        .with(|cell| cell.borrow().resolve(handle).expect("interface resolvable"));
+        .with(|cell| cell.borrow().resolve_guest_contract(handle).expect("interface resolvable"));
 
     // SAFETY: interface_ptr is valid — plugin is loaded
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };

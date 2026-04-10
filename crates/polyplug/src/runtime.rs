@@ -161,7 +161,7 @@ impl Runtime {
 
     /// Resolve a plugin handle to its interface pointer directly.
     #[inline(always)]
-    pub fn resolve_guest_contract_plugin(
+    pub fn resolve_guest_contract(
         &self,
         handle: GuestContractHandle,
     ) -> Result<*const GuestContractInterface, RegistryError> {
@@ -170,7 +170,7 @@ impl Runtime {
 
     /// Register a host contract interface.
     /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
-    pub fn register_guest_contract_host_contract(
+    pub fn register_host_contract(
         &self,
         contract_id: u64,
         interface: &'static HostContractInterface,
@@ -1078,7 +1078,7 @@ mod tests {
             .build()
             .expect("runtime build should succeed");
         let result: Result<GuestContractHandle, _> =
-            runtime.find_by_contract(0x1234_5678_9ABC_DEF0_u64, 0);
+            runtime.find_guest_contract(0x1234_5678_9ABC_DEF0_u64, 0);
         assert!(result.is_err(), "empty registry should return not found");
     }
 
@@ -1476,7 +1476,7 @@ mod tests {
             Some(true),
             "loader should have been called during init"
         );
-        let handle_after: Result<GuestContractHandle, _> = runtime.find_by_contract(contract, 0_u32);
+        let handle_after: Result<GuestContractHandle, _> = runtime.find_guest_contract(contract, 0_u32);
         assert!(
             handle_after.is_ok(),
             "after init, find_by_contract should succeed"
@@ -1678,11 +1678,11 @@ mod tests {
         let interface2: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 1);
 
         let result1: Result<(), HostContractError> =
-            runtime.register_guest_contract_host_contract(contract_id, interface1);
+            runtime.register_host_contract(contract_id, interface1);
         assert!(result1.is_ok(), "first registration should succeed");
 
         let result2: Result<(), HostContractError> =
-            runtime.register_guest_contract_host_contract(contract_id, interface2);
+            runtime.register_host_contract(contract_id, interface2);
         assert!(result2.is_err(), "duplicate registration should fail");
         match result2 {
             Err(HostContractError::DuplicateContract { contract_id: id }) => {
@@ -1703,7 +1703,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
-            .register_guest_contract_host_contract(contract_id, interface)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         let removed: bool = runtime.unregister_host_contract(contract_id);
@@ -1735,7 +1735,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 2, 5);
 
         runtime
-            .register_guest_contract_host_contract(contract_id, interface)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         let found_low: Option<&'static HostContractInterface> =
@@ -1788,7 +1788,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         runtime
-            .register_guest_contract_host_contract(contract_id, interface)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
@@ -1921,7 +1921,7 @@ mod tests {
             create_counting_host_contract_interface(contract_id, 1, true);  // singleton=true
 
         runtime
-            .register_guest_contract_host_contract(contract_id, interface)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
@@ -1990,7 +1990,7 @@ mod tests {
             create_counting_host_contract_interface(contract_id, 1, false);  // singleton=false
 
         runtime
-            .register_guest_contract_host_contract(contract_id, interface)
+            .register_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
         // Create a HostInterface with runtime pointer
@@ -2061,10 +2061,10 @@ mod tests {
             create_counting_host_contract_interface(multi_id, 1, false);
 
         runtime
-            .register_guest_contract_host_contract(singleton_id, singleton_interface)
+            .register_host_contract(singleton_id, singleton_interface)
             .expect("singleton registration should succeed");
         runtime
-            .register_guest_contract_host_contract(multi_id, multi_interface)
+            .register_host_contract(multi_id, multi_interface)
             .expect("multi-instance registration should succeed");
 
         // Create a HostInterface with runtime pointer

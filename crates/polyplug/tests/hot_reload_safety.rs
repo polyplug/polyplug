@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
     GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
@@ -81,12 +81,12 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 /// is returned by resolve after the swap.
 #[test]
 fn test_swap_interface_changes_interface_pointer() {
-    let registry: ContractRegistry = ContractRegistry::new();
+    let registry: RuntimeStore = RuntimeStore::new();
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
 
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
     let handle: GuestContractHandle = unsafe {
-        registry.register(
+        registry.register_guest_contract(
             descriptor,
             &INTERFACE_V1,
             "swap.test.contract".to_owned(),
@@ -97,7 +97,7 @@ fn test_swap_interface_changes_interface_pointer() {
 
     // The handle should be valid before the swap.
     let resolve_result_before: Result<*const GuestContractInterface, _> =
-        registry.resolve(handle);
+        registry.resolve_guest_contract(handle);
     assert!(
         resolve_result_before.is_ok(),
         "handle should be valid before swap"
@@ -115,12 +115,12 @@ fn test_swap_interface_changes_interface_pointer() {
     // Perform the swap - direct swap_interface
     let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
     registry
-        .swap_interface(handle.index, new_arc)
+        .swap_guest_contract_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
 
     // The same handle should now resolve to INTERFACE_V2.
     let resolve_result_after: Result<*const GuestContractInterface, polyplug::error::RegistryError> =
-        registry.resolve(handle);
+        registry.resolve_guest_contract(handle);
 
     // With the new model (no generation), the handle should still be valid after swap
     assert!(
@@ -143,12 +143,12 @@ fn test_swap_interface_changes_interface_pointer() {
 /// Verifies that swap_interface directly swaps the interface under RwLock write guard.
 #[test]
 fn test_direct_swap_interface() {
-    let registry: ContractRegistry = ContractRegistry::new();
+    let registry: RuntimeStore = RuntimeStore::new();
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.direct.contract");
 
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
     let handle: GuestContractHandle = unsafe {
-        registry.register(
+        registry.register_guest_contract(
             descriptor,
             &INTERFACE_V1,
             "swap.direct.contract".to_owned(),
@@ -159,7 +159,7 @@ fn test_direct_swap_interface() {
 
     // Resolve before swap
     let interface_ptr_before: *const GuestContractInterface =
-        registry.resolve(handle).expect("resolve should succeed before swap");
+        registry.resolve_guest_contract(handle).expect("resolve should succeed before swap");
 
     // SAFETY: interface_ptr_before points to INTERFACE_V1 which is 'static.
     let version_before: &Version = unsafe { &(*interface_ptr_before).contract_version };
@@ -168,12 +168,12 @@ fn test_direct_swap_interface() {
     // Perform direct swap
     let new_arc: Arc<GuestContractInterface> = Arc::new(INTERFACE_V2.clone());
     registry
-        .swap_interface(handle.index, new_arc)
+        .swap_guest_contract_interface(handle.index, new_arc)
         .expect("swap_interface should succeed");
 
     // Resolve after swap - the handle should still be valid
     let interface_ptr_after: *const GuestContractInterface =
-        registry.resolve(handle).expect("resolve should succeed after swap");
+        registry.resolve_guest_contract(handle).expect("resolve should succeed after swap");
 
     // SAFETY: interface_ptr_after points to INTERFACE_V2 which is 'static.
     let version_after: &Version = unsafe { &(*interface_ptr_after).contract_version };

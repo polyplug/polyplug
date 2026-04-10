@@ -5,7 +5,7 @@
 //! Edge case tests for the FFI layer.
 //!
 //! Tests null pointers, stale handles, and buffer boundary conditions
-//! for `polyplug_runtime_resolve_plugin` and `polyplug_runtime_find_all_by_contract`.
+//! for `polyplug_runtime_resolve_guest_contract` and `polyplug_runtime_find_all_by_contract`.
 
 use std::path::PathBuf;
 
@@ -13,10 +13,10 @@ use polyplug::ffi::OpaqueRuntime;
 use polyplug::ffi::polyplug_runtime_create;
 use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
-use polyplug::ffi::polyplug_runtime_find_by_contract;
+use polyplug::ffi::polyplug_runtime_find_guest_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::polyplug_runtime_resolve_guest_contract;
 
 const TEST_PLUGIN_DIR: &str = env!("TEST_PLUGIN_DIR");
 const RELOAD_PLUGIN_V1_DIR: &str = env!("RELOAD_PLUGIN_V1_DIR");
@@ -33,9 +33,9 @@ const TEST_ADD_CONTRACT_ID: u64 = 0xCC4232FAB0410D2B_u64;
 #[test]
 fn test_resolve_plugin_null_runtime() {
     // SAFETY: Passing null runtime is explicitly testing the null-safety contract.
-    // polyplug_runtime_resolve_plugin returns *const GuestContractInterface now.
+    // polyplug_runtime_resolve_guest_contract returns *const GuestContractInterface now.
     let interface: *const polyplug_abi::GuestContractInterface =
-        unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0x1234_5678_u64) };
+        unsafe { polyplug_runtime_resolve_guest_contract(core::ptr::null(), 0x1234_5678_u64) };
     assert!(interface.is_null(), "resolve_plugin(null rt) must return null");
 
     // Verify last_error returns 0 for null runtime (no runtime to have an error)
@@ -59,7 +59,7 @@ fn test_resolve_plugin_null_handle() {
 
     // SAFETY: rt is valid; u64::MAX is the sentinel NULL_HANDLE value.
     let interface: *const polyplug_abi::GuestContractInterface =
-        unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
+        unsafe { polyplug_runtime_resolve_guest_contract(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
         interface.is_null(),
         "resolve_plugin(NULL_HANDLE) must return null"
@@ -98,7 +98,7 @@ fn test_resolve_plugin_stale_handle() {
     let contract_id: u64 = TEST_ADD_CONTRACT_ID;
     // SAFETY: rt is valid.
     let packed_handle: u64 =
-        unsafe { polyplug_runtime_find_by_contract(rt as *const OpaqueRuntime, contract_id, 0) };
+        unsafe { polyplug_runtime_find_guest_contract(rt as *const OpaqueRuntime, contract_id, 0) };
     assert_ne!(packed_handle, u64::MAX, "plugin must be found");
 
     // Create an invalid handle by using an out-of-bounds index
@@ -107,7 +107,7 @@ fn test_resolve_plugin_stale_handle() {
 
     // SAFETY: rt is valid; invalid_index is a deliberately invalid handle.
     let interface: *const polyplug_abi::GuestContractInterface =
-        unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, invalid_index) };
+        unsafe { polyplug_runtime_resolve_guest_contract(rt as *const OpaqueRuntime, invalid_index) };
     assert!(
         interface.is_null(),
         "resolve_plugin(invalid handle) must return null"

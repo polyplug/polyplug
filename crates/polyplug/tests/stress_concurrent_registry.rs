@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
     GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
@@ -116,12 +116,12 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 
 #[test]
 fn stress_concurrent_register_find_resolve() {
-    let registry: Arc<ContractRegistry> = Arc::new(ContractRegistry::new());
+    let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(THREADS));
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(THREADS);
 
     for idx in 0_usize..THREADS {
-        let reg_clone: Arc<ContractRegistry> = Arc::clone(&registry);
+        let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
         let barrier_clone: Arc<Barrier> = Arc::clone(&barrier);
         let thread_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {
             let descriptor: PluginDescriptor =
@@ -131,7 +131,7 @@ fn stress_concurrent_register_find_resolve() {
             // SAFETY: interface is a static reference valid for the test lifetime.
             let handle: GuestContractHandle = unsafe {
                 reg_clone
-                    .register(
+                    .register_guest_contract(
                         descriptor,
                         interface,
                         CONTRACT_NAMES[idx].to_owned(),
@@ -142,10 +142,10 @@ fn stress_concurrent_register_find_resolve() {
 
             for _round in 0_usize..RESOLVE_ROUNDS {
                 let found: GuestContractHandle = reg_clone
-                    .find_by_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
+                    .find_guest_contract(GuestContractId::from_u64(CONTRACT_IDS[idx]), 0_u32)
                     .expect("find_by_contract must succeed");
                 let interface_ptr: *const GuestContractInterface =
-                    reg_clone.resolve(found).expect("resolve must succeed");
+                    reg_clone.resolve_guest_contract(found).expect("resolve must succeed");
                 // SAFETY: interface_ptr is from the registry and valid.
                 let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
                 // SAFETY: interface_ptr is from the registry and valid.
@@ -155,7 +155,7 @@ fn stress_concurrent_register_find_resolve() {
             }
 
             let resolved: Result<*const GuestContractInterface, RegistryError> =
-                reg_clone.resolve(handle);
+                reg_clone.resolve_guest_contract(handle);
             assert!(
                 resolved.is_ok(),
                 "resolve must succeed for registered handle"
@@ -170,10 +170,10 @@ fn stress_concurrent_register_find_resolve() {
 
     for (idx, &expected_cid) in CONTRACT_IDS.iter().enumerate().take(THREADS) {
         let found: GuestContractHandle = registry
-            .find_by_contract(GuestContractId::from_u64(expected_cid), 0_u32)
+            .find_guest_contract(GuestContractId::from_u64(expected_cid), 0_u32)
             .expect("main-thread find must succeed");
         let interface_ptr: *const GuestContractInterface =
-            registry.resolve(found).expect("main-thread resolve must succeed");
+            registry.resolve_guest_contract(found).expect("main-thread resolve must succeed");
         // SAFETY: interface_ptr is valid.
         let contract_id: GuestContractId = unsafe { (*interface_ptr).contract_id };
         assert_eq!(contract_id.id(), CONTRACT_IDS[idx]);
@@ -182,12 +182,12 @@ fn stress_concurrent_register_find_resolve() {
 
 #[test]
 fn stress_concurrent_swaps_with_resolvers() {
-    let registry: Arc<ContractRegistry> = Arc::new(ContractRegistry::new());
+    let registry: Arc<RuntimeStore> = Arc::new(RuntimeStore::new());
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "stress.swap.contract");
     // SAFETY: INTERFACE_SWAP_V1 is a static reference valid for the test lifetime.
     let handle: GuestContractHandle = unsafe {
         registry
-            .register(
+            .register_guest_contract(
                 descriptor,
                 &INTERFACE_SWAP_V1,
                 "stress.swap.contract".to_owned(),
@@ -203,7 +203,7 @@ fn stress_concurrent_swaps_with_resolvers() {
         Vec::with_capacity(RESOLVER_THREADS);
 
     for _thread_idx in 0_usize..RESOLVER_THREADS {
-        let reg_clone: Arc<ContractRegistry> = Arc::clone(&registry);
+        let reg_clone: Arc<RuntimeStore> = Arc::clone(&registry);
         let stop_clone: Arc<AtomicBool> = Arc::clone(&stop);
         let ready_clone: Arc<Barrier> = Arc::clone(&ready);
         let resolve_counter: Arc<AtomicUsize> = Arc::clone(&resolve_count);
@@ -211,10 +211,10 @@ fn stress_concurrent_swaps_with_resolvers() {
             ready_clone.wait();
             while !stop_clone.load(Ordering::Relaxed) {
                 let handle_result: Result<GuestContractHandle, RegistryError> =
-                    reg_clone.find_by_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
+                    reg_clone.find_guest_contract(GuestContractId::from_u64(SWAP_CONTRACT_ID), 0_u32);
                 if let Ok(found) = handle_result {
                     let resolve_result: Result<*const GuestContractInterface, RegistryError> =
-                        reg_clone.resolve(found);
+                        reg_clone.resolve_guest_contract(found);
                     if let Ok(interface_ptr) = resolve_result {
                         // SAFETY: interface_ptr is valid.
                         let version: &Version = unsafe { &(*interface_ptr).contract_version };
@@ -240,7 +240,7 @@ fn stress_concurrent_swaps_with_resolvers() {
         };
         let new_arc: Arc<GuestContractInterface> = Arc::new(new_interface.clone());
         registry
-            .swap_interface(handle.index, new_arc)
+            .swap_guest_contract_interface(handle.index, new_arc)
             .expect("swap_interface must succeed");
         // No quiescence wait needed - direct swap model
     }

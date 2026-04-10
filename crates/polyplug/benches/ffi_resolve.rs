@@ -3,7 +3,7 @@
 // THIS IS A BENCHMARK FILE — do not add #[test] functions here
 // Run with: cargo bench -p polyplug --bench ffi_resolve
 //
-// Benchmark: polyplug_runtime_resolve_plugin FFI path
+// Benchmark: polyplug_runtime_resolve_guest_contract FFI path
 // Measures: Time from FFI call to interface pointer return (direct, no allocation)
 
 use core::hint::black_box;
@@ -31,13 +31,13 @@ unsafe extern "C" {
         path: *const u8,
         path_len: usize,
     ) -> u32;
-    fn polyplug_runtime_find_by_contract(
+    fn polyplug_runtime_find_guest_contract(
         rt: *const OpaqueRuntime,
         contract_id: u64,
         min_version: u32,
     ) -> u64;
     // New FFI: returns interface pointer directly, no allocation
-    fn polyplug_runtime_resolve_plugin(rt: *const OpaqueRuntime, packed_handle: u64) -> *const ();
+    fn polyplug_runtime_resolve_guest_contract(rt: *const OpaqueRuntime, packed_handle: u64) -> *const ();
 }
 
 // ─── Setup helper ────────────────────────────────────────────────────────────
@@ -54,10 +54,10 @@ fn setup_runtime_with_plugin() -> (*mut OpaqueRuntime, u64, u64) {
     assert_eq!(load_result, 0, "polyplug_runtime_load_bundle failed");
 
     // test.add contract with major version 1
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
 
     // SAFETY: rt is non-null valid OpaqueRuntime.
-    let packed_handle: u64 = unsafe { polyplug_runtime_find_by_contract(rt, contract_id, 0) };
+    let packed_handle: u64 = unsafe { polyplug_runtime_find_guest_contract(rt, contract_id, 0) };
     assert_ne!(packed_handle, u64::MAX, "plugin not found in registry");
 
     (rt, contract_id, packed_handle)
@@ -78,7 +78,7 @@ fn bench_ffi_resolve_plugin(c: &mut Criterion) {
             // SAFETY: rt is non-null valid OpaqueRuntime; packed_handle is a valid handle.
             // New FFI returns interface pointer directly - no allocation, no release needed.
             let interface_ptr: *const () =
-                unsafe { polyplug_runtime_resolve_plugin(black_box(rt), black_box(packed_handle)) };
+                unsafe { polyplug_runtime_resolve_guest_contract(black_box(rt), black_box(packed_handle)) };
             black_box(interface_ptr);
         });
     });
@@ -103,7 +103,7 @@ fn bench_ffi_resolve_null_handle(c: &mut Criterion) {
         b.iter(|| {
             // SAFETY: rt is non-null valid OpaqueRuntime; u64::MAX is null handle sentinel.
             let interface_ptr: *const () =
-                unsafe { polyplug_runtime_resolve_plugin(black_box(rt), black_box(u64::MAX)) };
+                unsafe { polyplug_runtime_resolve_guest_contract(black_box(rt), black_box(u64::MAX)) };
             black_box(interface_ptr);
         });
     });

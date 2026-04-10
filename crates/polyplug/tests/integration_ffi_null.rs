@@ -9,7 +9,7 @@ use polyplug::ffi::polyplug_runtime_destroy;
 use polyplug::ffi::polyplug_runtime_find_all_by_contract;
 use polyplug::ffi::polyplug_runtime_last_error;
 use polyplug::ffi::polyplug_runtime_load_bundle;
-use polyplug::ffi::polyplug_runtime_resolve_plugin;
+use polyplug::ffi::polyplug_runtime_resolve_guest_contract;
 
 #[test]
 fn test_runtime_free_null() {
@@ -89,9 +89,9 @@ fn test_resolve_plugin_null_handle() {
     let rt: *mut OpaqueRuntime = unsafe { polyplug_runtime_create() };
     assert!(!rt.is_null());
     // SAFETY: rt is valid (asserted above); u64::MAX is the sentinel NULL_HANDLE value.
-    // polyplug_runtime_resolve_plugin returns *const GuestContractInterface now.
+    // polyplug_runtime_resolve_guest_contract returns *const GuestContractInterface now.
     let interface: *const polyplug_abi::GuestContractInterface =
-        unsafe { polyplug_runtime_resolve_plugin(rt as *const OpaqueRuntime, u64::MAX) };
+        unsafe { polyplug_runtime_resolve_guest_contract(rt as *const OpaqueRuntime, u64::MAX) };
     assert!(
         interface.is_null(),
         "resolve_plugin(NULL_HANDLE) must return null"

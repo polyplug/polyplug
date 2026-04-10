@@ -218,7 +218,7 @@ fn find_contract<T>(runtime: &'static Runtime, contract_id: u64) -> Option<T>
 where
     T: ContractCaller,
 {
-    let handle: GuestContractHandle = runtime.find_by_contract(contract_id, 0).ok()?;
+    let handle: GuestContractHandle = runtime.find_guest_contract(contract_id, 0).ok()?;
     if handle.is_null() {
         return None;
     }

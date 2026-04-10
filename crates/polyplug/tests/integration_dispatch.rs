@@ -4,7 +4,7 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
     BundleInitContext, PluginDescriptor, GuestContractHandle, StringView,
@@ -50,9 +50,9 @@ unsafe extern "C" fn registry_register_callback(
     // Register with thread-local Registry.
     // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
+        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
 
     match result {
@@ -160,8 +160,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
 }
 
 std::thread_local! {
-    static DISPATCH_REGISTRY: core::cell::RefCell<ContractRegistry> =
-        core::cell::RefCell::new(ContractRegistry::new());
+    static DISPATCH_REGISTRY: core::cell::RefCell<RuntimeStore> =
+        core::cell::RefCell::new(RuntimeStore::new());
 }
 
 /// AddArgs — mirrors the struct in test_plugin (must be `#[repr(C)]`).
@@ -196,7 +196,7 @@ fn test_dispatch_add_function() {
 
     // Reset the thread-local registry before the test.
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     let host_interface: HostInterface = HostInterface {
@@ -237,7 +237,7 @@ fn test_dispatch_add_function() {
 
     // Resolve the interface.
     let interface_ptr: *const GuestContractInterface =
-        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
+        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(handle).expect("handle must be valid"));
 
     // SAFETY: interface_ptr is valid (plugin is loaded, library not yet dropped).
     let interface: &GuestContractInterface = unsafe { &*interface_ptr };
@@ -298,7 +298,7 @@ fn test_dispatch_add_with_zero() {
 
     // Reset registry.
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     let host_interface: HostInterface = HostInterface {
@@ -336,7 +336,7 @@ fn test_dispatch_add_with_zero() {
             .expect("test.add must be registered")
     });
     let interface_ptr: *const GuestContractInterface =
-        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
+        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(handle).expect("handle must be valid"));
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };
@@ -382,7 +382,7 @@ fn test_dispatch_add_wrapping_overflow() {
     };
 
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     let host_interface: HostInterface = HostInterface {
@@ -420,7 +420,7 @@ fn test_dispatch_add_wrapping_overflow() {
             .expect("test.add must be registered")
     });
     let interface_ptr: *const GuestContractInterface =
-        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve(handle).expect("handle must be valid"));
+        DISPATCH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(handle).expect("handle must be valid"));
 
     // SAFETY: interface_ptr is valid.
     let fn_ptr: *const () = unsafe { *(*interface_ptr).dispatch.native.functions.add(0) };

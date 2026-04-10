@@ -68,7 +68,7 @@ mod tests {
     use super::make_desc;
     use super::make_static_interface;
     use polyplug::error::RegistryError;
-    use polyplug::registry::contract_registry::ContractRegistry;
+    use polyplug::registry::runtime_store::RuntimeStore;
     use polyplug_abi::PluginDescriptor;
     use polyplug_abi::GuestContractHandle;
     use polyplug_abi::GuestContractInterface;
@@ -79,17 +79,17 @@ mod tests {
     /// Single plugin registered for a contract -- find_by_contract returns a valid handle.
     #[test]
     fn find_by_contract_single_plugin() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let bid: BundleId = BundleId::new("audio-engine");
         let interface: &'static GuestContractInterface = make_static_interface(cid);
         let desc: PluginDescriptor = make_desc("decoder", "audio.Decoder");
         // SAFETY: interface is 'static and valid for the duration of this test.
-        unsafe { registry.register(desc, interface, "audio.Decoder".to_owned(), bid) }
+        unsafe { registry.register_guest_contract(desc, interface, "audio.Decoder".to_owned(), bid) }
             .expect("register should succeed");
 
         let handle: GuestContractHandle = registry
-            .find_by_contract(cid, 0)
+            .find_guest_contract(cid, 0)
             .expect("find_by_contract should return Ok");
 
         assert!(!handle.is_null(), "returned handle must not be null");
@@ -101,7 +101,7 @@ mod tests {
     /// find_all_by_contract returns both.
     #[test]
     fn find_all_returns_two_impls() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let interface_a: &'static GuestContractInterface = make_static_interface(cid);
         let interface_b: &'static GuestContractInterface = make_static_interface(cid);
@@ -109,7 +109,7 @@ mod tests {
         // SAFETY: interfaces are 'static.
         unsafe {
             registry
-                .register(
+                .register_guest_contract(
                     make_desc("decoder-a", "audio.Decoder"),
                     interface_a,
                     "audio.Decoder".to_owned(),
@@ -120,7 +120,7 @@ mod tests {
         // SAFETY: interface_b is 'static.
         unsafe {
             registry
-                .register(
+                .register_guest_contract(
                     make_desc("decoder-b", "audio.Decoder"),
                     interface_b,
                     "audio.Decoder".to_owned(),
@@ -130,7 +130,7 @@ mod tests {
         };
 
         let mut handles: [GuestContractHandle; 4] = [GuestContractHandle::null(); 4];
-        let count: usize = registry.find_all_by_contract(cid, 0, &mut handles);
+        let count: usize = registry.find_all_guest_contracts(cid, 0, &mut handles);
         assert_eq!(count, 2, "must find exactly 2 providers");
     }
 
@@ -140,7 +140,7 @@ mod tests {
     /// not the first-registered one.
     #[test]
     fn find_by_bundle_specificity() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let bid_a: BundleId = BundleId::new("bundle-a");
         let bid_b: BundleId = BundleId::new("bundle-b");
@@ -150,7 +150,7 @@ mod tests {
         // SAFETY: interfaces are 'static.
         unsafe {
             registry
-                .register(
+                .register_guest_contract(
                     make_desc("decoder-a", "audio.Decoder"),
                     interface_a,
                     "audio.Decoder".to_owned(),
@@ -161,7 +161,7 @@ mod tests {
         // SAFETY: interface_b is 'static.
         unsafe {
             registry
-                .register(
+                .register_guest_contract(
                     make_desc("decoder-b", "audio.Decoder"),
                     interface_b,
                     "audio.Decoder".to_owned(),
@@ -171,12 +171,12 @@ mod tests {
         };
 
         let found: GuestContractHandle = registry
-            .find_by_bundle(bid_b, cid, 0)
+            .find_guest_contract_by_bundle(bid_b, cid, 0)
             .expect("find_by_bundle(bundle-b) should succeed");
 
         // Resolve and verify the interface pointer belongs to bundle-b.
         let resolved_ptr: *const GuestContractInterface = registry
-            .resolve(found)
+            .resolve_guest_contract(found)
             .expect("resolve must succeed for a freshly registered handle");
 
         assert_eq!(
@@ -190,12 +190,12 @@ mod tests {
     /// A handle with an out-of-bounds index is rejected by resolve with InvalidHandle.
     #[test]
     fn invalid_handle_rejected() {
-        let registry: ContractRegistry = ContractRegistry::new();
+        let registry: RuntimeStore = RuntimeStore::new();
 
         // Construct a handle with an out-of-bounds index.
         let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
 
-        let result = registry.resolve(invalid);
+        let result = registry.resolve_guest_contract(invalid);
         assert!(
             matches!(result, Err(RegistryError::InvalidHandle { .. })),
             "invalid handle must return Err(InvalidHandle)"

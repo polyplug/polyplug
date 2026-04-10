@@ -9,7 +9,7 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
     BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
@@ -57,7 +57,7 @@ unsafe extern "C" fn graph_register_callback(
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
         cell.borrow()
-            .register(*desc, interface, contract_name_str.to_owned(), BundleId::from_u64(iface.contract_id.id()))
+            .register_guest_contract(*desc, interface, contract_name_str.to_owned(), BundleId::from_u64(iface.contract_id.id()))
     });
 
     match result {
@@ -180,8 +180,8 @@ unsafe extern "C" fn fake_destroy_instance(
 }
 
 std::thread_local! {
-    static GRAPH_REGISTRY: core::cell::RefCell<ContractRegistry> =
-        core::cell::RefCell::new(ContractRegistry::new());
+    static GRAPH_REGISTRY: core::cell::RefCell<RuntimeStore> =
+        core::cell::RefCell::new(RuntimeStore::new());
 }
 
 /// Load the test_plugin and call polyplug_init, storing results in GRAPH_REGISTRY.
@@ -240,7 +240,7 @@ fn load_and_init_plugin() -> libloading::Library {
 
 #[test]
 fn test_single_contract_registration_and_lookup() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -258,7 +258,7 @@ fn test_single_contract_registration_and_lookup() {
     // Resolve the interface.
     let interface_ptr: *const GuestContractInterface = GRAPH_REGISTRY.with(|cell| {
         cell.borrow()
-            .resolve(handle)
+            .resolve_guest_contract(handle)
             .expect("handle must resolve to interface")
     });
 
@@ -279,7 +279,7 @@ fn test_single_contract_registration_and_lookup() {
 
 #[test]
 fn test_unknown_contract_returns_not_found() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -297,7 +297,7 @@ fn test_unknown_contract_returns_not_found() {
 
 #[test]
 fn test_duplicate_registration_allowed() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -327,7 +327,7 @@ fn test_duplicate_registration_allowed() {
 
     // SAFETY: fake_interface is a local static with 'static lifetime.
     let result: Result<GuestContractHandle, _> = GRAPH_REGISTRY.with(|cell| unsafe {
-        cell.borrow().register(
+        cell.borrow().register_guest_contract(
             fake_descriptor,
             &fake_interface as *const GuestContractInterface,
             "test.add".to_owned(),
@@ -345,7 +345,7 @@ fn test_duplicate_registration_allowed() {
 
 #[test]
 fn test_invalid_handle_detected() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -360,7 +360,7 @@ fn test_invalid_handle_detected() {
     let invalid: GuestContractHandle = GuestContractHandle { index: 999 };
 
     let result: Result<*const GuestContractInterface, _> =
-        GRAPH_REGISTRY.with(|cell| cell.borrow().resolve(invalid));
+        GRAPH_REGISTRY.with(|cell| cell.borrow().resolve_guest_contract(invalid));
 
     assert!(result.is_err(), "invalid handle must return Err");
 
@@ -369,7 +369,7 @@ fn test_invalid_handle_detected() {
 
 #[test]
 fn test_multi_lookup_consistent() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = RuntimeStore::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 

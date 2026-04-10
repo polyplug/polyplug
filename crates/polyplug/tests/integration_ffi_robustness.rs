@@ -3,7 +3,7 @@
 use core::cell::RefCell;
 use std::sync::Arc;
 
-use polyplug::registry::contract_registry::ContractRegistry;
+use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug_abi::{
     AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
     BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
@@ -16,7 +16,7 @@ use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
 std::thread_local! {
-    static FFI_REGISTRY: RefCell<ContractRegistry> = RefCell::new(ContractRegistry::new());
+    static FFI_REGISTRY: RefCell<RuntimeStore> = RefCell::new(RuntimeStore::new());
 }
 
 #[repr(C)]
@@ -50,9 +50,9 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     let result: Result<GuestContractHandle, _> = FFI_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, RuntimeStore> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
-        unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
+        unsafe { registry.register_guest_contract(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
 
     match result {
@@ -166,7 +166,7 @@ fn load_memory_plugin() -> libloading::Library {
 
 fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestContractInterface {
     FFI_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = ContractRegistry::new();
+        *cell.borrow_mut() = RuntimeStore::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
@@ -220,7 +220,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
 
     FFI_REGISTRY.with(|cell| {
         cell.borrow()
-            .resolve(handle)
+            .resolve_guest_contract(handle)
             .expect("interface must be resolvable")
     })
 }

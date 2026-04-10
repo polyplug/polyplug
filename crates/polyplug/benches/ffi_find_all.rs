@@ -54,7 +54,7 @@ fn setup_runtime_with_plugins() -> (*mut OpaqueRuntime, u64) {
     assert_eq!(load_result, 0, "polyplug_runtime_load_bundle failed");
 
     // test.add contract with major version 1
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let contract_id: u64 = polyplug_utils::guest_contract_id("test.add", 1);
     (rt, contract_id)
 }
 
