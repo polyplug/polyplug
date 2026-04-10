@@ -28,7 +28,7 @@ use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
 use polyplug_abi::VmLoaderData;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
@@ -897,7 +897,7 @@ impl BundleLoader for JsLoader {
             // SAFETY: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =
                 Box::leak(bundle_dir_str.clone().into_boxed_str());
-            let plugin_ctx: PluginContext = PluginContext {
+            let plugin_ctx: BundleInitContext = BundleInitContext {
                 bundle_path: StringView {
                     ptr: bundle_path_static.as_ptr(),
                     len: bundle_path_static.len(),
@@ -905,11 +905,11 @@ impl BundleLoader for JsLoader {
                 bundle_id,
             };
 
-            // Pass HostInterface pointer and PluginContext pointer to JS.
+            // Pass HostInterface pointer and BundleInitContext pointer to JS.
             // The HostInterface uses self-passing pattern - JS guest code will pass it back
             // as the first parameter to each HostInterface function call.
             let host_interface_i64: i64 = host_interface as usize as i64;
-            let ctx_ptr_i64: i64 = &plugin_ctx as *const PluginContext as i64;
+            let ctx_ptr_i64: i64 = &plugin_ctx as *const BundleInitContext as i64;
 
             let host_interface_bigint: rquickjs::BigInt<'_> =
                 rquickjs::BigInt::from_i64(ctx_ref.clone(), host_interface_i64).map_err(

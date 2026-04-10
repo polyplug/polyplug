@@ -32,7 +32,7 @@ use polyplug::loader::BundleLoader;
 use polyplug::loader::ManifestData;
 use polyplug::runtime::Runtime;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::StringView;
 
 use crate::context::ensure_python_initialized;
@@ -229,7 +229,7 @@ impl BundleLoader for PythonLoader {
             // NOTE: Intentionally leaked; bundle_path_static outlives this call.
             let bundle_path_static: &'static str =
                 Box::leak(bundle_dir_str.clone().into_boxed_str());
-            let ctx: PluginContext = PluginContext {
+            let ctx: BundleInitContext = BundleInitContext {
                 bundle_id,
                 bundle_path: StringView {
                     ptr: bundle_path_static.as_ptr(),
@@ -237,11 +237,11 @@ impl BundleLoader for PythonLoader {
                 },
             };
 
-            // Pass HostInterface pointer and PluginContext pointer to Python.
+            // Pass HostInterface pointer and BundleInitContext pointer to Python.
             // The HostInterface uses self-passing pattern - Python guest code will pass it back
             // as the first parameter to each HostInterface function call.
             let host_interface_i64: i64 = host_interface as usize as i64;
-            let ctx_ptr: i64 = &ctx as *const PluginContext as i64;
+            let ctx_ptr: i64 = &ctx as *const BundleInitContext as i64;
             init_fn
                 .call((host_interface_i64, ctx_ptr), None)
                 .map_err(|e: pyo3::PyErr| {

@@ -272,18 +272,18 @@ impl BundleLoader for LuaLoader {
         // New signature: polyplug_init(host, ctx) - self-passing pattern.
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.clone().into_boxed_str());
-        let ctx: polyplug_abi::PluginContext = polyplug_abi::PluginContext {
+        let ctx: polyplug_abi::BundleInitContext = polyplug_abi::BundleInitContext {
             bundle_path: polyplug_abi::StringView {
                 ptr: bundle_path_static.as_ptr(),
                 len: bundle_path_static.len(),
             },
             bundle_id,
         };
-        // Pass HostInterface pointer and PluginContext pointer to Lua.
+        // Pass HostInterface pointer and BundleInitContext pointer to Lua.
         // The HostInterface uses self-passing pattern - Lua guest code will pass it back
         // as the first parameter to each HostInterface function call.
         let host_interface_i64: i64 = host_interface as usize as i64;
-        let ctx_ptr: i64 = &ctx as *const polyplug_abi::PluginContext as i64;
+        let ctx_ptr: i64 = &ctx as *const polyplug_abi::BundleInitContext as i64;
         init_fn
             .call::<()>((host_interface_i64, ctx_ptr))
             .map_err(|e: mlua::Error| {

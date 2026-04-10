@@ -28,10 +28,10 @@ use crate::config::HostfxrLocation;
 ///
 /// New ABI signature: (host, ctx) -> u32
 /// - host: HostInterface pointer (self-passing pattern)
-/// - ctx: PluginContext with bundle_path, bundle_id
+/// - ctx: BundleInitContext with bundle_path, bundle_id
 pub(crate) type InitFn = unsafe extern "system" fn(
     *const polyplug_abi::HostInterface,
-    *const polyplug_abi::PluginContext,
+    *const polyplug_abi::BundleInitContext,
 ) -> u32;
 
 /// DotnetContext holds the live CLR runtime and per-assembly loader cache.

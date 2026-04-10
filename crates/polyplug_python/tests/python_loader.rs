@@ -608,7 +608,7 @@ fn test_error_contains_bundle_name() {
     );
 }
 
-/// Confirm the `PluginContext` `bundle_path` pointer received by `polyplug_init`
+/// Confirm the `BundleInitContext` `bundle_path` pointer received by `polyplug_init`
 /// is a valid non-empty string.  The plugin reads it via ctypes; we verify no exception is raised.
 #[test]
 fn test_plugin_context_bundle_path_accessible() {
@@ -618,11 +618,11 @@ import ctypes
 class _StringView(ctypes.Structure):
     _fields_ = [("ptr", ctypes.c_void_p), ("len", ctypes.c_size_t)]
 
-class _PluginContext(ctypes.Structure):
+class _BundleInitContext(ctypes.Structure):
     _fields_ = [("bundle_path", _StringView), ("host_abi_version", ctypes.c_uint32), ("bundle_id", ctypes.c_uint64)]
 
 def polyplug_init(_rt_ctx: int, _host_vtable: int, ctx_addr: int) -> None:
-    ctx = _PluginContext.from_address(ctx_addr)
+    ctx = _BundleInitContext.from_address(ctx_addr)
     # ptr must be non-null and len must be > 0
     assert ctx.bundle_path.ptr is not None and ctx.bundle_path.ptr != 0
     assert ctx.bundle_path.len > 0

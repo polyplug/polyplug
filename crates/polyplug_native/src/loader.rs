@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use polyplug::error::{LoaderError, RuntimeError};
 use polyplug::loader::{BundleLoader, ManifestData};
 use polyplug::Runtime;
-use polyplug_abi::plugin::PluginContext;
+use polyplug_abi::plugin::BundleInitContext;
 use polyplug_abi::types::AbiError;
 use polyplug_abi::types::AbiErrorCode;
 use polyplug_abi::POLYPLUG_ABI_VERSION;
@@ -86,16 +86,16 @@ impl BundleLoader for NativeLoader {
 
         // ─── Step 3: Resolve init symbol ──────────────────────────────────────────────
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
-        // New signature: fn(host_abi: *const HostInterface, ctx: *const PluginContext) -> AbiError
+        // New signature: fn(host_abi: *const HostInterface, ctx: *const BundleInitContext) -> AbiError
         let init_fn_ptr: unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
                     *const HostInterface,
-                    *const PluginContext,
+                    *const BundleInitContext,
                 ) -> AbiError,
             > = unsafe {
                 library
@@ -107,9 +107,9 @@ impl BundleLoader for NativeLoader {
             *sym
         };
 
-        // ─── Step 4: Create PluginContext ────────────────────────────────────────────
+        // ─── Step 4: Create BundleInitContext ────────────────────────────────────────────
         let bundle_dir = bundle_path.parent().unwrap_or(std::path::Path::new("."));
-        let ctx: PluginContext = PluginContext {
+        let ctx: BundleInitContext = BundleInitContext {
             bundle_id: BundleId::new(&manifest.name).id(),
             bundle_path: polyplug_abi::types::StringView {
                 ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),
@@ -198,13 +198,13 @@ impl BundleLoader for NativeLoader {
         // SAFETY: polyplug_init is guaranteed by the plugin build process.
         let init_fn_ptr: unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError = {
             let sym: libloading::Symbol<
                 '_,
                 unsafe extern "C" fn(
                     *const HostInterface,
-                    *const PluginContext,
+                    *const BundleInitContext,
                 ) -> AbiError,
             > = unsafe {
                 new_library
@@ -216,9 +216,9 @@ impl BundleLoader for NativeLoader {
             *sym
         };
 
-        // ─── Step 4: Create PluginContext ──────────────────────────────────────────────
+        // ─── Step 4: Create BundleInitContext ──────────────────────────────────────────────
         let bundle_dir = bundle_path.parent().unwrap_or(std::path::Path::new("."));
-        let ctx: PluginContext = PluginContext {
+        let ctx: BundleInitContext = BundleInitContext {
             bundle_id: BundleId::new(&manifest.name).id(),
             bundle_path: polyplug_abi::types::StringView {
                 ptr: bundle_dir.as_os_str().as_encoded_bytes().as_ptr(),

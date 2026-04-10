@@ -6,7 +6,7 @@ pub mod ffi;
 pub mod version;
 pub use config::DotnetConfig;
 pub use config::HostfxrLocation;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::StringView;
 
 use std::path::Path;
@@ -161,7 +161,7 @@ impl BundleLoader for DotnetLoader {
         // SAFETY: bundle_path_static outlives this call; leaked intentionally.
         let bundle_dir_str: String = bundle_dir.to_string_lossy().into_owned();
         let bundle_path_static: &'static str = Box::leak(bundle_dir_str.into_boxed_str());
-        let ctx = PluginContext {
+        let ctx = BundleInitContext {
             bundle_id,
             bundle_path: StringView {
                 ptr: bundle_path_static.as_ptr(),
