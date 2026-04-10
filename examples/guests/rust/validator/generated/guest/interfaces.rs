@@ -18,27 +18,27 @@ use polyplug_guest::NativeDispatch;
 use polyplug_guest::DispatchMechanisms;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
-use polyplug_guest::PluginError;
+use polyplug_guest::GuestError;
 use polyplug_guest::alloc_string;
 use polyplug_guest::string_view_null;
 use polyplug_guest::string_view_from_static;
 use polyplug_guest::abi_error_ok;
 use super::types::*;
-/// Convert a PluginError to an AbiError, allocating the message via host_alloc.
+/// Convert a GuestError to an AbiError, allocating the message via host_alloc.
 /// Falls back to a null message if allocation fails.
-fn plugin_error_to_abi_error(e: PluginError) -> AbiError {
+fn plugin_error_to_abi_error(e: GuestError) -> AbiError {
     let message: StringView = alloc_string(&e.message).unwrap_or_else(|_| string_view_null());
-    // SAFETY: PluginError.code is u32, AbiErrorCode is #[repr(u32)].
+    // SAFETY: GuestError.code is u32, AbiErrorCode is #[repr(u32)].
     // Both types have the same size and alignment, so transmute is safe.
     // Plugin-defined error codes (256+) are valid AbiErrorCode values.
     AbiError { code: unsafe { std::mem::transmute(e.code) }, message }
 }
 
-use super::contracts::PipelineDecoderPlugin;
-use super::contracts::DataTransformerPlugin;
-use super::contracts::PipelineEncoderPlugin;
-use super::contracts::DataReporterPlugin;
-use super::contracts::PipelineValidatorPlugin;
+use super::contracts::PipelineDecoderGuestContract;
+use super::contracts::DataTransformerGuestContract;
+use super::contracts::PipelineEncoderGuestContract;
+use super::contracts::DataReporterGuestContract;
+use super::contracts::PipelineValidatorGuestContract;
 /// Wrapper for a function pointer stored in a static interface array.
 #[repr(transparent)]
 pub struct FnPtr(pub *const ());
@@ -53,9 +53,9 @@ unsafe impl Sync for FnPtr {}
 /// Contract ID constant -- pre-computed FNV-1a of "pipeline.Validator@1".
 pub const VALIDATOR_CONTRACT_ID: u64 = 0x45173A959EEC57C5;
 
-pub static VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorPlugin>> = OnceLock::new();
+pub static VALIDATOR_IMPL: OnceLock<Box<dyn PipelineValidatorGuestContract>> = OnceLock::new();
 
-pub fn set_validator_impl(impl_: Box<dyn PipelineValidatorPlugin>) -> Result<(), &'static str> {
+pub fn set_validator_impl(impl_: Box<dyn PipelineValidatorGuestContract>) -> Result<(), &'static str> {
     VALIDATOR_IMPL.set(impl_).map_err(|_| "validator already registered")
 }
 
@@ -67,7 +67,7 @@ extern "C" fn validator_validate_abi(instance: GuestContractInstance, args: *con
     // For stateful plugins, users override create_instance and use instance.data.
     let _ = instance;
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let impl_ref: &dyn PipelineValidatorPlugin = match VALIDATOR_IMPL.get() {
+        let impl_ref: &dyn PipelineValidatorGuestContract = match VALIDATOR_IMPL.get() {
             Some(i) => i.as_ref(),
             None => return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"implementation not registered") },
         };

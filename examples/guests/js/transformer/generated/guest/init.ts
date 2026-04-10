@@ -7,10 +7,12 @@ import {
 } from './contracts';
 import { storeHostVtable } from 'polyplug-guest';
 
-// ABI constants
-const ABI_OK = 0;
-const ABI_ERROR_GENERIC = 1;
-const ABI_ERROR_INVALID_POINTER = 8;
+// ABI error codes (match polyplug_abi.AbiErrorCode)
+const AbiErrorCode = {
+    Ok: 0,
+    Generic: 1,
+    InvalidPointer: 8,
+};
 
 interface AbiError {
     code: number;
@@ -21,8 +23,8 @@ interface AbiError {
  * Initialize plugin with host runtime.
  * @param host_lo - HostInterface pointer (low 32 bits)
  * @param host_hi - HostInterface pointer (high 32 bits)
- * @param ctx_lo - PluginContext pointer (low 32 bits)
- * @param ctx_hi - PluginContext pointer (high 32 bits)
+ * @param ctx_lo - BundleInitContext pointer (low 32 bits)
+ * @param ctx_hi - BundleInitContext pointer (high 32 bits)
  */
 export function polyplug_init(
     host_lo: number, host_hi: number,
@@ -30,10 +32,10 @@ export function polyplug_init(
 ): AbiError {
     // Validate parameters
     if (host_lo === 0 && host_hi === 0) {
-        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
+        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
     }
     if (ctx_lo === 0 && ctx_hi === 0) {
-        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
+        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
     }
 
     // Store host interface for later access via getHostVtable()
@@ -42,7 +44,7 @@ export function polyplug_init(
     // Get polyplug host interface from globalThis
     const polyplug = (globalThis as any).polyplug;
     if (!polyplug || !polyplug.register_contract) {
-        return { code: ABI_ERROR_GENERIC, message: { ptr: 0, len: 0 } };
+        return { code: AbiErrorCode.Generic, message: { ptr: 0, len: 0 } };
     }
 
     // Register plugin: transformer
@@ -54,5 +56,5 @@ export function polyplug_init(
         TRANSFORMER_INTERFACE.contractName
     );
 
-    return { code: ABI_OK, message: { ptr: 0, len: 0 } };
+    return { code: AbiErrorCode.Ok, message: { ptr: 0, len: 0 } };
 }

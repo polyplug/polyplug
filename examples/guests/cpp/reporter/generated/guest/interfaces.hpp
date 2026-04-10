@@ -12,14 +12,14 @@ namespace polyplug_plugin {
 using namespace polyplug_generated;
 
 // Plugin: reporter
-extern DataReporterPlugin* g_reporter_impl;
+extern DataReporterGuestContract* g_reporter_impl;
 
 constexpr uint64_t REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68ULL;
 
-inline void set_reporter_impl(DataReporterPlugin* impl) { g_reporter_impl = impl; }
+inline void set_reporter_impl(DataReporterGuestContract* impl) { g_reporter_impl = impl; }
 
 // Forward declaration - user must implement this
-DataReporterPlugin* create_reporter_impl();
+DataReporterGuestContract* create_reporter_impl();
 
 // ABI wrapper for report (function_id = 0)
 inline AbiError reporter_report_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
@@ -28,10 +28,10 @@ inline AbiError reporter_report_abi(GuestContractInstance instance, const void* 
     (void)instance;  // Suppress unused warning for stateless plugins.
     try {
         if (args == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         if (out == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.

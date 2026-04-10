@@ -12,14 +12,14 @@ namespace polyplug_plugin {
 using namespace polyplug_generated;
 
 // Plugin: transformer
-extern DataTransformerPlugin* g_transformer_impl;
+extern DataTransformerGuestContract* g_transformer_impl;
 
 constexpr uint64_t TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEULL;
 
-inline void set_transformer_impl(DataTransformerPlugin* impl) { g_transformer_impl = impl; }
+inline void set_transformer_impl(DataTransformerGuestContract* impl) { g_transformer_impl = impl; }
 
 // Forward declaration - user must implement this
-DataTransformerPlugin* create_transformer_impl();
+DataTransformerGuestContract* create_transformer_impl();
 
 // ABI wrapper for transform (function_id = 0)
 inline AbiError transformer_transform_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
@@ -28,10 +28,10 @@ inline AbiError transformer_transform_abi(GuestContractInstance instance, const 
     (void)instance;  // Suppress unused warning for stateless plugins.
     try {
         if (args == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         if (out == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.

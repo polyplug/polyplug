@@ -4,32 +4,34 @@
 local ffi = require("ffi")
 local polyplug_guest = require("polyplug_guest")
 
--- ABI constants
-local ABI_OK = 0
-local ABI_ERROR_GENERIC = 1
-local ABI_ERROR_INVALID_POINTER = 8
+-- ABI error codes (match polyplug_abi.AbiErrorCode)
+local AbiErrorCode = {
+    Ok = 0,
+    Generic = 1,
+    InvalidPointer = 8,
+}
 
 -- No optional extensions requested.
 
 --- Register all plugin interfaces with the host.
 --- @param host_ptr userdata HostInterface pointer from host.
---- @param ctx_ptr userdata PluginContext pointer from host.
+--- @param ctx_ptr userdata BundleInitContext pointer from host.
 --- @return number error_code 0 on success, non-zero on failure.
 function polyplug_init(host_ptr, ctx_ptr)
     if host_ptr == nil then
-        return ABI_ERROR_GENERIC
+        return AbiErrorCode.Generic
     end
     if ctx_ptr == nil then
-        return ABI_ERROR_GENERIC
+        return AbiErrorCode.Generic
     end
     polyplug_guest.store_host_vtable(host_ptr)
     local ctx = polyplug_guest.cast_context(ctx_ptr)
     local host = ffi.cast("HostInterface*", host_ptr)
 
     local err_DECODER = host.register_contract(host_ptr, DECODER_DESCRIPTOR, DECODER_INTERFACE)
-    if err_DECODER.code ~= ABI_OK then
+    if err_DECODER.code ~= AbiErrorCode.Ok then
         return err_DECODER.code
     end
 
-    return ABI_OK
+    return AbiErrorCode.Ok
 end

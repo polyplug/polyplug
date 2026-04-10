@@ -6,32 +6,32 @@
 #![allow(clippy::eq_op)]
 #![allow(clippy::identity_op)]
 
-use polyplug_guest::PluginError;
+use polyplug_guest::GuestError;
 use polyplug_guest::StringView;
 use super::types::*;
 
 /// Guest trait for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
-pub trait PipelineDecoderPlugin: Send + Sync {
-    fn decode(&self, input: StringView) -> Result<StringView, PluginError>;
+pub trait PipelineDecoderGuestContract: Send + Sync {
+    fn decode(&self, input: StringView) -> Result<StringView, GuestError>;
 }
 
 /// Guest trait for contract `data.Transformer` (id=0x4775991362CD68EE)
-pub trait DataTransformerPlugin: Send + Sync {
-    fn transform(&self, input: StringView) -> Result<StringView, PluginError>;
+pub trait DataTransformerGuestContract: Send + Sync {
+    fn transform(&self, input: StringView) -> Result<StringView, GuestError>;
 }
 
 /// Guest trait for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
-pub trait PipelineEncoderPlugin: Send + Sync {
-    fn encode(&self, input: StringView) -> Result<StringView, PluginError>;
+pub trait PipelineEncoderGuestContract: Send + Sync {
+    fn encode(&self, input: StringView) -> Result<StringView, GuestError>;
 }
 
 /// Guest trait for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
-pub trait DataReporterPlugin: Send + Sync {
-    fn report(&self, input: StringView) -> Result<StringView, PluginError>;
+pub trait DataReporterGuestContract: Send + Sync {
+    fn report(&self, input: StringView) -> Result<StringView, GuestError>;
 }
 
 /// Guest trait for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
-pub trait PipelineValidatorPlugin: Send + Sync {
-    fn validate(&self, input: StringView) -> Result<StringView, PluginError>;
+pub trait PipelineValidatorGuestContract: Send + Sync {
+    fn validate(&self, input: StringView) -> Result<StringView, GuestError>;
 }
 

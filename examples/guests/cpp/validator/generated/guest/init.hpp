@@ -9,13 +9,13 @@ namespace polyplug_plugin {
 
 using namespace polyplug_generated;
 
-PipelineValidatorPlugin* g_validator_impl = nullptr;
+PipelineValidatorGuestContract* g_validator_impl = nullptr;
 
 }  // namespace polyplug_plugin
 
 extern "C" uint32_t polyplug_abi_version() { return 1U; }
 
-extern "C" AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx) {
+extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {
     if (!host || !ctx) {
         static constexpr const char* err_msg = "null parameter in polyplug_init";
         return AbiError{1U, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}};

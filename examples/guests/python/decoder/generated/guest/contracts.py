@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version
+from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
 from polyplug_guest import store_host_vtable
 
 if TYPE_CHECKING:
@@ -24,12 +24,12 @@ class _AbiError(ctypes.Structure):
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]
 
-class DECODERPipelineDecoderPlugin:
+class DECODERPipelineDecoderGuestContract:
     def decode(self, input: StringView) -> StringView:
         raise NotImplementedError
 
-_decoder_IMPL: DECODERPipelineDecoderPlugin | None = None
-def set_decoder_impl(impl: DECODERPipelineDecoderPlugin) -> None:
+_decoder_IMPL: DECODERPipelineDecoderGuestContract | None = None
+def set_decoder_impl(impl: DECODERPipelineDecoderGuestContract) -> None:
     global _decoder_IMPL
     _decoder_IMPL = impl
 
@@ -46,7 +46,7 @@ DECODER_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
 def decoder_decode_abi(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
     # Instance is ignored for stateless plugins (instance.data is null).
     # For stateful plugins, users override create_instance and use instance.data.
-    impl: DECODERPipelineDecoderPlugin | None = _decoder_IMPL
+    impl: DECODERPipelineDecoderGuestContract | None = _decoder_IMPL
     if impl is None:
         return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)
     if args_ptr.value is None or args_ptr.value == 0:
@@ -100,14 +100,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
 
     Args:
         host_ptr: Pointer to HostInterface
-        ctx_ptr: Pointer to PluginContext
+        ctx_ptr: Pointer to BundleInitContext
     """
     if host_ptr == 0:
         return
     if ctx_ptr == 0:
         return
     store_host_vtable(host_ptr)
-    ctx: PluginContext = PluginContext.from_address(ctx_ptr)
+    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_DECODER: AbiError = host.contents.register_contract(
         host_ptr, ctypes.byref(DECODER_DESCRIPTOR), ctypes.byref(DECODER_INTERFACE)

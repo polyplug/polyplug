@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 // Plugin: reporter
 public static class ReporterInterfaces {
     public const ulong REPORTER_CONTRACT_ID = 0x76BB4643A9F5AD68UL;
-    private static IDataReporterPlugin? _impl_reporter;
-    public static void SetReporterImpl(IDataReporterPlugin impl) { _impl_reporter = impl; }
+    private static IDataReporterGuestContract? _impl_reporter;
+    public static void SetReporterImpl(IDataReporterGuestContract impl) { _impl_reporter = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static AbiError reporter_report_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
@@ -18,15 +18,15 @@ public static class ReporterInterfaces {
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_reporter ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, "not initialized");
+            var impl = _impl_reporter ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
             // call impl
             return new AbiError { Code = 0 };
-        } catch (Polyplug.Guest.PluginException ex) {
+        } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.AllocString(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {

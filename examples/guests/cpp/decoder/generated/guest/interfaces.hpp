@@ -12,14 +12,14 @@ namespace polyplug_plugin {
 using namespace polyplug_generated;
 
 // Plugin: decoder
-extern PipelineDecoderPlugin* g_decoder_impl;
+extern PipelineDecoderGuestContract* g_decoder_impl;
 
 constexpr uint64_t DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL;
 
-inline void set_decoder_impl(PipelineDecoderPlugin* impl) { g_decoder_impl = impl; }
+inline void set_decoder_impl(PipelineDecoderGuestContract* impl) { g_decoder_impl = impl; }
 
 // Forward declaration - user must implement this
-PipelineDecoderPlugin* create_decoder_impl();
+PipelineDecoderGuestContract* create_decoder_impl();
 
 // ABI wrapper for decode (function_id = 0)
 inline AbiError decoder_decode_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
@@ -28,10 +28,10 @@ inline AbiError decoder_decode_abi(GuestContractInstance instance, const void* a
     (void)instance;  // Suppress unused warning for stateless plugins.
     try {
         if (args == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         if (out == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.

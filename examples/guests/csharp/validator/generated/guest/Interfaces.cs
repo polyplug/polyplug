@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 // Plugin: validator
 public static class ValidatorInterfaces {
     public const ulong VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5UL;
-    private static IPipelineValidatorPlugin? _impl_validator;
-    public static void SetValidatorImpl(IPipelineValidatorPlugin impl) { _impl_validator = impl; }
+    private static IPipelineValidatorGuestContract? _impl_validator;
+    public static void SetValidatorImpl(IPipelineValidatorGuestContract impl) { _impl_validator = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static AbiError validator_validate_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
@@ -18,15 +18,15 @@ public static class ValidatorInterfaces {
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_validator ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, "not initialized");
+            var impl = _impl_validator ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
             // call impl
             return new AbiError { Code = 0 };
-        } catch (Polyplug.Guest.PluginException ex) {
+        } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.AllocString(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {

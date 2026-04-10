@@ -5,7 +5,7 @@
 from __future__ import annotations
 import ctypes
 from typing import Any, Callable, TYPE_CHECKING, TypeAlias
-from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version
+from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version
 from polyplug_guest import store_host_vtable
 
 if TYPE_CHECKING:
@@ -24,12 +24,12 @@ class _AbiError(ctypes.Structure):
 _DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
 _DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]
 
-class VALIDATORPipelineValidatorPlugin:
+class VALIDATORPipelineValidatorGuestContract:
     def validate(self, input: StringView) -> StringView:
         raise NotImplementedError
 
-_validator_IMPL: VALIDATORPipelineValidatorPlugin | None = None
-def set_validator_impl(impl: VALIDATORPipelineValidatorPlugin) -> None:
+_validator_IMPL: VALIDATORPipelineValidatorGuestContract | None = None
+def set_validator_impl(impl: VALIDATORPipelineValidatorGuestContract) -> None:
     global _validator_IMPL
     _validator_IMPL = impl
 
@@ -46,7 +46,7 @@ VALIDATOR_DESCRIPTOR: PluginDescriptor = PluginDescriptor(
 def validator_validate_abi(instance: _GuestContractInstance, args_ptr: ctypes.c_void_p, out_ptr: ctypes.c_void_p) -> _AbiError:
     # Instance is ignored for stateless plugins (instance.data is null).
     # For stateful plugins, users override create_instance and use instance.data.
-    impl: VALIDATORPipelineValidatorPlugin | None = _validator_IMPL
+    impl: VALIDATORPipelineValidatorGuestContract | None = _validator_IMPL
     if impl is None:
         return _AbiError(code=AbiErrorCode.Generic, _pad=0, message_ptr=0, message_len=0)
     if args_ptr.value is None or args_ptr.value == 0:
@@ -100,14 +100,14 @@ def polyplug_init(host_ptr: int, ctx_ptr: int) -> None:
 
     Args:
         host_ptr: Pointer to HostInterface
-        ctx_ptr: Pointer to PluginContext
+        ctx_ptr: Pointer to BundleInitContext
     """
     if host_ptr == 0:
         return
     if ctx_ptr == 0:
         return
     store_host_vtable(host_ptr)
-    ctx: PluginContext = PluginContext.from_address(ctx_ptr)
+    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)
     host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))
     err_VALIDATOR: AbiError = host.contents.register_contract(
         host_ptr, ctypes.byref(VALIDATOR_DESCRIPTOR), ctypes.byref(VALIDATOR_INTERFACE)

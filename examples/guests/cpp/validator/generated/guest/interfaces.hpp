@@ -12,14 +12,14 @@ namespace polyplug_plugin {
 using namespace polyplug_generated;
 
 // Plugin: validator
-extern PipelineValidatorPlugin* g_validator_impl;
+extern PipelineValidatorGuestContract* g_validator_impl;
 
 constexpr uint64_t VALIDATOR_CONTRACT_ID = 0x45173A959EEC57C5ULL;
 
-inline void set_validator_impl(PipelineValidatorPlugin* impl) { g_validator_impl = impl; }
+inline void set_validator_impl(PipelineValidatorGuestContract* impl) { g_validator_impl = impl; }
 
 // Forward declaration - user must implement this
-PipelineValidatorPlugin* create_validator_impl();
+PipelineValidatorGuestContract* create_validator_impl();
 
 // ABI wrapper for validate (function_id = 0)
 inline AbiError validator_validate_abi(GuestContractInstance instance, const void* args, void* out) noexcept {
@@ -28,10 +28,10 @@ inline AbiError validator_validate_abi(GuestContractInstance instance, const voi
     (void)instance;  // Suppress unused warning for stateless plugins.
     try {
         if (args == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         if (out == nullptr) {
-            return AbiError{8U, StringView{nullptr, 0}};  // ABI_ERROR_INVALID_POINTER
+            return AbiError{static_cast<uint32_t>(AbiErrorCode::InvalidPointer), StringView{nullptr, 0}};
         }
         // SAFETY: args is a valid const void* pointing to a StringView per ABI contract.
 // The host guarantees proper alignment and size before calling this wrapper.

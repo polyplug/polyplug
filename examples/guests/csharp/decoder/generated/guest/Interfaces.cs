@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 // Plugin: decoder
 public static class DecoderInterfaces {
     public const ulong DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7UL;
-    private static IPipelineDecoderPlugin? _impl_decoder;
-    public static void SetDecoderImpl(IPipelineDecoderPlugin impl) { _impl_decoder = impl; }
+    private static IPipelineDecoderGuestContract? _impl_decoder;
+    public static void SetDecoderImpl(IPipelineDecoderGuestContract impl) { _impl_decoder = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static AbiError decoder_decode_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
@@ -18,15 +18,15 @@ public static class DecoderInterfaces {
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_decoder ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, "not initialized");
+            var impl = _impl_decoder ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
             // call impl
             return new AbiError { Code = 0 };
-        } catch (Polyplug.Guest.PluginException ex) {
+        } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.AllocString(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {

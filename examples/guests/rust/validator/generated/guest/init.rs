@@ -15,7 +15,7 @@ use polyplug_guest::HostInterface;
 use polyplug_guest::GuestContractInterface;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
-use polyplug_guest::PluginContext;
+use polyplug_guest::BundleInitContext;
 use polyplug_guest::store_host_vtable;
 use core::ffi::c_void;
 use super::interfaces::VALIDATOR_CONTRACT_ID;
@@ -33,7 +33,7 @@ use super::interfaces::VALIDATOR_INTERFACE;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     host: *const HostInterface,
-    ctx: *const PluginContext,
+    ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"host is null") };
@@ -42,7 +42,7 @@ pub unsafe extern "C" fn polyplug_init(
         return AbiError { code: AbiErrorCode::Generic, message: string_view_from_static(b"ctx is null") };
     }
     // SAFETY: ctx is non-null and valid for the lifetime of this call as guaranteed by the host.
-    let ctx: &PluginContext = unsafe { &*ctx };
+    let ctx: &BundleInitContext = unsafe { &*ctx };
     let _ = ctx; // suppress unused warning if plugin_init user stub not yet updated
     // SAFETY: host is non-null and valid per ABI contract.
     let host: &HostInterface = unsafe { &*host };

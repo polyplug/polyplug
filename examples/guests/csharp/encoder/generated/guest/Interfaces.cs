@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 // Plugin: encoder
 public static class EncoderInterfaces {
     public const ulong ENCODER_CONTRACT_ID = 0xFC50F9D1D3DB629FUL;
-    private static IPipelineEncoderPlugin? _impl_encoder;
-    public static void SetEncoderImpl(IPipelineEncoderPlugin impl) { _impl_encoder = impl; }
+    private static IPipelineEncoderGuestContract? _impl_encoder;
+    public static void SetEncoderImpl(IPipelineEncoderGuestContract impl) { _impl_encoder = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static AbiError encoder_encode_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
@@ -18,15 +18,15 @@ public static class EncoderInterfaces {
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_encoder ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, "not initialized");
+            var impl = _impl_encoder ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
             // call impl
             return new AbiError { Code = 0 };
-        } catch (Polyplug.Guest.PluginException ex) {
+        } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.AllocString(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {

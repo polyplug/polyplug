@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 // Plugin: transformer
 public static class TransformerInterfaces {
     public const ulong TRANSFORMER_CONTRACT_ID = 0x4775991362CD68EEUL;
-    private static IDataTransformerPlugin? _impl_transformer;
-    public static void SetTransformerImpl(IDataTransformerPlugin impl) { _impl_transformer = impl; }
+    private static IDataTransformerGuestContract? _impl_transformer;
+    public static void SetTransformerImpl(IDataTransformerGuestContract impl) { _impl_transformer = impl; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static AbiError transformer_transform_abi(GuestContractInstance instance, IntPtr argsPtr, IntPtr outPtr) {
@@ -18,15 +18,15 @@ public static class TransformerInterfaces {
         // For stateful plugins, users override create_instance and use instance.Data.
         try {
             if (argsPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
             if (outPtr == IntPtr.Zero) {
-                return new AbiError { Code = AbiConstants.ABI_ERROR_INVALID_POINTER };
+                return new AbiError { Code = (uint)AbiErrorCode.InvalidPointer };
             }
-            var impl = _impl_transformer ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, "not initialized");
+            var impl = _impl_transformer ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, "not initialized");
             // call impl
             return new AbiError { Code = 0 };
-        } catch (Polyplug.Guest.PluginException ex) {
+        } catch (Polyplug.Guest.GuestException ex) {
             var msg = StringHelpers.AllocString(ex.Message);
             return new AbiError { Code = ex.Code, Message = msg };
         } catch {
