@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-10T12:45:11.130Z"
+last_updated: "2026-04-10T16:31:23.536Z"
 progress:
-  total_phases: 16
+  total_phases: 17
   completed_phases: 14
-  total_plans: 80
-  completed_plans: 78
-  percent: 98
+  total_plans: 85
+  completed_plans: 80
+  percent: 94
 ---
 
 # STATE: polyplug Architecture Refactor
@@ -32,10 +32,10 @@ progress:
 
 ## Current Position
 
-Phase: 17 (refactor-contractregistry-to-unified-runtimestore) — EXECUTING
-Plan: 1 of 2
-**Status:** Executing Phase 17
-**Progress:** [██████████] 100%
+Phase: 18 (consolidate-ffi-to-hostinterface) — EXECUTING
+Plan: 2 of 5
+**Status:** Ready to execute
+**Progress:** [█████████░] 94%
 
 ## Phase Completion Summary
 
@@ -57,36 +57,48 @@ Plan: 1 of 2
 | 14 | Hot-Reload Documentation | Complete | 2026-04-08 |
 | 15 | Final Cleanup | Complete | 2026-04-09 |
 | 16 | Milestone Gap Closure | Complete | 2026-04-09 |
-| 17 | RuntimeStore Refactor | Planning Complete | 2026-04-10 |
+| 17 | RuntimeStore Refactor | Complete | 2026-04-10 |
+| 18 | FFI Consolidation | Planned | — |
 
-## Phase 17 Plans
+## Phase 18 Plans
 
-**Two-Pass Migration (per CONTEXT.md D-37/D-38):**
+**FFI Consolidation (HostInterface-based API):**
 
-- **17-01-PLAN.md** — Pass 1: Rename types, methods, fields
-  - ContractRegistry -> RuntimeStore
-  - All Registry* -> Plugin* or RuntimeStore*
-  - All methods renamed with guest_contract/bundle prefix
-  - Wave 1 (independent)
+- **18-01-PLAN.md** — HostInterface struct changes (add fields, rename fields)
+  - Add: load_bundle, reload_bundle, register_host_contract, register_loader, get_last_error, get_error_len
+  - Rename: find_by_contract → find_guest_contract, find_all_by_contract → find_all_guest_contracts, resolve_contract → resolve_guest_contract
+  - Wave 1 (ABI layer)
 
-- **17-02-PLAN.md** — Pass 2: Add BundleData, BundleDescriptor, new APIs
-  - O(1) get_bundle_plugin_slots via bundle_data HashMap
-  - BundleDescriptor for bundle metadata in RuntimeStore
-  - bundle_name_index for multi-version support
-  - Wave 2 (depends on 17-01)
+- **18-02-PLAN.md** — FFI deletions + Runtime implementation
+  - Delete 10 polyplug_runtime_* functions (keep only create/destroy)
+  - Implement HostInterface callback functions
+  - Wave 2 (depends on 18-01)
+
+- **18-03-PLAN.md** — Python + C# SDK updates
+  - Runtime class calls HostInterface methods directly
+  - Wave 3 (parallel with 18-04)
+
+- **18-04-PLAN.md** — Lua + JS + C++ SDK updates
+  - Runtime class calls HostInterface methods directly
+  - Wave 3 (parallel with 18-03)
+
+- **18-05-PLAN.md** — Codegen + tests + verification
+  - Update all generators to use HostInterface API
+  - Update tests to use new API
+  - Wave 4 (depends on 18-02, 18-03, 18-04)
 
 ## Session Continuity
 
-Last session: 2026-04-10T14:30:00.000Z
-Completed: Phase 17 Planning
-Next: Execute Phase 17 - `/gsd-execute-phase 17`
+Last session: 2026-04-10T15:30:00.000Z
+Completed: Phase 17 Execution (RuntimeStore rename complete)
+Next: Execute Phase 18 - `/gsd-execute-phase 18`
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
-- Phase 17 added: Refactor ContractRegistry to unified RuntimeStore
-- Phase 17 plans created: 2026-04-10
+- Phase 17 added: Refactor ContractRegistry to unified RuntimeStore (COMPLETE)
+- Phase 18 added: Consolidate FFI to HostInterface (PLANNED)
 
 ---
 *State updated: 2026-04-10*
