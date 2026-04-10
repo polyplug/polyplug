@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
     GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
@@ -81,7 +81,7 @@ fn make_descriptor(name: &'static str, contract_name: &'static str) -> PluginDes
 /// is returned by resolve after the swap.
 #[test]
 fn test_swap_interface_changes_interface_pointer() {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
 
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.
@@ -143,7 +143,7 @@ fn test_swap_interface_changes_interface_pointer() {
 /// Verifies that swap_interface directly swaps the interface under RwLock write guard.
 #[test]
 fn test_direct_swap_interface() {
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
     let descriptor: PluginDescriptor = make_descriptor("swap_plugin", "swap.direct.contract");
 
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.

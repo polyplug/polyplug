@@ -3,10 +3,10 @@
 use core::cell::RefCell;
 use std::sync::Arc;
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
+    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -16,7 +16,7 @@ use polyplug_utils::{guest_contract_id, bundle_id, GuestContractId, BundleId};
 const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 
 std::thread_local! {
-    static FFI_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
+    static FFI_REGISTRY: RefCell<ContractRegistry> = RefCell::new(ContractRegistry::new());
 }
 
 #[repr(C)]
@@ -50,7 +50,7 @@ unsafe extern "C" fn registry_register_callback(
     };
 
     let result: Result<GuestContractHandle, _> = FFI_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
@@ -166,7 +166,7 @@ fn load_memory_plugin() -> libloading::Library {
 
 fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestContractInterface {
     FFI_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
@@ -174,7 +174,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -197,7 +197,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         get_dependencies: noop_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -206,7 +206,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");

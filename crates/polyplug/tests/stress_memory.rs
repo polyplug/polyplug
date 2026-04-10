@@ -11,10 +11,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, Buffer, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
+    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
     DispatchType, NativeDispatch, Array,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -30,7 +30,7 @@ const MEMORY_PLUGIN_SO: &str = env!("MEMORY_PLUGIN_SO");
 // --- Thread-local registry ---------------------------------------------------
 
 std::thread_local! {
-    static STRESS_REGISTRY: RefCell<PluginRegistry> = RefCell::new(PluginRegistry::new());
+    static STRESS_REGISTRY: RefCell<ContractRegistry> = RefCell::new(ContractRegistry::new());
     static TLS_TRACKING_ALLOC: RefCell<unsafe extern "C" fn(usize, usize) -> *mut u8> =
         RefCell::new(polyplug_host_alloc);
     static TLS_TRACKING_FREE: RefCell<unsafe extern "C" fn(*mut u8, usize, usize)> =
@@ -205,7 +205,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = STRESS_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
@@ -245,7 +245,7 @@ fn load_memory_plugin() -> libloading::Library {
 fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     STRESS_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     // SAFETY: polyplug_init matches the expected 2-arg ABI signature.
@@ -253,7 +253,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -276,7 +276,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
         get_dependencies: stub_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -284,7 +284,7 @@ fn init_memory_plugin_interface(library: &libloading::Library) -> *const GuestCo
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");

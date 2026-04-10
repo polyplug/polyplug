@@ -13,7 +13,7 @@ use std::process::ExitStatus;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
@@ -240,9 +240,9 @@ fn test_panic_returns_abi_error_panic() {
         "\n",
         "use polyplug_guest::AbiError;\n",
         "use polyplug_guest::HostInterface;\n",
-        "use polyplug_guest::PluginContext;\n",
+        "use polyplug_guest::BundleInitContext;\n",
         "use polyplug_guest::PluginDescriptor;\n",
-        "use polyplug_guest::PluginError;\n",
+        "use polyplug_guest::GuestError;\n",
         "use polyplug_guest::GuestContractInterface;\n",
         "use polyplug_guest::StringView;\n",
         "use polyplug_guest::AbiErrorCode;\n",
@@ -253,7 +253,7 @@ fn test_panic_returns_abi_error_panic() {
         "struct PanicPlugin;\n",
         "\n",
         "impl TestPanicPlugin for PanicPlugin {\n",
-        "    fn do_panic(&self) -> Result<(), PluginError> {\n",
+        "    fn do_panic(&self) -> Result<(), GuestError> {\n",
         "        panic!(\"intentional test panic\");\n",
         "    }\n",
         "}\n",
@@ -265,7 +265,7 @@ fn test_panic_returns_abi_error_panic() {
         "#[unsafe(no_mangle)]\n",
         "pub unsafe extern \"C\" fn polyplug_init(\n",
         "    host: *const HostInterface,\n",
-        "    ctx: *const PluginContext,\n",
+        "    ctx: *const BundleInitContext,\n",
         ") -> AbiError {\n",
         "    PANIC_PLUGIN_IMPL.get_or_init(|| Box::new(PanicPlugin));\n",
         "    if host.is_null() || ctx.is_null() {\n",
@@ -336,7 +336,7 @@ fn test_panic_returns_abi_error_panic() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -359,7 +359,7 @@ fn test_panic_returns_abi_error_panic() {
         get_dependencies: noop_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -367,7 +367,7 @@ fn test_panic_returns_abi_error_panic() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed (code Ok)");

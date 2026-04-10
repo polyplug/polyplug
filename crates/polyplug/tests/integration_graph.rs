@@ -9,10 +9,10 @@
 //! - contract_id lookup returns correct handles
 //! - Stale handles are detected after replacement
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
+    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView, Version, DispatchMechanisms,
     NativeDispatch, DispatchType,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
@@ -180,8 +180,8 @@ unsafe extern "C" fn fake_destroy_instance(
 }
 
 std::thread_local! {
-    static GRAPH_REGISTRY: core::cell::RefCell<PluginRegistry> =
-        core::cell::RefCell::new(PluginRegistry::new());
+    static GRAPH_REGISTRY: core::cell::RefCell<ContractRegistry> =
+        core::cell::RefCell::new(ContractRegistry::new());
 }
 
 /// Load the test_plugin and call polyplug_init, storing results in GRAPH_REGISTRY.
@@ -192,12 +192,12 @@ fn load_and_init_plugin() -> libloading::Library {
         libloading::Library::new(TEST_PLUGIN_SO).expect("failed to load test_plugin shared library")
     };
 
-    // SAFETY: polyplug_init signature is `extern "C" fn(*const HostInterface, *const PluginContext) -> AbiError`.
+    // SAFETY: polyplug_init signature is `extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -220,7 +220,7 @@ fn load_and_init_plugin() -> libloading::Library {
         get_dependencies: noop_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -228,7 +228,7 @@ fn load_and_init_plugin() -> libloading::Library {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
@@ -240,7 +240,7 @@ fn load_and_init_plugin() -> libloading::Library {
 
 #[test]
 fn test_single_contract_registration_and_lookup() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -279,7 +279,7 @@ fn test_single_contract_registration_and_lookup() {
 
 #[test]
 fn test_unknown_contract_returns_not_found() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -297,7 +297,7 @@ fn test_unknown_contract_returns_not_found() {
 
 #[test]
 fn test_duplicate_registration_allowed() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -345,7 +345,7 @@ fn test_duplicate_registration_allowed() {
 
 #[test]
 fn test_invalid_handle_detected() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 
@@ -369,7 +369,7 @@ fn test_invalid_handle_detected() {
 
 #[test]
 fn test_multi_lookup_consistent() {
-    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = PluginRegistry::new());
+    GRAPH_REGISTRY.with(|cell| *cell.borrow_mut() = ContractRegistry::new());
 
     let lib: libloading::Library = load_and_init_plugin();
 

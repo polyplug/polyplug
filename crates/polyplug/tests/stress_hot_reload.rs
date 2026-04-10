@@ -19,7 +19,7 @@ use std::sync::Mutex;
 
 use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug::runtime::Runtime;
 use polyplug_abi::{DispatchType, GuestContractInterface, HostInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
 use polyplug_utils::BundleId;
@@ -198,7 +198,7 @@ fn stress_rapid_reload_cycles_100() {
 fn stress_memory_interface_swap_cycles() {
     const CYCLES: usize = 50_usize;
 
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"stress-mem-plugin"),
@@ -239,7 +239,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     const READER_THREADS: usize = 8_usize;
     const SWAP_ROUNDS: usize = 50_usize;
 
-    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
+    let registry: Arc<ContractRegistry> = Arc::new(ContractRegistry::new());
 
     let descriptor: PluginDescriptor = PluginDescriptor {
         name: StringView::from_static(b"swap-load-plugin"),
@@ -265,7 +265,7 @@ fn stress_direct_swap_under_concurrent_reader_load() {
     let mut reader_handles: Vec<std::thread::JoinHandle<()>> = Vec::with_capacity(READER_THREADS);
 
     for _thread_idx in 0_usize..READER_THREADS {
-        let reg_clone: Arc<PluginRegistry> = Arc::clone(&registry);
+        let reg_clone: Arc<ContractRegistry> = Arc::clone(&registry);
         let stop_clone: Arc<core::sync::atomic::AtomicBool> = Arc::clone(&stop_flag);
 
         let reader_handle: std::thread::JoinHandle<()> = std::thread::spawn(move || {

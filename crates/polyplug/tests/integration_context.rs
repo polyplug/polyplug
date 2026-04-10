@@ -1,9 +1,9 @@
 #![allow(clippy::expect_used)]
 
-//! Integration test: verify the `PluginContext.bundle_path` round-trip for the Rust fixture plugin.
+//! Integration test: verify the `BundleInitContext.bundle_path` round-trip for the Rust fixture plugin.
 //!
 //! Loads the test_plugin shared library, calls `polyplug_init` with a crafted
-//! `PluginContext` containing a known `bundle_path`, then calls
+//! `BundleInitContext` containing a known `bundle_path`, then calls
 //! `polyplug_get_last_bundle_path()` and asserts the returned `StringView` matches.
 //!
 //! This test crate is the crate root for the `integration_context` test binary.
@@ -11,7 +11,7 @@
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
@@ -141,12 +141,12 @@ fn rust_plugin_receives_bundle_path() {
 
     // Resolve the two-arg polyplug_init symbol.
     // SAFETY: polyplug_init is a C function with signature
-    //   `unsafe extern "C" fn(*const HostInterface, *const PluginContext) -> AbiError`.
+    //   `unsafe extern "C" fn(*const HostInterface, *const BundleInitContext) -> AbiError`.
     let init_fn: libloading::Symbol<
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -179,9 +179,9 @@ fn rust_plugin_receives_bundle_path() {
         get_dependencies: noop_get_dependencies,
     };
 
-    // Build a PluginContext with a known bundle_path string.
+    // Build a BundleInitContext with a known bundle_path string.
     let bundle_path_str: &str = "/tmp/test_bundle_dir";
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView {
             ptr: bundle_path_str.as_ptr(),
             len: bundle_path_str.len(),
@@ -195,7 +195,7 @@ fn rust_plugin_receives_bundle_path() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
 

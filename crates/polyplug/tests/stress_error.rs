@@ -11,10 +11,10 @@ use libloading::os::unix::RTLD_GLOBAL;
 #[cfg(unix)]
 use libloading::os::unix::RTLD_LAZY;
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, GuestContractHandle, StringView,
+    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView,
 };
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
@@ -40,8 +40,8 @@ struct ChainArgs {
 // --- Thread-local registry ---------------------------------------------------
 
 std::thread_local! {
-    static ERROR_REGISTRY: core::cell::RefCell<PluginRegistry> =
-        core::cell::RefCell::new(PluginRegistry::new());
+    static ERROR_REGISTRY: core::cell::RefCell<ContractRegistry> =
+        core::cell::RefCell::new(ContractRegistry::new());
 }
 
 // --- HostInterface callbacks (for Test 3 chain dispatch) -----------------------
@@ -56,7 +56,7 @@ unsafe extern "C" fn chain_find_by_contract(
     _min_version: u32,
 ) -> GuestContractHandle {
     ERROR_REGISTRY.with(|cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = cell.borrow();
         match registry.find(GuestContractId::from_u64(contract_id), 0) {
             Ok(handle) => handle,
             Err(_) => GuestContractHandle::null(),
@@ -85,7 +85,7 @@ unsafe extern "C" fn chain_resolve_contract(
     handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     ERROR_REGISTRY.with(|cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = cell.borrow();
         registry.resolve(handle).unwrap_or(core::ptr::null())
     })
 }
@@ -248,7 +248,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = ERROR_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static -- extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
@@ -314,7 +314,7 @@ fn load_error_plugin() -> libloading::Library {
 fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInterface {
     // Reset registry before each use.
     ERROR_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     // SAFETY: polyplug_init matches the expected ABI signature (2-arg).
@@ -322,7 +322,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -332,7 +332,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
 
     let host_interface: HostInterface = make_host_interface();
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -340,7 +340,7 @@ fn init_error_plugin(library: &libloading::Library) -> *const GuestContractInter
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");

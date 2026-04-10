@@ -68,7 +68,7 @@ mod tests {
     use super::make_desc;
     use super::make_static_interface;
     use polyplug::error::RegistryError;
-    use polyplug::registry::plugin_registry::PluginRegistry;
+    use polyplug::registry::contract_registry::ContractRegistry;
     use polyplug_abi::PluginDescriptor;
     use polyplug_abi::GuestContractHandle;
     use polyplug_abi::GuestContractInterface;
@@ -79,7 +79,7 @@ mod tests {
     /// Single plugin registered for a contract -- find_by_contract returns a valid handle.
     #[test]
     fn find_by_contract_single_plugin() {
-        let registry: PluginRegistry = PluginRegistry::new();
+        let registry: ContractRegistry = ContractRegistry::new();
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let bid: BundleId = BundleId::new("audio-engine");
         let interface: &'static GuestContractInterface = make_static_interface(cid);
@@ -101,7 +101,7 @@ mod tests {
     /// find_all_by_contract returns both.
     #[test]
     fn find_all_returns_two_impls() {
-        let registry: PluginRegistry = PluginRegistry::new();
+        let registry: ContractRegistry = ContractRegistry::new();
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let interface_a: &'static GuestContractInterface = make_static_interface(cid);
         let interface_b: &'static GuestContractInterface = make_static_interface(cid);
@@ -140,7 +140,7 @@ mod tests {
     /// not the first-registered one.
     #[test]
     fn find_by_bundle_specificity() {
-        let registry: PluginRegistry = PluginRegistry::new();
+        let registry: ContractRegistry = ContractRegistry::new();
         let cid: GuestContractId = GuestContractId::new("audio.Decoder", 0);
         let bid_a: BundleId = BundleId::new("bundle-a");
         let bid_b: BundleId = BundleId::new("bundle-b");
@@ -190,7 +190,7 @@ mod tests {
     /// A handle with an out-of-bounds index is rejected by resolve with InvalidHandle.
     #[test]
     fn invalid_handle_rejected() {
-        let registry: PluginRegistry = PluginRegistry::new();
+        let registry: ContractRegistry = ContractRegistry::new();
 
         // Construct a handle with an out-of-bounds index.
         let invalid: GuestContractHandle = GuestContractHandle { index: 999 };

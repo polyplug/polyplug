@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Barrier;
 
 use polyplug::error::RegistryError;
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     DispatchType, GuestContractInterface, HostInterface, NativeDispatch, PluginDescriptor,
     GuestContractHandle, StringView, Version, DispatchMechanisms, GuestContractId,
@@ -64,7 +64,7 @@ fn resolve_valid_handle_after_multiple_registrations() {
     static INTERFACE_B: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0002_u64, Version { major: 2, minor: 0, patch: 0 });
     static INTERFACE_C: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0003_u64, Version { major: 3, minor: 0, patch: 0 });
 
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     let descriptor_a: PluginDescriptor = make_descriptor("plugin_a", "contract.a");
     let descriptor_b: PluginDescriptor = make_descriptor("plugin_b", "contract.b");
@@ -127,7 +127,7 @@ fn resolve_valid_handle_after_multiple_registrations() {
 fn resolve_vacant_slot_returns_invalid_handle() {
     static INTERFACE: GuestContractInterface = make_interface!(0xEEEE_0000_0000_0010_u64, Version { major: 1, minor: 0, patch: 0 });
 
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     let descriptor: PluginDescriptor = make_descriptor("plugin_single", "contract.single");
     // SAFETY: INTERFACE is 'static, pointer is valid for Registry lifetime.
@@ -218,7 +218,7 @@ static CONCURRENT_INTERFACES: [GuestContractInterface; CONCURRENT_THREADS] = [
 
 #[test]
 fn resolve_concurrent_access_thread_safety() {
-    let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
+    let registry: Arc<ContractRegistry> = Arc::new(ContractRegistry::new());
     let barrier: Arc<Barrier> = Arc::new(Barrier::new(CONCURRENT_THREADS));
     let mut thread_handles: Vec<std::thread::JoinHandle<()>> =
         Vec::with_capacity(CONCURRENT_THREADS);
@@ -242,7 +242,7 @@ fn resolve_concurrent_access_thread_safety() {
     }
 
     for idx in 0_usize..CONCURRENT_THREADS {
-        let registry_clone: Arc<PluginRegistry> = Arc::clone(&registry);
+        let registry_clone: Arc<ContractRegistry> = Arc::clone(&registry);
         let barrier_clone: Arc<Barrier> = Arc::clone(&barrier);
         let handle: GuestContractHandle = handles[idx];
         let expected_contract_id: u64 = CONCURRENT_CONTRACT_IDS[idx];
@@ -283,7 +283,7 @@ fn find_by_contract_multiple_implementations_returns_first() {
     static INTERFACE_IMPL_B: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 2, minor: 0, patch: 0 });
     static INTERFACE_IMPL_C: GuestContractInterface = make_interface!(MULTI_CONTRACT_ID, Version { major: 3, minor: 0, patch: 0 });
 
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     let descriptor_a: PluginDescriptor = make_descriptor("impl_a", "multi.contract");
     let descriptor_b: PluginDescriptor = make_descriptor("impl_b", "multi.contract");
@@ -379,7 +379,7 @@ fn swap_interface_during_active_resolve() {
     static INTERFACE_V1: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V1);
     static INTERFACE_V2: GuestContractInterface = make_interface!(SWAP_TEST_CONTRACT_ID, VERSION_V2);
 
-    let registry: PluginRegistry = PluginRegistry::new();
+    let registry: ContractRegistry = ContractRegistry::new();
 
     let descriptor: PluginDescriptor = make_descriptor("swap_test_plugin", "swap.test.contract");
     // SAFETY: INTERFACE_V1 is 'static, pointer is valid for Registry lifetime.

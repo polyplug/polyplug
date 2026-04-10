@@ -7,7 +7,7 @@
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
@@ -202,7 +202,7 @@ fn test_init_registers_interface() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -230,7 +230,7 @@ fn test_init_registers_interface() {
     CAPTURED_CONTRACT_ID.with(|cell| *cell.borrow_mut() = None);
     CAPTURED_FUNCTION_COUNT.with(|cell| *cell.borrow_mut() = None);
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
@@ -238,7 +238,7 @@ fn test_init_registers_interface() {
     let result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
 

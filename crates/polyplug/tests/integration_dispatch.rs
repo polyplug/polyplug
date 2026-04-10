@@ -4,10 +4,10 @@
 //!
 //! This test crate is the crate root for the `integration_dispatch` test binary.
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::{
     AbiErrorCode, AbiError, HostInterface, GuestContractInterface, GuestContractInstance,
-    PluginContext, PluginDescriptor, GuestContractHandle, StringView,
+    BundleInitContext, PluginDescriptor, GuestContractHandle, StringView,
 };
 use polyplug_utils::{GuestContractId, BundleId};
 
@@ -50,7 +50,7 @@ unsafe extern "C" fn registry_register_callback(
     // Register with thread-local Registry.
     // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
     let result: Result<GuestContractHandle, _> = DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), BundleId::from_u64(iface.contract_id.id())) }
     });
@@ -160,8 +160,8 @@ unsafe extern "C" fn noop_resolve_host_contract_interface(
 }
 
 std::thread_local! {
-    static DISPATCH_REGISTRY: core::cell::RefCell<PluginRegistry> =
-        core::cell::RefCell::new(PluginRegistry::new());
+    static DISPATCH_REGISTRY: core::cell::RefCell<ContractRegistry> =
+        core::cell::RefCell::new(ContractRegistry::new());
 }
 
 /// AddArgs — mirrors the struct in test_plugin (must be `#[repr(C)]`).
@@ -186,7 +186,7 @@ fn test_dispatch_add_function() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -196,7 +196,7 @@ fn test_dispatch_add_function() {
 
     // Reset the thread-local registry before the test.
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     let host_interface: HostInterface = HostInterface {
@@ -214,7 +214,7 @@ fn test_dispatch_add_function() {
         get_dependencies: noop_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -222,7 +222,7 @@ fn test_dispatch_add_function() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must succeed");
@@ -288,7 +288,7 @@ fn test_dispatch_add_with_zero() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -298,7 +298,7 @@ fn test_dispatch_add_with_zero() {
 
     // Reset registry.
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     let host_interface: HostInterface = HostInterface {
@@ -316,7 +316,7 @@ fn test_dispatch_add_with_zero() {
         get_dependencies: noop_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -324,7 +324,7 @@ fn test_dispatch_add_with_zero() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok);
@@ -373,7 +373,7 @@ fn test_dispatch_add_wrapping_overflow() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -382,7 +382,7 @@ fn test_dispatch_add_wrapping_overflow() {
     };
 
     DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     let host_interface: HostInterface = HostInterface {
@@ -400,7 +400,7 @@ fn test_dispatch_add_wrapping_overflow() {
         get_dependencies: noop_get_dependencies,
     };
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
         bundle_id: 0,
     };
@@ -408,7 +408,7 @@ fn test_dispatch_add_wrapping_overflow() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok);

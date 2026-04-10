@@ -6,7 +6,7 @@
 //!
 //! This test crate is the crate root for the `integration_codegen_cpp` test binary.
 
-use polyplug::registry::plugin_registry::PluginRegistry;
+use polyplug::registry::contract_registry::ContractRegistry;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostInterface;
@@ -15,7 +15,7 @@ use polyplug_abi::types::StringView;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::ffi::polyplug_host_alloc;
 use polyplug_abi::ffi::polyplug_host_free;
 use polyplug_utils::{GuestContractId, BundleId};
@@ -91,7 +91,7 @@ unsafe extern "C" fn registry_register_callback(
 
     // Register with thread-local Registry.
     let result: Result<GuestContractHandle, _> = CPP_DISPATCH_REGISTRY.with(|reg_cell| {
-        let registry: core::cell::Ref<'_, PluginRegistry> = reg_cell.borrow();
+        let registry: core::cell::Ref<'_, ContractRegistry> = reg_cell.borrow();
         // SAFETY: interface pointer is 'static — extracted from a loaded library that outlives registry.
         unsafe { registry.register(*desc, interface, contract_name.to_owned(), polyplug_utils::BundleId::from_u64(vt.contract_id.id())) }
     });
@@ -213,8 +213,8 @@ fn make_host_interface() -> HostInterface {
 }
 
 std::thread_local! {
-    static CPP_DISPATCH_REGISTRY: core::cell::RefCell<PluginRegistry> =
-        core::cell::RefCell::new(PluginRegistry::new());
+    static CPP_DISPATCH_REGISTRY: core::cell::RefCell<ContractRegistry> =
+        core::cell::RefCell::new(ContractRegistry::new());
 }
 
 /// `AddArgs` — mirrors the C++ struct in the test plugin (`#[repr(C)]`).
@@ -341,7 +341,7 @@ fn test_cpp_plugin_dispatch() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -351,13 +351,13 @@ fn test_cpp_plugin_dispatch() {
 
     // ── 3. Reset the thread-local registry ───────────────────────────────────
     CPP_DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     // ── 4. Build HostInterface + call polyplug_init ──────────────────────────
     let host_interface: HostInterface = make_host_interface();
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
@@ -365,7 +365,7 @@ fn test_cpp_plugin_dispatch() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
@@ -442,7 +442,7 @@ fn test_cpp_host_loads_rust_plugin() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -451,12 +451,12 @@ fn test_cpp_host_loads_rust_plugin() {
     };
 
     CPP_DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     let host_interface: HostInterface = make_host_interface();
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
@@ -464,7 +464,7 @@ fn test_cpp_host_loads_rust_plugin() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(
@@ -540,7 +540,7 @@ fn test_exception_isolation_cpp() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -549,12 +549,12 @@ fn test_exception_isolation_cpp() {
     };
 
     CPP_DISPATCH_REGISTRY.with(|cell| {
-        *cell.borrow_mut() = PluginRegistry::new();
+        *cell.borrow_mut() = ContractRegistry::new();
     });
 
     let host_interface: HostInterface = make_host_interface();
 
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
@@ -562,7 +562,7 @@ fn test_exception_isolation_cpp() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(
