@@ -20,7 +20,7 @@ use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::GuestContractInterface;
@@ -264,7 +264,7 @@ fn test_rust_host_rust_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -281,9 +281,8 @@ fn test_rust_host_rust_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -291,7 +290,7 @@ fn test_rust_host_rust_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -343,7 +342,7 @@ fn test_cpp_host_rust_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -360,9 +359,8 @@ fn test_cpp_host_rust_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -370,7 +368,7 @@ fn test_cpp_host_rust_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -422,7 +420,7 @@ fn test_csharp_host_rust_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -439,9 +437,8 @@ fn test_csharp_host_rust_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -449,7 +446,7 @@ fn test_csharp_host_rust_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -501,7 +498,7 @@ fn test_python_host_rust_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -518,9 +515,8 @@ fn test_python_host_rust_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -528,7 +524,7 @@ fn test_python_host_rust_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -580,7 +576,7 @@ fn test_lua_host_rust_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -597,9 +593,8 @@ fn test_lua_host_rust_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -607,7 +602,7 @@ fn test_lua_host_rust_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -659,7 +654,7 @@ fn test_js_host_rust_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -676,9 +671,8 @@ fn test_js_host_rust_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -686,7 +680,7 @@ fn test_js_host_rust_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -744,7 +738,7 @@ fn test_rust_host_cpp_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -761,9 +755,8 @@ fn test_rust_host_cpp_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -771,7 +764,7 @@ fn test_rust_host_cpp_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -823,7 +816,7 @@ fn test_cpp_host_cpp_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -840,9 +833,8 @@ fn test_cpp_host_cpp_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -850,7 +842,7 @@ fn test_cpp_host_cpp_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -902,7 +894,7 @@ fn test_csharp_host_cpp_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -919,9 +911,8 @@ fn test_csharp_host_cpp_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -929,7 +920,7 @@ fn test_csharp_host_cpp_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -981,7 +972,7 @@ fn test_python_host_cpp_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -998,9 +989,8 @@ fn test_python_host_cpp_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -1008,7 +998,7 @@ fn test_python_host_cpp_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -1060,7 +1050,7 @@ fn test_lua_host_cpp_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -1077,9 +1067,8 @@ fn test_lua_host_cpp_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -1087,7 +1076,7 @@ fn test_lua_host_cpp_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
@@ -1139,7 +1128,7 @@ fn test_js_host_cpp_guest() {
         unsafe extern "C" fn(
             *mut core::ffi::c_void,
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -1156,9 +1145,8 @@ fn test_js_host_cpp_guest() {
         resolve_plugin: stub_resolve_plugin,
         get_host_contract: stub_get_host_contract,
     };
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
-        host_abi_version: polyplug_abi::POLYPLUG_ABI_VERSION,
         bundle_id: 0,
     };
     // SAFETY: init_fn is valid; host_interface and ctx live for the duration of this call.
@@ -1166,7 +1154,7 @@ fn test_js_host_cpp_guest() {
         init_fn(
             core::ptr::null_mut(),
             &host_interface as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return AbiErrorCode::Ok");
