@@ -239,7 +239,8 @@ Plans:
 | 13. C++ Codegen Modernization | 2/2 | Complete   | 2026-04-08 |
 | 14. Hot-Reload Documentation | 1/1 | Complete   | 2026-04-08 |
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
-| 16. Milestone Gap Closure | 0/5 | Pending | — |
+| 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
+| 17. RuntimeStore Refactor | 0/2 | Pending | — |
 
 ## Dependencies
 
@@ -290,6 +291,9 @@ Phase 15 (Final Cleanup)
         |
         v
 Phase 16 (Milestone Gap Closure)
+        |
+        v
+Phase 17 (RuntimeStore Refactor)
 ```
 
 ### Phase 12: SDK Instance Model Completion
@@ -396,6 +400,26 @@ Plans:
 - [ ] 16-04-PLAN.md — Update documentation with Guest/Host terminology (CLN-03) [Wave 4]
 - [ ] 16-05-PLAN.md — Final verification: grep audit + test suite [Wave 5]
 
+### Phase 17: Refactor ContractRegistry to unified RuntimeStore
+
+**Goal:** Rename ContractRegistry to RuntimeStore and add bundle-level indexing with BundleDescriptor for complete bundle/plugin management. Follow all AGENTS.md rules.
+**Requirements:** STORE-01, STORE-02, STORE-03, STORE-04
+**Depends on:** Phase 16
+**Success Criteria** (what must be TRUE):
+1. find_slots_by_bundle() becomes O(1) lookup instead of O(n) scan
+2. Bundle metadata available through RuntimeStore, not split across Runtime
+3. All tests pass with renamed types
+4. All AGENTS.md rules followed (no type aliases, explicit types, no deprecated code)
+**Plans:** 2 plans
+
+Wave Structure:
+- Wave 1: Pass 1 — Rename types, methods, fields (Plan 01)
+- Wave 2: Pass 2 — Add BundleData, BundleDescriptor, bundle_name_index, new APIs (Plan 02)
+
+Plans:
+- [ ] 17-01-PLAN.md — Pass 1: Rename ContractRegistry to RuntimeStore and all methods/fields [Wave 1]
+- [ ] 17-02-PLAN.md — Pass 2: Add BundleData, BundleDescriptor, bundle_name_index, new APIs [Wave 2]
+
 ---
 *Roadmap created: 2026-04-03*
 *Phase 1 plans added: 2026-04-03*
@@ -416,4 +440,4 @@ Plans:
 *Phase 13 plans added: 2026-04-08*
 *Phase 15 plans added: 2026-04-08*
 *Phase 15 plan 04b added for polyplugc tests: 2026-04-08*
-*Phase 16 added for milestone gap closure: 2026-04-09*
+*Phase 16 added for milestone gap closure: 2026-04-09**Phase 17 plans added: 2026-04-10*

@@ -2,21 +2,21 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: complete
-last_updated: "2026-04-09T11:35:00.000Z"
+status: planning
+last_updated: "2026-04-10T14:30:00.000Z"
 progress:
-  total_phases: 16
-  completed_phases: 14
-  total_plans: 83
-  completed_plans: 78
-  percent: 94
+  total_phases: 17
+  completed_phases: 16
+  total_plans: 80
+  completed_plans: 80
+  percent: 100
 ---
 
 # STATE: polyplug Architecture Refactor
 
 **Project:** polyplug Architecture Refactor
 **Started:** 2026-04-03
-**Last Active:** 2026-04-08
+**Last Active:** 2026-04-10
 
 ## Project Reference
 
@@ -32,10 +32,10 @@ progress:
 
 ## Current Position
 
-Phase: 16 (milestone-gap-closure) — COMPLETE
-Plan: 5 of 5
-**Status:** Phase 16 Complete - Ready for Milestone Audit
-**Progress:** [██████████] 94%
+Phase: 17 (refactor-contractregistry-to-unified-runtimestore) — PLANNING COMPLETE
+Plan: 0 of 2
+**Status:** Phase 17 Plans Created - Ready for Execution
+**Progress:** [██████████] 100%
 
 ## Phase Completion Summary
 
@@ -51,26 +51,42 @@ Plan: 5 of 5
 | 08 | Retroactive Verification | Complete | 2026-04-06 |
 | 09 | Codegen Test Cleanup | Complete | 2026-04-06 |
 | 10 | SDK Cleanup Completion | Complete | 2026-04-06 |
-| 11 | Guest Calling Convention & Missing Introspection | Complete | 2026-04-07 |
+| 11 | Guest Calling Convention | Complete | 2026-04-07 |
 | 12 | SDK Instance Model Completion | Complete | 2026-04-08 |
 | 13 | C++ Codegen Modernization | Complete | 2026-04-08 |
+| 14 | Hot-Reload Documentation | Complete | 2026-04-08 |
+| 15 | Final Cleanup | Complete | 2026-04-09 |
 | 16 | Milestone Gap Closure | Complete | 2026-04-09 |
+| 17 | RuntimeStore Refactor | Planning Complete | 2026-04-10 |
 
-## Phase 16 Progress
+## Phase 17 Plans
 
-**All Waves Complete:**
+**Two-Pass Migration (per CONTEXT.md D-37/D-38):**
 
-- 16-01: REQUIREMENTS.md checkbox state correction
-- 16-02: Phase 07 VERIFICATION.md reconciliation
-- 16-03: Generator VTable→Interface comment cleanup
-- 16-04: Documentation code example fix
-- 16-05: Final verification
+- **17-01-PLAN.md** — Pass 1: Rename types, methods, fields
+  - ContractRegistry -> RuntimeStore
+  - All Registry* -> Plugin* or RuntimeStore*
+  - All methods renamed with guest_contract/bundle prefix
+  - Wave 1 (independent)
+
+- **17-02-PLAN.md** — Pass 2: Add BundleData, BundleDescriptor, new APIs
+  - O(1) get_bundle_plugin_slots via bundle_data HashMap
+  - BundleDescriptor for bundle metadata in RuntimeStore
+  - bundle_name_index for multi-version support
+  - Wave 2 (depends on 17-01)
 
 ## Session Continuity
 
-Last session: 2026-04-09T11:35:00.000Z
-Completed: Phase 16 - Milestone Gap Closure
-Next: Milestone audit (v1.1 ready for final review)
+Last session: 2026-04-10T14:30:00.000Z
+Completed: Phase 17 Planning
+Next: Execute Phase 17 - `/gsd-execute-phase 17`
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 17 added: Refactor ContractRegistry to unified RuntimeStore
+- Phase 17 plans created: 2026-04-10
 
 ---
-*State updated: 2026-04-09*
+*State updated: 2026-04-10*
