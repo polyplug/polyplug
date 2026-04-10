@@ -32,7 +32,7 @@ const ABI_TYPES: &[&str] = &[
     "GuestContractInterface",
     "RuntimeAbi",
     "PluginDescriptor",
-    "PluginContext",
+    "BundleInitContext",
     "ExtensionEntry",
     "RuntimeConfig",
     "RuntimeLanguage",

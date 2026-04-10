@@ -231,7 +231,7 @@ pub struct HostInterface {
     ) -> Array<BundleId>,
     /// Get dependencies for the calling bundle.
     ///
-    /// Uses bundle_id from current PluginContext (TLS) to look up declared deps.
+    /// Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
     /// Returns an Array of DependencyInfo. Caller must free via `host->free`.
     ///
     /// # Arguments
