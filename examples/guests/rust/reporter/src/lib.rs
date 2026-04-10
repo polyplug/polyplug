@@ -1,17 +1,17 @@
-use polyplug_guest::{PluginError, StringView, alloc_string, get_host_vtable, to_str};
+use polyplug_guest::{GuestError, StringView, alloc_string, get_host_vtable, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
-use generated::contracts::DataReporterPlugin;
+use generated::contracts::DataReporterGuestContract;
 use generated::host_contract_callers::HostLoggerCaller;
 use generated::types::LogLevel;
 use generated::interfaces::set_reporter_impl;
 
 struct Plugin;
 
-impl DataReporterPlugin for Plugin {
-    fn report(&self, input: StringView) -> Result<StringView, PluginError> {
+impl DataReporterGuestContract for Plugin {
+    fn report(&self, input: StringView) -> Result<StringView, GuestError> {
         let s = to_str(input);
 
         // Try to get host logger and log messages
@@ -59,7 +59,7 @@ impl DataReporterPlugin for Plugin {
                 parts[0], parts[1], parts[2]
             ))
         } else {
-            Err(PluginError {
+            Err(GuestError {
                 code: polyplug_guest::AbiErrorCode::Generic,
                 message: "invalid format".into(),
             })

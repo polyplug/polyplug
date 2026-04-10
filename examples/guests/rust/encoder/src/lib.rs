@@ -1,15 +1,15 @@
-use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
+use polyplug_guest::{GuestError, StringView, alloc_string, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
-use generated::contracts::PipelineEncoderPlugin;
+use generated::contracts::PipelineEncoderGuestContract;
 use generated::interfaces::set_encoder_impl;
 
 struct Plugin;
 
-impl PipelineEncoderPlugin for Plugin {
-    fn encode(&self, input: StringView) -> Result<StringView, PluginError> {
+impl PipelineEncoderGuestContract for Plugin {
+    fn encode(&self, input: StringView) -> Result<StringView, GuestError> {
         let s = to_str(input);
         let data = s.strip_prefix("TRANSFORMED:").unwrap_or(s);
         alloc_string(&data.replace('|', ","))

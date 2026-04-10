@@ -1,15 +1,15 @@
-use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
+use polyplug_guest::{GuestError, StringView, alloc_string, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
-use generated::contracts::PipelineValidatorPlugin;
+use generated::contracts::PipelineValidatorGuestContract;
 use generated::interfaces::set_validator_impl;
 
 struct Plugin;
 
-impl PipelineValidatorPlugin for Plugin {
-    fn validate(&self, input: StringView) -> Result<StringView, PluginError> {
+impl PipelineValidatorGuestContract for Plugin {
+    fn validate(&self, input: StringView) -> Result<StringView, GuestError> {
         let s = to_str(input);
         let data = s.strip_prefix("DECODED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();

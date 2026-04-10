@@ -1,15 +1,15 @@
-use polyplug_guest::{PluginError, StringView, alloc_string, to_str};
+use polyplug_guest::{GuestError, StringView, alloc_string, to_str};
 
 #[path = "../generated/guest/mod.rs"]
 mod generated;
 
-use generated::contracts::DataTransformerPlugin;
+use generated::contracts::DataTransformerGuestContract;
 use generated::interfaces::set_transformer_impl;
 
 struct Plugin;
 
-impl DataTransformerPlugin for Plugin {
-    fn transform(&self, input: StringView) -> Result<StringView, PluginError> {
+impl DataTransformerGuestContract for Plugin {
+    fn transform(&self, input: StringView) -> Result<StringView, GuestError> {
         let s = to_str(input);
         let data = s.strip_prefix("DECODED:").unwrap_or(s);
         let parts: Vec<&str> = data.split('|').collect();
@@ -19,7 +19,7 @@ impl DataTransformerPlugin for Plugin {
             let count: i32 = parts[2].parse().unwrap_or(0);
             alloc_string(&format!("TRANSFORMED:{}|{}|{}", name, value, count + 1))
         } else {
-            Err(PluginError {
+            Err(GuestError {
                 code: polyplug_guest::AbiErrorCode::Generic,
                 message: "invalid format".into(),
             })
