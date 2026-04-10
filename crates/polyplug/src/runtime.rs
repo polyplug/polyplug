@@ -115,7 +115,7 @@ impl Runtime {
 
     /// Find the first provider of a contract.
     #[inline(always)]
-    pub fn find_by_contract(
+    pub fn find_guest_contract(
         &self,
         contract_id: u64,
         min_version: u32,
@@ -169,8 +169,8 @@ impl Runtime {
     }
 
     /// Register a host contract interface.
-    /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already register_guest_contracted.
-    pub fn register_host_contract(
+    /// Returns `Err(HostContractError::DuplicateContract)` if a contract with the same ID is already registered.
+    pub fn register_guest_contract_host_contract(
         &self,
         contract_id: u64,
         interface: &'static HostContractInterface,
@@ -189,7 +189,7 @@ impl Runtime {
 
     /// Unregister_guest_contract a host contract interface.
     /// Returns `true` if the contract was register_guest_contracted and removed, `false` if it was not found.
-    pub fn unregister_guest_contract_host_contract(&self, contract_id: u64) -> bool {
+    pub fn unregister_host_contract(&self, contract_id: u64) -> bool {
         let mut guard: std::sync::RwLockWriteGuard<'_, HashMap<u64, &'static HostContractInterface>> =
             self.host_contracts.write().unwrap_or_else(|e| {
                 eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
@@ -349,7 +349,7 @@ impl Runtime {
     ///
     /// Returns `Err(RuntimeError::Loader(LoaderError::DuplicateLoader { .. }))` if a
     /// loader for the same runtime name is already register_guest_contracted.
-    pub fn register_loader(&mut self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
+    pub fn register_guest_contract_loader(&mut self, loader: Box<dyn BundleLoader>) -> Result<(), RuntimeError> {
         let names: Vec<String> = loader.runtime_names();
         for name in &names {
             if self.loaders.contains_key(name.as_str()) {
@@ -1657,7 +1657,7 @@ mod tests {
         let interface: &'static HostContractInterface = create_host_contract_interface(contract_id, 1, 0);
 
         let result: Result<(), HostContractError> =
-            runtime.register_guest_contract_host_contract(contract_id, interface);
+            runtime.register_host_contract(contract_id, interface);
         assert!(result.is_ok(), "registration should succeed");
 
         let found: Option<&'static HostContractInterface> = runtime.get_host_contract(contract_id, 0);
@@ -1706,13 +1706,13 @@ mod tests {
             .register_guest_contract_host_contract(contract_id, interface)
             .expect("registration should succeed");
 
-        let removed: bool = runtime.unregister_guest_contract_host_contract(contract_id);
+        let removed: bool = runtime.unregister_host_contract(contract_id);
         assert!(
             removed,
             "unregister_guest_contract should return true for existing contract"
         );
 
-        let removed_again: bool = runtime.unregister_guest_contract_host_contract(contract_id);
+        let removed_again: bool = runtime.unregister_host_contract(contract_id);
         assert!(
             !removed_again,
             "unregister_guest_contract should return false for non-existent contract"

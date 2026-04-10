@@ -317,7 +317,7 @@ pub unsafe extern "C" fn polyplug_runtime_reload_bundle(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_find_by_contract(
+pub unsafe extern "C" fn polyplug_runtime_find_guest_contract(
     rt: *const OpaqueRuntime,
     contract_id: u64,
     min_version: u32,
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_by_contract(
         }
         // SAFETY: rt is non-null valid OpaqueRuntime per ABI contract.
         let runtime: &OpaqueRuntime = unsafe { &*rt };
-        match runtime.0.find_by_contract(contract_id, min_version) {
+        match runtime.0.find_guest_contract(contract_id, min_version) {
             Ok(h) => pack_handle(h),
             Err(_) => u64::MAX,
         }
@@ -339,7 +339,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_by_contract(
 /// # Safety
 /// `rt` must be a valid pointer returned by `polyplug_runtime_create`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_find_by_bundle(
+pub unsafe extern "C" fn polyplug_runtime_find_guest_contract_by_bundle(
     rt: *const OpaqueRuntime,
     bundle_id: u64,
     contract_id: u64,
@@ -408,7 +408,7 @@ pub unsafe extern "C" fn polyplug_runtime_find_all_by_contract(
 /// - Non-null pointer on success
 /// - Null on error (check `polyplug_runtime_last_error` for details)
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_runtime_resolve_plugin(
+pub unsafe extern "C" fn polyplug_runtime_resolve_guest_contract(
     rt: *const OpaqueRuntime,
     packed_handle: u64,
 ) -> *const GuestContractInterface {
@@ -511,7 +511,7 @@ pub unsafe extern "C" fn polyplug_runtime_register_loader(
         // compiled against the same polyplug rlib. Reconstituting via Box::from_raw is valid.
         let loader: Box<dyn BundleLoader> =
             unsafe { *Box::from_raw(loader_ptr as *mut Box<dyn BundleLoader>) };
-        match runtime.register_loader(loader) {
+        match runtime.register_guest_contract_loader(loader) {
             Ok(()) => 0u32,
             Err(e) => {
                 runtime.set_last_error(e.to_string());
@@ -747,8 +747,8 @@ mod tests {
         assert!(!rt1.is_null());
         assert!(!rt2.is_null());
 
-        let handle1: u64 = unsafe { polyplug_runtime_find_by_contract(rt1, 12345, 0) };
-        let handle2: u64 = unsafe { polyplug_runtime_find_by_contract(rt2, 12345, 0) };
+        let handle1: u64 = unsafe { polyplug_runtime_find_guest_contract(rt1, 12345, 0) };
+        let handle2: u64 = unsafe { polyplug_runtime_find_guest_contract(rt2, 12345, 0) };
 
         assert_eq!(handle1, u64::MAX);
         assert_eq!(handle2, u64::MAX);
@@ -800,11 +800,11 @@ mod tests {
             unsafe { polyplug_runtime_load_bundle(core::ptr::null_mut(), b"test".as_ptr(), 4) };
         assert_eq!(result, 1);
 
-        let handle: u64 = unsafe { polyplug_runtime_find_by_contract(core::ptr::null(), 1, 0) };
+        let handle: u64 = unsafe { polyplug_runtime_find_guest_contract(core::ptr::null(), 1, 0) };
         assert_eq!(handle, u64::MAX);
 
         let interface: *const GuestContractInterface =
-            unsafe { polyplug_runtime_resolve_plugin(core::ptr::null(), 0) };
+            unsafe { polyplug_runtime_resolve_guest_contract(core::ptr::null(), 0) };
         assert!(interface.is_null());
 
         unsafe {
@@ -876,13 +876,13 @@ mod tests {
         assert!(!rt1.is_null());
         assert!(!rt2.is_null());
 
-        let h1: u64 = unsafe { polyplug_runtime_find_by_contract(rt1, 100, 1) };
-        let h2: u64 = unsafe { polyplug_runtime_find_by_contract(rt2, 100, 1) };
+        let h1: u64 = unsafe { polyplug_runtime_find_guest_contract(rt1, 100, 1) };
+        let h2: u64 = unsafe { polyplug_runtime_find_guest_contract(rt2, 100, 1) };
         assert_eq!(h1, u64::MAX);
         assert_eq!(h2, u64::MAX);
         assert_eq!(h1, h2);
 
-        let h3: u64 = unsafe { polyplug_runtime_find_by_contract(rt1, 200, 2) };
+        let h3: u64 = unsafe { polyplug_runtime_find_guest_contract(rt1, 200, 2) };
         assert_eq!(h3, u64::MAX);
 
         unsafe {
