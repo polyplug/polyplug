@@ -9,7 +9,7 @@
 // This pulls in all host-side headers in dependency order:
 //   1. abi/polyplug/abi.hpp     — C ABI structs, constants, and C function decls
 //   2. polyplug/handle.hpp      — GuestContractHandle operator overloads and utilities
-//   3. polyplug/error.hpp       — PluginError exception and throw_if_error()
+//   3. polyplug/error.hpp       — HostException exception and throw_if_error()
 //   4. polyplug/runtime.hpp     — RAII Runtime class with Builder pattern
 
 #pragma once

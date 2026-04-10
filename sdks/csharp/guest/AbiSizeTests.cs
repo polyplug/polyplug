@@ -51,9 +51,9 @@ internal static class AbiSizeAssertions
         Debug.Assert(Marshal.SizeOf<PluginDescriptor>() == 48,
             $"PluginDescriptor size mismatch: {Marshal.SizeOf<PluginDescriptor>()} != 48");
 
-        // PluginContext: StringView(16) + uint(4) + _pad(4) + ulong(8) = 32 bytes
-        Debug.Assert(Marshal.SizeOf<PluginContext>() == 32,
-            $"PluginContext size mismatch: {Marshal.SizeOf<PluginContext>()} != 32");
+        // BundleInitContext: StringView(16) + uint(4) + _pad(4) + ulong(8) = 32 bytes
+        Debug.Assert(Marshal.SizeOf<BundleInitContext>() == 32,
+            $"BundleInitContext size mismatch: {Marshal.SizeOf<BundleInitContext>()} != 32");
 
         // ExtensionEntry: uint(4) + _pad(4) + IntPtr(8) = 16 bytes
         Debug.Assert(Marshal.SizeOf<ExtensionEntry>() == 16,

@@ -269,7 +269,7 @@ class PluginDescriptor(ctypes.Structure):
     ]
 
 
-class PluginContext(ctypes.Structure):
+class BundleInitContext(ctypes.Structure):
     """Context passed to every guest `polyplug_init()` function.
 
     The `bundle_path` pointer is runtime-owned and valid for the lifetime of the Runtime.

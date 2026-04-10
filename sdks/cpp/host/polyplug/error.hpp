@@ -1,7 +1,7 @@
 // THIS FILE IS PART OF polyplug — header-only C++ binding.
 // Host-side exception types for the polyplug plugin runtime.
 //
-// Provides PluginError (wraps AbiError) and throw_if_error() helper.
+// Provides HostException (wraps AbiError) and throw_if_error() helper.
 
 #pragma once
 
@@ -16,16 +16,16 @@ static_assert(POLYPLUG_ABI_VERSION == 1,
 
 namespace polyplug {
 
-/// Exception wrapper around an AbiError.
+/// Exception wrapper around an AbiError for host-side error handling.
 ///
 /// Every ABI call that returns a non-OK AbiError can be surfaced as a
-/// PluginError by calling throw_if_error(). The original AbiError is preserved
+/// HostException by calling throw_if_error(). The original AbiError is preserved
 /// so callers that need to re-cross the ABI boundary can call to_abi_error().
-class PluginError : public std::exception {
+class HostException : public std::exception {
 public:
     /// Construct from an AbiError. Copies the message string so the caller
     /// may free the AbiError message buffer immediately after construction.
-    explicit PluginError(AbiError err)
+    explicit HostException(AbiError err)
         : err_(err)
         , message_{}
     {
@@ -34,7 +34,7 @@ public:
                 reinterpret_cast<const char*>(err_.message.ptr),
                 err_.message.len);
         } else {
-            message_ = "(polyplug error code " + std::to_string(err_.code) + ")";
+            message_ = "(polyplug error code " + std::to_string(static_cast<uint32_t>(err_.code)) + ")";
         }
     }
 
@@ -54,36 +54,36 @@ private:
     std::string message_;
 };
 
-/// Throws PluginError if err.code != AbiErrorCode::Ok.
+/// Throws HostException if err.code != AbiErrorCode::Ok.
 /// Intended for host-side code that wants C++ exceptions rather than manual
 /// AbiError checks after every ABI call.
 inline void throw_if_error(AbiError err) {
-    if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
-        throw PluginError(err);
+    if (err.code != AbiErrorCode::Ok) {
+        throw HostException(err);
     }
 }
 
 /// Exception thrown by generated host callers when an ABI call returns a non-zero code.
-/// This is the exception type used by generated code (distinct from the hand-written PluginError).
-class PolyplugException : public std::runtime_error {
+/// This is the exception type used by generated code.
+class DispatchException : public std::runtime_error {
 public:
-    explicit PolyplugException(uint32_t code, const std::string& message)
+    explicit DispatchException(AbiErrorCode code, const std::string& message)
         : std::runtime_error(message), code_(code) {}
 
-    uint32_t code() const noexcept { return code_; }
+    AbiErrorCode code() const noexcept { return code_; }
 
 private:
-    uint32_t code_;
+    AbiErrorCode code_;
 };
 
-/// Throw a PolyplugException if the AbiError indicates failure.
+/// Throw a DispatchException if the AbiError indicates failure.
 /// Used by generated host caller code after every interface dispatch.
 inline void check_abi_error(AbiError err) {
-    if (err.code != static_cast<uint32_t>(AbiErrorCode::Ok)) {
+    if (err.code != AbiErrorCode::Ok) {
         const char* msg = (err.message.ptr != nullptr)
             ? reinterpret_cast<const char*>(err.message.ptr)
             : "unknown error";
-        throw PolyplugException{err.code, std::string(msg, err.message.len)};
+        throw DispatchException(err.code, std::string(msg, err.message.len));
     }
 }
 

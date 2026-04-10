@@ -30,7 +30,7 @@ function M.cast_host_interface(ptr_int)
 end
 
 function M.cast_context(ptr)
-    return ffi.cast("PluginContext*", ptr)
+    return ffi.cast("BundleInitContext*", ptr)
 end
 
 function M.string_view(s)

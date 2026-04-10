@@ -279,7 +279,7 @@ A zeroed `GuestContractHandle` (`{ index: 0, generation: 0 }`) is the sentinel "
 
 ---
 
-### `PluginContext`
+### `BundleInitContext`
 
 Passed to `polyplug_init`. Contains `bundle_path` — the absolute path to the bundle
 directory on disk.
@@ -303,13 +303,13 @@ static MY_FNS: [FnPtr; 2] = [
 
 ---
 
-### `PluginError`
+### `GuestError`
 
 High-level error type for use in generated trait implementations.
 
 ```rust
-pub struct PluginError {
-    pub code:    u32,
+pub struct GuestError {
+    pub code:    AbiErrorCode,
     pub message: String,
 }
 ```

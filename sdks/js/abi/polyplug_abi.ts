@@ -347,7 +347,7 @@ export interface HostContext {
  *  The `bundle_path` pointer is runtime-owned and valid for the lifetime of the `PluginRuntime`.
  *  **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
  */
-export interface PluginContext {
+export interface BundleInitContext {
     /**  Absolute canonical path to the directory containing the loaded bundle. */
     bundle_path: StringView;
     /**
@@ -522,7 +522,7 @@ export const ABI_EXPECTED_SIZES: {
     HostContractInstance: number;
     Version: number;
     DependencyInfo: number;
-    PluginContext: number;
+    BundleInitContext: number;
     ExtensionEntry: number;
     RuntimeConfig: number;
 } = {
@@ -543,7 +543,7 @@ export const ABI_EXPECTED_SIZES: {
     HostContractInstance: 8,
     Version: 12,
     DependencyInfo: 24,
-    PluginContext: 32,
+    BundleInitContext: 32,
     ExtensionEntry: 16,
     RuntimeConfig: 40,
 };

@@ -222,10 +222,10 @@ ffi.cdef[[
     } HostInterface;
 
     //  Context passed to every guest `polyplug_init()` function.
-    typedef struct PluginContext {
+    typedef struct BundleInitContext {
         uint64_t bundle_id;
         StringView bundle_path;
-    } PluginContext;
+    } BundleInitContext;
 
     //  Configuration passed to `polyplug_runtime_create` during runtime initialisation.
     typedef struct RuntimeConfig {

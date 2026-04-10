@@ -120,7 +120,7 @@ export function getHostVtable() {
 /**
  * Context passed to polyplug_init.
  * 
- * @typedef {Object} PluginContext
+ * @typedef {Object} BundleInitContext
  * @property {StringView} bundle_path - Path to the bundle directory
  */
 
@@ -129,7 +129,7 @@ export function getHostVtable() {
  * 
  * @callback InitFn
  * @param {PluginRegistrar} registrar - Host registrar for plugin registration
- * @param {PluginContext} context - Plugin context with bundle path
+ * @param {BundleInitContext} context - Plugin context with bundle path
  * @returns {AbiError} Registration result
  */
 

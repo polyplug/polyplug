@@ -49,7 +49,7 @@
 //! #[unsafe(no_mangle)]
 //! pub unsafe extern "C" fn polyplug_init(
 //!     host_abi: *const HostInterface,
-//!     _ctx: *const PluginContext,
+//!     _ctx: *const BundleInitContext,
 //! ) -> AbiError {
 //!     if host_abi.is_null() {
 //!         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
@@ -192,7 +192,7 @@ pub use polyplug_abi::PluginDescriptor;
 ///
 /// Contains `bundle_path` — the absolute path to the bundle directory.
 /// **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
-pub use polyplug_abi::PluginContext;
+pub use polyplug_abi::BundleInitContext;
 
 // ─── Hash Utilities ───────────────────────────────────────────────────────────
 

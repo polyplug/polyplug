@@ -92,7 +92,7 @@ Python wrappers over the polyplug C ABI using ctypes:
 Bootstrap layer for Python plugins:
 - `@plugin` decorator — Marks plugin entry point
 - `PluginRegistrar` — Contract registration
-- `PluginContext` — Bundle metadata
+- `BundleInitContext` — Bundle metadata
 - Exception boundary — Plugin crashes don't take down host
 
 ### Loaders (`loaders/`)
