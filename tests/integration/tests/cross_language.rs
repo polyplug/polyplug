@@ -16,15 +16,19 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 use polyplug::runtime::Runtime;
-use polyplug_abi::AbiErrorCode;
-use polyplug_abi::AbiError;
+use polyplug_abi::Array;
+use polyplug_abi::BundleInitContext;
+use polyplug_abi::DependencyInfo;
+use polyplug_abi::GuestContractHandle;
+use polyplug_abi::GuestContractInstance;
+use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostContractInstance;
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::HostInterface;
-use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
-use polyplug_abi::GuestContractHandle;
-use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
+use polyplug_abi::{AbiError, AbiErrorCode};
+use polyplug_utils::BundleId;
 use polyplug_utils::guest_contract_id;
 use polyplug_dotnet::DotnetConfig;
 use polyplug_dotnet::DotnetLoader;
@@ -107,7 +111,7 @@ std::thread_local! {
 /// `interface` must be valid for the call duration and remain valid as long as the
 /// loaded library is live (caller must use `core::mem::forget` on the Library).
 unsafe extern "C" fn capture_interface_cb(
-    _rt_ctx: *mut core::ffi::c_void,
+    _this: *const HostInterface,
     _desc: *const PluginDescriptor,
     interface: *const GuestContractInterface,
 ) -> AbiError {
@@ -119,7 +123,7 @@ unsafe extern "C" fn capture_interface_cb(
 
 /// Stub alloc callback using the global allocator.
 unsafe extern "C" fn stub_alloc(
-    _rt_ctx: *mut core::ffi::c_void,
+    _this: *const HostInterface,
     size: usize,
     align: usize,
 ) -> *mut u8 {
@@ -128,7 +132,7 @@ unsafe extern "C" fn stub_alloc(
 
 /// Stub free callback using the global allocator.
 unsafe extern "C" fn stub_free(
-    _rt_ctx: *mut core::ffi::c_void,
+    _this: *const HostInterface,
     ptr: *mut u8,
     size: usize,
     align: usize,
@@ -136,57 +140,118 @@ unsafe extern "C" fn stub_free(
     unsafe { polyplug_abi::ffi::polyplug_host_free(ptr, size, align) }
 }
 
-/// Stub find_by_contract — returns a null handle.
-unsafe extern "C" fn stub_find_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+/// Stub find_guest_contract — returns a null handle.
+unsafe extern "C" fn stub_find_guest_contract(
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> GuestContractHandle {
-    GuestContractHandle {
-        index: u32::MAX,
-        generation: 0,
-    }
+    GuestContractHandle::null()
 }
 
-/// Stub find_by_bundle — returns a null handle.
-unsafe extern "C" fn stub_find_by_bundle(
-    _rt_ctx: *mut core::ffi::c_void,
-    _bundle_id: u64,
+/// Stub find_all_guest_contracts — returns empty array.
+unsafe extern "C" fn stub_find_all_guest_contracts(
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
-) -> GuestContractHandle {
-    GuestContractHandle {
-        index: u32::MAX,
-        generation: 0,
-    }
+) -> Array<GuestContractHandle> {
+    Array::empty()
 }
 
-/// Stub find_all_by_contract — returns 0.
-unsafe extern "C" fn stub_find_all_by_contract(
-    _rt_ctx: *mut core::ffi::c_void,
-    _contract_id: u64,
-    _min_version: u32,
-    _out: *mut GuestContractHandle,
-    _out_cap: usize,
-) -> usize {
-    0
-}
-
-/// Stub resolve_plugin — returns null.
-unsafe extern "C" fn stub_resolve_plugin(
-    _rt_ctx: *mut core::ffi::c_void,
+/// Stub resolve_guest_contract — returns null.
+unsafe extern "C" fn stub_resolve_guest_contract(
+    _this: *const HostInterface,
     _handle: GuestContractHandle,
 ) -> *const GuestContractInterface {
     core::ptr::null()
 }
 
-/// Stub get_host_contract — returns null.
+/// Stub call_guest_method — returns error.
+unsafe extern "C" fn stub_call_guest_method(
+    _this: *const HostInterface,
+    _instance: GuestContractInstance,
+    _method_id: u32,
+    _args: *const (),
+    _out: *mut (),
+) -> AbiError {
+    AbiError::ok()
+}
+
+/// Stub get_host_contract — returns null instance.
 unsafe extern "C" fn stub_get_host_contract(
-    _rt_ctx: *mut core::ffi::c_void,
+    _this: *const HostInterface,
+    _contract_id: u64,
+    _min_version: u32,
+) -> HostContractInstance {
+    HostContractInstance::null()
+}
+
+/// Stub resolve_host_contract_interface — returns null.
+unsafe extern "C" fn stub_resolve_host_contract_interface(
+    _this: *const HostInterface,
     _contract_id: u64,
     _min_version: u32,
 ) -> *const HostContractInterface {
     core::ptr::null()
+}
+
+/// Stub list_bundles — returns empty array.
+unsafe extern "C" fn stub_list_bundles(_this: *const HostInterface) -> Array<BundleId> {
+    Array::empty()
+}
+
+/// Stub get_dependencies — returns empty array.
+unsafe extern "C" fn stub_get_dependencies(_this: *const HostInterface) -> Array<DependencyInfo> {
+    Array::empty()
+}
+
+/// Stub load_bundle — returns success.
+unsafe extern "C" fn stub_load_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError::ok()
+}
+
+/// Stub reload_bundle — returns success.
+unsafe extern "C" fn stub_reload_bundle(
+    _this: *const HostInterface,
+    _path: *const u8,
+    _path_len: usize,
+) -> AbiError {
+    AbiError::ok()
+}
+
+/// Stub register_host_contract — returns success.
+unsafe extern "C" fn stub_register_host_contract(
+    _this: *const HostInterface,
+    _interface: *const HostContractInterface,
+) -> AbiError {
+    AbiError::ok()
+}
+
+/// Stub register_loader — returns success.
+unsafe extern "C" fn stub_register_loader(
+    _this: *const HostInterface,
+    _runtime_name: StringView,
+    _loader_ptr: *mut core::ffi::c_void,
+) -> AbiError {
+    AbiError::ok()
+}
+
+/// Stub get_last_error — returns 0 bytes written.
+unsafe extern "C" fn stub_get_last_error(
+    _this: *const HostInterface,
+    _buf: *mut u8,
+    _buf_len: usize,
+) -> usize {
+    0
+}
+
+/// Stub get_error_len — returns 0.
+unsafe extern "C" fn stub_get_error_len(_this: *const HostInterface) -> usize {
+    0
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -195,10 +260,10 @@ unsafe extern "C" fn stub_get_host_contract(
 fn get_interface_from_runtime(runtime: &Runtime) -> *const GuestContractInterface {
     let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: GuestContractHandle = runtime
-        .find_by_contract(contract_id, 0)
+        .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load");
     runtime
-        .resolve_plugin(handle)
+        .resolve_guest_contract(handle)
         .expect("handle must be valid")
 }
 
@@ -228,6 +293,7 @@ fn dispatch_add_and_verify(interface_ptr: *const GuestContractInterface) {
         unsafe {
             (interface.dispatch.vm.call)(
                 interface.dispatch.vm.loader_data,
+                GuestContractInstance::null(),
                 0, // fn_id = 0 for add
                 &args as *const AddArgs as *const (),
                 &mut out as *mut u32 as *mut (),
@@ -272,14 +338,24 @@ fn test_rust_host_rust_guest() {
             .expect("polyplug_init symbol not found in Rust plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -350,14 +426,24 @@ fn test_cpp_host_rust_guest() {
             .expect("polyplug_init symbol not found in Rust plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -428,14 +514,24 @@ fn test_csharp_host_rust_guest() {
             .expect("polyplug_init symbol not found in Rust plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -506,14 +602,24 @@ fn test_python_host_rust_guest() {
             .expect("polyplug_init symbol not found in Rust plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -584,14 +690,24 @@ fn test_lua_host_rust_guest() {
             .expect("polyplug_init symbol not found in Rust plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -662,14 +778,24 @@ fn test_js_host_rust_guest() {
             .expect("polyplug_init symbol not found in Rust plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -746,14 +872,24 @@ fn test_rust_host_cpp_guest() {
             .expect("polyplug_init symbol not found in C++ plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -824,14 +960,24 @@ fn test_cpp_host_cpp_guest() {
             .expect("polyplug_init symbol not found in C++ plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -902,14 +1048,24 @@ fn test_csharp_host_cpp_guest() {
             .expect("polyplug_init symbol not found in C++ plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -980,14 +1136,24 @@ fn test_python_host_cpp_guest() {
             .expect("polyplug_init symbol not found in C++ plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1058,14 +1224,24 @@ fn test_lua_host_cpp_guest() {
             .expect("polyplug_init symbol not found in C++ plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1136,14 +1312,24 @@ fn test_js_host_cpp_guest() {
             .expect("polyplug_init symbol not found in C++ plugin")
     };
     let host_interface: HostInterface = HostInterface {
-        register_plugin: capture_interface_cb,
+        runtime: core::ptr::null_mut(),
+        register_contract: capture_interface_cb,
         alloc: stub_alloc,
         free: stub_free,
-        find_by_contract: stub_find_by_contract,
-        find_by_bundle: stub_find_by_bundle,
-        find_all_by_contract: stub_find_all_by_contract,
-        resolve_plugin: stub_resolve_plugin,
+        find_guest_contract: stub_find_guest_contract,
+        find_all_guest_contracts: stub_find_all_guest_contracts,
+        resolve_guest_contract: stub_resolve_guest_contract,
+        call_guest_method: stub_call_guest_method,
         get_host_contract: stub_get_host_contract,
+        resolve_host_contract_interface: stub_resolve_host_contract_interface,
+        list_bundles: stub_list_bundles,
+        get_dependencies: stub_get_dependencies,
+        load_bundle: stub_load_bundle,
+        reload_bundle: stub_reload_bundle,
+        register_host_contract: stub_register_host_contract,
+        register_loader: stub_register_loader,
+        get_last_error: stub_get_last_error,
+        get_error_len: stub_get_error_len,
     };
     let ctx: BundleInitContext = BundleInitContext {
         bundle_path: StringView::null(),
@@ -1267,12 +1453,12 @@ fn test_csharp_host_csharp_guest() {
         "Runtime::load_bundle failed: {:?}",
         load_result.err()
     );
-    let contract_id: u64 = polyplug_abi::contract_id("test.add", 1);
+    let contract_id: u64 = guest_contract_id("test.add", 1);
     let handle: GuestContractHandle = runtime
-        .find_by_contract(contract_id, 0)
+        .find_guest_contract(contract_id, 0)
         .expect("test.add must be registered after load");
     let interface_ptr: *const GuestContractInterface = runtime
-        .resolve_plugin(handle)
+        .resolve_guest_contract(handle)
         .expect("handle must be valid");
     assert!(!interface_ptr.is_null(), "interface must be non-null");
     let args: AddArgs = AddArgs { a: 3_u32, b: 5_u32 };
