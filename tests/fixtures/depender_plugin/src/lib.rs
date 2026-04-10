@@ -97,11 +97,11 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 ///
 /// # Safety
 /// `host_abi` must be a valid non-null pointer to a HostInterface from the host.
-/// `ctx` must be a valid non-null pointer to a PluginContext from the host.
+/// `ctx` must be a valid non-null pointer to a BundleInitContext from the host.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_init(
     host_abi: *const HostInterface,
-    ctx: *const PluginContext,
+    ctx: *const BundleInitContext,
 ) -> AbiError {
     if host_abi.is_null() {
         return AbiError {

@@ -14,7 +14,7 @@ sys.path.insert(0, str(_REPO_ROOT / "sdks" / "python" / "guest"))
 from polyplug_guest.abi import (
     AbiErrorCode,
     AbiError,
-    PluginContext,
+    BundleInitContext,
     PluginDescriptor,
     PluginRegistrar,
     GuestContractInterface,
