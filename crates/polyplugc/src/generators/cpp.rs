@@ -201,7 +201,7 @@ fn generate_contracts_hpp(ir: &ValidatedIr) -> String {
 }
 
 fn generate_cpp_guest_contract_class(out: &mut String, contract: &ResolvedContract) {
-    let class_name: String = contract_name_to_plugin_class(&contract.name);
+    let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     out.push_str(&format!(
         "/// Abstract plugin base for contract `{}` (id=0x{:016X})\n",
         contract.name, contract.contract_id
@@ -294,7 +294,7 @@ fn generate_cpp_guest_plugin_interface(
 ) -> Result<(), PolyplugcError> {
     let plugin_upper: String = plugin_name.to_uppercase().replace('.', "_");
     let plugin_lower: String = plugin_name.to_lowercase().replace('.', "_");
-    let class_name: String = contract_name_to_plugin_class(&contract.name);
+    let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     let fn_count: usize = contract.functions.len();
 
     out.push_str(&format!("// Plugin: {}\n", plugin_name));
@@ -390,7 +390,7 @@ fn generate_cpp_guest_contract_interface(
 ) -> Result<(), PolyplugcError> {
     let lower: String = contract_name_to_lower_snake(&contract.name);
     let upper: String = contract_name_to_upper_snake(&contract.name);
-    let class_name: String = contract_name_to_plugin_class(&contract.name);
+    let class_name: String = contract_name_to_guest_contract_class(&contract.name);
     let fn_count: usize = contract.functions.len();
 
     // Forward declaration of impl pointer
@@ -646,7 +646,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
                         format!("{}@{}.{}", c.name, c.version.major, c.version.minor);
                     &contract_full == contract_impl
                 }) {
-                    contract_name_to_plugin_class(&contract.name)
+                    contract_name_to_guest_contract_class(&contract.name)
                 } else {
                     "IPlugin".to_string()
                 }
@@ -661,7 +661,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     } else {
         for contract in &ir.contracts {
             let lower: String = contract_name_to_lower_snake(&contract.name);
-            let class_name: String = contract_name_to_plugin_class(&contract.name);
+            let class_name: String = contract_name_to_guest_contract_class(&contract.name);
             out.push_str(&format!("{}* g_{}_impl = nullptr;\n", class_name, lower));
         }
     }
@@ -671,7 +671,7 @@ fn generate_init_hpp(ir: &ValidatedIr) -> Result<String, PolyplugcError> {
     out.push_str("extern \"C\" uint32_t polyplug_abi_version() { return 1U; }\n\n");
 
     // polyplug_init
-    out.push_str("extern \"C\" AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx) {\n");
+    out.push_str("extern \"C\" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx) {\n");
     out.push_str("    if (!host || !ctx) {\n");
     out.push_str(
         "        static constexpr const char* err_msg = \"null parameter in polyplug_init\";\n",
@@ -1338,7 +1338,7 @@ fn contract_name_to_class(name: &str) -> String {
 }
 
 /// Convert "test.add" → "TestAddPlugin"
-fn contract_name_to_plugin_class(name: &str) -> String {
+fn contract_name_to_guest_contract_class(name: &str) -> String {
     name.split('.')
         .map(|p| {
             let mut chars: core::str::Chars<'_> = p.chars();
@@ -1349,7 +1349,7 @@ fn contract_name_to_plugin_class(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
-        + "Plugin"
+        + "GuestContract"
 }
 
 /// Convert "test.add" → "test_add"
@@ -2244,7 +2244,7 @@ mod tests {
 
     #[test]
     fn plugin_class_name_conversion() {
-        assert_eq!(contract_name_to_plugin_class("test.add"), "TestAddPlugin");
+        assert_eq!(contract_name_to_guest_contract_class("test.add"), "TestAddPlugin");
     }
 
     #[test]

@@ -16,7 +16,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::AbiErrorCode;
@@ -115,7 +115,7 @@ use polyplug_guest::AbiErrorCode;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::GuestError;
 use polyplug_guest::HostInterface;
-use polyplug_guest::PluginContext;
+use polyplug_guest::BundleInitContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use polyplug_guest::string_view_null;
@@ -149,7 +149,7 @@ impl TestAddPlugin for MyPlugin {
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(
     host: *const HostInterface,
-    _ctx: *const PluginContext,
+    _ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: string_view_null() };
@@ -361,7 +361,7 @@ fn test_rust_codegen_compile_and_run() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -388,7 +388,7 @@ fn test_rust_codegen_compile_and_run() {
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_id: 0,
         bundle_path: string_view_null(),
     };
@@ -396,7 +396,7 @@ fn test_rust_codegen_compile_and_run() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_abi as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");

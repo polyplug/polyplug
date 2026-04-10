@@ -357,7 +357,7 @@ fn generate_init_lua(ir: &ValidatedIr) -> String {
 
     out.push_str("--- Register all plugin interfaces with the host.\n");
     out.push_str("--- @param host_ptr userdata HostInterface pointer from host.\n");
-    out.push_str("--- @param ctx_ptr userdata PluginContext pointer from host.\n");
+    out.push_str("--- @param ctx_ptr userdata BundleInitContext pointer from host.\n");
     out.push_str("--- @return number error_code 0 on success, non-zero on failure.\n");
     out.push_str("function polyplug_init(host_ptr, ctx_ptr)\n");
     out.push_str("    if host_ptr == nil then\n");

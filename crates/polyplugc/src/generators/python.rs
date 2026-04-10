@@ -412,7 +412,7 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any, Callable, TYPE_CHECKING, TypeAlias\n");
-    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
+    out.push_str("from polyplug_guest.abi import AbiErrorCode, AbiError, DispatchType, HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView, Version\n");
     out.push_str("from polyplug_guest import store_host_vtable\n\n");
     out.push_str("if TYPE_CHECKING:\n");
     out.push_str("    from ctypes import _Pointer as _CtypesPointer\n");
@@ -471,14 +471,14 @@ fn generate_guest_contracts_file(ir: &ValidatedIr) -> String {
     out.push_str("\n");
     out.push_str("    Args:\n");
     out.push_str("        host_ptr: Pointer to HostInterface\n");
-    out.push_str("        ctx_ptr: Pointer to PluginContext\n");
+    out.push_str("        ctx_ptr: Pointer to BundleInitContext\n");
     out.push_str("    \"\"\"\n");
     out.push_str("    if host_ptr == 0:\n");
     out.push_str("        return\n");
     out.push_str("    if ctx_ptr == 0:\n");
     out.push_str("        return\n");
     out.push_str("    store_host_vtable(host_ptr)\n");
-    out.push_str("    ctx: PluginContext = PluginContext.from_address(ctx_ptr)\n");
+    out.push_str("    ctx: BundleInitContext = BundleInitContext.from_address(ctx_ptr)\n");
     out.push_str("    host: Any = ctypes.cast(host_ptr, ctypes.POINTER(HostInterface))\n");
 
     if let Some(bundle) = &ir.bundle {
@@ -516,7 +516,7 @@ fn generate_guest_contracts_stub(ir: &ValidatedIr) -> String {
     out.push_str("from __future__ import annotations\n");
     out.push_str("import ctypes\n");
     out.push_str("from typing import Any\n");
-    out.push_str("from polyplug_guest.abi import HostInterface, PluginContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
+    out.push_str("from polyplug_guest.abi import HostInterface, BundleInitContext, PluginDescriptor, GuestContractInterface, StringView\n\n");
 
     let type_imports: BTreeSet<String> = collect_python_type_imports(ir);
     if !type_imports.is_empty() {
@@ -1324,7 +1324,7 @@ fn contract_name_to_guest_trait(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("");
-    format!("{base}Plugin")
+    format!("{base}GuestContract")
 }
 
 fn contract_name_to_upper_snake(name: &str) -> String {

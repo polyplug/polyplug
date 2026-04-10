@@ -112,7 +112,7 @@ pub(crate) struct RawEnum {
 pub(crate) struct RawBundleSchema {
     pub bundle: RawBundleMeta,
     #[serde(default)]
-    pub plugin: Vec<RawPlugin>,
+    pub plugin: Vec<RawBundlePlugin>,
     #[serde(default, rename = "dependency")]
     pub dependencies: Vec<RawDependency>,
 }
@@ -144,7 +144,7 @@ impl Default for RawBundleFile {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct RawPlugin {
+pub(crate) struct RawBundlePlugin {
     pub name: String,
     pub version: String,
     #[serde(default)]

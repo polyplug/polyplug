@@ -125,7 +125,7 @@ fn pascal_case(s: &str) -> String {
 
 /// Convert contract name to C# interface name: "test.add" → "ITestAddPlugin"
 fn contract_name_to_cs_interface(name: &str) -> String {
-    format!("I{}Plugin", pascal_case(name))
+    format!("I{}GuestContract", pascal_case(name))
 }
 
 /// Convert contract name to C# class name: "test.add" → "TestAddContract"
@@ -342,11 +342,11 @@ fn generate_cs_guest_interfaces(ir: &ValidatedIr) -> String {
                     out.push_str("            }\n");
                 }
                 out.push_str(&format!(
-                    "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, \"not initialized\");\n"
+                    "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, \"not initialized\");\n"
                 ));
                 out.push_str("            // call impl\n");
                 out.push_str("            return new AbiError { Code = 0 };\n");
-                out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
+                out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
                 out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
                 out.push_str(
                     "            return new AbiError { Code = ex.Code, Message = msg };\n",
@@ -516,12 +516,12 @@ fn generate_cs_guest_plugin_interface(
             out.push_str("            }\n");
         }
         out.push_str(&format!(
-            "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.PluginException(AbiErrorCode.Generic, \"not initialized\");\n",
+            "            var impl = _impl_{lower} ?? throw new Polyplug.Guest.GuestException(AbiErrorCode.Generic, \"not initialized\");\n",
             lower = plugin_lower
         ));
         out.push_str("            // call impl\n");
         out.push_str("            return new AbiError { Code = 0 };\n");
-        out.push_str("        } catch (Polyplug.Guest.PluginException ex) {\n");
+        out.push_str("        } catch (Polyplug.Guest.GuestException ex) {\n");
         out.push_str("            var msg = StringHelpers.AllocString(ex.Message);\n");
         out.push_str("            return new AbiError { Code = ex.Code, Message = msg };\n");
         out.push_str("        } catch {\n");

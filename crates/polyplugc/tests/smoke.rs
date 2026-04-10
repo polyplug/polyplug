@@ -2,7 +2,7 @@
 //!
 //! Two E2E codegen round-trip tests:
 //!   1. `smoke_rust_codegen_dispatch` — generate Rust bindings, compile plugin, load,
-//!      dispatch add(3, 5), assert == 8 and ABI_OK.
+//!      dispatch add(3, 5), assert == 8 and AbiErrorCode::Ok.
 //!   2. `smoke_cpp_codegen_dispatch` — generate C++ bindings, assert files exist,
 //!      optionally compile/load if g++ available, otherwise gracefully skip.
 //!
@@ -18,7 +18,7 @@ use polyplug_abi::GuestContractHandle;
 use polyplug_abi::DependencyInfo;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::HostInterface;
-use polyplug_abi::PluginContext;
+use polyplug_abi::BundleInitContext;
 use polyplug_abi::PluginDescriptor;
 use polyplug_abi::GuestContractInterface;
 use polyplug_abi::StringView;
@@ -118,7 +118,7 @@ use polyplug_guest::AbiError;
 use polyplug_guest::PluginDescriptor;
 use polyplug_guest::GuestError;
 use polyplug_guest::HostInterface;
-use polyplug_guest::PluginContext;
+use polyplug_guest::BundleInitContext;
 use polyplug_guest::StringView;
 use polyplug_guest::Version;
 use guest::contracts::TestAddPlugin;
@@ -151,7 +151,7 @@ impl TestAddPlugin for MyPlugin {
 #[no_mangle]
 pub unsafe extern "C" fn polyplug_init(
     host: *const HostInterface,
-    _ctx: *const PluginContext,
+    _ctx: *const BundleInitContext,
 ) -> AbiError {
     if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
@@ -367,7 +367,7 @@ fn smoke_rust_codegen_dispatch() {
         '_,
         unsafe extern "C" fn(
             *const HostInterface,
-            *const PluginContext,
+            *const BundleInitContext,
         ) -> AbiError,
     > = unsafe {
         library
@@ -394,7 +394,7 @@ fn smoke_rust_codegen_dispatch() {
     };
 
     // SAFETY: init_fn is valid; host_abi lives for the duration of the call.
-    let ctx: PluginContext = PluginContext {
+    let ctx: BundleInitContext = BundleInitContext {
         bundle_id: 0,
         bundle_path: StringView::null(),
     };
@@ -402,7 +402,7 @@ fn smoke_rust_codegen_dispatch() {
     let init_result: AbiError = unsafe {
         init_fn(
             &host_abi as *const HostInterface,
-            &ctx as *const PluginContext,
+            &ctx as *const BundleInitContext,
         )
     };
     assert_eq!(init_result.code, AbiErrorCode::Ok, "polyplug_init must return Ok");
