@@ -1,3 +1,3 @@
-pub mod plugin_registry;
+pub mod contract_registry;
 
-pub(crate) use plugin_registry::PluginRegistry;
+pub use contract_registry::ContractRegistry;

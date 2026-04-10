@@ -33,7 +33,7 @@ use crate::loader::BundleLoader;
 use crate::loader::LoadedBundle;
 use crate::loader::ManifestData;
 use crate::loader::ManifestDependency;
-use crate::registry::PluginRegistry;
+use crate::registry::ContractRegistry;
 use crate::runtime_builder::RuntimeBuilder;
 use crate::RuntimeConfig;
 
@@ -81,7 +81,7 @@ pub struct LoadOptions {
 
 /// The runtime instance.
 pub struct Runtime {
-    pub(crate) registry: Arc<PluginRegistry>,
+    pub(crate) registry: Arc<ContractRegistry>,
     /// Loaded bundles, never dropped.
     pub(crate) _bundles: Vec<LoadedBundle>,
     /// The static HostInterface given to plugins. Must be 'static.
@@ -273,7 +273,7 @@ impl Runtime {
     }
 
     #[inline(always)]
-    pub fn registry(&self) -> &Arc<PluginRegistry> {
+    pub fn registry(&self) -> &Arc<ContractRegistry> {
         &self.registry
     }
 
@@ -631,7 +631,7 @@ pub(crate) unsafe extern "C" fn host_register_contract(
     // SAFETY: this is a valid HostInterface pointer passed during polyplug_init.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &PluginRegistry = &runtime.registry;
+    let registry: &ContractRegistry = &runtime.registry;
     // Get bundle_id from TLS (set by loader before calling polyplug_init)
     let bundle_id: u64 = get_init_bundle_id();
 
@@ -706,7 +706,7 @@ pub(crate) unsafe extern "C" fn host_find_by_contract(
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &PluginRegistry = &runtime.registry;
+    let registry: &ContractRegistry = &runtime.registry;
     // Get bundle_id from TLS for dependency enforcement during init phase
     let caller_bundle_id: u64 = get_init_bundle_id();
 
@@ -736,7 +736,7 @@ pub(crate) unsafe extern "C" fn host_find_all_by_contract(
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &PluginRegistry = &runtime.registry;
+    let registry: &ContractRegistry = &runtime.registry;
 
     // First, count matching contracts
     let count = registry.count_by_contract(GuestContractId::from_u64(contract_id), min_version);
@@ -776,7 +776,7 @@ pub(crate) unsafe extern "C" fn host_resolve_contract(
     // SAFETY: this is a valid HostInterface pointer passed by the host.
     // (*this).runtime contains a valid pointer to Runtime.
     let runtime: &Runtime = unsafe { &*((*this).runtime as *const Runtime) };
-    let registry: &PluginRegistry = &runtime.registry;
+    let registry: &ContractRegistry = &runtime.registry;
 
     match registry.resolve(handle) {
         Ok(ptr) => ptr,
@@ -1084,7 +1084,8 @@ mod tests {
 
     #[test]
     fn abi_ok_constant() {
-        assert_eq!(polyplug_abi::AbiErrorCode::Ok, 0_u32);
+        assert_eq!(polyplug_abi::AbiErrorCode::Ok, polyplug_abi::AbiErrorCode::Ok);
+        assert_eq!(polyplug_abi::AbiErrorCode::Ok as u32, 0_u32);
     }
 
     /// TH-06: Verify host callbacks in runtime.rs use HostInterface self-passing pattern.
@@ -1171,7 +1172,7 @@ mod tests {
     }
 
     fn register_contract(
-        registry: &crate::registry::PluginRegistry,
+        registry: &crate::registry::ContractRegistry,
         contract_id: u64,
         bundle_id: u64,
     ) -> GuestContractHandle {
@@ -1424,7 +1425,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<PluginRegistry> = runtime.registry();
+        let registry: &Arc<ContractRegistry> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xBEEF_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
@@ -1459,7 +1460,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<PluginRegistry> = runtime.registry();
+        let registry: &Arc<ContractRegistry> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xCAFE_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(bundle_path.as_path());
@@ -1529,7 +1530,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<PluginRegistry> = runtime.registry();
+        let registry: &Arc<ContractRegistry> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xABCD_u64);
         {
             let mut guard: std::sync::MutexGuard<'_, ReentrantState> = match state.lock() {
@@ -1584,7 +1585,7 @@ mod tests {
             Ok(rt) => rt,
             Err(e) => panic!("failed to build runtime: {e}"),
         };
-        let registry: &Arc<PluginRegistry> = runtime.registry();
+        let registry: &Arc<ContractRegistry> = runtime.registry();
         let _handle: GuestContractHandle = register_contract(registry.as_ref(), contract, 0xFACE_u64);
         let result: Result<(), crate::error::RuntimeError> =
             runtime.load_bundle(outer_bundle.as_path());

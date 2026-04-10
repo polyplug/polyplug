@@ -6,7 +6,7 @@ use crate::{
     compatibility::{CapabilityGraph, Compatibility},
     error::{GraphError, LoaderError, RuntimeError},
     loader::{BundleLoader, ManifestData},
-    registry::plugin_registry::PluginRegistry,
+    registry::contract_registry::ContractRegistry,
     runtime::{Runtime, WarningCb, ReloadCb},
     RuntimeConfig,
 };
@@ -97,7 +97,7 @@ impl RuntimeBuilder {
     //  loads them in sorted order, registers interfaces.
     //  Full capability graph resolution is a future enhancement.
     pub fn build(self) -> Result<Runtime, RuntimeError> {
-        let registry: Arc<PluginRegistry> = Arc::new(PluginRegistry::new());
+        let registry: Arc<ContractRegistry> = Arc::new(ContractRegistry::new());
 
         // Build the static HostInterface. This must be 'static.
         // The runtime field will be set when Runtime is created.
