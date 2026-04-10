@@ -9,6 +9,7 @@
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::AbiError;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::HostInterface;
 use polyplug_abi::DispatchType;
 use polyplug_abi::StringView;
 use polyplug_abi::GuestContractHandle;
@@ -104,25 +105,25 @@ impl PipelineDecoderContract {
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
-        let vtable: &GuestContractInterface = unsafe { &*self.interface };
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+            if 0_u32 >= interface.dispatch.native.function_count {
+                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in interface") }
             } else {
-                match vtable.dispatch_type {
+                match interface.dispatch_type {
                     DispatchType::Native => {
-                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
-                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        // - The interface guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(
-                            vtable.dispatch.vm.loader_data,
+                        (interface.dispatch.vm.call)(
+                            interface.dispatch.vm.loader_data,
                             self.instance,  // instance parameter
                             0_u32,
                             args_ptr,
@@ -239,25 +240,25 @@ impl DataTransformerContract {
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
-        let vtable: &GuestContractInterface = unsafe { &*self.interface };
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+            if 0_u32 >= interface.dispatch.native.function_count {
+                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in interface") }
             } else {
-                match vtable.dispatch_type {
+                match interface.dispatch_type {
                     DispatchType::Native => {
-                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
-                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        // - The interface guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(
-                            vtable.dispatch.vm.loader_data,
+                        (interface.dispatch.vm.call)(
+                            interface.dispatch.vm.loader_data,
                             self.instance,  // instance parameter
                             0_u32,
                             args_ptr,
@@ -374,25 +375,25 @@ impl PipelineEncoderContract {
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
-        let vtable: &GuestContractInterface = unsafe { &*self.interface };
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+            if 0_u32 >= interface.dispatch.native.function_count {
+                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in interface") }
             } else {
-                match vtable.dispatch_type {
+                match interface.dispatch_type {
                     DispatchType::Native => {
-                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
-                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        // - The interface guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(
-                            vtable.dispatch.vm.loader_data,
+                        (interface.dispatch.vm.call)(
+                            interface.dispatch.vm.loader_data,
                             self.instance,  // instance parameter
                             0_u32,
                             args_ptr,
@@ -509,25 +510,25 @@ impl DataReporterContract {
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
-        let vtable: &GuestContractInterface = unsafe { &*self.interface };
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+            if 0_u32 >= interface.dispatch.native.function_count {
+                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in interface") }
             } else {
-                match vtable.dispatch_type {
+                match interface.dispatch_type {
                     DispatchType::Native => {
-                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
-                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        // - The interface guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(
-                            vtable.dispatch.vm.loader_data,
+                        (interface.dispatch.vm.call)(
+                            interface.dispatch.vm.loader_data,
                             self.instance,  // instance parameter
                             0_u32,
                             args_ptr,
@@ -644,25 +645,25 @@ impl PipelineValidatorContract {
         // Enforced by the generated caller contract.
         let out_ptr: *mut () = &mut out_val as *mut StringView as *mut ();
         // SAFETY: interface pointer is stored in wrapper, valid for the duration of the call.
-        let vtable: &GuestContractInterface = unsafe { &*self.interface };
+        let interface: &GuestContractInterface = unsafe { &*self.interface };
         // SAFETY: args_ptr/out_ptr match the ABI contract; instance is valid.
         let err: AbiError = unsafe {
-            if 0_u32 >= vtable.dispatch.native.function_count {
-                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in vtable") }
+            if 0_u32 >= interface.dispatch.native.function_count {
+                AbiError { code: AbiErrorCode::FunctionNotAvailable, message: polyplug_abi::string_view_from_static(b"function not available in interface") }
             } else {
-                match vtable.dispatch_type {
+                match interface.dispatch_type {
                     DispatchType::Native => {
-                        let fn_ptr: *const () = *vtable.dispatch.native.functions.add(0_usize);
+                        let fn_ptr: *const () = *interface.dispatch.native.functions.add(0_usize);
                         // SAFETY: Transmuting *const () to a function pointer is sound because:
                         // - Function pointers have the same size and alignment as data pointers on all supported platforms
-                        // - The vtable guarantees that the function at this index is a native dispatch function
+                        // - The interface guarantees that the function at this index is a native dispatch function
                         //   with the exact signature: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError
                         let dispatch_fn: unsafe extern "C" fn(GuestContractInstance, *const (), *mut ()) -> AbiError = core::mem::transmute(fn_ptr);
                         dispatch_fn(self.instance, args_ptr, out_ptr)
                     }
                     DispatchType::VirtualMachine => {
-                        (vtable.dispatch.vm.call)(
-                            vtable.dispatch.vm.loader_data,
+                        (interface.dispatch.vm.call)(
+                            interface.dispatch.vm.loader_data,
                             self.instance,  // instance parameter
                             0_u32,
                             args_ptr,

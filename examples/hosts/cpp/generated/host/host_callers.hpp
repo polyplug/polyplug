@@ -10,293 +10,563 @@
 namespace polyplug_generated {
 
 /// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
+///
+/// RAII wrapper that manages instance lifecycle:
+/// - `create()`: resolves handle and calls `create_instance`
+/// - destructor: calls `destroy_instance` to clean up
+/// - dispatch: passes `instance_` to all method calls
 class PipelineDecoderContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
-    static std::optional<PipelineDecoderContract> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {
-        uint64_t handle = rt.find(PIPELINE_DECODER_CONTRACT_ID, min_version);
-        if (handle == UINT64_MAX) {
+    /// Calls `create_instance` on the resolved interface.
+    ///
+    /// # Arguments
+    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `host`: Host interface pointer
+    ///
+    /// # Returns
+    /// - `std::optional<Self>` if interface found and instance created
+    /// - `std::nullopt` if interface not found or `create_instance` failed
+    static std::optional<PipelineDecoderContract> create(uint64_t handle, const HostInterface* host) noexcept {
+        // Resolve the interface from the handle via FFI
+        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
+        if (!iface) {
             return std::nullopt;
         }
-        polyplug::PluginGuard guard = rt.resolve_plugin(handle);
-        if (!guard) {
+        // Create instance via factory function
+        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        if (instance.data == nullptr) {
             return std::nullopt;
         }
-        return PipelineDecoderContract(std::move(guard));
+        return PipelineDecoderContract(iface, instance, host);
     }
 
-    // Move-only (guard is not copyable)
-    PipelineDecoderContract(PipelineDecoderContract&&) noexcept = default;
-    PipelineDecoderContract& operator=(PipelineDecoderContract&&) noexcept = default;
+    /// Destructor - calls `destroy_instance` to clean up.
+    ~PipelineDecoderContract() noexcept {
+        // Destroy instance via factory
+        // SAFETY: instance was created by create_instance and is valid.
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+            instance_.data = nullptr;  // Prevent reuse after cleanup.
+        }
+    }
+
+    // Move-only (instance handles are unique)
+    PipelineDecoderContract(PipelineDecoderContract&& other) noexcept
+        : interface_(other.interface_),
+          instance_(other.instance_),
+          host_(other.host_) {
+        other.instance_.data = nullptr;  // Prevent double-destroy.
+    }
+    PipelineDecoderContract& operator=(PipelineDecoderContract&& other) noexcept {
+        if (this != &other) {
+            // Destroy current instance first
+            if (instance_.data != nullptr) {
+                interface_->destroy_instance(host_, instance_);
+            }
+            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+        }
+        return *this;
+    }
     PipelineDecoderContract(const PipelineDecoderContract&) = delete;
     PipelineDecoderContract& operator=(const PipelineDecoderContract&) = delete;
 
-    /// Check if instance is valid.
-    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }
+    /// Check if instance is valid (non-null data).
+    explicit operator bool() const noexcept { return instance_.data != nullptr; }
 
     /// Check if instance is valid.
-    bool is_valid() const noexcept { return static_cast<bool>(guard_); }
+    bool is_valid() const noexcept { return instance_.data != nullptr; }
 
-    /// Explicitly destroy instance (optional - destructor does this too).
-    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
+    /// Destroy current instance and create a new one.
+    /// Useful for recovering from plugin errors.
+    void reset() noexcept {
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+        }
+        instance_ = interface_->create_instance(host_, nullptr);
+    }
 
+    /// Call `decode` (function_id=0)
     StringView decode(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const GuestContractInterface* vtable = guard_.interface();
-        if (!vtable) {
-            static constexpr const char* err_msg = "vtable is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
+        // SAFETY: interface_ is valid for the lifetime of this wrapper.
+        if (!interface_) {
+            static constexpr const char* err_msg = "interface is null";
+            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= vtable->function_count) {
-            static constexpr const char* err_msg = "function not available in vtable";
+        if (0_u32 >= interface_->function_count) {
+            static constexpr const char* err_msg = "function not available in interface";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[0U]);
-        AbiError err = fn_(args_ptr, out_ptr);
+        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+        // SAFETY: instance_ was created by create_instance and is valid.
+        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        AbiError err = fn_(instance_, args_ptr, out_ptr);
         polyplug::check_abi_error(err);
         return out;
     }
 
 private:
-    explicit PipelineDecoderContract(polyplug::PluginGuard guard) noexcept
-        : guard_(std::move(guard)) {}
+    /// Resolved interface pointer from the registry.
+    const GuestContractInterface* interface_;
+    /// Instance handle created by `create_instance`.
+    GuestContractInstance instance_;
+    /// Host interface pointer (needed for create/destroy_instance).
+    const HostInterface* host_;
 
-    polyplug::PluginGuard guard_;
+    explicit PipelineDecoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+        : interface_(iface), instance_(inst), host_(host) {}
 };
 
 /// Host caller for contract `data.Transformer` (id=0x4775991362CD68EE)
+///
+/// RAII wrapper that manages instance lifecycle:
+/// - `create()`: resolves handle and calls `create_instance`
+/// - destructor: calls `destroy_instance` to clean up
+/// - dispatch: passes `instance_` to all method calls
 class DataTransformerContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
-    static std::optional<DataTransformerContract> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {
-        uint64_t handle = rt.find(DATA_TRANSFORMER_CONTRACT_ID, min_version);
-        if (handle == UINT64_MAX) {
+    /// Calls `create_instance` on the resolved interface.
+    ///
+    /// # Arguments
+    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `host`: Host interface pointer
+    ///
+    /// # Returns
+    /// - `std::optional<Self>` if interface found and instance created
+    /// - `std::nullopt` if interface not found or `create_instance` failed
+    static std::optional<DataTransformerContract> create(uint64_t handle, const HostInterface* host) noexcept {
+        // Resolve the interface from the handle via FFI
+        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
+        if (!iface) {
             return std::nullopt;
         }
-        polyplug::PluginGuard guard = rt.resolve_plugin(handle);
-        if (!guard) {
+        // Create instance via factory function
+        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        if (instance.data == nullptr) {
             return std::nullopt;
         }
-        return DataTransformerContract(std::move(guard));
+        return DataTransformerContract(iface, instance, host);
     }
 
-    // Move-only (guard is not copyable)
-    DataTransformerContract(DataTransformerContract&&) noexcept = default;
-    DataTransformerContract& operator=(DataTransformerContract&&) noexcept = default;
+    /// Destructor - calls `destroy_instance` to clean up.
+    ~DataTransformerContract() noexcept {
+        // Destroy instance via factory
+        // SAFETY: instance was created by create_instance and is valid.
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+            instance_.data = nullptr;  // Prevent reuse after cleanup.
+        }
+    }
+
+    // Move-only (instance handles are unique)
+    DataTransformerContract(DataTransformerContract&& other) noexcept
+        : interface_(other.interface_),
+          instance_(other.instance_),
+          host_(other.host_) {
+        other.instance_.data = nullptr;  // Prevent double-destroy.
+    }
+    DataTransformerContract& operator=(DataTransformerContract&& other) noexcept {
+        if (this != &other) {
+            // Destroy current instance first
+            if (instance_.data != nullptr) {
+                interface_->destroy_instance(host_, instance_);
+            }
+            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+        }
+        return *this;
+    }
     DataTransformerContract(const DataTransformerContract&) = delete;
     DataTransformerContract& operator=(const DataTransformerContract&) = delete;
 
-    /// Check if instance is valid.
-    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }
+    /// Check if instance is valid (non-null data).
+    explicit operator bool() const noexcept { return instance_.data != nullptr; }
 
     /// Check if instance is valid.
-    bool is_valid() const noexcept { return static_cast<bool>(guard_); }
+    bool is_valid() const noexcept { return instance_.data != nullptr; }
 
-    /// Explicitly destroy instance (optional - destructor does this too).
-    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
+    /// Destroy current instance and create a new one.
+    /// Useful for recovering from plugin errors.
+    void reset() noexcept {
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+        }
+        instance_ = interface_->create_instance(host_, nullptr);
+    }
 
+    /// Call `transform` (function_id=0)
     StringView transform(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const GuestContractInterface* vtable = guard_.interface();
-        if (!vtable) {
-            static constexpr const char* err_msg = "vtable is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
+        // SAFETY: interface_ is valid for the lifetime of this wrapper.
+        if (!interface_) {
+            static constexpr const char* err_msg = "interface is null";
+            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= vtable->function_count) {
-            static constexpr const char* err_msg = "function not available in vtable";
+        if (0_u32 >= interface_->function_count) {
+            static constexpr const char* err_msg = "function not available in interface";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[0U]);
-        AbiError err = fn_(args_ptr, out_ptr);
+        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+        // SAFETY: instance_ was created by create_instance and is valid.
+        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        AbiError err = fn_(instance_, args_ptr, out_ptr);
         polyplug::check_abi_error(err);
         return out;
     }
 
 private:
-    explicit DataTransformerContract(polyplug::PluginGuard guard) noexcept
-        : guard_(std::move(guard)) {}
+    /// Resolved interface pointer from the registry.
+    const GuestContractInterface* interface_;
+    /// Instance handle created by `create_instance`.
+    GuestContractInstance instance_;
+    /// Host interface pointer (needed for create/destroy_instance).
+    const HostInterface* host_;
 
-    polyplug::PluginGuard guard_;
+    explicit DataTransformerContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+        : interface_(iface), instance_(inst), host_(host) {}
 };
 
 /// Host caller for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
+///
+/// RAII wrapper that manages instance lifecycle:
+/// - `create()`: resolves handle and calls `create_instance`
+/// - destructor: calls `destroy_instance` to clean up
+/// - dispatch: passes `instance_` to all method calls
 class PipelineEncoderContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
-    static std::optional<PipelineEncoderContract> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {
-        uint64_t handle = rt.find(PIPELINE_ENCODER_CONTRACT_ID, min_version);
-        if (handle == UINT64_MAX) {
+    /// Calls `create_instance` on the resolved interface.
+    ///
+    /// # Arguments
+    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `host`: Host interface pointer
+    ///
+    /// # Returns
+    /// - `std::optional<Self>` if interface found and instance created
+    /// - `std::nullopt` if interface not found or `create_instance` failed
+    static std::optional<PipelineEncoderContract> create(uint64_t handle, const HostInterface* host) noexcept {
+        // Resolve the interface from the handle via FFI
+        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
+        if (!iface) {
             return std::nullopt;
         }
-        polyplug::PluginGuard guard = rt.resolve_plugin(handle);
-        if (!guard) {
+        // Create instance via factory function
+        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        if (instance.data == nullptr) {
             return std::nullopt;
         }
-        return PipelineEncoderContract(std::move(guard));
+        return PipelineEncoderContract(iface, instance, host);
     }
 
-    // Move-only (guard is not copyable)
-    PipelineEncoderContract(PipelineEncoderContract&&) noexcept = default;
-    PipelineEncoderContract& operator=(PipelineEncoderContract&&) noexcept = default;
+    /// Destructor - calls `destroy_instance` to clean up.
+    ~PipelineEncoderContract() noexcept {
+        // Destroy instance via factory
+        // SAFETY: instance was created by create_instance and is valid.
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+            instance_.data = nullptr;  // Prevent reuse after cleanup.
+        }
+    }
+
+    // Move-only (instance handles are unique)
+    PipelineEncoderContract(PipelineEncoderContract&& other) noexcept
+        : interface_(other.interface_),
+          instance_(other.instance_),
+          host_(other.host_) {
+        other.instance_.data = nullptr;  // Prevent double-destroy.
+    }
+    PipelineEncoderContract& operator=(PipelineEncoderContract&& other) noexcept {
+        if (this != &other) {
+            // Destroy current instance first
+            if (instance_.data != nullptr) {
+                interface_->destroy_instance(host_, instance_);
+            }
+            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+        }
+        return *this;
+    }
     PipelineEncoderContract(const PipelineEncoderContract&) = delete;
     PipelineEncoderContract& operator=(const PipelineEncoderContract&) = delete;
 
-    /// Check if instance is valid.
-    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }
+    /// Check if instance is valid (non-null data).
+    explicit operator bool() const noexcept { return instance_.data != nullptr; }
 
     /// Check if instance is valid.
-    bool is_valid() const noexcept { return static_cast<bool>(guard_); }
+    bool is_valid() const noexcept { return instance_.data != nullptr; }
 
-    /// Explicitly destroy instance (optional - destructor does this too).
-    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
+    /// Destroy current instance and create a new one.
+    /// Useful for recovering from plugin errors.
+    void reset() noexcept {
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+        }
+        instance_ = interface_->create_instance(host_, nullptr);
+    }
 
+    /// Call `encode` (function_id=0)
     StringView encode(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const GuestContractInterface* vtable = guard_.interface();
-        if (!vtable) {
-            static constexpr const char* err_msg = "vtable is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
+        // SAFETY: interface_ is valid for the lifetime of this wrapper.
+        if (!interface_) {
+            static constexpr const char* err_msg = "interface is null";
+            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= vtable->function_count) {
-            static constexpr const char* err_msg = "function not available in vtable";
+        if (0_u32 >= interface_->function_count) {
+            static constexpr const char* err_msg = "function not available in interface";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[0U]);
-        AbiError err = fn_(args_ptr, out_ptr);
+        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+        // SAFETY: instance_ was created by create_instance and is valid.
+        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        AbiError err = fn_(instance_, args_ptr, out_ptr);
         polyplug::check_abi_error(err);
         return out;
     }
 
 private:
-    explicit PipelineEncoderContract(polyplug::PluginGuard guard) noexcept
-        : guard_(std::move(guard)) {}
+    /// Resolved interface pointer from the registry.
+    const GuestContractInterface* interface_;
+    /// Instance handle created by `create_instance`.
+    GuestContractInstance instance_;
+    /// Host interface pointer (needed for create/destroy_instance).
+    const HostInterface* host_;
 
-    polyplug::PluginGuard guard_;
+    explicit PipelineEncoderContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+        : interface_(iface), instance_(inst), host_(host) {}
 };
 
 /// Host caller for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
+///
+/// RAII wrapper that manages instance lifecycle:
+/// - `create()`: resolves handle and calls `create_instance`
+/// - destructor: calls `destroy_instance` to clean up
+/// - dispatch: passes `instance_` to all method calls
 class DataReporterContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
-    static std::optional<DataReporterContract> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {
-        uint64_t handle = rt.find(DATA_REPORTER_CONTRACT_ID, min_version);
-        if (handle == UINT64_MAX) {
+    /// Calls `create_instance` on the resolved interface.
+    ///
+    /// # Arguments
+    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `host`: Host interface pointer
+    ///
+    /// # Returns
+    /// - `std::optional<Self>` if interface found and instance created
+    /// - `std::nullopt` if interface not found or `create_instance` failed
+    static std::optional<DataReporterContract> create(uint64_t handle, const HostInterface* host) noexcept {
+        // Resolve the interface from the handle via FFI
+        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
+        if (!iface) {
             return std::nullopt;
         }
-        polyplug::PluginGuard guard = rt.resolve_plugin(handle);
-        if (!guard) {
+        // Create instance via factory function
+        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        if (instance.data == nullptr) {
             return std::nullopt;
         }
-        return DataReporterContract(std::move(guard));
+        return DataReporterContract(iface, instance, host);
     }
 
-    // Move-only (guard is not copyable)
-    DataReporterContract(DataReporterContract&&) noexcept = default;
-    DataReporterContract& operator=(DataReporterContract&&) noexcept = default;
+    /// Destructor - calls `destroy_instance` to clean up.
+    ~DataReporterContract() noexcept {
+        // Destroy instance via factory
+        // SAFETY: instance was created by create_instance and is valid.
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+            instance_.data = nullptr;  // Prevent reuse after cleanup.
+        }
+    }
+
+    // Move-only (instance handles are unique)
+    DataReporterContract(DataReporterContract&& other) noexcept
+        : interface_(other.interface_),
+          instance_(other.instance_),
+          host_(other.host_) {
+        other.instance_.data = nullptr;  // Prevent double-destroy.
+    }
+    DataReporterContract& operator=(DataReporterContract&& other) noexcept {
+        if (this != &other) {
+            // Destroy current instance first
+            if (instance_.data != nullptr) {
+                interface_->destroy_instance(host_, instance_);
+            }
+            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+        }
+        return *this;
+    }
     DataReporterContract(const DataReporterContract&) = delete;
     DataReporterContract& operator=(const DataReporterContract&) = delete;
 
-    /// Check if instance is valid.
-    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }
+    /// Check if instance is valid (non-null data).
+    explicit operator bool() const noexcept { return instance_.data != nullptr; }
 
     /// Check if instance is valid.
-    bool is_valid() const noexcept { return static_cast<bool>(guard_); }
+    bool is_valid() const noexcept { return instance_.data != nullptr; }
 
-    /// Explicitly destroy instance (optional - destructor does this too).
-    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
+    /// Destroy current instance and create a new one.
+    /// Useful for recovering from plugin errors.
+    void reset() noexcept {
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+        }
+        instance_ = interface_->create_instance(host_, nullptr);
+    }
 
+    /// Call `report` (function_id=0)
     StringView report(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const GuestContractInterface* vtable = guard_.interface();
-        if (!vtable) {
-            static constexpr const char* err_msg = "vtable is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
+        // SAFETY: interface_ is valid for the lifetime of this wrapper.
+        if (!interface_) {
+            static constexpr const char* err_msg = "interface is null";
+            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= vtable->function_count) {
-            static constexpr const char* err_msg = "function not available in vtable";
+        if (0_u32 >= interface_->function_count) {
+            static constexpr const char* err_msg = "function not available in interface";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[0U]);
-        AbiError err = fn_(args_ptr, out_ptr);
+        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+        // SAFETY: instance_ was created by create_instance and is valid.
+        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        AbiError err = fn_(instance_, args_ptr, out_ptr);
         polyplug::check_abi_error(err);
         return out;
     }
 
 private:
-    explicit DataReporterContract(polyplug::PluginGuard guard) noexcept
-        : guard_(std::move(guard)) {}
+    /// Resolved interface pointer from the registry.
+    const GuestContractInterface* interface_;
+    /// Instance handle created by `create_instance`.
+    GuestContractInstance instance_;
+    /// Host interface pointer (needed for create/destroy_instance).
+    const HostInterface* host_;
 
-    polyplug::PluginGuard guard_;
+    explicit DataReporterContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+        : interface_(iface), instance_(inst), host_(host) {}
 };
 
 /// Host caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
+///
+/// RAII wrapper that manages instance lifecycle:
+/// - `create()`: resolves handle and calls `create_instance`
+/// - destructor: calls `destroy_instance` to clean up
+/// - dispatch: passes `instance_` to all method calls
 class PipelineValidatorContract {
 public:
     /// Factory method - creates instance or nullopt if not found.
-    static std::optional<PipelineValidatorContract> create(polyplug::Runtime& rt, uint32_t min_version = 0) noexcept {
-        uint64_t handle = rt.find(PIPELINE_VALIDATOR_CONTRACT_ID, min_version);
-        if (handle == UINT64_MAX) {
+    /// Calls `create_instance` on the resolved interface.
+    ///
+    /// # Arguments
+    /// - `handle`: Contract handle from `find_by_contract`
+    /// - `host`: Host interface pointer
+    ///
+    /// # Returns
+    /// - `std::optional<Self>` if interface found and instance created
+    /// - `std::nullopt` if interface not found or `create_instance` failed
+    static std::optional<PipelineValidatorContract> create(uint64_t handle, const HostInterface* host) noexcept {
+        // Resolve the interface from the handle via FFI
+        const GuestContractInterface* iface = polyplug_runtime_resolve_contract(host, handle);
+        if (!iface) {
             return std::nullopt;
         }
-        polyplug::PluginGuard guard = rt.resolve_plugin(handle);
-        if (!guard) {
+        // Create instance via factory function
+        GuestContractInstance instance = iface->create_instance(host, nullptr);
+        if (instance.data == nullptr) {
             return std::nullopt;
         }
-        return PipelineValidatorContract(std::move(guard));
+        return PipelineValidatorContract(iface, instance, host);
     }
 
-    // Move-only (guard is not copyable)
-    PipelineValidatorContract(PipelineValidatorContract&&) noexcept = default;
-    PipelineValidatorContract& operator=(PipelineValidatorContract&&) noexcept = default;
+    /// Destructor - calls `destroy_instance` to clean up.
+    ~PipelineValidatorContract() noexcept {
+        // Destroy instance via factory
+        // SAFETY: instance was created by create_instance and is valid.
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+            instance_.data = nullptr;  // Prevent reuse after cleanup.
+        }
+    }
+
+    // Move-only (instance handles are unique)
+    PipelineValidatorContract(PipelineValidatorContract&& other) noexcept
+        : interface_(other.interface_),
+          instance_(other.instance_),
+          host_(other.host_) {
+        other.instance_.data = nullptr;  // Prevent double-destroy.
+    }
+    PipelineValidatorContract& operator=(PipelineValidatorContract&& other) noexcept {
+        if (this != &other) {
+            // Destroy current instance first
+            if (instance_.data != nullptr) {
+                interface_->destroy_instance(host_, instance_);
+            }
+            interface_ = other.interface_; instance_ = other.instance_; host_ = other.host_; other.instance_.data = nullptr;
+        }
+        return *this;
+    }
     PipelineValidatorContract(const PipelineValidatorContract&) = delete;
     PipelineValidatorContract& operator=(const PipelineValidatorContract&) = delete;
 
-    /// Check if instance is valid.
-    explicit operator bool() const noexcept { return static_cast<bool>(guard_); }
+    /// Check if instance is valid (non-null data).
+    explicit operator bool() const noexcept { return instance_.data != nullptr; }
 
     /// Check if instance is valid.
-    bool is_valid() const noexcept { return static_cast<bool>(guard_); }
+    bool is_valid() const noexcept { return instance_.data != nullptr; }
 
-    /// Explicitly destroy instance (optional - destructor does this too).
-    void reset() noexcept { guard_ = polyplug::PluginGuard{}; }
+    /// Destroy current instance and create a new one.
+    /// Useful for recovering from plugin errors.
+    void reset() noexcept {
+        if (instance_.data != nullptr) {
+            interface_->destroy_instance(host_, instance_);
+        }
+        instance_ = interface_->create_instance(host_, nullptr);
+    }
 
+    /// Call `validate` (function_id=0)
     StringView validate(StringView input) {
         const StringView local_input = input;
         const void* args_ptr = &local_input;
-        const GuestContractInterface* vtable = guard_.interface();
-        if (!vtable) {
-            static constexpr const char* err_msg = "vtable is null";
-            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 14}});
+        // SAFETY: interface_ is valid for the lifetime of this wrapper.
+        if (!interface_) {
+            static constexpr const char* err_msg = "interface is null";
+            polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 16}});
         }
         StringView out{};
         void* out_ptr = &out;
-        if (0_u32 >= vtable->function_count) {
-            static constexpr const char* err_msg = "function not available in vtable";
+        if (0_u32 >= interface_->function_count) {
+            static constexpr const char* err_msg = "function not available in interface";
             polyplug::check_abi_error(AbiError{4, StringView{reinterpret_cast<const uint8_t*>(err_msg), 32}});
         }
-        auto fn_ = reinterpret_cast<AbiError(*)(const void*, void*)>(vtable->dispatch.native.functions[0U]);
-        AbiError err = fn_(args_ptr, out_ptr);
+        auto fn_ = reinterpret_cast<AbiError(*)(GuestContractInstance, const void*, void*)>(interface_->dispatch.native.functions[0U]);
+        // SAFETY: instance_ was created by create_instance and is valid.
+        // args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        AbiError err = fn_(instance_, args_ptr, out_ptr);
         polyplug::check_abi_error(err);
         return out;
     }
 
 private:
-    explicit PipelineValidatorContract(polyplug::PluginGuard guard) noexcept
-        : guard_(std::move(guard)) {}
+    /// Resolved interface pointer from the registry.
+    const GuestContractInterface* interface_;
+    /// Instance handle created by `create_instance`.
+    GuestContractInstance instance_;
+    /// Host interface pointer (needed for create/destroy_instance).
+    const HostInterface* host_;
 
-    polyplug::PluginGuard guard_;
+    explicit PipelineValidatorContract(const GuestContractInterface* iface, GuestContractInstance inst, const HostInterface* host) noexcept
+        : interface_(iface), instance_(inst), host_(host) {}
 };
 
 }  // namespace polyplug_generated

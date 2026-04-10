@@ -10,21 +10,21 @@ namespace polyplug_host {
 
 using namespace polyplug_generated;
 
-/// Create a host contract vtable for `host.logger` with NATIVE dispatch.
+/// Create a host contract interface for `host.logger` with NATIVE dispatch.
 ///
-/// Takes ownership of the implementation and creates a 'static vtable.
+/// Takes ownership of the implementation and creates a 'static interface.
 /// The implementation must inherit from the abstract class.
 ///
 /// # Memory
-/// The returned vtable pointer is valid for the lifetime of the program.
+/// The returned interface pointer is valid for the lifetime of the program.
 /// The implementation unique_ptr is released and managed internally.
 template<typename T>
-const HostContractVTable* create_host_logger_interface(std::unique_ptr<T> impl) noexcept {
+const HostContractInterface* create_host_logger_interface(std::unique_ptr<T> impl) noexcept {
     static T* s_impl = nullptr;
     s_impl = impl.release();
 
-    static AbiError host_logger_log_thunk(const void* impl_ptr, const void* args, void* out) noexcept {
-        (void)impl_ptr;  // We use s_impl directly
+    static AbiError host_logger_log_thunk(HostContractInstance instance, const void* args, void* out) noexcept {
+        (void)instance;  // Instance data passed by caller, we use s_impl directly
         if (s_impl == nullptr) {
             return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
         }
@@ -39,8 +39,8 @@ const HostContractVTable* create_host_logger_interface(std::unique_ptr<T> impl) 
         }
     }
 
-    static AbiError host_logger_log_with_level_thunk(const void* impl_ptr, const void* args, void* out) noexcept {
-        (void)impl_ptr;  // We use s_impl directly
+    static AbiError host_logger_log_with_level_thunk(HostContractInstance instance, const void* args, void* out) noexcept {
+        (void)instance;  // Instance data passed by caller, we use s_impl directly
         if (s_impl == nullptr) {
             return AbiError{static_cast<uint32_t>(AbiErrorCode::Panic), StringView{nullptr, 0}};
         }
@@ -65,62 +65,78 @@ const HostContractVTable* create_host_logger_interface(std::unique_ptr<T> impl) 
         host_logger_log_with_level_thunk,
     };
 
-    static HostContractVTable s_vtable = {
-        HostContractVTableHeader{
-            1,  // vtable_version
-            0xF53EB5F2845853BBULL,  // contract_id
-            1U,  // contract_major
-            0U,  // contract_minor
+    // create_instance stub - host owns the singleton instance lifecycle
+    static HostContractInstance create_instance_stub(
+        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {
+        // Multi-instance: not supported in host-side factory, use custom factory
+        return HostContractInstance{nullptr};
+    }
+
+    // destroy_instance stub - host owns the singleton instance lifecycle
+    static void destroy_instance_stub(
+        const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept {
+        // Multi-instance: not supported in host-side factory, use custom factory
+    }
+
+    static HostContractInterface s_interface = {
+        0xF53EB5F2845853BBULL,  // contract_id
+        Version{1U, 0U, 0U},  // contract_version
+        false,  // singleton
+        DispatchType::Native,  // dispatch_type
+        nullptr,  // runtime (set by polyplug during registration)
+        create_instance_stub,  // create_instance
+        destroy_instance_stub,  // destroy_instance
+        NativeDispatch{
             2U,  // function_count
-            false,  // singleton
-            DispatchType::Native,
-        },
-        HostContractDispatch{
-            NativeHostContractDispatch{
-                static_cast<const void*>(static_cast<T*>(nullptr)),  // impl_ptr (unused, we use s_impl)
-                FUNCTIONS,
-            },
-        },
-    };
+            FUNCTIONS,  // functions
+        },  // dispatch.native
+    };  // dispatch
 
     (void)s_impl;  // Suppress unused warning - used by thunks
-    return &s_vtable;
+    return &s_interface;
 }
 
-/// Create a host contract vtable for `host.logger` with VM dispatch.
+/// Create a host contract interface for `host.logger` with VM dispatch.
 ///
 /// Used when the host implementation is in a VM language (Python, Lua, JS).
 ///
 /// # Arguments
-/// * `bridge_data` - Opaque pointer to VM-specific data
+/// * `loader_data` - Opaque pointer to VM-specific data
 /// * `dispatch_fn` - Function to call for each contract function
 ///
 /// # Memory
-/// The returned vtable pointer is valid for the lifetime of the program.
-const HostContractVTable* create_host_logger_interface_vm(
-    void* bridge_data,
-    VmHostContractDispatchFn dispatch_fn
+/// The returned interface pointer is valid for the lifetime of the program.
+const HostContractInterface* create_host_logger_interface_vm(
+    void* loader_data,
+    VmDispatchCallFn dispatch_fn
 ) noexcept {
-    static HostContractVTable s_vtable = {
-        HostContractVTableHeader{
-            1,  // vtable_version
-            0xF53EB5F2845853BBULL,  // contract_id
-            1U,  // contract_major
-            0U,  // contract_minor
-            2U,  // function_count
-            false,  // singleton
-            DispatchType::VirtualMachine,
-        },
-        HostContractDispatch{
-            VmHostContractDispatch{
-                dispatch_fn,
-                bridge_data,
-            },
-        },
-    };
-    s_vtable.dispatch.vm.bridge_data = bridge_data;
-    s_vtable.dispatch.vm.call = dispatch_fn;
-    return &s_vtable;
+    // create_instance stub - VM loader owns instance lifecycle
+    static HostContractInstance vm_create_instance_stub(
+        const HostContractInterface* /*this*/, const void* /*args*/) noexcept {
+        // VM dispatch: instance managed by VM loader, return placeholder
+        return HostContractInstance{nullptr};
+    }
+
+    // destroy_instance stub - VM loader owns instance lifecycle
+    static void vm_destroy_instance_stub(
+        const HostContractInterface* /*this*/, HostContractInstance /*instance*/) noexcept {
+        // VM dispatch: instance managed by VM loader, no-op here
+    }
+
+    static HostContractInterface s_interface = {
+        0xF53EB5F2845853BBULL,  // contract_id
+        Version{1U, 0U, 0U},  // contract_version
+        false,  // singleton
+        DispatchType::VirtualMachine,  // dispatch_type
+        nullptr,  // runtime (set by polyplug during registration)
+        vm_create_instance_stub,  // create_instance
+        vm_destroy_instance_stub,  // destroy_instance
+        VmDispatch{
+            dispatch_fn,  // call
+            loader_data,  // loader_data
+        },  // dispatch.vm
+    };  // dispatch
+    return &s_interface;
 }
 
 }  // namespace polyplug_host

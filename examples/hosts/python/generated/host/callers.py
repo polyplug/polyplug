@@ -6,7 +6,6 @@ from __future__ import annotations
 import ctypes
 from typing import Callable, Optional, TypeAlias
 
-from polyplug import PluginGuard, Runtime
 from polyplug.abi import AbiErrorCode, NULL_HANDLE, GuestContractInterface, StringView
 
 class ContractError(Exception):
@@ -30,30 +29,81 @@ class _AbiError(ctypes.Structure):
         ('message_len', ctypes.c_size_t),
     ]
 
-_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, ctypes.c_void_p, ctypes.c_void_p)
-_DISPATCH_FN_TYPE: TypeAlias = Callable[[ctypes.c_void_p, ctypes.c_void_p], _AbiError]
+# GuestContractInstance type for instance-based dispatch
+class _GuestContractInstance(ctypes.Structure):
+    _fields_ = [
+        ('data', ctypes.c_void_p),
+        ('contract_id', ctypes.c_uint64),
+    ]
+
+_DISPATCH_FN_CTYPE = ctypes.CFUNCTYPE(_AbiError, _GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_DISPATCH_FN_TYPE: TypeAlias = Callable[[_GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p], _AbiError]
 
 class PipelineDecoderContractCaller:
-    """Host caller for contract `pipeline.Decoder` with hot-reload support."""
+    """Host caller for contract `pipeline.Decoder` with instance lifecycle management.
 
-    def __init__(self, guard: PluginGuard) -> None:
-        self._guard: PluginGuard = guard
+    RAII wrapper that manages instance lifecycle:
+    - `create()`: resolves handle and calls `create_instance`
+    - `__del__`: calls `destroy_instance` to clean up
+    - dispatch: passes `_instance` to all method calls
+    """
+
+    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+        """Create instance wrapper from handle and host interface.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Raises:
+            ValueError: If interface not found or create_instance failed
+        """
+        # Resolve the interface from the handle via FFI
+        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)
+        if not self._interface:
+            raise ValueError("Contract not found")
+        # Cast to GuestContractInterface pointer
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        # Create instance via factory function
+        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        if self._instance.data is None:
+            raise ValueError("create_instance failed")
+        self._host: ctypes.c_void_p = host
+
+    def __del__(self) -> None:
+        """Destroy instance via destroy_instance factory."""
+        # SAFETY: instance was created by create_instance and is valid.
+        if self._instance.data is not None:
+            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            self._instance.data = None  # Prevent reuse after cleanup.
 
     @classmethod
-    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
-        handle: int = rt.find_by_contract(PIPELINE_DECODER_CONTRACT_ID, min_version)
-        if handle == NULL_HANDLE:
+    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+        """Factory method - creates instance or None if failed.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Returns:
+            Self if interface found and instance created, None otherwise
+        """
+        try:
+            return cls(handle, host)
+        except ValueError:
             return None
-        guard: PluginGuard = rt.resolve_plugin(handle)
-        if guard.is_null():
-            return None
-        return cls(guard)
 
     def is_valid(self) -> bool:
-        return not self._guard.is_null()
+        """Check if instance is valid (non-null data)."""
+        return self._instance.data is not None
 
     def reset(self) -> None:
-        self._guard.reset()
+        """Destroy current instance and create a new one."""
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        if self._instance.data is not None:
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+        self._instance = iface_ptr.contents.create_instance(self._host, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -63,42 +113,87 @@ class PipelineDecoderContractCaller:
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
-        vtable_ptr: int = self._guard.vtable
-        if vtable_ptr == 0:
-            raise RuntimeError("invalid caller: guard is null")
-        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
-        if 0 >= vtable.function_count:
-            raise RuntimeError("function not available in vtable")
-        functions_ptr: int = vtable.dispatch.native.functions
+        # SAFETY: interface_ is valid for the lifetime of this wrapper.
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        interface: GuestContractInterface = iface_ptr.contents
+        if 0 >= interface.function_count:
+            raise RuntimeError("function not available in interface")
+        functions_ptr: int = interface.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        err: _AbiError = dispatch_fn(args_ptr, out_ptr)
+        # SAFETY: instance_ was created by create_instance and is valid.
+        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
 
 class DataTransformerContractCaller:
-    """Host caller for contract `data.Transformer` with hot-reload support."""
+    """Host caller for contract `data.Transformer` with instance lifecycle management.
 
-    def __init__(self, guard: PluginGuard) -> None:
-        self._guard: PluginGuard = guard
+    RAII wrapper that manages instance lifecycle:
+    - `create()`: resolves handle and calls `create_instance`
+    - `__del__`: calls `destroy_instance` to clean up
+    - dispatch: passes `_instance` to all method calls
+    """
+
+    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+        """Create instance wrapper from handle and host interface.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Raises:
+            ValueError: If interface not found or create_instance failed
+        """
+        # Resolve the interface from the handle via FFI
+        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)
+        if not self._interface:
+            raise ValueError("Contract not found")
+        # Cast to GuestContractInterface pointer
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        # Create instance via factory function
+        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        if self._instance.data is None:
+            raise ValueError("create_instance failed")
+        self._host: ctypes.c_void_p = host
+
+    def __del__(self) -> None:
+        """Destroy instance via destroy_instance factory."""
+        # SAFETY: instance was created by create_instance and is valid.
+        if self._instance.data is not None:
+            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            self._instance.data = None  # Prevent reuse after cleanup.
 
     @classmethod
-    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
-        handle: int = rt.find_by_contract(DATA_TRANSFORMER_CONTRACT_ID, min_version)
-        if handle == NULL_HANDLE:
+    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+        """Factory method - creates instance or None if failed.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Returns:
+            Self if interface found and instance created, None otherwise
+        """
+        try:
+            return cls(handle, host)
+        except ValueError:
             return None
-        guard: PluginGuard = rt.resolve_plugin(handle)
-        if guard.is_null():
-            return None
-        return cls(guard)
 
     def is_valid(self) -> bool:
-        return not self._guard.is_null()
+        """Check if instance is valid (non-null data)."""
+        return self._instance.data is not None
 
     def reset(self) -> None:
-        self._guard.reset()
+        """Destroy current instance and create a new one."""
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        if self._instance.data is not None:
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+        self._instance = iface_ptr.contents.create_instance(self._host, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -108,42 +203,87 @@ class DataTransformerContractCaller:
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
-        vtable_ptr: int = self._guard.vtable
-        if vtable_ptr == 0:
-            raise RuntimeError("invalid caller: guard is null")
-        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
-        if 0 >= vtable.function_count:
-            raise RuntimeError("function not available in vtable")
-        functions_ptr: int = vtable.dispatch.native.functions
+        # SAFETY: interface_ is valid for the lifetime of this wrapper.
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        interface: GuestContractInterface = iface_ptr.contents
+        if 0 >= interface.function_count:
+            raise RuntimeError("function not available in interface")
+        functions_ptr: int = interface.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        err: _AbiError = dispatch_fn(args_ptr, out_ptr)
+        # SAFETY: instance_ was created by create_instance and is valid.
+        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
 
 class PipelineEncoderContractCaller:
-    """Host caller for contract `pipeline.Encoder` with hot-reload support."""
+    """Host caller for contract `pipeline.Encoder` with instance lifecycle management.
 
-    def __init__(self, guard: PluginGuard) -> None:
-        self._guard: PluginGuard = guard
+    RAII wrapper that manages instance lifecycle:
+    - `create()`: resolves handle and calls `create_instance`
+    - `__del__`: calls `destroy_instance` to clean up
+    - dispatch: passes `_instance` to all method calls
+    """
+
+    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+        """Create instance wrapper from handle and host interface.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Raises:
+            ValueError: If interface not found or create_instance failed
+        """
+        # Resolve the interface from the handle via FFI
+        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)
+        if not self._interface:
+            raise ValueError("Contract not found")
+        # Cast to GuestContractInterface pointer
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        # Create instance via factory function
+        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        if self._instance.data is None:
+            raise ValueError("create_instance failed")
+        self._host: ctypes.c_void_p = host
+
+    def __del__(self) -> None:
+        """Destroy instance via destroy_instance factory."""
+        # SAFETY: instance was created by create_instance and is valid.
+        if self._instance.data is not None:
+            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            self._instance.data = None  # Prevent reuse after cleanup.
 
     @classmethod
-    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
-        handle: int = rt.find_by_contract(PIPELINE_ENCODER_CONTRACT_ID, min_version)
-        if handle == NULL_HANDLE:
+    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+        """Factory method - creates instance or None if failed.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Returns:
+            Self if interface found and instance created, None otherwise
+        """
+        try:
+            return cls(handle, host)
+        except ValueError:
             return None
-        guard: PluginGuard = rt.resolve_plugin(handle)
-        if guard.is_null():
-            return None
-        return cls(guard)
 
     def is_valid(self) -> bool:
-        return not self._guard.is_null()
+        """Check if instance is valid (non-null data)."""
+        return self._instance.data is not None
 
     def reset(self) -> None:
-        self._guard.reset()
+        """Destroy current instance and create a new one."""
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        if self._instance.data is not None:
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+        self._instance = iface_ptr.contents.create_instance(self._host, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -153,42 +293,87 @@ class PipelineEncoderContractCaller:
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
-        vtable_ptr: int = self._guard.vtable
-        if vtable_ptr == 0:
-            raise RuntimeError("invalid caller: guard is null")
-        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
-        if 0 >= vtable.function_count:
-            raise RuntimeError("function not available in vtable")
-        functions_ptr: int = vtable.dispatch.native.functions
+        # SAFETY: interface_ is valid for the lifetime of this wrapper.
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        interface: GuestContractInterface = iface_ptr.contents
+        if 0 >= interface.function_count:
+            raise RuntimeError("function not available in interface")
+        functions_ptr: int = interface.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        err: _AbiError = dispatch_fn(args_ptr, out_ptr)
+        # SAFETY: instance_ was created by create_instance and is valid.
+        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
 
 class DataReporterContractCaller:
-    """Host caller for contract `data.Reporter` with hot-reload support."""
+    """Host caller for contract `data.Reporter` with instance lifecycle management.
 
-    def __init__(self, guard: PluginGuard) -> None:
-        self._guard: PluginGuard = guard
+    RAII wrapper that manages instance lifecycle:
+    - `create()`: resolves handle and calls `create_instance`
+    - `__del__`: calls `destroy_instance` to clean up
+    - dispatch: passes `_instance` to all method calls
+    """
+
+    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+        """Create instance wrapper from handle and host interface.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Raises:
+            ValueError: If interface not found or create_instance failed
+        """
+        # Resolve the interface from the handle via FFI
+        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)
+        if not self._interface:
+            raise ValueError("Contract not found")
+        # Cast to GuestContractInterface pointer
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        # Create instance via factory function
+        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        if self._instance.data is None:
+            raise ValueError("create_instance failed")
+        self._host: ctypes.c_void_p = host
+
+    def __del__(self) -> None:
+        """Destroy instance via destroy_instance factory."""
+        # SAFETY: instance was created by create_instance and is valid.
+        if self._instance.data is not None:
+            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            self._instance.data = None  # Prevent reuse after cleanup.
 
     @classmethod
-    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
-        handle: int = rt.find_by_contract(DATA_REPORTER_CONTRACT_ID, min_version)
-        if handle == NULL_HANDLE:
+    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+        """Factory method - creates instance or None if failed.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Returns:
+            Self if interface found and instance created, None otherwise
+        """
+        try:
+            return cls(handle, host)
+        except ValueError:
             return None
-        guard: PluginGuard = rt.resolve_plugin(handle)
-        if guard.is_null():
-            return None
-        return cls(guard)
 
     def is_valid(self) -> bool:
-        return not self._guard.is_null()
+        """Check if instance is valid (non-null data)."""
+        return self._instance.data is not None
 
     def reset(self) -> None:
-        self._guard.reset()
+        """Destroy current instance and create a new one."""
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        if self._instance.data is not None:
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+        self._instance = iface_ptr.contents.create_instance(self._host, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -198,42 +383,87 @@ class DataReporterContractCaller:
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
-        vtable_ptr: int = self._guard.vtable
-        if vtable_ptr == 0:
-            raise RuntimeError("invalid caller: guard is null")
-        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
-        if 0 >= vtable.function_count:
-            raise RuntimeError("function not available in vtable")
-        functions_ptr: int = vtable.dispatch.native.functions
+        # SAFETY: interface_ is valid for the lifetime of this wrapper.
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        interface: GuestContractInterface = iface_ptr.contents
+        if 0 >= interface.function_count:
+            raise RuntimeError("function not available in interface")
+        functions_ptr: int = interface.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        err: _AbiError = dispatch_fn(args_ptr, out_ptr)
+        # SAFETY: instance_ was created by create_instance and is valid.
+        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val
 
 
 class PipelineValidatorContractCaller:
-    """Host caller for contract `pipeline.Validator` with hot-reload support."""
+    """Host caller for contract `pipeline.Validator` with instance lifecycle management.
 
-    def __init__(self, guard: PluginGuard) -> None:
-        self._guard: PluginGuard = guard
+    RAII wrapper that manages instance lifecycle:
+    - `create()`: resolves handle and calls `create_instance`
+    - `__del__`: calls `destroy_instance` to clean up
+    - dispatch: passes `_instance` to all method calls
+    """
+
+    def __init__(self, handle: int, host: ctypes.c_void_p) -> None:
+        """Create instance wrapper from handle and host interface.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Raises:
+            ValueError: If interface not found or create_instance failed
+        """
+        # Resolve the interface from the handle via FFI
+        self._interface: ctypes.c_void_p = polyplug_runtime_resolve_contract(host, handle)
+        if not self._interface:
+            raise ValueError("Contract not found")
+        # Cast to GuestContractInterface pointer
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        # Create instance via factory function
+        self._instance: _GuestContractInstance = iface_ptr.contents.create_instance(host, None)
+        if self._instance.data is None:
+            raise ValueError("create_instance failed")
+        self._host: ctypes.c_void_p = host
+
+    def __del__(self) -> None:
+        """Destroy instance via destroy_instance factory."""
+        # SAFETY: instance was created by create_instance and is valid.
+        if self._instance.data is not None:
+            iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+            self._instance.data = None  # Prevent reuse after cleanup.
 
     @classmethod
-    def create(cls, rt: Runtime, min_version: int = 0) -> Optional[Self]:
-        handle: int = rt.find_by_contract(PIPELINE_VALIDATOR_CONTRACT_ID, min_version)
-        if handle == NULL_HANDLE:
+    def create(cls, handle: int, host: ctypes.c_void_p) -> Optional[Self]:
+        """Factory method - creates instance or None if failed.
+
+        Args:
+            handle: Contract handle from find_by_contract
+            host: Host interface pointer
+
+        Returns:
+            Self if interface found and instance created, None otherwise
+        """
+        try:
+            return cls(handle, host)
+        except ValueError:
             return None
-        guard: PluginGuard = rt.resolve_plugin(handle)
-        if guard.is_null():
-            return None
-        return cls(guard)
 
     def is_valid(self) -> bool:
-        return not self._guard.is_null()
+        """Check if instance is valid (non-null data)."""
+        return self._instance.data is not None
 
     def reset(self) -> None:
-        self._guard.reset()
+        """Destroy current instance and create a new one."""
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        if self._instance.data is not None:
+            iface_ptr.contents.destroy_instance(self._host, self._instance)
+        self._instance = iface_ptr.contents.create_instance(self._host, None)
 
     def __bool__(self) -> bool:
         return self.is_valid()
@@ -243,16 +473,17 @@ class PipelineValidatorContractCaller:
         args_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(input_val), ctypes.c_void_p)
         out_val: StringView = StringView()
         out_ptr: ctypes.c_void_p = ctypes.cast(ctypes.byref(out_val), ctypes.c_void_p)
-        vtable_ptr: int = self._guard.vtable
-        if vtable_ptr == 0:
-            raise RuntimeError("invalid caller: guard is null")
-        vtable: GuestContractInterface = GuestContractInterface.from_address(vtable_ptr)
-        if 0 >= vtable.function_count:
-            raise RuntimeError("function not available in vtable")
-        functions_ptr: int = vtable.dispatch.native.functions
+        # SAFETY: interface_ is valid for the lifetime of this wrapper.
+        iface_ptr: ctypes.POINTER(GuestContractInterface) = ctypes.cast(self._interface, ctypes.POINTER(GuestContractInterface))
+        interface: GuestContractInterface = iface_ptr.contents
+        if 0 >= interface.function_count:
+            raise RuntimeError("function not available in interface")
+        functions_ptr: int = interface.dispatch.native.functions
         fn_ptr: int = ctypes.cast(functions_ptr + 0 * 8, ctypes.POINTER(ctypes.c_void_p)).contents.value
         dispatch_fn: _DISPATCH_FN_CTYPE = ctypes.cast(fn_ptr, _DISPATCH_FN_CTYPE)
-        err: _AbiError = dispatch_fn(args_ptr, out_ptr)
+        # SAFETY: instance_ was created by create_instance and is valid.
+        # args_ptr points to valid args, out_ptr points to valid return type per ABI contract.
+        err: _AbiError = dispatch_fn(self._instance, args_ptr, out_ptr)
         if err.code != AbiErrorCode.Ok:
             raise RuntimeError("polyplug call failed")
         return out_val

@@ -2,10 +2,12 @@
 // DO NOT EDIT BY HAND
 // Runtime: js-quickjs (host-side callers)
 
-// ABI constants
-export const ABI_OK = 0;
-export const ABI_ERROR_GENERIC = 1;
-export const ABI_ERROR_INVALID_POINTER = 8;
+// ABI error codes (match polyplug_abi.AbiErrorCode)
+export const AbiErrorCode = {
+    Ok: 0,
+    Generic: 1,
+    InvalidPointer: 8,
+} as const;
 
 // Contract ID constants
 export const ContractIds = {
@@ -24,275 +26,360 @@ export const ContractIds = {
 // Function pointer cache - avoids repeated type casting overhead
 const _funcCache = new Map<number, (args: any, out: any) => { lo: number; hi: number }>();
 
-/** Host caller for contract `pipeline.Decoder` with hot-reload support. */
+/** Host caller for contract `pipeline.Decoder` with instance-based lifecycle. */
 export class PipelineDecoderContract {
-    #guard: any;
+    #interface: any;
+    #instance: any;
+    #host: any;
 
-    private constructor(guard: any) {
-        this.#guard = guard;
+    private constructor(interface_: any, instance: any, host: any) {
+        this.#interface = interface_;
+        this.#instance = instance;
+        this.#host = host;
     }
 
-    /** Factory method - creates instance or null if not found. */
-    static create(rt: any, minVersion: number = 0): PipelineDecoderContract | null {
-        const handle = rt.findByContractLoHi(ContractIds.PIPELINE_DECODER_CONTRACT_LO, ContractIds.PIPELINE_DECODER_CONTRACT_HI, minVersion);
+    /** Factory method - resolves contract and creates instance. */
+    static create(rt: any, host: any): PipelineDecoderContract | null {
+        const handle = rt.findByContractLoHi(ContractIds.PIPELINE_DECODER_CONTRACT_LO, ContractIds.PIPELINE_DECODER_CONTRACT_HI, 0);
         if (handle === null || handle === undefined) {
             return null;
         }
-        const guard = rt.getGuard(handle);
-        if (!guard) {
+        const interface_ = rt.resolveContract(handle);
+        if (!interface_) {
             return null;
         }
-        return new PipelineDecoderContract(guard);
+        const instance = interface_.create_instance(host, null);
+        if (!instance || instance.data === null) {
+            return null;
+        }
+        return new PipelineDecoderContract(interface_, instance, host);
     }
 
     /** Check if this caller instance is still valid. */
     isValid(): boolean {
-        return this.#guard !== null && this.#guard !== undefined;
+        return this.#instance !== null && this.#instance !== undefined && this.#instance.data !== null;
     }
 
-    /** Explicitly release the guard reference. */
+    /** Destroy instance - calls destroy_instance. */
+    destroy(): void {
+        if (this.#instance !== null && this.#instance.data !== null) {
+            this.#interface.destroy_instance(this.#host, this.#instance);
+            this.#instance.data = null;
+        }
+    }
+
+    /** Reset instance - destroy existing and create new. */
     reset(): void {
-        if (this.#guard !== null) {
-            this.#guard.reset();
-            this.#guard = null;
+        this.destroy();
+        if (this.#interface !== null) {
+            this.#instance = this.#interface.create_instance(this.#host, null);
         }
     }
 
     /** Call `decode` */
     decode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number } {
-        const vtable = this.#guard?.vtable?.();
-        if (!vtable) throw new Error('caller is not valid');
+        if (!this.#instance || this.#instance.data === null) {
+            throw new Error('caller is not valid');
+        }
         const argsPtr = input;
-        if (0 >= vtable.functionCount) { throw new Error('function not available'); }
-        const fnPtr = vtable.dispatch.native.functions[0];
+        if (0 >= this.#interface.functionCount) { throw new Error('function not available'); }
+        const fnPtr = this.#interface.dispatch.native.functions[0];
         if (!fnPtr) throw new Error('function not available');
         let fn = _funcCache.get(fnPtr);
         if (!fn) {
-            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };
+            fn = fnPtr as unknown as (instance: any, args: any, out: any) => { lo: number; hi: number };
             _funcCache.set(fnPtr, fn);
         }
         const outVal = { lo: 0, hi: 0 };
-        const err = fn(argsPtr, outVal);
+        const err = fn(this.#instance, argsPtr, outVal);
         if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');
         return outVal;
     }
 
 }
 
-/** Host caller for contract `data.Transformer` with hot-reload support. */
+/** Host caller for contract `data.Transformer` with instance-based lifecycle. */
 export class DataTransformerContract {
-    #guard: any;
+    #interface: any;
+    #instance: any;
+    #host: any;
 
-    private constructor(guard: any) {
-        this.#guard = guard;
+    private constructor(interface_: any, instance: any, host: any) {
+        this.#interface = interface_;
+        this.#instance = instance;
+        this.#host = host;
     }
 
-    /** Factory method - creates instance or null if not found. */
-    static create(rt: any, minVersion: number = 0): DataTransformerContract | null {
-        const handle = rt.findByContractLoHi(ContractIds.DATA_TRANSFORMER_CONTRACT_LO, ContractIds.DATA_TRANSFORMER_CONTRACT_HI, minVersion);
+    /** Factory method - resolves contract and creates instance. */
+    static create(rt: any, host: any): DataTransformerContract | null {
+        const handle = rt.findByContractLoHi(ContractIds.DATA_TRANSFORMER_CONTRACT_LO, ContractIds.DATA_TRANSFORMER_CONTRACT_HI, 0);
         if (handle === null || handle === undefined) {
             return null;
         }
-        const guard = rt.getGuard(handle);
-        if (!guard) {
+        const interface_ = rt.resolveContract(handle);
+        if (!interface_) {
             return null;
         }
-        return new DataTransformerContract(guard);
+        const instance = interface_.create_instance(host, null);
+        if (!instance || instance.data === null) {
+            return null;
+        }
+        return new DataTransformerContract(interface_, instance, host);
     }
 
     /** Check if this caller instance is still valid. */
     isValid(): boolean {
-        return this.#guard !== null && this.#guard !== undefined;
+        return this.#instance !== null && this.#instance !== undefined && this.#instance.data !== null;
     }
 
-    /** Explicitly release the guard reference. */
+    /** Destroy instance - calls destroy_instance. */
+    destroy(): void {
+        if (this.#instance !== null && this.#instance.data !== null) {
+            this.#interface.destroy_instance(this.#host, this.#instance);
+            this.#instance.data = null;
+        }
+    }
+
+    /** Reset instance - destroy existing and create new. */
     reset(): void {
-        if (this.#guard !== null) {
-            this.#guard.reset();
-            this.#guard = null;
+        this.destroy();
+        if (this.#interface !== null) {
+            this.#instance = this.#interface.create_instance(this.#host, null);
         }
     }
 
     /** Call `transform` */
     transform(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number } {
-        const vtable = this.#guard?.vtable?.();
-        if (!vtable) throw new Error('caller is not valid');
+        if (!this.#instance || this.#instance.data === null) {
+            throw new Error('caller is not valid');
+        }
         const argsPtr = input;
-        if (0 >= vtable.functionCount) { throw new Error('function not available'); }
-        const fnPtr = vtable.dispatch.native.functions[0];
+        if (0 >= this.#interface.functionCount) { throw new Error('function not available'); }
+        const fnPtr = this.#interface.dispatch.native.functions[0];
         if (!fnPtr) throw new Error('function not available');
         let fn = _funcCache.get(fnPtr);
         if (!fn) {
-            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };
+            fn = fnPtr as unknown as (instance: any, args: any, out: any) => { lo: number; hi: number };
             _funcCache.set(fnPtr, fn);
         }
         const outVal = { lo: 0, hi: 0 };
-        const err = fn(argsPtr, outVal);
+        const err = fn(this.#instance, argsPtr, outVal);
         if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');
         return outVal;
     }
 
 }
 
-/** Host caller for contract `pipeline.Encoder` with hot-reload support. */
+/** Host caller for contract `pipeline.Encoder` with instance-based lifecycle. */
 export class PipelineEncoderContract {
-    #guard: any;
+    #interface: any;
+    #instance: any;
+    #host: any;
 
-    private constructor(guard: any) {
-        this.#guard = guard;
+    private constructor(interface_: any, instance: any, host: any) {
+        this.#interface = interface_;
+        this.#instance = instance;
+        this.#host = host;
     }
 
-    /** Factory method - creates instance or null if not found. */
-    static create(rt: any, minVersion: number = 0): PipelineEncoderContract | null {
-        const handle = rt.findByContractLoHi(ContractIds.PIPELINE_ENCODER_CONTRACT_LO, ContractIds.PIPELINE_ENCODER_CONTRACT_HI, minVersion);
+    /** Factory method - resolves contract and creates instance. */
+    static create(rt: any, host: any): PipelineEncoderContract | null {
+        const handle = rt.findByContractLoHi(ContractIds.PIPELINE_ENCODER_CONTRACT_LO, ContractIds.PIPELINE_ENCODER_CONTRACT_HI, 0);
         if (handle === null || handle === undefined) {
             return null;
         }
-        const guard = rt.getGuard(handle);
-        if (!guard) {
+        const interface_ = rt.resolveContract(handle);
+        if (!interface_) {
             return null;
         }
-        return new PipelineEncoderContract(guard);
+        const instance = interface_.create_instance(host, null);
+        if (!instance || instance.data === null) {
+            return null;
+        }
+        return new PipelineEncoderContract(interface_, instance, host);
     }
 
     /** Check if this caller instance is still valid. */
     isValid(): boolean {
-        return this.#guard !== null && this.#guard !== undefined;
+        return this.#instance !== null && this.#instance !== undefined && this.#instance.data !== null;
     }
 
-    /** Explicitly release the guard reference. */
+    /** Destroy instance - calls destroy_instance. */
+    destroy(): void {
+        if (this.#instance !== null && this.#instance.data !== null) {
+            this.#interface.destroy_instance(this.#host, this.#instance);
+            this.#instance.data = null;
+        }
+    }
+
+    /** Reset instance - destroy existing and create new. */
     reset(): void {
-        if (this.#guard !== null) {
-            this.#guard.reset();
-            this.#guard = null;
+        this.destroy();
+        if (this.#interface !== null) {
+            this.#instance = this.#interface.create_instance(this.#host, null);
         }
     }
 
     /** Call `encode` */
     encode(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number } {
-        const vtable = this.#guard?.vtable?.();
-        if (!vtable) throw new Error('caller is not valid');
+        if (!this.#instance || this.#instance.data === null) {
+            throw new Error('caller is not valid');
+        }
         const argsPtr = input;
-        if (0 >= vtable.functionCount) { throw new Error('function not available'); }
-        const fnPtr = vtable.dispatch.native.functions[0];
+        if (0 >= this.#interface.functionCount) { throw new Error('function not available'); }
+        const fnPtr = this.#interface.dispatch.native.functions[0];
         if (!fnPtr) throw new Error('function not available');
         let fn = _funcCache.get(fnPtr);
         if (!fn) {
-            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };
+            fn = fnPtr as unknown as (instance: any, args: any, out: any) => { lo: number; hi: number };
             _funcCache.set(fnPtr, fn);
         }
         const outVal = { lo: 0, hi: 0 };
-        const err = fn(argsPtr, outVal);
+        const err = fn(this.#instance, argsPtr, outVal);
         if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');
         return outVal;
     }
 
 }
 
-/** Host caller for contract `data.Reporter` with hot-reload support. */
+/** Host caller for contract `data.Reporter` with instance-based lifecycle. */
 export class DataReporterContract {
-    #guard: any;
+    #interface: any;
+    #instance: any;
+    #host: any;
 
-    private constructor(guard: any) {
-        this.#guard = guard;
+    private constructor(interface_: any, instance: any, host: any) {
+        this.#interface = interface_;
+        this.#instance = instance;
+        this.#host = host;
     }
 
-    /** Factory method - creates instance or null if not found. */
-    static create(rt: any, minVersion: number = 0): DataReporterContract | null {
-        const handle = rt.findByContractLoHi(ContractIds.DATA_REPORTER_CONTRACT_LO, ContractIds.DATA_REPORTER_CONTRACT_HI, minVersion);
+    /** Factory method - resolves contract and creates instance. */
+    static create(rt: any, host: any): DataReporterContract | null {
+        const handle = rt.findByContractLoHi(ContractIds.DATA_REPORTER_CONTRACT_LO, ContractIds.DATA_REPORTER_CONTRACT_HI, 0);
         if (handle === null || handle === undefined) {
             return null;
         }
-        const guard = rt.getGuard(handle);
-        if (!guard) {
+        const interface_ = rt.resolveContract(handle);
+        if (!interface_) {
             return null;
         }
-        return new DataReporterContract(guard);
+        const instance = interface_.create_instance(host, null);
+        if (!instance || instance.data === null) {
+            return null;
+        }
+        return new DataReporterContract(interface_, instance, host);
     }
 
     /** Check if this caller instance is still valid. */
     isValid(): boolean {
-        return this.#guard !== null && this.#guard !== undefined;
+        return this.#instance !== null && this.#instance !== undefined && this.#instance.data !== null;
     }
 
-    /** Explicitly release the guard reference. */
+    /** Destroy instance - calls destroy_instance. */
+    destroy(): void {
+        if (this.#instance !== null && this.#instance.data !== null) {
+            this.#interface.destroy_instance(this.#host, this.#instance);
+            this.#instance.data = null;
+        }
+    }
+
+    /** Reset instance - destroy existing and create new. */
     reset(): void {
-        if (this.#guard !== null) {
-            this.#guard.reset();
-            this.#guard = null;
+        this.destroy();
+        if (this.#interface !== null) {
+            this.#instance = this.#interface.create_instance(this.#host, null);
         }
     }
 
     /** Call `report` */
     report(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number } {
-        const vtable = this.#guard?.vtable?.();
-        if (!vtable) throw new Error('caller is not valid');
+        if (!this.#instance || this.#instance.data === null) {
+            throw new Error('caller is not valid');
+        }
         const argsPtr = input;
-        if (0 >= vtable.functionCount) { throw new Error('function not available'); }
-        const fnPtr = vtable.dispatch.native.functions[0];
+        if (0 >= this.#interface.functionCount) { throw new Error('function not available'); }
+        const fnPtr = this.#interface.dispatch.native.functions[0];
         if (!fnPtr) throw new Error('function not available');
         let fn = _funcCache.get(fnPtr);
         if (!fn) {
-            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };
+            fn = fnPtr as unknown as (instance: any, args: any, out: any) => { lo: number; hi: number };
             _funcCache.set(fnPtr, fn);
         }
         const outVal = { lo: 0, hi: 0 };
-        const err = fn(argsPtr, outVal);
+        const err = fn(this.#instance, argsPtr, outVal);
         if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');
         return outVal;
     }
 
 }
 
-/** Host caller for contract `pipeline.Validator` with hot-reload support. */
+/** Host caller for contract `pipeline.Validator` with instance-based lifecycle. */
 export class PipelineValidatorContract {
-    #guard: any;
+    #interface: any;
+    #instance: any;
+    #host: any;
 
-    private constructor(guard: any) {
-        this.#guard = guard;
+    private constructor(interface_: any, instance: any, host: any) {
+        this.#interface = interface_;
+        this.#instance = instance;
+        this.#host = host;
     }
 
-    /** Factory method - creates instance or null if not found. */
-    static create(rt: any, minVersion: number = 0): PipelineValidatorContract | null {
-        const handle = rt.findByContractLoHi(ContractIds.PIPELINE_VALIDATOR_CONTRACT_LO, ContractIds.PIPELINE_VALIDATOR_CONTRACT_HI, minVersion);
+    /** Factory method - resolves contract and creates instance. */
+    static create(rt: any, host: any): PipelineValidatorContract | null {
+        const handle = rt.findByContractLoHi(ContractIds.PIPELINE_VALIDATOR_CONTRACT_LO, ContractIds.PIPELINE_VALIDATOR_CONTRACT_HI, 0);
         if (handle === null || handle === undefined) {
             return null;
         }
-        const guard = rt.getGuard(handle);
-        if (!guard) {
+        const interface_ = rt.resolveContract(handle);
+        if (!interface_) {
             return null;
         }
-        return new PipelineValidatorContract(guard);
+        const instance = interface_.create_instance(host, null);
+        if (!instance || instance.data === null) {
+            return null;
+        }
+        return new PipelineValidatorContract(interface_, instance, host);
     }
 
     /** Check if this caller instance is still valid. */
     isValid(): boolean {
-        return this.#guard !== null && this.#guard !== undefined;
+        return this.#instance !== null && this.#instance !== undefined && this.#instance.data !== null;
     }
 
-    /** Explicitly release the guard reference. */
+    /** Destroy instance - calls destroy_instance. */
+    destroy(): void {
+        if (this.#instance !== null && this.#instance.data !== null) {
+            this.#interface.destroy_instance(this.#host, this.#instance);
+            this.#instance.data = null;
+        }
+    }
+
+    /** Reset instance - destroy existing and create new. */
     reset(): void {
-        if (this.#guard !== null) {
-            this.#guard.reset();
-            this.#guard = null;
+        this.destroy();
+        if (this.#interface !== null) {
+            this.#instance = this.#interface.create_instance(this.#host, null);
         }
     }
 
     /** Call `validate` */
     validate(input: { ptr_lo: number; ptr_hi: number; len: number }): { ptr_lo: number; ptr_hi: number; len: number } {
-        const vtable = this.#guard?.vtable?.();
-        if (!vtable) throw new Error('caller is not valid');
+        if (!this.#instance || this.#instance.data === null) {
+            throw new Error('caller is not valid');
+        }
         const argsPtr = input;
-        if (0 >= vtable.functionCount) { throw new Error('function not available'); }
-        const fnPtr = vtable.dispatch.native.functions[0];
+        if (0 >= this.#interface.functionCount) { throw new Error('function not available'); }
+        const fnPtr = this.#interface.dispatch.native.functions[0];
         if (!fnPtr) throw new Error('function not available');
         let fn = _funcCache.get(fnPtr);
         if (!fn) {
-            fn = fnPtr as unknown as (args: any, out: any) => { lo: number; hi: number };
+            fn = fnPtr as unknown as (instance: any, args: any, out: any) => { lo: number; hi: number };
             _funcCache.set(fnPtr, fn);
         }
         const outVal = { lo: 0, hi: 0 };
-        const err = fn(argsPtr, outVal);
+        const err = fn(this.#instance, argsPtr, outVal);
         if (err.lo !== 0 || err.hi !== 0) throw new Error('call failed');
         return outVal;
     }

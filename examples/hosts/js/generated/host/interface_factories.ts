@@ -6,11 +6,13 @@ import type { HostContractVTable } from 'polyplug';
 import { DispatchType } from 'polyplug';
 import type * as contracts from './contracts';
 
-// ABI constants
-const ABI_OK = 0;
-const ABI_ERROR_PANIC = 5;
+// ABI error codes (match polyplug_abi.AbiErrorCode)
+const AbiErrorCode = {
+    Ok: 0,
+    Panic: 5,
+};
 
-/** Create a host contract vtable for `host.logger` with NATIVE dispatch. */
+/** Create a host contract interface for `host.logger` with NATIVE dispatch. */
 export function createHostLoggerVtable(impl: contracts.HostLogger): HostContractVTable {
     _HostLogger_impl = impl;
 
@@ -18,14 +20,14 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
         try {
             const impl = _HostLogger_impl;
             if (impl === null) {
-                return ABI_ERROR_PANIC;
+                return AbiErrorCode.Panic;
             }
             // Extract StringView from args pointer
             const message = '';
             impl.Log(message);
-            return ABI_OK;
+            return AbiErrorCode.Ok;
         } catch (e) {
-            return ABI_ERROR_PANIC;
+            return AbiErrorCode.Panic;
         }
     }
 
@@ -33,14 +35,14 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
         try {
             const impl = _HostLogger_impl;
             if (impl === null) {
-                return ABI_ERROR_PANIC;
+                return AbiErrorCode.Panic;
             }
             const level: LogLevel = 0;
             const message: string = 0;
             impl.LogWithLevel(level, message);
-            return ABI_OK;
+            return AbiErrorCode.Ok;
         } catch (e) {
-            return ABI_ERROR_PANIC;
+            return AbiErrorCode.Panic;
         }
     }
 
@@ -49,7 +51,7 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
         _host_logger_log_with_level_thunk,
     ];
 
-    const vtable: HostContractVTable = {
+    const interface: HostContractVTable = {
         header: {
             vtableVersion: 1,
             contractIdLo: 0x845853BB,
@@ -68,17 +70,17 @@ export function createHostLoggerVtable(impl: contracts.HostLogger): HostContract
         },
     };
 
-    return vtable;
+    return interface;
 }
 
 let _HostLogger_impl: contracts.HostLogger | null = null;
 
-/** Create a host contract vtable for `host.logger` with VM dispatch. */
+/** Create a host contract interface for `host.logger` with VM dispatch. */
 export function createHostLoggerVtableVm(
     bridgeData: { lo: number; hi: number },
     dispatchFn: (bridgeData: { lo: number; hi: number }, fnId: number, args: number, out: number) => number,
 ): HostContractVTable {
-    const vtable: HostContractVTable = {
+    const interface: HostContractVTable = {
         header: {
             vtableVersion: 1,
             contractIdLo: 0x845853BB,
@@ -97,6 +99,6 @@ export function createHostLoggerVtableVm(
         },
     };
 
-    return vtable;
+    return interface;
 }
 

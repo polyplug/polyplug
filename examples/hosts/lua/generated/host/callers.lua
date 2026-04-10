@@ -4,10 +4,12 @@
 
 local ffi = require("ffi")
 
--- ABI constants
-local ABI_OK = 0
-local ABI_ERROR_GENERIC = 1
-local ABI_ERROR_INVALID_POINTER = 8
+-- ABI error codes (match polyplug_abi.AbiErrorCode)
+local AbiErrorCode = {
+    Ok = 0,
+    Generic = 1,
+    InvalidPointer = 8,
+}
 
 -- Contract ID constants
 local PIPELINE_DECODER_CONTRACT_ID = 0xE1D7DE773BE6E7F7ULL
@@ -27,38 +29,43 @@ M.PIPELINE_VALIDATOR_CONTRACT_ID = PIPELINE_VALIDATOR_CONTRACT_ID
 -- Cached FFI types for hot path performance
 local DispatchFnType = ffi.typeof("uint32_t (*)(const void*, void*)")
 
--- Methods for PipelineDecoderContract
+-- Methods for PipelineDecoderContract (instance wrapper)
 local PipelineDecoderContract_methods = {
     is_valid = function(self)
-        return self._guard ~= nil
+        return self._instance ~= nil and self._instance.data ~= nil
+    end,
+
+    destroy = function(self)
+        if self._instance ~= nil and self._instance.data ~= nil then
+            self._interface.destroy_instance(self._host, self._instance)
+            self._instance.data = nil
+        end
     end,
 
     reset = function(self)
-        if self._guard ~= nil then
-            self._guard:reset()
-            self._guard = nil
+        self:destroy()
+        if self._interface ~= nil then
+            self._instance = self._interface.create_instance(self._host, nil)
         end
     end,
 
     decode = function(self, input)
-        if self._guard == nil then
-            error("invalid caller: guard is nil", 2)
-        end
-        local vtable = self._guard:vtable()
-        if vtable == nil then
-            error("guard is not valid", 2)
+        if self._instance == nil or self._instance.data == nil then
+            error("invalid caller: instance is nil", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("GuestContractInterface*", vtable)
-        if 0 >= interface.dispatch.native.function_count then
-            error("function not available in vtable", 2)
+        if self._interface == nil then
+            error("interface is nil", 2)
         end
-        local fn_ptr = interface.dispatch.native.functions[0]
+        if 0 >= self._interface.dispatch.native.function_count then
+            error("function not available in interface", 2)
+        end
+        local fn_ptr = self._interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(args_ptr, out_ptr)
+        local err = fn(self._instance, args_ptr, out_ptr)
         if err ~= 0 then
             error("polyplug call failed", 2)
         end
@@ -67,61 +74,72 @@ local PipelineDecoderContract_methods = {
 
 }
 
--- Metatable for PipelineDecoderContract
+-- Metatable for PipelineDecoderContract with __gc cleanup
 local PipelineDecoderContract_mt = {
-    __index = PipelineDecoderContract_methods
+    __index = PipelineDecoderContract_methods,
+    __gc = function(self) self:destroy() end
 }
 
--- Factory function for PipelineDecoderContract
-function M.PipelineDecoderContract_create(runtime, min_version)
-    if min_version == nil then min_version = 0 end
-    local handle = runtime:find_by_contract(PIPELINE_DECODER_CONTRACT_ID, min_version)
+-- Factory function for PipelineDecoderContract (instance wrapper)
+function M.PipelineDecoderContract_create(runtime, host)
+    local handle = runtime:find_by_contract(PIPELINE_DECODER_CONTRACT_ID, 0)
     if handle == nil then
         return nil
     end
-    local guard = runtime:resolve_plugin(handle)
-    if guard == nil then
+    local interface = runtime:resolve_contract(handle)
+    if interface == nil then
         return nil
     end
-    local instance = {
-        _guard = guard
+    local instance = interface.create_instance(host, nil)
+    if instance == nil or instance.data == nil then
+        return nil
+    end
+    local wrapper = {
+        _interface = interface,
+        _instance = instance,
+        _host = host
     }
-    setmetatable(instance, PipelineDecoderContract_mt)
-    return instance
+    setmetatable(wrapper, PipelineDecoderContract_mt)
+    return wrapper
 end
 
--- Methods for DataTransformerContract
+-- Methods for DataTransformerContract (instance wrapper)
 local DataTransformerContract_methods = {
     is_valid = function(self)
-        return self._guard ~= nil
+        return self._instance ~= nil and self._instance.data ~= nil
+    end,
+
+    destroy = function(self)
+        if self._instance ~= nil and self._instance.data ~= nil then
+            self._interface.destroy_instance(self._host, self._instance)
+            self._instance.data = nil
+        end
     end,
 
     reset = function(self)
-        if self._guard ~= nil then
-            self._guard:reset()
-            self._guard = nil
+        self:destroy()
+        if self._interface ~= nil then
+            self._instance = self._interface.create_instance(self._host, nil)
         end
     end,
 
     transform = function(self, input)
-        if self._guard == nil then
-            error("invalid caller: guard is nil", 2)
-        end
-        local vtable = self._guard:vtable()
-        if vtable == nil then
-            error("guard is not valid", 2)
+        if self._instance == nil or self._instance.data == nil then
+            error("invalid caller: instance is nil", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("GuestContractInterface*", vtable)
-        if 0 >= interface.dispatch.native.function_count then
-            error("function not available in vtable", 2)
+        if self._interface == nil then
+            error("interface is nil", 2)
         end
-        local fn_ptr = interface.dispatch.native.functions[0]
+        if 0 >= self._interface.dispatch.native.function_count then
+            error("function not available in interface", 2)
+        end
+        local fn_ptr = self._interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(args_ptr, out_ptr)
+        local err = fn(self._instance, args_ptr, out_ptr)
         if err ~= 0 then
             error("polyplug call failed", 2)
         end
@@ -130,61 +148,72 @@ local DataTransformerContract_methods = {
 
 }
 
--- Metatable for DataTransformerContract
+-- Metatable for DataTransformerContract with __gc cleanup
 local DataTransformerContract_mt = {
-    __index = DataTransformerContract_methods
+    __index = DataTransformerContract_methods,
+    __gc = function(self) self:destroy() end
 }
 
--- Factory function for DataTransformerContract
-function M.DataTransformerContract_create(runtime, min_version)
-    if min_version == nil then min_version = 0 end
-    local handle = runtime:find_by_contract(DATA_TRANSFORMER_CONTRACT_ID, min_version)
+-- Factory function for DataTransformerContract (instance wrapper)
+function M.DataTransformerContract_create(runtime, host)
+    local handle = runtime:find_by_contract(DATA_TRANSFORMER_CONTRACT_ID, 0)
     if handle == nil then
         return nil
     end
-    local guard = runtime:resolve_plugin(handle)
-    if guard == nil then
+    local interface = runtime:resolve_contract(handle)
+    if interface == nil then
         return nil
     end
-    local instance = {
-        _guard = guard
+    local instance = interface.create_instance(host, nil)
+    if instance == nil or instance.data == nil then
+        return nil
+    end
+    local wrapper = {
+        _interface = interface,
+        _instance = instance,
+        _host = host
     }
-    setmetatable(instance, DataTransformerContract_mt)
-    return instance
+    setmetatable(wrapper, DataTransformerContract_mt)
+    return wrapper
 end
 
--- Methods for PipelineEncoderContract
+-- Methods for PipelineEncoderContract (instance wrapper)
 local PipelineEncoderContract_methods = {
     is_valid = function(self)
-        return self._guard ~= nil
+        return self._instance ~= nil and self._instance.data ~= nil
+    end,
+
+    destroy = function(self)
+        if self._instance ~= nil and self._instance.data ~= nil then
+            self._interface.destroy_instance(self._host, self._instance)
+            self._instance.data = nil
+        end
     end,
 
     reset = function(self)
-        if self._guard ~= nil then
-            self._guard:reset()
-            self._guard = nil
+        self:destroy()
+        if self._interface ~= nil then
+            self._instance = self._interface.create_instance(self._host, nil)
         end
     end,
 
     encode = function(self, input)
-        if self._guard == nil then
-            error("invalid caller: guard is nil", 2)
-        end
-        local vtable = self._guard:vtable()
-        if vtable == nil then
-            error("guard is not valid", 2)
+        if self._instance == nil or self._instance.data == nil then
+            error("invalid caller: instance is nil", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("GuestContractInterface*", vtable)
-        if 0 >= interface.dispatch.native.function_count then
-            error("function not available in vtable", 2)
+        if self._interface == nil then
+            error("interface is nil", 2)
         end
-        local fn_ptr = interface.dispatch.native.functions[0]
+        if 0 >= self._interface.dispatch.native.function_count then
+            error("function not available in interface", 2)
+        end
+        local fn_ptr = self._interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(args_ptr, out_ptr)
+        local err = fn(self._instance, args_ptr, out_ptr)
         if err ~= 0 then
             error("polyplug call failed", 2)
         end
@@ -193,61 +222,72 @@ local PipelineEncoderContract_methods = {
 
 }
 
--- Metatable for PipelineEncoderContract
+-- Metatable for PipelineEncoderContract with __gc cleanup
 local PipelineEncoderContract_mt = {
-    __index = PipelineEncoderContract_methods
+    __index = PipelineEncoderContract_methods,
+    __gc = function(self) self:destroy() end
 }
 
--- Factory function for PipelineEncoderContract
-function M.PipelineEncoderContract_create(runtime, min_version)
-    if min_version == nil then min_version = 0 end
-    local handle = runtime:find_by_contract(PIPELINE_ENCODER_CONTRACT_ID, min_version)
+-- Factory function for PipelineEncoderContract (instance wrapper)
+function M.PipelineEncoderContract_create(runtime, host)
+    local handle = runtime:find_by_contract(PIPELINE_ENCODER_CONTRACT_ID, 0)
     if handle == nil then
         return nil
     end
-    local guard = runtime:resolve_plugin(handle)
-    if guard == nil then
+    local interface = runtime:resolve_contract(handle)
+    if interface == nil then
         return nil
     end
-    local instance = {
-        _guard = guard
+    local instance = interface.create_instance(host, nil)
+    if instance == nil or instance.data == nil then
+        return nil
+    end
+    local wrapper = {
+        _interface = interface,
+        _instance = instance,
+        _host = host
     }
-    setmetatable(instance, PipelineEncoderContract_mt)
-    return instance
+    setmetatable(wrapper, PipelineEncoderContract_mt)
+    return wrapper
 end
 
--- Methods for DataReporterContract
+-- Methods for DataReporterContract (instance wrapper)
 local DataReporterContract_methods = {
     is_valid = function(self)
-        return self._guard ~= nil
+        return self._instance ~= nil and self._instance.data ~= nil
+    end,
+
+    destroy = function(self)
+        if self._instance ~= nil and self._instance.data ~= nil then
+            self._interface.destroy_instance(self._host, self._instance)
+            self._instance.data = nil
+        end
     end,
 
     reset = function(self)
-        if self._guard ~= nil then
-            self._guard:reset()
-            self._guard = nil
+        self:destroy()
+        if self._interface ~= nil then
+            self._instance = self._interface.create_instance(self._host, nil)
         end
     end,
 
     report = function(self, input)
-        if self._guard == nil then
-            error("invalid caller: guard is nil", 2)
-        end
-        local vtable = self._guard:vtable()
-        if vtable == nil then
-            error("guard is not valid", 2)
+        if self._instance == nil or self._instance.data == nil then
+            error("invalid caller: instance is nil", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("GuestContractInterface*", vtable)
-        if 0 >= interface.dispatch.native.function_count then
-            error("function not available in vtable", 2)
+        if self._interface == nil then
+            error("interface is nil", 2)
         end
-        local fn_ptr = interface.dispatch.native.functions[0]
+        if 0 >= self._interface.dispatch.native.function_count then
+            error("function not available in interface", 2)
+        end
+        local fn_ptr = self._interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(args_ptr, out_ptr)
+        local err = fn(self._instance, args_ptr, out_ptr)
         if err ~= 0 then
             error("polyplug call failed", 2)
         end
@@ -256,61 +296,72 @@ local DataReporterContract_methods = {
 
 }
 
--- Metatable for DataReporterContract
+-- Metatable for DataReporterContract with __gc cleanup
 local DataReporterContract_mt = {
-    __index = DataReporterContract_methods
+    __index = DataReporterContract_methods,
+    __gc = function(self) self:destroy() end
 }
 
--- Factory function for DataReporterContract
-function M.DataReporterContract_create(runtime, min_version)
-    if min_version == nil then min_version = 0 end
-    local handle = runtime:find_by_contract(DATA_REPORTER_CONTRACT_ID, min_version)
+-- Factory function for DataReporterContract (instance wrapper)
+function M.DataReporterContract_create(runtime, host)
+    local handle = runtime:find_by_contract(DATA_REPORTER_CONTRACT_ID, 0)
     if handle == nil then
         return nil
     end
-    local guard = runtime:resolve_plugin(handle)
-    if guard == nil then
+    local interface = runtime:resolve_contract(handle)
+    if interface == nil then
         return nil
     end
-    local instance = {
-        _guard = guard
+    local instance = interface.create_instance(host, nil)
+    if instance == nil or instance.data == nil then
+        return nil
+    end
+    local wrapper = {
+        _interface = interface,
+        _instance = instance,
+        _host = host
     }
-    setmetatable(instance, DataReporterContract_mt)
-    return instance
+    setmetatable(wrapper, DataReporterContract_mt)
+    return wrapper
 end
 
--- Methods for PipelineValidatorContract
+-- Methods for PipelineValidatorContract (instance wrapper)
 local PipelineValidatorContract_methods = {
     is_valid = function(self)
-        return self._guard ~= nil
+        return self._instance ~= nil and self._instance.data ~= nil
+    end,
+
+    destroy = function(self)
+        if self._instance ~= nil and self._instance.data ~= nil then
+            self._interface.destroy_instance(self._host, self._instance)
+            self._instance.data = nil
+        end
     end,
 
     reset = function(self)
-        if self._guard ~= nil then
-            self._guard:reset()
-            self._guard = nil
+        self:destroy()
+        if self._interface ~= nil then
+            self._instance = self._interface.create_instance(self._host, nil)
         end
     end,
 
     validate = function(self, input)
-        if self._guard == nil then
-            error("invalid caller: guard is nil", 2)
-        end
-        local vtable = self._guard:vtable()
-        if vtable == nil then
-            error("guard is not valid", 2)
+        if self._instance == nil or self._instance.data == nil then
+            error("invalid caller: instance is nil", 2)
         end
     local input_val = ffi.new("StringView", input)
     local args_ptr = ffi.cast("const void*", input_val)
     local out_val = ffi.new("StringView")
     local out_ptr = ffi.cast("void*", out_val)
-        local interface = ffi.cast("GuestContractInterface*", vtable)
-        if 0 >= interface.dispatch.native.function_count then
-            error("function not available in vtable", 2)
+        if self._interface == nil then
+            error("interface is nil", 2)
         end
-        local fn_ptr = interface.dispatch.native.functions[0]
+        if 0 >= self._interface.dispatch.native.function_count then
+            error("function not available in interface", 2)
+        end
+        local fn_ptr = self._interface.dispatch.native.functions[0]
         local fn = ffi.cast(DispatchFnType, fn_ptr)
-        local err = fn(args_ptr, out_ptr)
+        local err = fn(self._instance, args_ptr, out_ptr)
         if err ~= 0 then
             error("polyplug call failed", 2)
         end
@@ -319,27 +370,33 @@ local PipelineValidatorContract_methods = {
 
 }
 
--- Metatable for PipelineValidatorContract
+-- Metatable for PipelineValidatorContract with __gc cleanup
 local PipelineValidatorContract_mt = {
-    __index = PipelineValidatorContract_methods
+    __index = PipelineValidatorContract_methods,
+    __gc = function(self) self:destroy() end
 }
 
--- Factory function for PipelineValidatorContract
-function M.PipelineValidatorContract_create(runtime, min_version)
-    if min_version == nil then min_version = 0 end
-    local handle = runtime:find_by_contract(PIPELINE_VALIDATOR_CONTRACT_ID, min_version)
+-- Factory function for PipelineValidatorContract (instance wrapper)
+function M.PipelineValidatorContract_create(runtime, host)
+    local handle = runtime:find_by_contract(PIPELINE_VALIDATOR_CONTRACT_ID, 0)
     if handle == nil then
         return nil
     end
-    local guard = runtime:resolve_plugin(handle)
-    if guard == nil then
+    local interface = runtime:resolve_contract(handle)
+    if interface == nil then
         return nil
     end
-    local instance = {
-        _guard = guard
+    local instance = interface.create_instance(host, nil)
+    if instance == nil or instance.data == nil then
+        return nil
+    end
+    local wrapper = {
+        _interface = interface,
+        _instance = instance,
+        _host = host
     }
-    setmetatable(instance, PipelineValidatorContract_mt)
-    return instance
+    setmetatable(wrapper, PipelineValidatorContract_mt)
+    return wrapper
 end
 
 return M

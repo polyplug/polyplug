@@ -44,10 +44,10 @@ private static AbiError host_logger_log_with_level_thunk(IntPtr implPtr, IntPtr 
 private static IHostLogger? s_HostLogger_impl;
 
 /// <summary>
-/// Create a host contract vtable for `host.logger` with NATIVE dispatch.
+/// Create a host contract interface for `host.logger` with NATIVE dispatch.
 /// </summary>
 /// <remarks>
-/// Takes a reference to the implementation and creates a vtable.
+/// Takes a reference to the implementation and creates an interface.
 /// The implementation must implement the interface.
 /// </remarks>
 public static HostContractVTable CreateHostLoggerInterface<T>(T impl) where T: IHostLogger {
@@ -81,7 +81,7 @@ public static HostContractVTable CreateHostLoggerInterface<T>(T impl) where T: I
 }
 
 /// <summary>
-/// Create a host contract vtable for `host.logger` with VM dispatch.
+/// Create a host contract interface for `host.logger` with VM dispatch.
 /// </summary>
 /// <remarks>
 /// Used when the host implementation is in a VM language (Python, Lua, JS).

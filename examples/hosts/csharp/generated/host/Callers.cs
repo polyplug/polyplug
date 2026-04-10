@@ -16,50 +16,71 @@ public static class PipelineDecoderContractConstants {
 
 /// <summary>
 /// Host caller for contract `pipeline.Decoder` (id=0xE1D7DE773BE6E7F7)
+/// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed class PipelineDecoderContractCaller : IDisposable {
-    private PluginGuard _guard;
+    private readonly GuestContractInterface* _interface;
+    private GuestContractInstance _instance;
+    private readonly HostInterface* _host;
+    private bool _disposed;
 
-    private PipelineDecoderContractCaller(PluginGuard guard) { _guard = guard; }
+    private PipelineDecoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+        _interface = iface;
+        _instance = inst;
+        _host = host;
+        _disposed = false;
+    }
 
-    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>
-    public static PipelineDecoderContractCaller? Create(Runtime rt, uint minVersion = 0) {
-        var handle = rt.FindByContract(PipelineDecoderContractConstants.PIPELINE_DECODER_CONTRACT_ID, minVersion);
+    /// <summary>Factory method - resolves contract and creates instance.</summary>
+    public static PipelineDecoderContractCaller? Create(Runtime rt, HostInterface* host) {
+        var handle = rt.FindByContract(PipelineDecoderContractConstants.PIPELINE_DECODER_CONTRACT_ID, 0);
         if (handle == ulong.MaxValue) { return null; }
-        var guard = rt.ResolvePlugin(handle);
-        if (guard.IsNull()) { return null; }
-        return new PipelineDecoderContractCaller(guard);
+        var iface = rt.ResolveContract(handle);
+        if (iface == null) { return null; }
+        var inst = iface->CreateInstance((nint)host, nint.Zero);
+        if (inst.Data == nint.Zero) { return null; }
+        return new PipelineDecoderContractCaller(iface, inst, host);
     }
 
     /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_guard.IsNull();
+    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
 
-    /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard.Release(); }
+    /// <summary>Reset instance - destroy existing and create new.</summary>
+    public void Reset() {
+        if (!_disposed && _instance.Data != nint.Zero) {
+            _interface->DestroyInstance((nint)_host, _instance);
+        }
+        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+    }
 
-    /// <summary>Dispose pattern for explicit cleanup.</summary>
-    public void Dispose() { Reset(); }
+    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
+    public void Dispose() {
+        if (!_disposed) {
+            if (_instance.Data != nint.Zero) {
+                _interface->DestroyInstance((nint)_host, _instance);
+                _instance.Data = nint.Zero;
+            }
+            _disposed = true;
+        }
+    }
 
     public Polyplug.Abi.StringView Decode(Polyplug.Abi.StringView input) {
-        nint vtablePtr = _guard.GetVTable();
-        if (vtablePtr == nint.Zero) {
-            throw new ObjectDisposedException(nameof(PluginGuard));
+        if (_disposed || _instance.Data == nint.Zero) {
+            throw new ObjectDisposedException(nameof(PipelineDecoderContractCaller));
         }
 
         unsafe {
-            var pluginInterface = *(GuestContractInterface*)vtablePtr;
-            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
+            if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
+            nint funcsArray = _interface->Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
+            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = default;
-            dispatch(&err, argsPtr, outPtr);
+            AbiError err = dispatch(_instance, argsPtr, outPtr);
             if (err.Code != 0u) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -76,50 +97,71 @@ public static class DataTransformerContractConstants {
 
 /// <summary>
 /// Host caller for contract `data.Transformer` (id=0x4775991362CD68EE)
+/// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed class DataTransformerContractCaller : IDisposable {
-    private PluginGuard _guard;
+    private readonly GuestContractInterface* _interface;
+    private GuestContractInstance _instance;
+    private readonly HostInterface* _host;
+    private bool _disposed;
 
-    private DataTransformerContractCaller(PluginGuard guard) { _guard = guard; }
+    private DataTransformerContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+        _interface = iface;
+        _instance = inst;
+        _host = host;
+        _disposed = false;
+    }
 
-    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>
-    public static DataTransformerContractCaller? Create(Runtime rt, uint minVersion = 0) {
-        var handle = rt.FindByContract(DataTransformerContractConstants.DATA_TRANSFORMER_CONTRACT_ID, minVersion);
+    /// <summary>Factory method - resolves contract and creates instance.</summary>
+    public static DataTransformerContractCaller? Create(Runtime rt, HostInterface* host) {
+        var handle = rt.FindByContract(DataTransformerContractConstants.DATA_TRANSFORMER_CONTRACT_ID, 0);
         if (handle == ulong.MaxValue) { return null; }
-        var guard = rt.ResolvePlugin(handle);
-        if (guard.IsNull()) { return null; }
-        return new DataTransformerContractCaller(guard);
+        var iface = rt.ResolveContract(handle);
+        if (iface == null) { return null; }
+        var inst = iface->CreateInstance((nint)host, nint.Zero);
+        if (inst.Data == nint.Zero) { return null; }
+        return new DataTransformerContractCaller(iface, inst, host);
     }
 
     /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_guard.IsNull();
+    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
 
-    /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard.Release(); }
+    /// <summary>Reset instance - destroy existing and create new.</summary>
+    public void Reset() {
+        if (!_disposed && _instance.Data != nint.Zero) {
+            _interface->DestroyInstance((nint)_host, _instance);
+        }
+        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+    }
 
-    /// <summary>Dispose pattern for explicit cleanup.</summary>
-    public void Dispose() { Reset(); }
+    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
+    public void Dispose() {
+        if (!_disposed) {
+            if (_instance.Data != nint.Zero) {
+                _interface->DestroyInstance((nint)_host, _instance);
+                _instance.Data = nint.Zero;
+            }
+            _disposed = true;
+        }
+    }
 
     public Polyplug.Abi.StringView Transform(Polyplug.Abi.StringView input) {
-        nint vtablePtr = _guard.GetVTable();
-        if (vtablePtr == nint.Zero) {
-            throw new ObjectDisposedException(nameof(PluginGuard));
+        if (_disposed || _instance.Data == nint.Zero) {
+            throw new ObjectDisposedException(nameof(DataTransformerContractCaller));
         }
 
         unsafe {
-            var pluginInterface = *(GuestContractInterface*)vtablePtr;
-            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
+            if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
+            nint funcsArray = _interface->Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
+            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = default;
-            dispatch(&err, argsPtr, outPtr);
+            AbiError err = dispatch(_instance, argsPtr, outPtr);
             if (err.Code != 0u) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -136,50 +178,71 @@ public static class PipelineEncoderContractConstants {
 
 /// <summary>
 /// Host caller for contract `pipeline.Encoder` (id=0xFC50F9D1D3DB629F)
+/// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed class PipelineEncoderContractCaller : IDisposable {
-    private PluginGuard _guard;
+    private readonly GuestContractInterface* _interface;
+    private GuestContractInstance _instance;
+    private readonly HostInterface* _host;
+    private bool _disposed;
 
-    private PipelineEncoderContractCaller(PluginGuard guard) { _guard = guard; }
+    private PipelineEncoderContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+        _interface = iface;
+        _instance = inst;
+        _host = host;
+        _disposed = false;
+    }
 
-    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>
-    public static PipelineEncoderContractCaller? Create(Runtime rt, uint minVersion = 0) {
-        var handle = rt.FindByContract(PipelineEncoderContractConstants.PIPELINE_ENCODER_CONTRACT_ID, minVersion);
+    /// <summary>Factory method - resolves contract and creates instance.</summary>
+    public static PipelineEncoderContractCaller? Create(Runtime rt, HostInterface* host) {
+        var handle = rt.FindByContract(PipelineEncoderContractConstants.PIPELINE_ENCODER_CONTRACT_ID, 0);
         if (handle == ulong.MaxValue) { return null; }
-        var guard = rt.ResolvePlugin(handle);
-        if (guard.IsNull()) { return null; }
-        return new PipelineEncoderContractCaller(guard);
+        var iface = rt.ResolveContract(handle);
+        if (iface == null) { return null; }
+        var inst = iface->CreateInstance((nint)host, nint.Zero);
+        if (inst.Data == nint.Zero) { return null; }
+        return new PipelineEncoderContractCaller(iface, inst, host);
     }
 
     /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_guard.IsNull();
+    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
 
-    /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard.Release(); }
+    /// <summary>Reset instance - destroy existing and create new.</summary>
+    public void Reset() {
+        if (!_disposed && _instance.Data != nint.Zero) {
+            _interface->DestroyInstance((nint)_host, _instance);
+        }
+        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+    }
 
-    /// <summary>Dispose pattern for explicit cleanup.</summary>
-    public void Dispose() { Reset(); }
+    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
+    public void Dispose() {
+        if (!_disposed) {
+            if (_instance.Data != nint.Zero) {
+                _interface->DestroyInstance((nint)_host, _instance);
+                _instance.Data = nint.Zero;
+            }
+            _disposed = true;
+        }
+    }
 
     public Polyplug.Abi.StringView Encode(Polyplug.Abi.StringView input) {
-        nint vtablePtr = _guard.GetVTable();
-        if (vtablePtr == nint.Zero) {
-            throw new ObjectDisposedException(nameof(PluginGuard));
+        if (_disposed || _instance.Data == nint.Zero) {
+            throw new ObjectDisposedException(nameof(PipelineEncoderContractCaller));
         }
 
         unsafe {
-            var pluginInterface = *(GuestContractInterface*)vtablePtr;
-            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
+            if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
+            nint funcsArray = _interface->Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
+            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = default;
-            dispatch(&err, argsPtr, outPtr);
+            AbiError err = dispatch(_instance, argsPtr, outPtr);
             if (err.Code != 0u) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -196,50 +259,71 @@ public static class DataReporterContractConstants {
 
 /// <summary>
 /// Host caller for contract `data.Reporter` (id=0x76BB4643A9F5AD68)
+/// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed class DataReporterContractCaller : IDisposable {
-    private PluginGuard _guard;
+    private readonly GuestContractInterface* _interface;
+    private GuestContractInstance _instance;
+    private readonly HostInterface* _host;
+    private bool _disposed;
 
-    private DataReporterContractCaller(PluginGuard guard) { _guard = guard; }
+    private DataReporterContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+        _interface = iface;
+        _instance = inst;
+        _host = host;
+        _disposed = false;
+    }
 
-    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>
-    public static DataReporterContractCaller? Create(Runtime rt, uint minVersion = 0) {
-        var handle = rt.FindByContract(DataReporterContractConstants.DATA_REPORTER_CONTRACT_ID, minVersion);
+    /// <summary>Factory method - resolves contract and creates instance.</summary>
+    public static DataReporterContractCaller? Create(Runtime rt, HostInterface* host) {
+        var handle = rt.FindByContract(DataReporterContractConstants.DATA_REPORTER_CONTRACT_ID, 0);
         if (handle == ulong.MaxValue) { return null; }
-        var guard = rt.ResolvePlugin(handle);
-        if (guard.IsNull()) { return null; }
-        return new DataReporterContractCaller(guard);
+        var iface = rt.ResolveContract(handle);
+        if (iface == null) { return null; }
+        var inst = iface->CreateInstance((nint)host, nint.Zero);
+        if (inst.Data == nint.Zero) { return null; }
+        return new DataReporterContractCaller(iface, inst, host);
     }
 
     /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_guard.IsNull();
+    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
 
-    /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard.Release(); }
+    /// <summary>Reset instance - destroy existing and create new.</summary>
+    public void Reset() {
+        if (!_disposed && _instance.Data != nint.Zero) {
+            _interface->DestroyInstance((nint)_host, _instance);
+        }
+        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+    }
 
-    /// <summary>Dispose pattern for explicit cleanup.</summary>
-    public void Dispose() { Reset(); }
+    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
+    public void Dispose() {
+        if (!_disposed) {
+            if (_instance.Data != nint.Zero) {
+                _interface->DestroyInstance((nint)_host, _instance);
+                _instance.Data = nint.Zero;
+            }
+            _disposed = true;
+        }
+    }
 
     public Polyplug.Abi.StringView Report(Polyplug.Abi.StringView input) {
-        nint vtablePtr = _guard.GetVTable();
-        if (vtablePtr == nint.Zero) {
-            throw new ObjectDisposedException(nameof(PluginGuard));
+        if (_disposed || _instance.Data == nint.Zero) {
+            throw new ObjectDisposedException(nameof(DataReporterContractCaller));
         }
 
         unsafe {
-            var pluginInterface = *(GuestContractInterface*)vtablePtr;
-            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
+            if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
+            nint funcsArray = _interface->Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
+            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = default;
-            dispatch(&err, argsPtr, outPtr);
+            AbiError err = dispatch(_instance, argsPtr, outPtr);
             if (err.Code != 0u) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }
@@ -256,50 +340,71 @@ public static class PipelineValidatorContractConstants {
 
 /// <summary>
 /// Host caller for contract `pipeline.Validator` (id=0x45173A959EEC57C5)
+/// Instance-based RAII wrapper with automatic cleanup via IDisposable.
 /// </summary>
 public sealed class PipelineValidatorContractCaller : IDisposable {
-    private PluginGuard _guard;
+    private readonly GuestContractInterface* _interface;
+    private GuestContractInstance _instance;
+    private readonly HostInterface* _host;
+    private bool _disposed;
 
-    private PipelineValidatorContractCaller(PluginGuard guard) { _guard = guard; }
+    private PipelineValidatorContractCaller(GuestContractInterface* iface, GuestContractInstance inst, HostInterface* host) {
+        _interface = iface;
+        _instance = inst;
+        _host = host;
+        _disposed = false;
+    }
 
-    /// <summary>Factory method - creates an instance if a plugin implementing this contract is found.</summary>
-    public static PipelineValidatorContractCaller? Create(Runtime rt, uint minVersion = 0) {
-        var handle = rt.FindByContract(PipelineValidatorContractConstants.PIPELINE_VALIDATOR_CONTRACT_ID, minVersion);
+    /// <summary>Factory method - resolves contract and creates instance.</summary>
+    public static PipelineValidatorContractCaller? Create(Runtime rt, HostInterface* host) {
+        var handle = rt.FindByContract(PipelineValidatorContractConstants.PIPELINE_VALIDATOR_CONTRACT_ID, 0);
         if (handle == ulong.MaxValue) { return null; }
-        var guard = rt.ResolvePlugin(handle);
-        if (guard.IsNull()) { return null; }
-        return new PipelineValidatorContractCaller(guard);
+        var iface = rt.ResolveContract(handle);
+        if (iface == null) { return null; }
+        var inst = iface->CreateInstance((nint)host, nint.Zero);
+        if (inst.Data == nint.Zero) { return null; }
+        return new PipelineValidatorContractCaller(iface, inst, host);
     }
 
     /// <summary>Check if this caller instance is still valid.</summary>
-    public bool IsValid => !_guard.IsNull();
+    public bool IsValid => !_disposed && _instance.Data != nint.Zero;
 
-    /// <summary>Explicitly release the guard reference.</summary>
-    public void Reset() { _guard.Release(); }
+    /// <summary>Reset instance - destroy existing and create new.</summary>
+    public void Reset() {
+        if (!_disposed && _instance.Data != nint.Zero) {
+            _interface->DestroyInstance((nint)_host, _instance);
+        }
+        _instance = _interface->CreateInstance((nint)_host, nint.Zero);
+    }
 
-    /// <summary>Dispose pattern for explicit cleanup.</summary>
-    public void Dispose() { Reset(); }
+    /// <summary>Dispose pattern - calls destroy_instance on cleanup.</summary>
+    public void Dispose() {
+        if (!_disposed) {
+            if (_instance.Data != nint.Zero) {
+                _interface->DestroyInstance((nint)_host, _instance);
+                _instance.Data = nint.Zero;
+            }
+            _disposed = true;
+        }
+    }
 
     public Polyplug.Abi.StringView Validate(Polyplug.Abi.StringView input) {
-        nint vtablePtr = _guard.GetVTable();
-        if (vtablePtr == nint.Zero) {
-            throw new ObjectDisposedException(nameof(PluginGuard));
+        if (_disposed || _instance.Data == nint.Zero) {
+            throw new ObjectDisposedException(nameof(PipelineValidatorContractCaller));
         }
 
         unsafe {
-            var pluginInterface = *(GuestContractInterface*)vtablePtr;
-            if (0u >= pluginInterface.Dispatch.Native.FunctionCount) {
+            if (0u >= _interface->Dispatch.Native.FunctionCount) {
                 throw new InvalidOperationException("function not available");
             }
-            nint funcsArray = pluginInterface.Dispatch.Native.Functions;
+            nint funcsArray = _interface->Dispatch.Native.Functions;
             nint funcPtr = ((nint*)funcsArray)[0];
-            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<AbiError*, nint, nint, void>)funcPtr;
+            var dispatch = (delegate* unmanaged[Cdecl, SuppressGCTransition]<GuestContractInstance, nint, nint, AbiError>)funcPtr;
             Polyplug.Abi.StringView input_arg = input;
             nint argsPtr = (nint)(&input_arg);
             Polyplug.Abi.StringView result = default;
             nint outPtr = (nint)(&result);
-            AbiError err = default;
-            dispatch(&err, argsPtr, outPtr);
+            AbiError err = dispatch(_instance, argsPtr, outPtr);
             if (err.Code != 0u) {
                 throw new InvalidOperationException($"plugin call failed: code={err.Code}");
             }

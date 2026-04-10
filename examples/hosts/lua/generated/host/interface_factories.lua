@@ -4,19 +4,21 @@
 
 local ffi = require("ffi")
 
--- ABI types for host contract interfaces
-local ABI_OK = 0
-local ABI_ERROR_PANIC = 5
+-- ABI error codes (match polyplug_abi.AbiErrorCode)
+local AbiErrorCode = {
+    Ok = 0,
+    Panic = 5,
+}
 
 local M = {}
 
--- Create a host contract vtable for `host.logger` with NATIVE dispatch.
+-- Create a host contract interface for `host.logger` with NATIVE dispatch.
 --
--- Takes an implementation table and creates a vtable.
+-- Takes an implementation table and creates an interface.
 -- The implementation must have methods matching the contract.
 --
 -- Memory:
--- The returned vtable is cached and lives for the lifetime of the program.
+-- The returned interface is cached and lives for the lifetime of the program.
 function M.create_host_logger_interface(impl)
     _HostLogger_impl = impl
 
@@ -24,16 +26,16 @@ function M.create_host_logger_interface(impl)
         local ok, err = pcall(function()
             local impl = _HostLogger_impl
             if impl == nil then
-                return ABI_ERROR_PANIC
+                return AbiErrorCode.Panic
             end
             local message_sv = ffi.cast("StringView*", args)[0]
             local message = ffi.string(message_sv.ptr, message_sv.len)
             impl:log(message)
             local _ = out
-            return ABI_OK
+            return AbiErrorCode.Ok
         end)
         if not ok then
-            return ABI_ERROR_PANIC
+            return AbiErrorCode.Panic
         end
         return err
     end
@@ -42,17 +44,17 @@ function M.create_host_logger_interface(impl)
         local ok, err = pcall(function()
             local impl = _HostLogger_impl
             if impl == nil then
-                return ABI_ERROR_PANIC
+                return AbiErrorCode.Panic
             end
             local packed = ffi.cast("LOG_WITH_LEVELArgs*", args)[0]
             local level: userdata = packed.level
             local message = ffi.string(packed.message.ptr, packed.message.len)
             impl:log_with_level(level, message)
             local _ = out
-            return ABI_OK
+            return AbiErrorCode.Ok
         end)
         if not ok then
-            return ABI_ERROR_PANIC
+            return AbiErrorCode.Panic
         end
         return err
     end
@@ -61,23 +63,23 @@ function M.create_host_logger_interface(impl)
     functions[0] = ffi.cast("void*", ffi.cast("uint32_t (*)(const void*, const void*, void*)", _host_logger_log_thunk))
     functions[1] = ffi.cast("void*", ffi.cast("uint32_t (*)(const void*, const void*, void*)", _host_logger_log_with_level_thunk))
 
-    local vtable = ffi.new("HostContractVTable")
-    vtable.header.vtable_version = 1
-    vtable.header.contract_id = 0xF53EB5F2845853BBULL
-    vtable.header.contract_major = 1
-    vtable.header.contract_minor = 0
-    vtable.header.function_count = 2
-    vtable.header.singleton = false  -- multi-instance
-    vtable.header.dispatch_type = 0  -- DispatchType.Native
-    vtable.dispatch.native.impl_ptr = nil  -- We use global _impl instead
-    vtable.dispatch.native.functions = functions
+    local interface = ffi.new("HostContractVTable")
+    interface.header.vtable_version = 1
+    interface.header.contract_id = 0xF53EB5F2845853BBULL
+    interface.header.contract_major = 1
+    interface.header.contract_minor = 0
+    interface.header.function_count = 2
+    interface.header.singleton = false  -- multi-instance
+    interface.header.dispatch_type = 0  -- DispatchType.Native
+    interface.dispatch.native.impl_ptr = nil  -- We use global _impl instead
+    interface.dispatch.native.functions = functions
 
-    return vtable
+    return interface
 end
 
 _HostLogger_impl = nil
 
--- Create a host contract vtable for `host.logger` with VM dispatch.
+-- Create a host contract interface for `host.logger` with VM dispatch.
 --
 -- Used when the host implementation is in a VM language (Python, Lua, JS).
 --
@@ -86,20 +88,20 @@ _HostLogger_impl = nil
 --     dispatch_fn: Function to call for each contract function
 --
 -- Memory:
--- The returned vtable is cached and lives for the lifetime of the program.
+-- The returned interface is cached and lives for the lifetime of the program.
 function M.create_host_logger_interface_vm(bridge_data, dispatch_fn)
-    local vtable = ffi.new("HostContractVTable")
-    vtable.header.vtable_version = 1
-    vtable.header.contract_id = 0xF53EB5F2845853BBULL
-    vtable.header.contract_major = 1
-    vtable.header.contract_minor = 0
-    vtable.header.function_count = 2
-    vtable.header.singleton = false  -- multi-instance
-    vtable.header.dispatch_type = 1  -- DispatchType.VirtualMachine
-    vtable.dispatch.vm.call = dispatch_fn
-    vtable.dispatch.vm.bridge_data = bridge_data
+    local interface = ffi.new("HostContractVTable")
+    interface.header.vtable_version = 1
+    interface.header.contract_id = 0xF53EB5F2845853BBULL
+    interface.header.contract_major = 1
+    interface.header.contract_minor = 0
+    interface.header.function_count = 2
+    interface.header.singleton = false  -- multi-instance
+    interface.header.dispatch_type = 1  -- DispatchType.VirtualMachine
+    interface.dispatch.vm.call = dispatch_fn
+    interface.dispatch.vm.bridge_data = bridge_data
 
-    return vtable
+    return interface
 end
 
 return M

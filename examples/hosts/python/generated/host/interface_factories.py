@@ -19,13 +19,13 @@ from polyplug.abi import (
 )
 from host.contracts import *
 
-# Create a host contract vtable for `host.logger` with NATIVE dispatch.
+# Create a host contract interface for `host.logger` with NATIVE dispatch.
 #
-# Takes an implementation instance and creates a vtable.
+# Takes an implementation instance and creates an interface.
 # The implementation must inherit from the ABC class.
 #
 # Memory:
-# The returned vtable is cached and lives for the lifetime of the program.
+# The returned interface is cached and lives for the lifetime of the program.
 def create_host_logger_interface(impl: HostLogger) -> HostContractVTable:
     global _HostLogger_impl
     _HostLogger_impl = impl
@@ -69,7 +69,7 @@ def create_host_logger_interface(impl: HostLogger) -> HostContractVTable:
         ctypes.cast(ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_host_logger_log_with_level_thunk), ctypes.c_void_p),
     ]
 
-    vtable = HostContractVTable(
+    interface = HostContractVTable(
         header=HostContractVTableHeader(
             vtable_version=1,
             contract_id=0xF53EB5F2845853BB,
@@ -87,11 +87,11 @@ def create_host_logger_interface(impl: HostLogger) -> HostContractVTable:
         ),
     )
 
-    return vtable
+    return interface
 
 _HostLogger_impl: HostLogger | None = None
 
-# Create a host contract vtable for `host.logger` with VM dispatch.
+# Create a host contract interface for `host.logger` with VM dispatch.
 #
 # Used when the host implementation is in a VM language (Python, Lua, JS).
 #
@@ -100,12 +100,12 @@ _HostLogger_impl: HostLogger | None = None
 #     dispatch_fn: Function to call for each contract function
 #
 # Memory:
-# The returned vtable is cached and lives for the lifetime of the program.
+# The returned interface is cached and lives for the lifetime of the program.
 def create_host_logger_interface_vm(
     bridge_data: int,
     dispatch_fn: Callable[[int, int, int, int], AbiError],
 ) -> HostContractVTable:
-    vtable = HostContractVTable(
+    interface = HostContractVTable(
         header=HostContractVTableHeader(
             vtable_version=1,
             contract_id=0xF53EB5F2845853BB,
@@ -123,5 +123,5 @@ def create_host_logger_interface_vm(
         ),
     )
 
-    return vtable
+    return interface
 

@@ -8,6 +8,7 @@
 
 use polyplug_abi::HostContractInterface;
 use polyplug_abi::HostContractInstance;
+use polyplug_abi::HostInterface;
 use polyplug_abi::GuestContractInstance;
 use polyplug_abi::VmLoaderData;
 use polyplug_abi::DispatchMechanisms;
@@ -25,14 +26,14 @@ use core::ffi::c_void;
 use super::host_contracts::*;
 use super::types::*;
 
-/// Create a host contract vtable for `host.logger` with NATIVE dispatch.
+/// Create a host contract interface for `host.logger` with NATIVE dispatch.
 ///
-/// Takes ownership of the implementation and creates a 'static vtable.
+/// Takes ownership of the implementation and creates a 'static interface.
 /// The implementation must be `Send + Sync`.
 ///
 /// # Memory
-/// The returned vtable is leaked and lives for the lifetime of the program.
-/// The implementation Box is also leaked (its pointer is stored in the vtable).
+/// The returned interface is leaked and lives for the lifetime of the program.
+/// The implementation Box is also leaked (its pointer is stored in the interface).
 pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'static HostContractInterface {
     static IMPL_PTR: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
@@ -103,7 +104,7 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
     /// For host contracts, the instance is the implementation object.
     /// This stub returns the impl_ptr as the instance data.
     unsafe extern "C" fn host_logger_create_instance_stub(
-        _host: *const HostInterface,
+        _this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
         HostContractInstance { data: IMPL_PTR.load(std::sync::atomic::Ordering::SeqCst) }
@@ -113,17 +114,18 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
     /// For singleton contracts, this is a no-op.
     /// For multi-instance contracts, the host must provide a custom destructor.
     unsafe extern "C" fn host_logger_destroy_instance_stub(
-        _host: *const HostInterface,
+        _this: *const HostContractInterface,
         _instance: HostContractInstance,
     ) {
         // Multi-instance: host should provide custom destroy_instance
     }
 
-    let vtable: HostContractInterface = HostContractInterface {
+    let interface: HostContractInterface = HostContractInterface {
         contract_id: HostContractId::from(0xF53EB5F2845853BB_u64),
         contract_version: Version { major: 1, minor: 0, patch: 0 },
         singleton: false,
         dispatch_type: DispatchType::Native,
+        runtime: std::ptr::null_mut(),
         create_instance: host_logger_create_instance_stub,
         destroy_instance: host_logger_destroy_instance_stub,
         dispatch: DispatchMechanisms {
@@ -134,10 +136,10 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
         },
     };
 
-    Box::leak(Box::new(vtable))
+    Box::leak(Box::new(interface))
 }
 
-/// Create a host contract vtable for `host.logger` with VM dispatch.
+/// Create a host contract interface for `host.logger` with VM dispatch.
 ///
 /// Used when the host implementation is in a VM language (Python, Lua, JS).
 ///
@@ -146,7 +148,7 @@ pub fn create_host_logger_interface(implementation: Box<dyn HostLogger>) -> &'st
 /// * `dispatch_fn` - Function to call for each contract function
 ///
 /// # Memory
-/// The returned vtable is leaked and lives for the lifetime of the program.
+/// The returned interface is leaked and lives for the lifetime of the program.
 pub fn create_host_logger_interface_vm(
     bridge_data: *mut c_void,
     dispatch_fn: unsafe extern "C" fn(
@@ -163,7 +165,7 @@ pub fn create_host_logger_interface_vm(
     /// Create instance stub for `host.logger` host contract (VM dispatch).
     /// Returns bridge_data as instance for VM-based implementations.
     unsafe extern "C" fn host_logger_vm_create_instance_stub(
-        _host: *const HostInterface,
+        _this: *const HostContractInterface,
         _args: *const (),
     ) -> HostContractInstance {
         HostContractInstance { data: BRIDGE_DATA.load(std::sync::atomic::Ordering::SeqCst) }
@@ -171,17 +173,18 @@ pub fn create_host_logger_interface_vm(
 
     /// Destroy instance stub for `host.logger` host contract (VM dispatch).
     unsafe extern "C" fn host_logger_vm_destroy_instance_stub(
-        _host: *const HostInterface,
+        _this: *const HostContractInterface,
         _instance: HostContractInstance,
     ) {
         // Multi-instance: host should provide custom destroy_instance
     }
 
-    let vtable: HostContractInterface = HostContractInterface {
+    let interface: HostContractInterface = HostContractInterface {
         contract_id: HostContractId::from(0xF53EB5F2845853BB_u64),
         contract_version: Version { major: 1, minor: 0, patch: 0 },
         singleton: false,
         dispatch_type: DispatchType::VirtualMachine,
+        runtime: std::ptr::null_mut(),
         create_instance: host_logger_vm_create_instance_stub,
         destroy_instance: host_logger_vm_destroy_instance_stub,
         dispatch: DispatchMechanisms {
@@ -192,6 +195,6 @@ pub fn create_host_logger_interface_vm(
         },
     };
 
-    Box::leak(Box::new(vtable))
+    Box::leak(Box::new(interface))
 }
 
