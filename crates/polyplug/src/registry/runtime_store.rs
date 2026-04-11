@@ -89,10 +89,12 @@ pub(crate) struct PluginSlot {
 struct RuntimeStoreData {
     /// Slot storage — each slot holds a plugin registration or is vacant.
     slots: Vec<PluginSlot>,
-    /// Maps contract_id to the Vec of register_guest_contracted slot indices (multi-impl support).
+    /// Maps contract_id to the Vec of registered slot indices (multi-impl support).
     guest_contract_index: HashMap<GuestContractId, Vec<u32>>,
-    /// Maps bundle_id to the first slot index register_guest_contracted for that bundle.
-    bundle_slots_index: HashMap<BundleId, u32>,
+    /// Maps bundle_id to BundleData containing all slots and descriptor (O(1) lookup).
+    bundle_data: HashMap<BundleId, BundleData>,
+    /// Maps bundle name to all loaded version BundleIds (multi-version support).
+    bundle_name_index: HashMap<String, Vec<BundleId>>,
     /// Maps bundle_id to the set of contract_ids it has declared as dependencies.
     bundle_declared_deps: HashMap<BundleId, HashSet<GuestContractId>>,
 }
@@ -103,7 +105,8 @@ impl RuntimeStoreData {
         Self {
             slots: Vec::new(),
             guest_contract_index: HashMap::new(),
-            bundle_slots_index: HashMap::new(),
+            bundle_data: HashMap::new(),
+            bundle_name_index: HashMap::new(),
             bundle_declared_deps: HashMap::new(),
         }
     }
@@ -209,8 +212,23 @@ impl RuntimeStore {
             .or_default()
             .push(slot_idx);
 
-        // Update bundle_index: record first slot for this bundle_id
-        data.bundle_slots_index.entry(bundle_id).or_insert(slot_idx);
+        // Update bundle_data: push slot_idx into plugin_slots Vec for this bundle_id.
+        // Note: descriptor is populated separately via register_bundle_metadata().
+        data.bundle_data
+            .entry(bundle_id)
+            .or_insert_with(|| BundleData {
+                plugin_slots: Vec::new(),
+                descriptor: BundleDescriptor {
+                    id: bundle_id,
+                    name: String::new(),
+                    version: Version { major: 0, minor: 0, patch: 0 },
+                    runtime: RuntimeLanguage::Rust,
+                    file_path: PathBuf::new(),
+                    dependencies: Vec::new(),
+                },
+            })
+            .plugin_slots
+            .push(slot_idx);
 
         Ok(GuestContractHandle { index: slot_idx })
     }
@@ -292,7 +310,7 @@ impl RuntimeStore {
         })
     }
 
-    /// Find the plugin register_guest_contracted by a specific bundle_id that satisfies contract_id + min_version.
+    /// Find the plugin registered by a specific bundle_id that satisfies contract_id + min_version.
     pub fn find_guest_contract_by_bundle(
         &self,
         bundle_id: BundleId,
@@ -305,8 +323,9 @@ impl RuntimeStore {
                 e.into_inner()
             });
 
-        let &slot_idx: &u32 = match data.bundle_slots_index.get(&bundle_id) {
-            Some(i) => i,
+        // Get all slot indices for this bundle (O(1) via bundle_data)
+        let slot_indices: &Vec<u32> = match data.bundle_data.get(&bundle_id) {
+            Some(bd) => &bd.plugin_slots,
             None => {
                 return Err(RegistryError::PluginNotFound {
                     contract_id: contract_id.id(),
@@ -315,17 +334,20 @@ impl RuntimeStore {
             }
         };
 
-        let slot: &PluginSlot = &data.slots[slot_idx as usize];
-        if let Some(ref entry) = slot.entry
-            && let Some(ref interface) = slot.interface
-        {
-            // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
-            // Written once at registration, never mutated.
-            if entry.bundle_id == bundle_id
-                && interface.contract_id == contract_id
-                && interface.contract_version.major >= min_version
+        // Find the slot matching contract_id and version
+        for &slot_idx in slot_indices.iter() {
+            let slot: &PluginSlot = &data.slots[slot_idx as usize];
+            if let Some(ref entry) = slot.entry
+                && let Some(ref interface) = slot.interface
             {
-                return Ok(GuestContractHandle { index: slot_idx });
+                // SAFETY: interface is 'static GuestContractInterface valid for Registry lifetime.
+                // Written once at registration, never mutated.
+                if entry.bundle_id == bundle_id
+                    && interface.contract_id == contract_id
+                    && interface.contract_version.major >= min_version
+                {
+                    return Ok(GuestContractHandle { index: slot_idx });
+                }
             }
         }
         Err(RegistryError::PluginNotFound {
@@ -524,25 +546,20 @@ impl RuntimeStore {
         Ok(())
     }
 
-    /// Find all slot indices that were register_guest_contracted by `bundle_id`.
+    /// Find all slot indices that were registered by `bundle_id`.
     ///
-    /// Returns an empty `Vec` if the bundle has no register_guest_contracted slots.
-    /// Used by `reload_bundle()` to locate every interface slot to swap.
+    /// Returns an empty `Vec` if the bundle has no registered slots.
+    /// O(1) lookup via bundle_data HashMap.
     pub fn get_bundle_plugin_slots(&self, bundle_id: BundleId) -> Vec<u32> {
         let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
             self.data.read().unwrap_or_else(|e| {
                 eprintln!("[polyplug] Mutex/RwLock poisoned, recovering: {}", e);
                 e.into_inner()
             });
-        let mut result: Vec<u32> = Vec::new();
-        for (i, slot) in data.slots.iter().enumerate() {
-            if let Some(ref entry) = slot.entry
-                && entry.bundle_id == bundle_id
-            {
-                result.push(i as u32);
-            }
-        }
-        result
+        data.bundle_data
+            .get(&bundle_id)
+            .map(|bd: &BundleData| bd.plugin_slots.clone())
+            .unwrap_or_default()
     }
 
     /// Get the contract_id for the interface currently stored in `slot_index`.
@@ -582,7 +599,8 @@ impl RuntimeStore {
             });
         data.slots.clear();
         data.guest_contract_index.clear();
-        data.bundle_slots_index.clear();
+        data.bundle_data.clear();
+        data.bundle_name_index.clear();
         data.bundle_declared_deps.clear();
     }
 }
