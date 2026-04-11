@@ -604,10 +604,11 @@ impl RuntimeStore {
         }
 
         // Add to bundle_name_index for multi-version support
-        data.bundle_name_index
-            .entry(bundle_name)
-            .or_default()
-            .push(bundle_id);
+        // Avoid duplicates when re-registering (e.g., during hot-reload).
+        let name_entries = data.bundle_name_index.entry(bundle_name).or_default();
+        if !name_entries.iter().any(|id| *id == bundle_id) {
+            name_entries.push(bundle_id);
+        }
 
         Ok(())
     }
