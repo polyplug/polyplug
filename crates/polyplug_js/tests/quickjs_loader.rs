@@ -111,6 +111,7 @@ fn make_manifest(path: &std::path::PathBuf, name: &str) -> ManifestData {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     }
 }
 
@@ -249,6 +250,7 @@ file = "bundle.js"
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     };
     let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(
@@ -360,6 +362,7 @@ fn load_nonexistent_file_returns_error() {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     };
     let result: Result<(), polyplug::error::RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_err(), "non-existent file must return Err");

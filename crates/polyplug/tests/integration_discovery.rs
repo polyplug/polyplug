@@ -122,6 +122,7 @@ fn empty_manifest() -> ManifestData {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+        bundle_dependencies: Vec::new(),
         path: PathBuf::new(),
     }
 }

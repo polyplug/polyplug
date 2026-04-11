@@ -156,6 +156,7 @@ mod tests {
             provides: vec!["contract.X".to_owned()],
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
         };
 
@@ -169,6 +170,7 @@ mod tests {
             provides: vec!["contract.Y".to_owned()],
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
         };
 
@@ -182,6 +184,7 @@ mod tests {
             provides: Vec::new(),
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
         };
 
@@ -236,6 +239,7 @@ mod tests {
             provides: Vec::new(),
             function_count: std::collections::HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
         };
 

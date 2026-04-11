@@ -65,6 +65,7 @@ fn make_manifest(path: &PathBuf, name: &str) -> ManifestData {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     }
 }
 
@@ -410,6 +411,7 @@ fn test_nonexistent_path_returns_import_failed() {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     };
     let err: RuntimeError = loader
         .load(&manifest, &runtime)
@@ -538,6 +540,7 @@ file = "bundle.py"
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "sibling import failed: {result:?}");
@@ -585,6 +588,7 @@ file = "bundle.py"
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     };
     let result: Result<(), RuntimeError> = loader.load(&manifest, &runtime);
     assert!(result.is_ok(), "site-packages import failed: {result:?}");

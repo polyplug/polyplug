@@ -9,7 +9,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use polyplug_abi::types::Version;
 use polyplug_utils::{BundleId, GuestContractId};
+use crate::registry::runtime_store::BundleDependency;
 use serde::Deserializer;
 
 const fn current_os() -> &'static str {
@@ -205,6 +207,9 @@ pub struct ManifestData {
     /// Defaults to false. Most bundles do not need it.
     #[serde(default)]
     pub needs_reinit_on_dep_reload: bool,
+    /// Bundle-level dependencies as string specs: ["image-decoder@1.0", "audio-encoder"]
+    #[serde(default)]
+    pub bundle_dependencies: Vec<String>,
     #[serde(skip)]
     pub path: PathBuf,
 }
@@ -218,6 +223,27 @@ impl ManifestData {
             .iter()
             .filter_map(|dep: &RawManifestDependency| dep.resolve())
             .collect::<Vec<ManifestDependency>>()
+    }
+
+    /// Parse bundle_dependencies strings into BundleDependency structs.
+    ///
+    /// Format: "name" or "name@1.0" where @version specifies minimum version.
+    pub fn parsed_bundle_dependencies(&self) -> Vec<BundleDependency> {
+        self.bundle_dependencies
+            .iter()
+            .map(|spec: &String| {
+                match spec.split_once('@') {
+                    Some((name, version_str)) => BundleDependency {
+                        name: name.to_string(),
+                        min_version: version_str.parse::<Version>().ok(),
+                    },
+                    None => BundleDependency {
+                        name: spec.clone(),
+                        min_version: None,
+                    },
+                }
+            })
+            .collect::<Vec<BundleDependency>>()
     }
 
     /// Validate the manifest has all required fields.
@@ -304,6 +330,7 @@ mod tests {
             provides: Vec::new(),
             function_count: HashMap::new(),
             needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
             path: PathBuf::new(),
         }
     }

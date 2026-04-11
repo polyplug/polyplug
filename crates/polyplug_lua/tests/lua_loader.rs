@@ -98,6 +98,7 @@ fn make_manifest(path: &Path, name: &str) -> ManifestData {
         function_count: HashMap::new(),
         dependencies: Vec::new(),
         needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
     }
 }
 
@@ -395,6 +396,7 @@ fn concurrent_loaders_do_not_race() {
                     function_count: HashMap::new(),
                     dependencies: Vec::new(),
                     needs_reinit_on_dep_reload: false,
+            bundle_dependencies: Vec::new(),
                 };
                 loader.load(&manifest, &runtime)
             })
