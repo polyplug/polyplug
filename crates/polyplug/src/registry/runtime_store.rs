@@ -900,4 +900,92 @@ mod tests {
             "undeclared dep should not be found"
         );
     }
+
+    #[test]
+    fn get_bundle_plugin_slots_is_o1_lookup() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::new("test-bundle");
+        let descriptor: PluginDescriptor = make_descriptor("plugin", "contract");
+        let interface: GuestContractInterface = mock_interface(0x1234_5678_9ABC_DEF0);
+
+        // Register a plugin
+        // SAFETY: interface is a local value for testing
+        unsafe {
+            registry.register_guest_contract(descriptor, &interface, "contract".to_owned(), bundle_id)
+        }.expect("registration should succeed");
+
+        // Register bundle metadata
+        registry.register_bundle_metadata(
+            bundle_id,
+            "test-bundle".to_string(),
+            Version { major: 1, minor: 0, patch: 0 },
+            RuntimeLanguage::Rust,
+            PathBuf::from("/test"),
+            Vec::new(),
+        ).expect("metadata registration should succeed");
+
+        // O(1) lookup should return the slot
+        let slots: Vec<u32> = registry.get_bundle_plugin_slots(bundle_id);
+        assert_eq!(slots.len(), 1, "bundle should have one plugin slot");
+        assert_eq!(slots[0], 0, "slot index should be 0");
+    }
+
+    #[test]
+    fn get_bundle_descriptor_returns_metadata() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::new("test-bundle");
+        let descriptor: PluginDescriptor = make_descriptor("plugin", "contract");
+        let interface: GuestContractInterface = mock_interface(0x1234_5678_9ABC_DEF0);
+
+        // SAFETY: interface is a local value for testing
+        unsafe {
+            registry.register_guest_contract(descriptor, &interface, "contract".to_owned(), bundle_id)
+        }.expect("registration should succeed");
+
+        registry.register_bundle_metadata(
+            bundle_id,
+            "test-bundle".to_string(),
+            Version { major: 1, minor: 2, patch: 3 },
+            RuntimeLanguage::Python,
+            PathBuf::from("/path/to/bundle"),
+            vec![BundleDependency {
+                name: "dep-bundle".to_string(),
+                min_version: Some(Version { major: 1, minor: 0, patch: 0 }),
+            }],
+        ).expect("metadata registration should succeed");
+
+        let desc: Option<BundleDescriptor> = registry.get_bundle_descriptor(bundle_id);
+        assert!(desc.is_some(), "descriptor should be found");
+        let d: BundleDescriptor = desc.expect("descriptor exists");
+        assert_eq!(d.name, "test-bundle");
+        assert_eq!(d.version.major, 1);
+        assert_eq!(d.version.minor, 2);
+        assert_eq!(d.version.patch, 3);
+        assert_eq!(d.runtime, RuntimeLanguage::Python);
+        assert_eq!(d.dependencies.len(), 1);
+    }
+
+    #[test]
+    fn get_bundles_by_name_returns_matching_ids() {
+        let registry: RuntimeStore = RuntimeStore::new();
+        let bundle_id: BundleId = BundleId::new("test-bundle");
+
+        // Register bundle metadata (no plugins needed for name index test)
+        registry.register_bundle_metadata(
+            bundle_id,
+            "test-bundle".to_string(),
+            Version { major: 1, minor: 0, patch: 0 },
+            RuntimeLanguage::Rust,
+            PathBuf::new(),
+            Vec::new(),
+        ).expect("metadata registration should succeed");
+
+        let ids: Vec<BundleId> = registry.get_bundles_by_name("test-bundle");
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ids[0], bundle_id);
+
+        // Non-existent name returns empty
+        let missing: Vec<BundleId> = registry.get_bundles_by_name("non-existent");
+        assert!(missing.is_empty(), "non-existent name should return empty vec");
+    }
 }
