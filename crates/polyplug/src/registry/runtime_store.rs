@@ -562,6 +562,104 @@ impl RuntimeStore {
             .unwrap_or_default()
     }
 
+    /// Register bundle metadata after load_bundle completes.
+    ///
+    /// This populates the BundleDescriptor in bundle_data and adds to bundle_name_index.
+    /// Must be called after all plugins from this bundle have registered.
+    pub fn register_bundle_metadata(
+        &self,
+        bundle_id: BundleId,
+        bundle_name: String,
+        version: Version,
+        runtime: RuntimeLanguage,
+        file_path: PathBuf,
+        dependencies: Vec<BundleDependency>,
+    ) -> Result<(), RegistryError> {
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+
+        // Update bundle_data descriptor if entry exists
+        if let Some(bundle_data) = data.bundle_data.get_mut(&bundle_id) {
+            bundle_data.descriptor.name = bundle_name.clone();
+            bundle_data.descriptor.version = version;
+            bundle_data.descriptor.runtime = runtime;
+            bundle_data.descriptor.file_path = file_path;
+            bundle_data.descriptor.dependencies = dependencies;
+        } else {
+            // Bundle has no plugins yet, create entry with empty plugin_slots
+            data.bundle_data.insert(bundle_id, BundleData {
+                plugin_slots: Vec::new(),
+                descriptor: BundleDescriptor {
+                    id: bundle_id,
+                    name: bundle_name.clone(),
+                    version,
+                    runtime,
+                    file_path,
+                    dependencies,
+                },
+            });
+        }
+
+        // Add to bundle_name_index for multi-version support
+        data.bundle_name_index
+            .entry(bundle_name)
+            .or_default()
+            .push(bundle_id);
+
+        Ok(())
+    }
+
+    /// List all loaded bundle IDs.
+    pub fn list_bundles(&self) -> Vec<BundleId> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        data.bundle_data.keys().copied().collect::<Vec<BundleId>>()
+    }
+
+    /// Get bundle metadata by bundle ID.
+    pub fn get_bundle_descriptor(&self, bundle_id: BundleId) -> Option<BundleDescriptor> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        data.bundle_data
+            .get(&bundle_id)
+            .map(|bd: &BundleData| {
+                // Clone descriptor fields manually since BundleDescriptor doesn't derive Clone
+                BundleDescriptor {
+                    id: bd.descriptor.id,
+                    name: bd.descriptor.name.clone(),
+                    version: bd.descriptor.version,
+                    runtime: bd.descriptor.runtime,
+                    file_path: bd.descriptor.file_path.clone(),
+                    dependencies: bd.descriptor.dependencies.iter().map(|d| BundleDependency {
+                        name: d.name.clone(),
+                        min_version: d.min_version,
+                    }).collect(),
+                }
+            })
+    }
+
+    /// Get all BundleIds for a given bundle name (multi-version support).
+    pub fn get_bundles_by_name(&self, bundle_name: &str) -> Vec<BundleId> {
+        let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
+            self.data.read().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+        data.bundle_name_index
+            .get(bundle_name)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Get the contract_id for the interface currently stored in `slot_index`.
     /// Returns None if the slot is empty or has no interface.
     pub(crate) fn get_slot_guest_contract_id(&self, slot_index: u32) -> Option<GuestContractId> {
