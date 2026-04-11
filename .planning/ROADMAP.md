@@ -240,7 +240,7 @@ Plans:
 | 14. Hot-Reload Documentation | 1/1 | Complete   | 2026-04-08 |
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
-| 17. RuntimeStore Refactor | 0/2 | Pending | — |
+| 17. RuntimeStore Refactor | 2/2 | Complete   | 2026-04-11 |
 | 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
 
 ## Dependencies
@@ -414,15 +414,15 @@ Plans:
 2. Bundle metadata available through RuntimeStore, not split across Runtime
 3. All tests pass with renamed types
 4. All AGENTS.md rules followed (no type aliases, explicit types, no deprecated code)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Wave Structure:
 - Wave 1: Pass 1 — Rename types, methods, fields (Plan 01)
 - Wave 2: Pass 2 — Add BundleData, BundleDescriptor, bundle_name_index, new APIs (Plan 02)
 
 Plans:
-- [ ] 17-01-PLAN.md — Pass 1: Rename ContractRegistry to RuntimeStore and all methods/fields [Wave 1]
-- [ ] 17-02-PLAN.md — Pass 2: Add BundleData, BundleDescriptor, bundle_name_index, new APIs [Wave 2]
+- [x] 17-01-PLAN.md — Pass 1: Rename ContractRegistry to RuntimeStore and all methods/fields [Wave 1]
+- [x] 17-02-PLAN.md — Pass 2: Add BundleData, BundleDescriptor, bundle_name_index, new APIs [Wave 2]
 
 ### Phase 18: Consolidate FFI to HostInterface
 
