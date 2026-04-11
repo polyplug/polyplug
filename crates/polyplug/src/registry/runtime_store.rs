@@ -613,6 +613,72 @@ impl RuntimeStore {
         Ok(())
     }
 
+    /// Remove bundle metadata from all index structures.
+    ///
+    /// Removes the bundle_id from `bundle_data`, `bundle_name_index`, and
+    /// `bundle_declared_deps`. Also unloads all plugin slots belonging to this
+    /// bundle by clearing their entries and interfaces, and removing stale
+    /// indices from `guest_contract_index`.
+    ///
+    /// Returns the number of plugin slots that were unloaded.
+    pub fn remove_bundle_metadata(&self, bundle_id: BundleId) -> Result<u32, RegistryError> {
+        let mut data: std::sync::RwLockWriteGuard<'_, RuntimeStoreData> =
+            self.data.write().unwrap_or_else(|e| {
+                eprintln!("[polyplug] RwLock poisoned, recovering: {}", e);
+                e.into_inner()
+            });
+
+        // Collect slot indices and bundle name before removing
+        let (slot_indices, bundle_name) = match data.bundle_data.get(&bundle_id) {
+            Some(bd) => (bd.plugin_slots.clone(), bd.descriptor.name.clone()),
+            None => return Ok(0),
+        };
+
+        // Clear each plugin slot and remove from guest_contract_index
+        for slot_idx in &slot_indices {
+            let slot_idx_usize = *slot_idx as usize;
+            if slot_idx_usize >= data.slots.len() {
+                continue;
+            }
+
+            // Read contract_id before clearing the slot
+            let contract_id = data.slots[slot_idx_usize]
+                .interface
+                .as_ref()
+                .map(|arc| arc.contract_id);
+
+            // Remove slot index from guest_contract_index
+            if let Some(cid) = contract_id {
+                if let Some(indices) = data.guest_contract_index.get_mut(&cid) {
+                    indices.retain(|&idx| idx != *slot_idx);
+                    if indices.is_empty() {
+                        data.guest_contract_index.remove(&cid);
+                    }
+                }
+            }
+
+            // Clear the slot
+            data.slots[slot_idx_usize].entry = None;
+            data.slots[slot_idx_usize].interface = None;
+        }
+
+        // Remove from bundle_data
+        data.bundle_data.remove(&bundle_id);
+
+        // Remove from bundle_name_index
+        if let Some(ids) = data.bundle_name_index.get_mut(&bundle_name) {
+            ids.retain(|id| *id != bundle_id);
+            if ids.is_empty() {
+                data.bundle_name_index.remove(&bundle_name);
+            }
+        }
+
+        // Remove from bundle_declared_deps
+        data.bundle_declared_deps.remove(&bundle_id);
+
+        Ok(slot_indices.len() as u32)
+    }
+
     /// List all loaded bundle IDs.
     pub fn list_bundles(&self) -> Vec<BundleId> {
         let data: std::sync::RwLockReadGuard<'_, RuntimeStoreData> =
