@@ -11,13 +11,57 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use polyplug_abi::RuntimeLanguage;
+use polyplug_abi::types::Version;
 use polyplug_abi::{GuestContractInterface, PluginDescriptor, GuestContractHandle};
 use polyplug_utils::{BundleId, GuestContractId};
 
 use crate::error::RegistryError;
+
+/// Bundle metadata stored in RuntimeStore.
+///
+/// Provides complete bundle information for introspection and dependency resolution.
+pub struct BundleDescriptor {
+    /// Bundle ID — computed from name via BundleId::new().
+    pub id: BundleId,
+    /// Bundle name — human-readable identifier.
+    pub name: String,
+    /// Bundle version — semantic version (major.minor.patch).
+    pub version: Version,
+    /// Runtime language — determines which BundleLoader handles this bundle.
+    pub runtime: RuntimeLanguage,
+    /// Path to bundle directory or library file.
+    pub file_path: PathBuf,
+    /// Bundle-level dependencies (replaces contract-level).
+    pub dependencies: Vec<BundleDependency>,
+}
+
+/// Bundle-level dependency specification.
+///
+/// Parsed from manifest.toml `dependencies` array entries like:
+/// - `"image-decoder"` -> { name: "image-decoder", min_version: None }
+/// - `"image-decoder@1.0"` -> { name: "image-decoder", min_version: Some(Version::new(1, 0, 0)) }
+pub struct BundleDependency {
+    /// Dependency bundle name.
+    pub name: String,
+    /// Minimum version requirement (None = any version).
+    pub min_version: Option<Version>,
+}
+
+/// Bundle data stored in RuntimeStoreData.bundle_data.
+///
+/// Contains all plugin slot indices for a bundle (enabling O(1) slot lookup)
+/// and the bundle descriptor for introspection.
+pub struct BundleData {
+    /// All slot indices for plugins from this bundle.
+    pub plugin_slots: Vec<u32>,
+    /// Bundle metadata.
+    pub descriptor: BundleDescriptor,
+}
 
 /// Live plugin registration data.
 pub(crate) struct PluginEntry {
