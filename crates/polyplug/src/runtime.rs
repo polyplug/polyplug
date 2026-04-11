@@ -453,6 +453,29 @@ impl Runtime {
         let result: Result<(), RuntimeError> = loader.load(&manifest, self);
         if result.is_ok() {
             let bundle_name: String = manifest.name.clone();
+            let bundle_id: BundleId = BundleId::new(&manifest.name);
+
+            // Parse bundle dependencies from new bundle-level format
+            let bundle_deps: Vec<crate::registry::runtime_store::BundleDependency> =
+                manifest.parsed_bundle_dependencies();
+
+            // Parse version from manifest
+            let bundle_version: Version = manifest.version.parse::<Version>()
+                .unwrap_or(Version { major: 0, minor: 0, patch: 0 });
+
+            // Convert runtime string to RuntimeLanguage
+            let runtime_lang: RuntimeLanguage = runtime_language_from_str(&manifest.runtime);
+
+            // Register bundle metadata in RuntimeStore
+            let _ = self.registry.register_bundle_metadata(
+                bundle_id,
+                manifest.name.clone(),
+                bundle_version,
+                runtime_lang,
+                manifest.path.clone(),
+                bundle_deps,
+            );
+
             let mut manifests: std::sync::MutexGuard<'_, HashMap<String, ManifestData>> =
                 self.bundle_manifests.lock().unwrap_or_else(|e| {
                     eprintln!("[polyplug] Mutex poisoned, recovering: {}", e);
@@ -602,6 +625,19 @@ fn parse_manifest_version(v: &str, _bundle_name: &str) -> Result<Version, Runtim
 /// Helper to create a null GuestContractHandle.
 fn plugin_handle_null() -> GuestContractHandle {
     GuestContractHandle::null()
+}
+
+/// Convert a runtime string from manifest.toml to RuntimeLanguage enum.
+fn runtime_language_from_str(s: &str) -> RuntimeLanguage {
+    match s {
+        "native" | "rust" => RuntimeLanguage::Rust,
+        "python" => RuntimeLanguage::Python,
+        "lua" => RuntimeLanguage::Lua,
+        "javascript" | "js" => RuntimeLanguage::JavaScript,
+        "dotnet" | "csharp" => RuntimeLanguage::Dotnet,
+        "cpp" => RuntimeLanguage::Cpp,
+        _ => RuntimeLanguage::Rust,
+    }
 }
 
 /// Helper to convert a StringView to an owned String.
