@@ -240,7 +240,7 @@ Plans:
 | 14. Hot-Reload Documentation | 1/1 | Complete   | 2026-04-08 |
 | 15. Final Cleanup | 9/9 | Complete    | 2026-04-09 |
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
-| 17. RuntimeStore Refactor | 2/2 | Complete   | 2026-04-11 |
+| 17. RuntimeStore Refactor | 2/2 | Complete    | 2026-04-11 |
 | 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
 
 ## Dependencies
