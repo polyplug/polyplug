@@ -73,7 +73,7 @@ impl RuntimeBuilder {
     /// The callback receives a `ReloadPhase` describing the reload phase.
     pub fn on_reload(
         mut self,
-        cb: impl Fn(crate::reload::ReloadPhase) + Send + Sync + 'static,
+        cb: impl Fn(polyplug_abi::runtime::ReloadPhase) + Send + Sync + 'static,
     ) -> RuntimeBuilder {
         self.on_reload_cb = Some(std::sync::Arc::new(cb));
         self

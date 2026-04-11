@@ -68,7 +68,7 @@ pub fn get_init_bundle_id() -> u64 {
 pub type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Type alias for the reload callback.
-pub type ReloadCb = Arc<dyn Fn(crate::reload::ReloadPhase) + Send + Sync>;
+pub type ReloadCb = Arc<dyn Fn(polyplug_abi::runtime::ReloadPhase) + Send + Sync>;
 
 /// Options for `Runtime::load_bundle_with`.
 ///

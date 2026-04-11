@@ -1,18 +1,17 @@
 //! Reload — callback-based hot-reload framework for all loaders.
 //!
 //! Provides:
-//! - `ReloadPhase` enum for notification callbacks
 //! - Warning check for potential instance leaks after Preparing callback
 //! - Explicit interface swap after init succeeds
 //!
 //! Hot-reload flow (callback-based model):
-//! 1. Fire `ReloadPhase::Preparing` — host destroys all instances here
+//! 1. Fire `ReloadPhase::preparing()` — host destroys all instances here
 //! 2. Check Arc::strong_count — emit warning if refs remain (informational only)
 //! 3. Call loader.reload() — load new library, init (registers new interfaces)
 //! 4. Swap interfaces — for each slot, find new interface and swap atomically
-//! 5. Fire `ReloadPhase::Reloaded` — host can create new instances
+//! 5. Fire `ReloadPhase::reloaded()` — host can create new instances
 //!
-//! If init fails: Fire `ReloadPhase::Failed`, no interface swap.
+//! If init fails: Fire `ReloadPhase::failed()`, no interface swap.
 //!
 //! Safety contract: Host MUST destroy all instances in Preparing callback.
 //! Runtime emits warning if instances may remain but proceeds with reload.
@@ -20,42 +19,20 @@
 use std::sync::Arc;
 
 use polyplug_abi::guest::GuestContractInterface;
+use polyplug_abi::runtime::ReloadPhase;
+use polyplug_abi::types::StringView;
 use polyplug_utils::{BundleId, GuestContractId};
 
-use crate::error::{RuntimeError};
+use crate::error::RuntimeError;
 use crate::loader::ManifestData;
 use crate::runtime::Runtime;
 
-// ─── Reload Phase Notifications ──────────────────────────────────────────────
-
-/// Phase of a hot-reload operation for notification callbacks.
-#[derive(Debug, Clone)]
-pub enum ReloadPhase {
-    /// Bundle is being prepared for reload (before interface swap).
-    ///
-    /// **Host MUST destroy all instances in this callback.**
-    /// After callback returns, runtime proceeds with reload regardless.
-    /// If instances remain, runtime emits warning (undefined behavior risk).
-    Preparing {
-        bundle_id: BundleId,
-        bundle_name: String,
-        retry_count: u32,
-    },
-    /// Bundle has been successfully reloaded.
-    ///
-    /// Interface swap completed. Host can now create new instances
-    /// using updated interfaces. Previous instances were destroyed
-    /// in Preparing callback.
-    Reloaded {
-        bundle_id: BundleId,
-        bundle_name: String,
-    },
-    /// Bundle reload failed.
-    Failed {
-        bundle_id: BundleId,
-        bundle_name: String,
-        reason: String,
-    },
+/// Helper to create a StringView from a Rust string slice.
+fn string_view(s: &str) -> StringView {
+    StringView {
+        ptr: s.as_ptr(),
+        len: s.len(),
+    }
 }
 
 /// Event describing a completed reload (for logging/telemetry).
@@ -115,14 +92,13 @@ impl Runtime {
 
         // Fire Preparing callback
         if let Some(cb) = self.on_reload_cb() {
-            cb(ReloadPhase::Preparing {
+            cb(ReloadPhase::preparing(
                 bundle_id,
-                bundle_name: manifest.name.clone(),
-                retry_count: 0,
-            });
+                string_view(&manifest.name),
+            ));
         }
 
-        // ─── Warning Check: Informational only, not blocking ─────────────────────────────
+        // ─── Warning Check: Informational only, not blocking ─────────────────
         // Check Arc::strong_count after Preparing callback returned.
         // If > 1, host may not have destroyed all instances - emit UB warning.
         for slot_idx in &slot_indices {
@@ -144,50 +120,53 @@ impl Runtime {
 
         match result {
             Ok(()) => {
-                // ─── Swap interfaces after init succeeds (HR-05) ───────────────────────────────
+                // ─── Swap interfaces after init succeeds (HR-05) ──────────────
                 // New interfaces were registered during init inside loader.reload()
                 // For each slot, find the NEW interface by contract_id and swap
                 for slot_idx in &slot_indices {
                     // Get contract_id for this slot (stable across reload)
-                    let contract_id: GuestContractId = self.registry
+                    let contract_id: GuestContractId = self
+                        .registry
                         .get_slot_guest_contract_id(*slot_idx)
-                        .ok_or_else(|| RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
-                            index: *slot_idx
-                        }))?;
+                        .ok_or_else(|| {
+                            RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
+                                index: *slot_idx,
+                            })
+                        })?;
 
                     // Find NEW interface handle (registered during init)
-                    // find_by_contract returns handle pointing to NEW registration
-                    let new_handle: polyplug_abi::plugin::GuestContractHandle = self.registry
-                        .find_guest_contract(contract_id, 0)?;
+                    let new_handle: polyplug_abi::plugin::GuestContractHandle =
+                        self.registry.find_guest_contract(contract_id, 0)?;
 
                     // Get Arc to NEW interface
-                    let new_interface: Arc<GuestContractInterface> = self.registry
+                    let new_interface: Arc<GuestContractInterface> = self
+                        .registry
                         .get_guest_contract_interface_arc(new_handle.index)
-                        .ok_or_else(|| RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
-                            index: new_handle.index
-                        }))?;
+                        .ok_or_else(|| {
+                            RuntimeError::Registry(crate::error::RegistryError::InvalidHandle {
+                                index: new_handle.index,
+                            })
+                        })?;
 
                     // Atomic swap - old slot now points to new interface
-                    self.registry.swap_guest_contract_interface(*slot_idx, new_interface)?;
+                    self.registry
+                        .swap_guest_contract_interface(*slot_idx, new_interface)?;
                 }
 
                 // Fire Reloaded callback
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(ReloadPhase::Reloaded {
-                        bundle_id,
-                        bundle_name: manifest.name.clone(),
-                    });
+                    cb(ReloadPhase::reloaded(bundle_id, string_view(&manifest.name)));
                 }
                 Ok(())
             }
             Err(e) => {
                 // Fire Failed callback - NO interface swap on failure
                 if let Some(cb) = self.on_reload_cb() {
-                    cb(ReloadPhase::Failed {
+                    cb(ReloadPhase::failed(
                         bundle_id,
-                        bundle_name: manifest.name.clone(),
-                        reason: e.to_string(),
-                    });
+                        string_view(&manifest.name),
+                        string_view(&e.to_string()),
+                    ));
                 }
                 Err(RuntimeError::from(e))
             }
@@ -202,7 +181,8 @@ impl Runtime {
         contract_id: u64,
         min_version: u32,
     ) -> Result<polyplug_abi::plugin::GuestContractHandle, crate::error::RegistryError> {
-        self.registry().find_guest_contract(GuestContractId::from_u64(contract_id), min_version)
+        self.registry()
+            .find_guest_contract(GuestContractId::from_u64(contract_id), min_version)
     }
 }
 
@@ -212,106 +192,54 @@ impl Runtime {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
+    use polyplug_abi::runtime::ReloadPhaseType;
 
     #[test]
     fn reload_phase_preparing_construction() {
-        let bundle_id: BundleId = BundleId::new("test-bundle");
-        let phase: ReloadPhase = ReloadPhase::Preparing {
-            bundle_id,
-            bundle_name: "test_bundle".to_owned(),
-            retry_count: 2,
-        };
+        let bundle_id = BundleId::new("test-bundle");
+        let name = StringView::from_static(b"test_bundle");
+        let phase = ReloadPhase::preparing(bundle_id, name);
 
-        match phase {
-            ReloadPhase::Preparing {
-                bundle_id: id,
-                bundle_name,
-                retry_count,
-            } => {
-                assert_eq!(id, BundleId::new("test-bundle"));
-                assert_eq!(bundle_name, "test_bundle");
-                assert_eq!(retry_count, 2);
-            }
-            _ => panic!("expected Preparing variant"),
-        }
+        assert_eq!(phase.phase_type, ReloadPhaseType::Preparing);
+        assert_eq!(phase.bundle_id, bundle_id);
     }
 
     #[test]
     fn reload_phase_reloaded_construction() {
-        let bundle_id: BundleId = BundleId::new("test-bundle");
-        let phase: ReloadPhase = ReloadPhase::Reloaded {
-            bundle_id,
-            bundle_name: "test_bundle".to_owned(),
-        };
+        let bundle_id = BundleId::new("test-bundle");
+        let name = StringView::from_static(b"test_bundle");
+        let phase = ReloadPhase::reloaded(bundle_id, name);
 
-        match phase {
-            ReloadPhase::Reloaded {
-                bundle_id: id,
-                bundle_name,
-            } => {
-                assert_eq!(id, BundleId::new("test-bundle"));
-                assert_eq!(bundle_name, "test_bundle");
-            }
-            _ => panic!("expected Reloaded variant"),
-        }
+        assert_eq!(phase.phase_type, ReloadPhaseType::Reloaded);
+        assert_eq!(phase.bundle_id, bundle_id);
     }
 
     #[test]
     fn reload_phase_failed_construction() {
-        let bundle_id: BundleId = BundleId::new("test-bundle");
-        let phase: ReloadPhase = ReloadPhase::Failed {
-            bundle_id,
-            bundle_name: "test_bundle".to_owned(),
-            reason: "init failed".to_owned(),
-        };
+        let bundle_id = BundleId::new("test-bundle");
+        let name = StringView::from_static(b"test_bundle");
+        let reason = StringView::from_static(b"init failed");
+        let phase = ReloadPhase::failed(bundle_id, name, reason);
 
-        match phase {
-            ReloadPhase::Failed {
-                bundle_id: id,
-                bundle_name,
-                reason,
-            } => {
-                assert_eq!(id, BundleId::new("test-bundle"));
-                assert_eq!(bundle_name, "test_bundle");
-                assert_eq!(reason, "init failed");
-            }
-            _ => panic!("expected Failed variant"),
-        }
+        assert_eq!(phase.phase_type, ReloadPhaseType::Failed);
+        assert_eq!(phase.bundle_id, bundle_id);
+        assert_eq!(phase.reason.len, 11);
     }
 
     #[test]
     fn reload_phase_clone() {
-        let bundle_id: BundleId = BundleId::new("test-bundle");
-        let original: ReloadPhase = ReloadPhase::Preparing {
-            bundle_id,
-            bundle_name: "test".to_owned(),
-            retry_count: 1,
-        };
-        let cloned: ReloadPhase = original.clone();
+        let bundle_id = BundleId::new("test-bundle");
+        let name = StringView::from_static(b"test");
+        let original = ReloadPhase::preparing(bundle_id, name);
+        let cloned = original.clone();
 
-        match (original, cloned) {
-            (
-                ReloadPhase::Preparing {
-                    bundle_id: id1,
-                    retry_count: c1,
-                    ..
-                },
-                ReloadPhase::Preparing {
-                    bundle_id: id2,
-                    retry_count: c2,
-                    ..
-                },
-            ) => {
-                assert_eq!(id1, id2);
-                assert_eq!(c1, c2);
-            }
-            _ => panic!("both should be Preparing"),
-        }
+        assert_eq!(original.phase_type, cloned.phase_type);
+        assert_eq!(original.bundle_id, cloned.bundle_id);
     }
 
     #[test]
     fn reload_event_construction() {
-        let event: ReloadEvent = ReloadEvent {
+        let event = ReloadEvent {
             bundle_name: "my_bundle".to_owned(),
             bundle_path: "/path/to/bundle".to_owned(),
             old_version: "1.0.0".to_owned(),

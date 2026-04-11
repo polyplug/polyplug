@@ -15,140 +15,10 @@
 //! - `get_last_error`, `get_error_len` — error handling
 //! - `alloc`, `free` — memory management
 
-use polyplug_abi::{HostInterface, types::StringView};
+use polyplug_abi::HostInterface;
+use polyplug_abi::runtime::RuntimeConfig;
 
-use crate::reload::ReloadPhase;
 use crate::runtime::Runtime;
-use crate::RuntimeConfig;
-
-/// Helper to create a StringView from a Rust string slice.
-fn string_view_from_str(s: &str) -> StringView {
-    StringView {
-        ptr: s.as_ptr(),
-        len: s.len(),
-    }
-}
-
-// ─── C-compatible types for hot-reload notification ───────────────────────────
-
-/// Type tag for `ReloadPhaseFfi` variants.
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReloadPhaseType {
-    /// `Preparing` variant.
-    Preparing = 0,
-    /// `Reloaded` variant.
-    Reloaded = 1,
-    /// `Failed` variant.
-    Failed = 2,
-}
-
-/// FFI-safe representation of `ReloadPhase` (not a 'C suffix' type, but an FFI variant).
-///
-/// This is a tagged union style struct. The `phase_type` field indicates
-/// which variant is active, and the corresponding fields are populated.
-///
-/// # Memory Safety
-///
-/// All string pointers (`bundle_name`, `reason`) are borrowed from the
-/// runtime's internal state and are valid only for the duration of the
-/// callback invocation. The callback must NOT store these pointers or
-/// free the memory.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ReloadPhaseFfi {
-    /// The phase type (Preparing, Reloaded, or Failed).
-    pub phase_type: u32,
-    /// Bundle ID (valid for all variants).
-    pub bundle_id: u64,
-    /// Bundle name (valid for all variants).
-    pub bundle_name: StringView,
-    /// Retry count (valid only for `Preparing` variant).
-    pub retry_count: u32,
-    /// Failure reason (valid only for `Failed` variant).
-    pub reason: StringView,
-}
-
-impl ReloadPhaseFfi {
-    /// Convert a Rust `ReloadPhase` to the FFI-safe representation.
-    fn from_reload_phase(phase: &ReloadPhase) -> ReloadPhaseFfi {
-        match phase {
-            ReloadPhase::Preparing {
-                bundle_id,
-                bundle_name,
-                retry_count,
-            } => ReloadPhaseFfi {
-                phase_type: ReloadPhaseType::Preparing as u32,
-                bundle_id: bundle_id.id(),
-                bundle_name: string_view_from_str(bundle_name.as_str()),
-                retry_count: *retry_count,
-                reason: StringView::null(),
-            },
-            ReloadPhase::Reloaded {
-                bundle_id,
-                bundle_name,
-            } => ReloadPhaseFfi {
-                phase_type: ReloadPhaseType::Reloaded as u32,
-                bundle_id: bundle_id.id(),
-                bundle_name: string_view_from_str(bundle_name.as_str()),
-                retry_count: 0,
-                reason: StringView::null(),
-            },
-            ReloadPhase::Failed {
-                bundle_id,
-                bundle_name,
-                reason,
-            } => ReloadPhaseFfi {
-                phase_type: ReloadPhaseType::Failed as u32,
-                bundle_id: bundle_id.id(),
-                bundle_name: string_view_from_str(bundle_name.as_str()),
-                retry_count: 0,
-                reason: string_view_from_str(reason.as_str()),
-            },
-        }
-    }
-}
-
-// ─── C-compatible runtime configuration ───────────────────────────────────────
-
-/// C-compatible runtime configuration.
-///
-/// This is a C ABI compatible version of RuntimeConfig, using integers for booleans
-/// and omitting the compatibility field (uses default Strict mode).
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RuntimeConfigC {
-    /// Whether hot-reload is enabled (0 = false, non-zero = true).
-    pub hot_reload_enabled: u32,
-    /// Maximum retry attempts for hot-reload.
-    pub hot_reload_max_retries: u32,
-    /// Interval between retries in milliseconds.
-    pub hot_reload_retry_interval_ms: u64,
-    /// Abort runtime when max retries exhausted (0 = false, non-zero = true).
-    pub hot_reload_abort_on_max_retries: u32,
-}
-
-impl RuntimeConfigC {
-    /// Convert to the Rust RuntimeConfig type.
-    fn into_runtime_config(self) -> crate::RuntimeConfig {
-        crate::RuntimeConfig {
-            hot_reload_enabled: self.hot_reload_enabled != 0,
-            hot_reload_max_retries: self.hot_reload_max_retries,
-            hot_reload_retry_interval_ms: self.hot_reload_retry_interval_ms,
-            hot_reload_abort_on_max_retries: self.hot_reload_abort_on_max_retries != 0,
-            compatibility: polyplug_abi::Compatibility::Strict,
-        }
-    }
-}
-
-/// Options for creating a runtime instance.
-#[repr(C)]
-pub struct RuntimeCreateOptions {
-    /// Pointer to RuntimeConfigC, or null for default config.
-    pub config: *const RuntimeConfigC,
-    /// Reload callback function pointer, or null for no callback.
-    pub on_reload: Option<extern "C" fn(ReloadPhaseFfi)>,
-}
 
 // ─── FFI Entry Points (18-02: Only 2 exports) ─────────────────────────────────
 
@@ -157,11 +27,10 @@ pub struct RuntimeCreateOptions {
 /// Returns a HostInterface pointer that provides all runtime operations.
 /// Callers use the HostInterface fields (load_bundle, find_guest_contract, etc.)
 /// instead of separate FFI functions.
-/// Pass null for options to use defaults.
+/// Pass null for `config` to use defaults.
 ///
 /// # Safety
-/// - If `options` is non-null, it must point to a valid `RuntimeCreateOptions` struct.
-/// - If `options.config` is non-null, it must point to a valid `RuntimeConfigC` struct.
+/// - If `config` is non-null, it must point to a valid `RuntimeConfig` struct.
 /// - Safe to call from any thread.
 /// - Returns null on allocation failure or panic.
 ///
@@ -170,26 +39,20 @@ pub struct RuntimeCreateOptions {
 /// The HostInterface is valid until destroyed via `polyplug_runtime_destroy`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn polyplug_runtime_create(
-    options: *const RuntimeCreateOptions,
+    config: *const RuntimeConfig,
 ) -> *const HostInterface {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut builder = Runtime::builder();
 
-        if !options.is_null() {
-            // SAFETY: options is non-null and points to a valid RuntimeCreateOptions per ABI contract.
-            let opts: &RuntimeCreateOptions = unsafe { &*options };
+        if !config.is_null() {
+            // SAFETY: config is non-null and points to a valid RuntimeConfig per ABI contract.
+            let rt_config: &RuntimeConfig = unsafe { &*config };
+            builder = builder.config(rt_config.clone());
 
-            if !opts.config.is_null() {
-                // SAFETY: opts.config is non-null and points to a valid RuntimeConfigC per ABI contract.
-                let config_c: RuntimeConfigC = unsafe { *opts.config };
-                let runtime_config: RuntimeConfig = config_c.into_runtime_config();
-                builder = builder.config(runtime_config);
-            }
-
-            if let Some(cb) = opts.on_reload {
-                builder = builder.on_reload(move |phase: ReloadPhase| {
-                    let phase_ffi: ReloadPhaseFfi = ReloadPhaseFfi::from_reload_phase(&phase);
-                    cb(phase_ffi);
+            if let Some(cb) = rt_config.on_reload {
+                builder = builder.on_reload(move |phase| {
+                    // SAFETY: cb is a valid extern "C" function pointer provided by the caller.
+                    unsafe { cb(phase) };
                 });
             }
         }
@@ -280,30 +143,21 @@ mod tests {
 
     #[test]
     fn multiple_ffi_runtimes_with_config() {
-        let config1: RuntimeConfigC = RuntimeConfigC {
-            hot_reload_enabled: 1,
-            hot_reload_max_retries: 5,
-            hot_reload_retry_interval_ms: 1000,
-            hot_reload_abort_on_max_retries: 1,
-        };
-        let config2: RuntimeConfigC = RuntimeConfigC {
-            hot_reload_enabled: 0,
-            hot_reload_max_retries: 10,
-            hot_reload_retry_interval_ms: 2000,
-            hot_reload_abort_on_max_retries: 0,
-        };
+        use polyplug_abi::runtime::Compatibility;
 
-        let opts1: RuntimeCreateOptions = RuntimeCreateOptions {
-            config: &config1,
+        let config1: RuntimeConfig = RuntimeConfig {
+            compatibility: Compatibility::Strict,
+            hot_reload_enabled: true,
             on_reload: None,
         };
-        let opts2: RuntimeCreateOptions = RuntimeCreateOptions {
-            config: &config2,
+        let config2: RuntimeConfig = RuntimeConfig {
+            compatibility: Compatibility::Relaxed,
+            hot_reload_enabled: false,
             on_reload: None,
         };
 
-        let host1: *const HostInterface = unsafe { polyplug_runtime_create(&opts1) };
-        let host2: *const HostInterface = unsafe { polyplug_runtime_create(&opts2) };
+        let host1: *const HostInterface = unsafe { polyplug_runtime_create(&config1) };
+        let host2: *const HostInterface = unsafe { polyplug_runtime_create(&config2) };
 
         assert!(!host1.is_null());
         assert!(!host2.is_null());

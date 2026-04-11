@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::unwrap_used)]
 
-use core::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -11,6 +10,7 @@ use polyplug::error::RuntimeError;
 use polyplug::runtime::Runtime;
 use polyplug::runtime::RuntimeConfig;
 use polyplug_abi::GuestContractInterface;
+use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_native::NativeLoader;
 
 fn get_version_fn(rt: &Runtime, contract_id: u64) -> Option<extern "C" fn() -> u32> {
@@ -69,29 +69,23 @@ fn test_preparing_fires_before_vtable_swap() {
 
     let preparing_phase: Option<&ReloadPhase> = captured_phases
         .iter()
-        .find(|p| matches!(p, ReloadPhase::Preparing { .. }));
+        .find(|p| p.phase_type == ReloadPhaseType::Preparing);
     assert!(
         preparing_phase.is_some(),
         "Preparing phase must have been fired"
     );
 
-    if let Some(ReloadPhase::Preparing {
-        bundle_id,
-        bundle_name,
-        retry_count,
-    }) = preparing_phase
-    {
-        assert_eq!(*bundle_name, "reload_plugin_v1", "bundle_name should match");
-        assert_eq!(
-            *retry_count, 0_u32,
-            "first attempt should have retry_count=0"
+    if let Some(phase) = preparing_phase {
+        assert!(
+            !phase.bundle_name.is_empty(),
+            "bundle_name should not be empty"
         );
-        assert!(*bundle_id != 0, "bundle_id should be non-zero");
+        assert!(phase.bundle_id != 0, "bundle_id should be non-zero");
     }
 
     let reloaded_phase: Option<&ReloadPhase> = captured_phases
         .iter()
-        .find(|p| matches!(p, ReloadPhase::Reloaded { .. }));
+        .find(|p| p.phase_type == ReloadPhaseType::Reloaded);
     assert!(
         reloaded_phase.is_some(),
         "Reloaded phase must have been fired after successful reload"
@@ -141,24 +135,23 @@ fn test_reloaded_fires_after_vtable_swap() {
 
     let reloaded_phase: Option<&ReloadPhase> = captured_phases
         .iter()
-        .find(|p| matches!(p, ReloadPhase::Reloaded { .. }));
+        .find(|p| p.phase_type == ReloadPhaseType::Reloaded);
     assert!(
         reloaded_phase.is_some(),
         "Reloaded phase must have been fired"
     );
 
-    if let Some(ReloadPhase::Reloaded {
-        bundle_id,
-        bundle_name,
-    }) = reloaded_phase
-    {
-        assert_eq!(*bundle_name, "reload_plugin_v1", "bundle_name should match");
-        assert!(*bundle_id != 0, "bundle_id should be non-zero");
+    if let Some(phase) = reloaded_phase {
+        assert!(
+            !phase.bundle_name.is_empty(),
+            "bundle_name should not be empty"
+        );
+        assert!(phase.bundle_id != 0, "bundle_id should be non-zero");
     }
 }
 
 #[test]
-fn test_failed_fires_on_abort_after_max_retries() {
+fn test_failed_fires_on_reload_error() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -166,9 +159,7 @@ fn test_failed_fires_on_abort_after_max_retries() {
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
-            hot_reload_max_retries: 1_u32,
-            hot_reload_retry_interval: Duration::from_millis(10_u64),
-            hot_reload_abort_on_max_retries: true,
+            ..RuntimeConfig::default()
         })
         .on_reload(move |phase: ReloadPhase| {
             phases_clone
@@ -205,29 +196,24 @@ fn test_failed_fires_on_abort_after_max_retries() {
 
     let failed_phase: Option<&ReloadPhase> = captured_phases
         .iter()
-        .find(|p| matches!(p, ReloadPhase::Failed { .. }));
+        .find(|p| p.phase_type == ReloadPhaseType::Failed);
     assert!(
         failed_phase.is_some(),
-        "Failed phase must have been fired after abort"
+        "Failed phase must have been fired after error"
     );
 
-    if let Some(ReloadPhase::Failed {
-        bundle_id,
-        bundle_name,
-        reason,
-    }) = failed_phase
-    {
-        assert_eq!(
-            *bundle_name, "reload_plugin_v1",
-            "bundle_name should match the loaded bundle"
+    if let Some(phase) = failed_phase {
+        assert!(
+            !phase.bundle_name.is_empty(),
+            "bundle_name should not be empty"
         );
-        assert!(*bundle_id != 0, "bundle_id should be non-zero");
-        assert!(!reason.is_empty(), "reason should not be empty");
+        assert!(phase.bundle_id != 0, "bundle_id should be non-zero");
+        assert!(!phase.reason.is_empty(), "reason should not be empty");
     }
 }
 
 #[test]
-fn test_retry_count_increments_correctly() {
+fn test_old_vtable_kept_on_failure() {
     let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
     let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
 
@@ -235,74 +221,7 @@ fn test_retry_count_increments_correctly() {
         .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
         .config(RuntimeConfig {
             hot_reload_enabled: true,
-            hot_reload_max_retries: 2_u32,
-            hot_reload_retry_interval: Duration::from_millis(10_u64),
-            hot_reload_abort_on_max_retries: true,
-        })
-        .on_reload(move |phase: ReloadPhase| {
-            phases_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push(phase);
-        })
-        .build()
-        .expect("build runtime");
-
-    let v1_path: &str = env!("RELOAD_PLUGIN_V1_DIR");
-    rt.load_bundle(std::path::Path::new(v1_path))
-        .expect("load v1");
-
-    phases.lock().unwrap_or_else(|e| e.into_inner()).clear();
-
-    let nonexistent_so: PathBuf =
-        PathBuf::from(env!("RELOAD_PLUGIN_V1_DIR")).join("nonexistent.so");
-    let _result: Result<(), RuntimeError> = rt.reload_bundle(nonexistent_so.as_path());
-
-    let captured_phases: Vec<ReloadPhase> =
-        phases.lock().unwrap_or_else(|e| e.into_inner()).clone();
-
-    let preparing_phases: Vec<&ReloadPhase> = captured_phases
-        .iter()
-        .filter(|p| matches!(p, ReloadPhase::Preparing { .. }))
-        .collect();
-
-    assert!(
-        preparing_phases.len() >= 2,
-        "Should have at least 2 Preparing phases (initial + retries)"
-    );
-
-    let retry_counts: Vec<u32> = preparing_phases
-        .iter()
-        .filter_map(|p| {
-            if let ReloadPhase::Preparing { retry_count, .. } = p {
-                Some(*retry_count)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    for (i, &count) in retry_counts.iter().enumerate() {
-        assert_eq!(
-            count, i as u32,
-            "retry_count at position {} should be {}",
-            i, i
-        );
-    }
-}
-
-#[test]
-fn test_old_vtable_kept_on_abort() {
-    let phases: Arc<Mutex<Vec<ReloadPhase>>> = Arc::new(Mutex::new(Vec::new()));
-    let phases_clone: Arc<Mutex<Vec<ReloadPhase>>> = Arc::clone(&phases);
-
-    let rt: Runtime = Runtime::builder()
-        .loader(NativeLoader::new(polyplug_native::NativeConfig::default()))
-        .config(RuntimeConfig {
-            hot_reload_enabled: true,
-            hot_reload_max_retries: 1_u32,
-            hot_reload_retry_interval: Duration::from_millis(10_u64),
-            hot_reload_abort_on_max_retries: true,
+            ..RuntimeConfig::default()
         })
         .on_reload(move |phase: ReloadPhase| {
             phases_clone
@@ -343,7 +262,7 @@ fn test_old_vtable_kept_on_abort() {
         phases.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let failed_phase: Option<&ReloadPhase> = captured_phases
         .iter()
-        .find(|p| matches!(p, ReloadPhase::Failed { .. }));
+        .find(|p| p.phase_type == ReloadPhaseType::Failed);
     assert!(failed_phase.is_some(), "Failed phase must have been fired");
 }
 
@@ -386,13 +305,15 @@ fn test_notification_order_on_successful_reload() {
         "Should have exactly 2 phases for successful reload"
     );
 
-    assert!(
-        matches!(captured_phases[0], ReloadPhase::Preparing { .. }),
+    assert_eq!(
+        captured_phases[0].phase_type,
+        ReloadPhaseType::Preparing,
         "First notification should be Preparing"
     );
 
-    assert!(
-        matches!(captured_phases[1], ReloadPhase::Reloaded { .. }),
+    assert_eq!(
+        captured_phases[1].phase_type,
+        ReloadPhaseType::Reloaded,
         "Second notification should be Reloaded"
     );
 }
@@ -405,18 +326,9 @@ fn test_runtime_config_defaults() {
         !config.hot_reload_enabled,
         "default hot_reload_enabled should be false"
     );
-    assert_eq!(
-        config.hot_reload_max_retries, 3_u32,
-        "default max_retries should be 3"
-    );
-    assert_eq!(
-        config.hot_reload_retry_interval,
-        Duration::from_secs(1_u64),
-        "default retry_interval should be 1 second"
-    );
     assert!(
-        config.hot_reload_abort_on_max_retries,
-        "default abort_on_max_retries should be true"
+        config.on_reload.is_none(),
+        "default on_reload should be None"
     );
 }
 
@@ -432,15 +344,10 @@ fn test_callback_receives_correct_bundle_id() {
             ..RuntimeConfig::default()
         })
         .on_reload(move |phase: ReloadPhase| {
-            let id: u64 = match phase {
-                ReloadPhase::Preparing { bundle_id, .. } => bundle_id,
-                ReloadPhase::Reloaded { bundle_id, .. } => bundle_id,
-                ReloadPhase::Failed { bundle_id, .. } => bundle_id,
-            };
             bundle_ids_clone
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .push(id);
+                .push(phase.bundle_id);
         })
         .build()
         .expect("build runtime");

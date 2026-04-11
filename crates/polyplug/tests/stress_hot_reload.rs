@@ -21,7 +21,7 @@ use polyplug::ReloadPhase;
 use polyplug::error::RuntimeError;
 use polyplug::registry::runtime_store::RuntimeStore;
 use polyplug::runtime::Runtime;
-use polyplug_abi::{DispatchType, GuestContractInterface, HostInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor};
+use polyplug_abi::{DispatchType, GuestContractInterface, HostInterface, NativeDispatch, DispatchMechanisms, Version, GuestContractId, StringView, PluginDescriptor, ReloadPhaseType};
 use polyplug_utils::BundleId;
 
 // ─── Environment variables emitted by build.rs ───────────────────────────────
@@ -116,11 +116,9 @@ fn v2_so_path() -> PathBuf {
 
 fn hot_reload_config() -> polyplug::RuntimeConfig {
     polyplug::RuntimeConfig {
-        hot_reload_enabled: true,
-        hot_reload_max_retries: 3,
-        hot_reload_retry_interval_ms: 1000,
-        hot_reload_abort_on_max_retries: true,
         compatibility: polyplug::Compatibility::Strict,
+        hot_reload_enabled: true,
+        on_reload: None,
     }
 }
 
@@ -450,7 +448,7 @@ fn stress_reload_callback_fires_on_every_cycle() {
     // Count only Reloaded events (Preparing fires before each attempt)
     let reloaded_count: usize = recorded_events
         .iter()
-        .filter(|ev| matches!(ev, ReloadPhase::Reloaded { .. }))
+        .filter(|ev| ev.phase_type == ReloadPhaseType::Reloaded)
         .count();
 
     assert_eq!(
@@ -460,9 +458,9 @@ fn stress_reload_callback_fires_on_every_cycle() {
     );
 
     for (idx, ev) in recorded_events.iter().enumerate() {
-        if let ReloadPhase::Reloaded { bundle_name, .. } = ev {
+        if ev.phase_type == ReloadPhaseType::Reloaded {
             assert!(
-                !bundle_name.is_empty(),
+                !ev.bundle_name.is_empty(),
                 "event {idx}: bundle_name must not be empty"
             );
         }

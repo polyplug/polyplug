@@ -13,8 +13,11 @@ pub mod runtime_builder;
 // Import from polyplug_abi (moved in Phase 01-03)
 pub use polyplug_abi::runtime::{RuntimeConfig, Compatibility};
 
-// Keep ReloadPhase and ReloadEvent exports (internal Rust types)
-pub use reload::{ReloadPhase, ReloadEvent};
+// Keep ReloadEvent export (internal Rust type)
+pub use reload::ReloadEvent;
+
+// Re-export ReloadPhase from polyplug_abi (single FFI-first type)
+pub use polyplug_abi::runtime::ReloadPhase;
 
 // Re-export TLS functions for loaders
 pub use runtime::{set_init_bundle_id, clear_init_bundle_id, get_init_bundle_id};

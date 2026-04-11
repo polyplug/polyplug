@@ -5,6 +5,7 @@ use polyplug::RuntimeConfig;
 use polyplug_abi::GuestContractHandle;
 use polyplug_abi::StringView;
 use polyplug_abi::HostContractInterface;
+use polyplug_abi::runtime::ReloadPhaseType;
 use polyplug_js::{JsConfig, JsLoader};
 use polyplug_lua::{LuaConfig, LuaLoader};
 use polyplug_native::{NativeConfig, NativeLoader};
@@ -53,11 +54,9 @@ fn run() -> Result<(), String> {
     eprintln!("loading plugins from: {}", plugin_path.display());
 
     let config = RuntimeConfig {
-        hot_reload_enabled: true,
-        hot_reload_max_retries: 5,
-        hot_reload_retry_interval_ms: 200,
-        hot_reload_abort_on_max_retries: false,
         compatibility: polyplug_abi::Compatibility::Strict,
+        hot_reload_enabled: true,
+        on_reload: None,
     };
 
     let runtime: &'static Runtime = Box::leak(Box::new(
@@ -67,34 +66,23 @@ fn run() -> Result<(), String> {
             .loader(LuaLoader::new(LuaConfig::default()))
             .loader(PythonLoader::new(PythonConfig::default()))
             .config(config)
-            .on_reload(|phase: ReloadPhase| match phase {
-                ReloadPhase::Preparing {
-                    bundle_id,
-                    bundle_name,
-                    retry_count,
-                } => {
+            .on_reload(|phase: ReloadPhase| match phase.phase_type {
+                ReloadPhaseType::Preparing => {
                     eprintln!(
-                        "[HOT-RELOAD] Preparing: {} (id=0x{:016X}, retry {})",
-                        bundle_name, bundle_id, retry_count
+                        "[HOT-RELOAD] Preparing: (id=0x{:016X})",
+                        phase.bundle_id
                     );
                 }
-                ReloadPhase::Reloaded {
-                    bundle_id,
-                    bundle_name,
-                } => {
+                ReloadPhaseType::Reloaded => {
                     eprintln!(
-                        "[HOT-RELOAD] Reloaded: {} (id=0x{:016X})",
-                        bundle_name, bundle_id
+                        "[HOT-RELOAD] Reloaded: (id=0x{:016X})",
+                        phase.bundle_id
                     );
                 }
-                ReloadPhase::Failed {
-                    bundle_id,
-                    bundle_name,
-                    reason,
-                } => {
+                ReloadPhaseType::Failed => {
                     eprintln!(
-                        "[HOT-RELOAD] Failed: {} (id=0x{:016X}) - {}",
-                        bundle_name, bundle_id, reason
+                        "[HOT-RELOAD] Failed: (id=0x{:016X})",
+                        phase.bundle_id
                     );
                 }
             })
