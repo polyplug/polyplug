@@ -82,14 +82,14 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
-    if registrar.is_null() {
+pub unsafe extern "C" fn polyplug_init(host: *const HostInterface) -> AbiError {
+    if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
-    // SAFETY: registrar is non-null and provided by the host per ABI contract.
-    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
+    // SAFETY: host is non-null and provided by the host per ABI contract.
+    let iface: &HostInterface = unsafe { &*host };
     // SAFETY: register_plugin is a valid function pointer set by the host.
-    unsafe { (reg.register_plugin)(registrar, &MY_DESCRIPTOR, &MY_VTABLE) }
+    unsafe { (iface.register_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE) }
 }
 ```
 
@@ -222,15 +222,15 @@ pub struct PluginDescriptor {
 
 ---
 
-### `PluginRegistrar`
+### `HostInterface`
 
 Passed by the host to your `polyplug_init`. Use it **only during init** — do not store it.
 
 ```rust
 #[repr(C)]
-pub struct PluginRegistrar {
-    pub register_plugin: unsafe extern "C" fn(
-        registrar:  *mut PluginRegistrar,
+pub struct HostInterface {
+    pub register_contract: unsafe extern "C" fn(
+        host:       *const HostInterface,
         descriptor: *const PluginDescriptor,
         vtable:     *const GuestContractInterface,
     ) -> AbiError,
@@ -459,16 +459,16 @@ pub extern "C" fn polyplug_abi_version() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn polyplug_init(registrar: *mut PluginRegistrar) -> AbiError {
-    if registrar.is_null() {
+pub unsafe extern "C" fn polyplug_init(host: *const HostInterface) -> AbiError {
+    if host.is_null() {
         return AbiError { code: AbiErrorCode::Generic, message: StringView::null() };
     }
-    // SAFETY: registrar is non-null and provided by the host per ABI contract.
-    let reg: &mut PluginRegistrar = unsafe { &mut *registrar };
-    // SAFETY: register_plugin is a valid function pointer. TRANSFORM_DESCRIPTOR and
+    // SAFETY: host is non-null and provided by the host per ABI contract.
+    let iface: &HostInterface = unsafe { &*host };
+    // SAFETY: register_contract is a valid function pointer. TRANSFORM_DESCRIPTOR and
     // TRANSFORM_VTABLE are 'static.
     unsafe {
-        (reg.register_plugin)(registrar, &TRANSFORM_DESCRIPTOR, &TRANSFORM_VTABLE)
+        (iface.register_contract)(host, &TRANSFORM_DESCRIPTOR, &TRANSFORM_VTABLE)
     }
 }
 ```

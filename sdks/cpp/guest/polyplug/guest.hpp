@@ -163,6 +163,6 @@ inline const HostInterface* get_host_interface() noexcept {
 ///   }
 ///
 /// The macro expands to:
-///   extern "C" AbiError polyplug_init(PluginRegistrar* registrar)
+///   extern "C" AbiError polyplug_init(const HostInterface* host)
 #define POLYPLUG_GUEST_MAIN \
-    extern "C" AbiError polyplug_init(PluginRegistrar* registrar)
+    extern "C" AbiError polyplug_init(const HostInterface* host)

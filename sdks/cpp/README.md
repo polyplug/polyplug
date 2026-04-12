@@ -103,7 +103,7 @@ C++ wrappers over the polyplug C ABI:
 
 Bootstrap layer for C++ plugins:
 - `POLYPLUG_PLUGIN_INIT` macro — Entry point
-- `PluginRegistrar` — Contract registration
+- `HostInterface` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Exception boundary — Plugin crashes don't take down host
 

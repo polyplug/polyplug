@@ -45,11 +45,11 @@ if decoder:
 ### Plugin Author
 
 ```python
-from polyplug_guest import plugin, PluginRegistrar
+from polyplug_guest import plugin, HostInterface
 
 @plugin
-def init(registrar: PluginRegistrar, ctx):
-    registrar.register(PipelineDecoder, DecoderImpl())
+def init(host: HostInterface, ctx):
+    host.register(PipelineDecoder, DecoderImpl())
 
 class DecoderImpl:
     def decode(self, input: str) -> str:
@@ -91,7 +91,7 @@ Python wrappers over the polyplug C ABI using ctypes:
 
 Bootstrap layer for Python plugins:
 - `@plugin` decorator — Marks plugin entry point
-- `PluginRegistrar` — Contract registration
+- `HostInterface` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Exception boundary — Plugin crashes don't take down host
 

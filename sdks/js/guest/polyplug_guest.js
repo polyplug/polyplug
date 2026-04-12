@@ -110,9 +110,9 @@ export function getHostVtable() {
  */
 
 /**
- * Host registrar for plugin registration.
- * 
- * @typedef {Object} PluginRegistrar
+ * Host interface for plugin registration.
+ *
+ * @typedef {Object} HostInterface
  * @property {Function} register_plugin - Function to register a plugin
  * @property {*} host - Host interface pointer
  */
@@ -128,7 +128,7 @@ export function getHostVtable() {
  * Initialization function signature for polyplug plugins.
  * 
  * @callback InitFn
- * @param {PluginRegistrar} registrar - Host registrar for plugin registration
+ * @param {HostInterface} host - Host interface for plugin registration
  * @param {BundleInitContext} context - Plugin context with bundle path
  * @returns {AbiError} Registration result
  */

@@ -58,7 +58,7 @@ using Polyplug.Guest;
 [PolyplugPlugin]
 public static class MyPlugin
 {
-    public static void Init(PluginRegistrar registrar, BundleInitContext ctx)
+    public static void Init(HostInterface host, BundleInitContext ctx)
     {
         // Register your contract implementations
         registrar.Register<IPipelineDecoder>(new DecoderImpl());
@@ -109,7 +109,7 @@ C# wrappers over the polyplug C ABI:
 
 Bootstrap layer for C# plugins:
 - `[PolyplugPlugin]` attribute — Marks plugin entry point
-- `PluginRegistrar` — Contract registration
+- `HostInterface` — Contract registration
 - `BundleInitContext` — Bundle metadata
 - Exception boundary — Plugin crashes don't take down host
 

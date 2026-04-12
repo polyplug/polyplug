@@ -178,7 +178,7 @@ pub use polyplug_abi::HostContractInstance;
 
 /// Host capabilities passed to every plugin at init time.
 ///
-/// Accessed via `PluginRegistrar::host`. Provides allocation, plugin lookup,
+/// Accessed via `HostInterface`. Provides allocation, plugin lookup,
 /// and extension vtable retrieval.
 pub use polyplug_abi::HostInterface;
 
