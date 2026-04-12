@@ -5,7 +5,7 @@
 
 #![allow(clippy::std_instead_of_core)]
 
-use crate::mapper::{create_hash_functions, map_all_abi_types};
+use crate::mapper::map_all_abi_types;
 use crate::types::AbiTypes;
 use polyplug_codegen::data::Item;
 use polyplug_codegen::languages::{
@@ -62,6 +62,41 @@ impl TargetLang {
             TargetLang::JavaScript => "",
         }
     }
+
+    /// Return the file extension for the generated SDK.
+    pub const fn file_extension(&self) -> &'static str {
+        match self {
+            TargetLang::Cpp => "hpp",
+            TargetLang::CSharp => "cs",
+            TargetLang::Python => "py",
+            TargetLang::Lua => "lua",
+            TargetLang::JavaScript => "ts",
+        }
+    }
+}
+
+/// Patterns in rust_type strings that indicate types which cannot be represented
+/// in target languages. Simple generics (Array<T>, Option<...>) and tuples are allowed.
+const UNREPRESENTABLE_PATTERNS: &[&str] = &["dyn ", "impl ", "for<", "where "];
+
+/// Validate that all field types can be represented in target languages.
+///
+/// Per D-09: Build fails with clear error if a type cannot be represented.
+fn validate_representable_types(abi_types: &AbiTypes) -> Result<(), String> {
+    for struct_info in &abi_types.structs {
+        for field in &struct_info.fields {
+            for pattern in UNREPRESENTABLE_PATTERNS {
+                if field.rust_type.contains(pattern) {
+                    return Err(format!(
+                        "Cannot represent type '{}' field '{}' with type '{}' in target languages. \
+                         Consider simplifying the type or adding codegen support.",
+                        struct_info.name, field.name, field.rust_type
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Generate SDK for a specific language.
@@ -73,9 +108,7 @@ impl TargetLang {
 /// # Returns
 /// Generated SDK code as a string.
 pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
-    let abi_items: Vec<Item> = map_all_abi_types(&abi_types.types());
-    let hash_items: Vec<Item> = create_hash_functions();
-    let all_items: Vec<Item> = abi_items.into_iter().chain(hash_items).collect();
+    let all_items: Vec<Item> = map_all_abi_types(&abi_types.types());
 
     let generator: Box<dyn CodeGenerator> = match lang {
         TargetLang::Cpp => Box::new(CppGenerator::new()),
@@ -96,7 +129,9 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
             Item::Struct(s) => generator.generate_struct(s, &ctx),
             Item::Enum(e) => generator.generate_enum(e, &ctx),
             Item::Union(u) => generator.generate_union(u, &ctx),
-            Item::Function(f) => generator.generate_function(f, &ctx),
+            // Function items are no longer generated from ABI extraction.
+            // The Function variant remains in codegen for use by polyplugc CLI.
+            Item::Function(_) => String::new(),
         };
         output.push_str(&code);
     }
@@ -110,13 +145,25 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
 /// # Arguments
 /// * `abi_types` - Extracted ABI types.
 /// * `workspace_root` - Path to the workspace root directory.
+/// * `tracked_files` - Source files to emit `cargo:rerun-if-changed` for.
 ///
 /// # Returns
 /// Result indicating success or failure.
 pub fn generate_all_sdks(
     abi_types: &AbiTypes,
     workspace_root: &Path,
+    tracked_files: &[PathBuf],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Validate that all types can be represented in target languages (D-09).
+    validate_representable_types(abi_types).map_err(|e| -> Box<dyn std::error::Error> {
+        e.into()
+    })?;
+
+    // Emit cargo:rerun-if-changed for all tracked source files.
+    for path in tracked_files {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+
     let languages: [TargetLang; 5] = [
         TargetLang::Cpp,
         TargetLang::CSharp,
