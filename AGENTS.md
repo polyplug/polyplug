@@ -286,7 +286,7 @@ Every generator (rust, python, lua, csharp, cpp, js_deno, js_quickjs) must gener
 
 3. **Never uses global state or thread-locals in generated code.**
 
-**Why this matters:** Different registration mechanisms (e.g., `PluginRegistrar` vs `HostInterface.register_plugin`) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
+**Why this matters:** Different registration mechanisms (e.g., divergent `HostInterface` field layouts or calling conventions) break the ABI contract and cause runtime failures. All plugins, regardless of language, must interact with the host through the exact same ABI path.
 
 **Verification:** When adding or modifying a generator, compare its output with `rust.rs` to ensure ABI parity.
 

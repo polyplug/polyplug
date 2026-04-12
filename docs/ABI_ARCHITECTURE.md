@@ -26,7 +26,7 @@ uint32_t polyplug_abi_version(void);
 
 ### `polyplug_init`
 ```c
-AbiError polyplug_init(PluginRegistrar* registrar, const BundleInitContext* ctx);
+AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx);
 ```
 **Called by:** Host immediately after dlopen
 **Parameters:**
@@ -170,7 +170,7 @@ polyplug_runtime_destroy()
 ## ABI Stability
 
 The core ABI is frozen per §7 of AGENTS.md:
-- `PluginRegistrar` layout cannot change
+- `HostInterface` layout cannot change
 - `BundleInitContext` can add fields but not remove
 - `polyplug_init` signature is fixed (2 params)
 - All additions go through extension system

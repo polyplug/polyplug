@@ -311,24 +311,24 @@ typedef struct {
 } GuestContractInterface;
 ```
 
-**PluginRegistrar — bridge during init only:**
+**HostInterface — host capabilities during init:**
 
 ```c
 typedef struct {
-    void (*register_plugin)(
-        PluginRegistrar*        self,
+    void (*register_contract)(
+        const HostInterface*        self,
         const PluginDescriptor* descriptor,
         const GuestContractInterface*     vtable
     );
     const HostInterface* host;
-} PluginRegistrar;
+} HostInterface;
 ```
 
 **Bundle entry point — single symbol exposed by every bundle:**
 
 ```c
 // PluginContext valid for duration of init() only — do not store the pointer.
-void init(PluginRegistrar* registrar, const PluginContext* ctx);
+void init(const HostInterface* host, const PluginContext* ctx);
 ```
 
 **Registry storage — arc-swap slots for hot-reload safety:**
@@ -571,7 +571,7 @@ pub trait BundleLoader: Send + Sync {
     fn load(
         &self,
         path: &Path,
-        registrar: &mut PluginRegistrar,
+        registrar: &mut HostInterface,
     ) -> Result<(), RuntimeError>;
 }
 ```
@@ -701,7 +701,7 @@ public static AbiError Init(IntPtr registrarPtr, IntPtr ctxPtr) {
     try {
         // Generated code casts IntPtr → delegate* here (unsafe block, generated only)
         unsafe {
-            var registrar = (PluginRegistrar*)registrarPtr;
+            var registrar = (HostInterface*)registrarPtr;
             var ctx       = (PluginContext*)ctxPtr;
             // register vtables via delegate* — calli IL, zero allocation
         }
@@ -824,7 +824,7 @@ LuaJIT `lightuserdata` has a 47-bit pointer limit on x86_64 Linux. The registrar
 
 ```lua
 -- Rust sets: lua.globals().set("_registrar_ptr", ptr as i64)
-local reg = ffi.cast("PluginRegistrar*", ffi.cast("uintptr_t", _registrar_ptr))
+local reg = ffi.cast("HostInterface*", ffi.cast("uintptr_t", _registrar_ptr))
 ```
 
 This cast happens once at init time. All subsequent vtable function pointer calls are FFI cdata indirect calls — JIT-compiled to near-native speed (~800M ops/sec vs ~45M for lightuserdata C bindings).
@@ -1993,7 +1993,7 @@ size_t polyplug_runtime_error_message_len(void);
 uint32_t polyplug_abi_version(void);
 
 // Plugin constructor — registers vtables with the runtime
-AbiError polyplug_init(PluginRegistrar* registrar, const PluginContext* ctx);
+AbiError polyplug_init(const HostInterface* host, const PluginContext* ctx);
 ```
 
 **Performance:** The C facade is a zero-overhead shim — each function is a direct call into the existing Rust runtime with no additional allocation or logic. LuaJIT JIT-compiles these calls to direct indirect calls (bypassing PLT). Deno uses V8 Fast API calls for non-BigInt parameters (<10ns) and the standard call path for BigInt u64 parameters (~150ns).

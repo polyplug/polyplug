@@ -223,7 +223,7 @@ Reserved error codes (0–255 runtime, 256+ plugin-defined):
 ## RuntimeAbi Note
 
 `RuntimeAbi` is **not** part of `DataRecord`. It is passed once at plugin init via
-`polyplug_init(registrar: *mut PluginRegistrar)` and must be stored in a static.
+`polyplug_init(host: *const HostInterface)` and must be stored in a static.
 It provides `alloc`, `free`, `find_by_contract`, and other host services.
 
 Plugins must use `host.alloc` / `host.free` for all cross-boundary memory. Never use

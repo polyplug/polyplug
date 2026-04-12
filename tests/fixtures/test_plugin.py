@@ -16,7 +16,7 @@ from polyplug_guest.abi import (
     AbiError,
     BundleInitContext,
     PluginDescriptor,
-    PluginRegistrar,
+    HostInterface,
     GuestContractInterface,
     StringView,
     REGISTER_FN_TYPE,
@@ -144,18 +144,18 @@ def polyplug_abi_version() -> int:
     return 1
 
 
-def polyplug_init(registrar_addr: int, ctx_ptr: int) -> None:
-    """Called by PythonLoader with the PluginRegistrar address as an integer."""
-    registrar = PluginRegistrar.from_address(registrar_addr)
-    # Cast the register_plugin function pointer to the correct type (sret convention)
-    register_fn = ctypes.cast(registrar.register_plugin, REGISTER_FN_TYPE)
+def polyplug_init(host_addr: int, ctx_ptr: int) -> None:
+    """Called by PythonLoader with the HostInterface address as an integer."""
+    host = HostInterface.from_address(host_addr)
+    # Cast the register_contract function pointer to the correct type (sret convention)
+    register_fn = ctypes.cast(host.register_contract, REGISTER_FN_TYPE)
     # Allocate space for the return value (AbiError struct)
     err = AbiError()
     register_fn(
         ctypes.byref(err),  # sret pointer
-        ctypes.byref(registrar),
+        ctypes.byref(host),
         ctypes.byref(_DESCRIPTOR),
         ctypes.byref(_VTABLE),
     )
     if err.code != AbiErrorCode.Ok:
-        raise RuntimeError(f"register_plugin failed with code {err.code}")
+        raise RuntimeError(f"register_contract failed with code {err.code}")
