@@ -1,4 +1,7 @@
 //! C++ code generator — produces C++ headers from ABI items.
+//!
+//! Generates typed function pointer typedefs, correct Array<T> representations,
+//! and snake_case naming in the `polyplug` namespace per D-35.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
 use crate::languages::{CodeGenerator, GenerationContext};
@@ -11,7 +14,38 @@ impl CppGenerator {
         CppGenerator
     }
 
+    /// Check if a rust_type represents Array<T>.
+    fn is_array(rust_type: &str) -> bool {
+        rust_type.starts_with("Array<")
+    }
+
+    /// Check if a rust_type is Option<...>.
+    fn is_option(rust_type: &str) -> bool {
+        rust_type.starts_with("Option<") && rust_type.ends_with('>')
+    }
+
+    /// Strip `Option<...>` wrapper if present.
+    fn strip_option(rust_type: &str) -> &str {
+        if let Some(inner) = rust_type.strip_prefix("Option<") {
+            if inner.ends_with('>') {
+                return &inner[..inner.len() - 1];
+            }
+        }
+        rust_type
+    }
+
     fn rust_type_to_cpp(rust_type: &str) -> String {
+        // Handle Option<...> wrapper.
+        if Self::is_option(rust_type) {
+            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
+            return Self::rust_type_to_cpp(inner);
+        }
+
+        // Handle Array<T> — returns void* for items; actual handling in generate_struct.
+        if Self::is_array(rust_type) {
+            return String::from("void*");
+        }
+
         if rust_type.contains("extern\"C\"fn") || rust_type.contains("extern\"C\"") {
             return Self::convert_function_pointer(rust_type);
         }
@@ -30,15 +64,15 @@ impl CppGenerator {
         }
 
         if rust_type.starts_with('*') {
-            let rest: &str = rust_type.trim_start_matches('*').trim();
+            let rest = rust_type.trim_start_matches('*').trim();
             if rest.starts_with("const") {
-                let inner: &str = rest.trim_start_matches("const").trim();
-                let cpp_inner: String = Self::rust_type_to_cpp(inner);
+                let inner = rest.trim_start_matches("const").trim();
+                let cpp_inner = Self::rust_type_to_cpp(inner);
                 return format!("const {}*", cpp_inner);
             }
             if rest.starts_with("mut") {
-                let inner: &str = rest.trim_start_matches("mut").trim();
-                let cpp_inner: String = Self::rust_type_to_cpp(inner);
+                let inner = rest.trim_start_matches("mut").trim();
+                let cpp_inner = Self::rust_type_to_cpp(inner);
                 return format!("{}*", cpp_inner);
             }
             return String::from("void*");
@@ -66,23 +100,25 @@ impl CppGenerator {
     }
 
     fn convert_function_pointer(type_name: &str) -> String {
-        let return_type: &str = if let Some(pos) = type_name.find(")->") {
-            &type_name[pos + 3..]
+        let type_str = Self::strip_option(type_name);
+
+        let return_type = if let Some(pos) = type_str.find(")->") {
+            &type_str[pos + 3..]
         } else {
             "void"
         };
 
-        let cpp_return: String = Self::rust_type_to_cpp(return_type);
+        let cpp_return = Self::rust_type_to_cpp(return_type);
 
-        let params_start: usize = type_name.find("fn(").map(|p| p + 3).unwrap_or(0);
-        let params_end: usize = type_name.find(")->").unwrap_or(type_name.len());
+        let params_start = type_str.find("fn(").map(|p| p + 3).unwrap_or(0);
+        let params_end = type_str.find(")->").unwrap_or(type_str.len());
 
         if params_start == 0 || params_end <= params_start {
             return format!("{}(*)()", cpp_return);
         }
 
-        let params_str: &str = &type_name[params_start..params_end];
-        let params: Vec<String> = Self::parse_function_params(params_str);
+        let params_str = &type_str[params_start..params_end];
+        let params = Self::parse_function_params(params_str);
 
         if params.is_empty() {
             return format!("{}(*)()", cpp_return);
@@ -96,9 +132,9 @@ impl CppGenerator {
             return Vec::new();
         }
 
-        let mut params: Vec<String> = Vec::new();
-        let mut current_param: String = String::new();
-        let mut depth: i32 = 0;
+        let mut params = Vec::new();
+        let mut current_param = String::new();
+        let mut depth = 0i32;
 
         for c in params_str.chars() {
             match c {
@@ -111,7 +147,7 @@ impl CppGenerator {
                     current_param.push(c);
                 }
                 ',' if depth == 0 => {
-                    let param: String = current_param.trim().to_string();
+                    let param = current_param.trim().to_string();
                     if !param.is_empty() {
                         params.push(Self::convert_param(&param));
                     }
@@ -132,7 +168,7 @@ impl CppGenerator {
 
     fn convert_param(param: &str) -> String {
         let parts: Vec<&str> = param.splitn(2, ':').collect();
-        let type_part: &str = if parts.len() == 2 { parts[1] } else { parts[0] };
+        let type_part = if parts.len() == 2 { parts[1] } else { parts[0] };
         Self::rust_type_to_cpp(type_part.trim())
     }
 
@@ -146,12 +182,12 @@ impl CppGenerator {
     }
 
     fn format_doc_comment(doc: &str, indent: usize) -> String {
-        let indent_str: String = " ".repeat(indent);
+        let indent_str = " ".repeat(indent);
         let lines: Vec<&str> = doc.lines().collect();
         if lines.len() == 1 {
             format!("{}/// {}\n", indent_str, lines[0])
         } else {
-            let mut result: String = format!("{}/// {}\n", indent_str, lines[0]);
+            let mut result = format!("{}/// {}\n", indent_str, lines[0]);
             for line in &lines[1..] {
                 if line.is_empty() {
                     result.push_str(&format!("{}///\n", indent_str));
@@ -163,76 +199,49 @@ impl CppGenerator {
         }
     }
 
-    fn generate_field_declaration(type_name: &str, field_name: &str) -> String {
-        if type_name.contains("extern\"C\"fn") || type_name.contains("extern\"C\"") {
-            return Self::generate_function_pointer_field(type_name, field_name);
+    /// Generate a typedef for a function pointer type.
+    ///
+    /// Returns (typedef_line, type_name_to_use_in_struct).
+    fn generate_fn_ptr_typedef(struct_name: &str, field_name: &str, rust_type: &str) -> (String, String) {
+        let fn_type = Self::convert_function_pointer(rust_type);
+        let typedef_name = format!("{}_{}_fn", struct_name, field_name);
+
+        let typedef = format!("typedef {} {};\n", fn_type, typedef_name);
+
+        let mut extra = String::new();
+        if Self::is_option(rust_type) {
+            extra.push_str("// Nullable function pointer.\n");
         }
 
-        let cpp_type: String = Self::rust_type_to_cpp(type_name);
-        format!("{} {}", cpp_type, field_name)
-    }
-
-    fn generate_function_pointer_field(type_name: &str, field_name: &str) -> String {
-        let return_type: &str = if let Some(pos) = type_name.find(")->") {
-            &type_name[pos + 3..]
-        } else {
-            "void"
-        };
-
-        let cpp_return: String = Self::rust_type_to_cpp(return_type);
-
-        let params_start: usize = type_name.find("fn(").map(|p| p + 3).unwrap_or(0);
-
-        let params_end: usize = if let Some(pos) = type_name.find(")->") {
-            pos
-        } else if params_start > 0 {
-            let mut depth: i32 = 1;
-            let mut end: usize = params_start;
-            for (i, c) in type_name[params_start..].chars().enumerate() {
-                match c {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = params_start + i;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            end
-        } else {
-            0
-        };
-
-        if params_start == 0 || params_end <= params_start {
-            return format!("{} (*{} )()", cpp_return, field_name);
-        }
-
-        let params_str: &str = &type_name[params_start..params_end];
-        let params: Vec<String> = Self::parse_function_params(params_str);
-
-        if params.is_empty() {
-            return format!("{} (*{} )()", cpp_return, field_name);
-        }
-
-        format!("{} (*{} )({})", cpp_return, field_name, params.join(", "))
+        (format!("{}{}", typedef, extra), typedef_name)
     }
 }
 
 impl CodeGenerator for CppGenerator {
     fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        let value: String = Self::format_constant_value(&item.value, &item.rust_type);
+        let value = Self::format_constant_value(&item.value, &item.rust_type);
         format!("#define {} {}\n", item.name, value)
     }
 
     fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
-        let mut output: String = String::new();
+        let mut output = String::new();
+        let mut typedefs = String::new();
+
+        // Pre-scan fields for function pointer types — collect typedefs.
+        for field in &item.fields {
+            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"") {
+                let (typedef, _type_name) =
+                    Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
+                typedefs.push_str(&typedef);
+            }
+        }
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_doc_comment(doc, 0));
         }
+
+        // Emit typedefs before the struct.
+        output.push_str(&typedefs);
 
         output.push_str("struct ");
         output.push_str(&item.name);
@@ -243,9 +252,24 @@ impl CodeGenerator for CppGenerator {
                 output.push_str(&Self::format_doc_comment(doc, 4));
             }
 
-            let field_decl: String =
-                Self::generate_field_declaration(&field.rust_type, &field.name);
-            output.push_str(&format!("    {};\n", field_decl));
+            // Handle Array<T> — expand into 3 sub-fields per D-21.
+            if Self::is_array(&field.rust_type) {
+                output.push_str(&format!("    void* {};\n", field.name));
+                output.push_str(&format!("    size_t {}_len;\n", field.name));
+                output.push_str(&format!("    size_t {}__align;\n", field.name));
+                continue;
+            }
+
+            // Handle function pointer fields — use the typedef name.
+            if field.rust_type.contains("extern\"C\"fn") || field.rust_type.contains("extern\"C\"") {
+                let (_, typedef_name) =
+                    Self::generate_fn_ptr_typedef(&item.name, &field.name, &field.rust_type);
+                output.push_str(&format!("    {} {};\n", typedef_name, field.name));
+                continue;
+            }
+
+            let cpp_type = Self::rust_type_to_cpp(&field.rust_type);
+            output.push_str(&format!("    {} {};\n", cpp_type, field.name));
         }
 
         output.push_str("};\n\n");
@@ -253,13 +277,13 @@ impl CodeGenerator for CppGenerator {
     }
 
     fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
-        let mut output: String = String::new();
+        let mut output = String::new();
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_doc_comment(doc, 0));
         }
 
-        let repr: String = Self::rust_type_to_cpp(&item.repr);
+        let repr = Self::rust_type_to_cpp(&item.repr);
         output.push_str(&format!("enum class {} : {} {{\n", item.name, repr));
         for (i, variant) in item.variants.iter().enumerate() {
             if let Some(doc) = &variant.doc {
@@ -279,7 +303,7 @@ impl CodeGenerator for CppGenerator {
     }
 
     fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
-        let mut output: String = String::new();
+        let mut output = String::new();
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_doc_comment(doc, 0));
@@ -287,7 +311,7 @@ impl CodeGenerator for CppGenerator {
 
         output.push_str(&format!("union {} {{\n", item.name));
         for variant in &item.variants {
-            let cpp_type: String = Self::rust_type_to_cpp(&variant.type_name);
+            let cpp_type = Self::rust_type_to_cpp(&variant.type_name);
             output.push_str(&format!("    {} {};\n", cpp_type, variant.name));
         }
         output.push_str("};\n\n");
@@ -295,13 +319,13 @@ impl CodeGenerator for CppGenerator {
     }
 
     fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let ret_type: String = item
+        let ret_type = item
             .return_type
             .as_ref()
             .map(|t| Self::rust_type_to_cpp(t))
             .unwrap_or_else(|| "void".to_string());
 
-        let params: String = item
+        let params = item
             .params
             .iter()
             .map(|p| format!("{} {}", Self::rust_type_to_cpp(&p.rust_type), p.name))

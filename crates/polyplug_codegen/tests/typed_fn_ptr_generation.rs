@@ -328,10 +328,18 @@ fn js_array_field_generates_generic_struct() {
 
     let output = generator.generate_struct(&item, &ctx);
 
-    // Array<T> should have items, len, align fields in the interface.
+    // Array<T> should have the field name and offset constants for len/align.
     assert!(
-        output.contains("items"),
-        "Array<T> must have 'items' field. Got:\n{output}"
+        output.contains("bundles"),
+        "Array<T> must have field name in interface. Got:\n{output}"
+    );
+    assert!(
+        output.contains("_LEN_OFFSET"),
+        "Array<T> must have _LEN_OFFSET constant. Got:\n{output}"
+    );
+    assert!(
+        output.contains("_ALIGN_OFFSET"),
+        "Array<T> must have _ALIGN_OFFSET constant. Got:\n{output}"
     );
 }
 
@@ -411,15 +419,24 @@ fn python_no_void_p_for_fn_ptr_fields() {
 
     let output = generator.generate_struct(&item, &ctx);
 
-    // After the fix, fn ptr fields should NOT produce c_void_p in _fields_.
-    // Instead, they should reference CFUNCTYPE typedefs.
+    // After the fix, fn ptr fields should reference CFUNCTYPE typedef names in _fields_.
+    // The `runtime` field is a raw pointer (*mut c_void) and correctly uses c_void_p.
+    // Only fn ptr fields (register_contract, alloc, free) must use CFUNCTYPE names.
     let fields_section = output
         .split("_fields_")
         .nth(1)
         .expect("Should have _fields_ section");
 
     assert!(
-        !fields_section.contains("c_void_p"),
-        "fn ptr fields must use CFUNCTYPE types, not c_void_p. Got:\n{output}"
+        fields_section.contains("_host_interface_register_contract_t"),
+        "register_contract field must use CFUNCTYPE typedef. Got:\n{output}"
+    );
+    assert!(
+        fields_section.contains("_host_interface_alloc_t"),
+        "alloc field must use CFUNCTYPE typedef. Got:\n{output}"
+    );
+    assert!(
+        fields_section.contains("_host_interface_free_t"),
+        "free field must use CFUNCTYPE typedef. Got:\n{output}"
     );
 }

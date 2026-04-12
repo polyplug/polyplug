@@ -1,4 +1,7 @@
 //! JavaScript/TypeScript code generator — produces TypeScript types from ABI items.
+//!
+//! Per D-33: emits BOTH TypeScript interfaces AND binary offset constants
+//! for DataView/UnsafePointerView access. Targets Deno host per D-34.
 
 use crate::data::{ConstInfo, EnumInfo, FunctionInfo, StructInfo, UnionInfo};
 use crate::languages::{CodeGenerator, GenerationContext};
@@ -11,9 +14,42 @@ impl JsGenerator {
         JsGenerator
     }
 
+    /// Check if a rust_type represents Array<T>.
+    fn is_array(rust_type: &str) -> bool {
+        rust_type.starts_with("Array<")
+    }
+
+    /// Check if a rust_type is Option<...>.
+    fn is_option(rust_type: &str) -> bool {
+        rust_type.starts_with("Option<") && rust_type.ends_with('>')
+    }
+
+    /// Strip `Option<...>` wrapper if present.
+    fn strip_option(rust_type: &str) -> &str {
+        if let Some(inner) = rust_type.strip_prefix("Option<") {
+            if inner.ends_with('>') {
+                return &inner[..inner.len() - 1];
+            }
+        }
+        rust_type
+    }
+
     fn rust_type_to_ts(rust_type: &str) -> String {
+        // Handle Option<...> wrapper.
+        if Self::is_option(rust_type) {
+            let inner = &rust_type["Option<".len()..rust_type.len() - 1];
+            let ts_inner = Self::rust_type_to_ts(inner);
+            // In TypeScript, function pointer Option is just the type itself (can be null).
+            return ts_inner;
+        }
+
+        // Handle Array<T> — return a typed object.
+        if Self::is_array(rust_type) {
+            return String::from("{ items: number; len: number; align: number }");
+        }
+
         if rust_type.contains("extern\"C\"fn") || rust_type.contains("extern\"C\"") {
-            return Self::convert_function_pointer(rust_type);
+            return String::from("number");
         }
 
         if rust_type.starts_with("*const*const")
@@ -42,122 +78,60 @@ impl JsGenerator {
         }
     }
 
-    fn convert_function_pointer(type_name: &str) -> String {
-        let return_type: &str = if let Some(pos) = type_name.find(")->") {
-            &type_name[pos + 3..]
-        } else {
-            "void"
-        };
-
-        let ts_return: String = Self::rust_type_to_ts(return_type);
-
-        let params_start: usize = type_name.find("fn(").map(|p| p + 3).unwrap_or(0);
-
-        let params_end: usize = if let Some(pos) = type_name.find(")->") {
-            pos
-        } else {
-            let mut depth: i32 = 0;
-            let mut end_pos: usize = type_name.len();
-            for (i, c) in type_name[params_start..].chars().enumerate() {
-                match c {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth < 0 {
-                            end_pos = params_start + i;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            end_pos
-        };
-
-        if params_start == 0 || params_end <= params_start {
-            return format!("() => {}", ts_return);
+    /// Compute the byte size of a known Rust type for offset calculation.
+    fn type_size(rust_type: &str) -> usize {
+        let type_str = Self::strip_option(rust_type);
+        if type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"") {
+            return 8; // fn pointer = 8 bytes on 64-bit
         }
-
-        let params_str: &str = &type_name[params_start..params_end];
-        let params: Vec<String> = Self::parse_function_params(params_str);
-
-        if params.is_empty() {
-            return format!("() => {}", ts_return);
+        if Self::is_array(rust_type) {
+            return 24; // Array<T>: ptr(8) + len(8) + align(8) = 24 bytes
         }
-
-        format!("({}) => {}", params.join(", "), ts_return)
+        if type_str.starts_with('*') {
+            return 8; // raw pointer
+        }
+        match type_str {
+            "u64" | "i64" | "usize" | "isize" => 8,
+            "u32" | "i32" => 4,
+            "u16" | "i16" => 2,
+            "u8" | "i8" | "bool" => 1,
+            _ => 8, // Assume 8 bytes for unknown types (pointer-sized)
+        }
     }
 
-    fn parse_function_params(params_str: &str) -> Vec<String> {
-        if params_str.is_empty() {
-            return Vec::new();
+    /// Compute the alignment of a known Rust type.
+    fn type_align(rust_type: &str) -> usize {
+        let type_str = Self::strip_option(rust_type);
+        if type_str.contains("extern\"C\"fn") || type_str.contains("extern\"C\"") {
+            return 8;
         }
-
-        let mut params: Vec<String> = Vec::new();
-        let mut current_param: String = String::new();
-        let mut depth: i32 = 0;
-        let mut param_index: usize = 0;
-
-        for c in params_str.chars() {
-            match c {
-                '(' | '<' | '[' => {
-                    depth += 1;
-                    current_param.push(c);
-                }
-                ')' | '>' | ']' => {
-                    depth -= 1;
-                    current_param.push(c);
-                }
-                ',' if depth == 0 => {
-                    let param: String = current_param.trim().to_string();
-                    if !param.is_empty() {
-                        params.push(Self::convert_param(&param, param_index));
-                        param_index += 1;
-                    }
-                    current_param.clear();
-                }
-                _ => {
-                    current_param.push(c);
-                }
-            }
+        if Self::is_array(rust_type) {
+            return 8;
         }
-
-        if !current_param.trim().is_empty() {
-            params.push(Self::convert_param(current_param.trim(), param_index));
+        if type_str.starts_with('*') {
+            return 8;
         }
-
-        params
+        match type_str {
+            "u64" | "i64" | "usize" | "isize" => 8,
+            "u32" | "i32" => 4,
+            "u16" | "i16" => 2,
+            "u8" | "i8" | "bool" => 1,
+            _ => 8,
+        }
     }
 
-    fn convert_param(param: &str, index: usize) -> String {
-        let parts: Vec<&str> = param.splitn(2, ':').collect();
-        let type_part: &str = if parts.len() == 2 { parts[1] } else { parts[0] };
-        let ts_type: String = Self::rust_type_to_ts(type_part.trim());
-        let name: &str = if parts.len() == 2 {
-            parts[0].trim()
-        } else {
-            match index {
-                0 => "arg0",
-                1 => "arg1",
-                2 => "arg2",
-                3 => "arg3",
-                4 => "arg4",
-                5 => "arg5",
-                _ => {
-                    return format!("arg{}: {}", index, ts_type);
-                }
-            }
-        };
-        format!("{}: {}", name, ts_type)
+    /// Align `offset` up to the given alignment boundary.
+    fn align_up(offset: usize, align: usize) -> usize {
+        (offset + align - 1) & !(align - 1)
     }
 
     fn format_jsdoc(doc: &str, indent: usize) -> String {
-        let indent_str: String = " ".repeat(indent);
+        let indent_str = " ".repeat(indent);
         let lines: Vec<&str> = doc.lines().collect();
         if lines.len() == 1 {
             format!("{}/** {} */\n", indent_str, lines[0])
         } else {
-            let mut output: String = format!("{}/**\n", indent_str);
+            let mut output = format!("{}/**\n", indent_str);
             for line in lines {
                 output.push_str(&format!("{} * {}\n", indent_str, line));
             }
@@ -169,8 +143,8 @@ impl JsGenerator {
 
 impl CodeGenerator for JsGenerator {
     fn generate_const(&self, item: &ConstInfo, _ctx: &GenerationContext) -> String {
-        let ts_type: String = Self::rust_type_to_ts(&item.rust_type);
-        let formatted_value: String = if ts_type == "bigint" {
+        let ts_type = Self::rust_type_to_ts(&item.rust_type);
+        let formatted_value = if ts_type == "bigint" {
             format!("{}n", item.value)
         } else {
             item.value.clone()
@@ -183,12 +157,13 @@ impl CodeGenerator for JsGenerator {
     }
 
     fn generate_struct(&self, item: &StructInfo, _ctx: &GenerationContext) -> String {
-        let mut output: String = String::new();
+        let mut output = String::new();
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_jsdoc(doc, 0));
         }
 
+        // TypeScript interface.
         output.push_str(&format!("export interface {} {{\n", item.name));
 
         for field in &item.fields {
@@ -196,16 +171,79 @@ impl CodeGenerator for JsGenerator {
                 output.push_str(&Self::format_jsdoc(doc, 4));
             }
 
-            let ts_type: String = Self::rust_type_to_ts(&field.rust_type);
+            // Handle Array<T> — expand into 3 sub-fields.
+            if Self::is_array(&field.rust_type) {
+                output.push_str(&format!("    {}: number;\n", field.name));
+                output.push_str(&format!("    {}_len: number;\n", field.name));
+                output.push_str(&format!("    {}__align: number;\n", field.name));
+                continue;
+            }
+
+            let ts_type = Self::rust_type_to_ts(&field.rust_type);
             output.push_str(&format!("    {}: {};\n", field.name, ts_type));
         }
 
         output.push_str("}\n\n");
+
+        // Binary offset constants per D-33.
+        let struct_align = item
+            .fields
+            .iter()
+            .map(|f| Self::type_align(&f.rust_type))
+            .max()
+            .unwrap_or(1);
+
+        let mut offset = 0usize;
+        let mut offset_constants = String::new();
+
+        for field in &item.fields {
+            let field_align = Self::type_align(&field.rust_type);
+            offset = Self::align_up(offset, field_align);
+
+            let const_name = format!(
+                "{}_{}_OFFSET",
+                to_upper_snake_case(&item.name),
+                to_upper_snake_case(&field.name)
+            );
+            offset_constants.push_str(&format!(
+                "export const {}: number = {};\n",
+                const_name, offset
+            ));
+
+            if Self::is_array(&field.rust_type) {
+                // Array<T> expands to 3 consecutive fields.
+                offset += 8; // items pointer
+                offset_constants.push_str(&format!(
+                    "export const {}_LEN_OFFSET: number = {};\n",
+                    to_upper_snake_case(&format!("{}_{}", item.name, field.name)),
+                    offset
+                ));
+                offset += 8; // len
+                offset_constants.push_str(&format!(
+                    "export const {}_ALIGN_OFFSET: number = {};\n",
+                    to_upper_snake_case(&format!("{}_{}", item.name, field.name)),
+                    offset
+                ));
+                offset += 8; // align
+            } else {
+                offset += Self::type_size(&field.rust_type);
+            }
+        }
+
+        // Total struct size constant.
+        let total_size = Self::align_up(offset, struct_align);
+        offset_constants.push_str(&format!(
+            "export const {}_SIZE: number = {};\n\n",
+            to_upper_snake_case(&item.name),
+            total_size
+        ));
+
+        output.push_str(&offset_constants);
         output
     }
 
     fn generate_enum(&self, item: &EnumInfo, _ctx: &GenerationContext) -> String {
-        let mut output: String = String::new();
+        let mut output = String::new();
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_jsdoc(doc, 0));
@@ -232,7 +270,7 @@ impl CodeGenerator for JsGenerator {
     }
 
     fn generate_union(&self, item: &UnionInfo, _ctx: &GenerationContext) -> String {
-        let mut output: String = String::new();
+        let mut output = String::new();
 
         if let Some(doc) = &item.doc {
             output.push_str(&Self::format_jsdoc(doc, 0));
@@ -241,7 +279,7 @@ impl CodeGenerator for JsGenerator {
         output.push_str(&format!("export type {} =\n", item.name));
 
         for variant in item.variants.iter() {
-            let ts_type: String = Self::rust_type_to_ts(&variant.type_name);
+            let ts_type = Self::rust_type_to_ts(&variant.type_name);
             output.push_str(&format!("    | {{ {}: {} }}\n", variant.name, ts_type));
         }
 
@@ -250,13 +288,13 @@ impl CodeGenerator for JsGenerator {
     }
 
     fn generate_function(&self, item: &FunctionInfo, _ctx: &GenerationContext) -> String {
-        let ret_type: String = item
+        let ret_type = item
             .return_type
             .as_ref()
             .map(|t| Self::rust_type_to_ts(t))
             .unwrap_or_else(|| "void".to_string());
 
-        let params: String = item
+        let params = item
             .params
             .iter()
             .map(|p| format!("{}: {}", p.name, Self::rust_type_to_ts(&p.rust_type)))
@@ -280,6 +318,22 @@ impl CodeGenerator for JsGenerator {
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
         String::new()
     }
+}
+
+/// Convert a string to UPPER_SNAKE_CASE for JS constant names.
+fn to_upper_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(c);
+        } else {
+            result.push(c.to_ascii_uppercase());
+        }
+    }
+    result
 }
 
 impl Default for JsGenerator {
