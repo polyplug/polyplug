@@ -396,19 +396,19 @@ public delegate AbiError RegisterContractDelegate(
 | A4 | `Option<unsafe extern "C" fn(...)>` in RuntimeConfig.on_reload can be represented in all target languages | Standard Stack | C# has `IntPtr` for fn ptr, Python has `c_void_p`, Lua has `void*` |
 | A5 | No inline `mod { ... }` blocks with ABI types exist in polyplug_abi src | Pitfall 1 | All modules are file-based; verified by reading all mod.rs files |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Lua ast-grep support level**
+1. **Lua ast-grep support level** (RESOLVED: Use tree-sitter fallback for Lua. Plan 19-03 Task 1 specifies regex-based extractor for Lua ffi.cdef blocks when ast-grep has limited Lua support.)
    - What we know: ast-grep 0.42.0 has Lua language support. `sdk_validator` uses tree-sitter directly for Lua.
    - What's unclear: Whether ast-grep can parse LuaJIT `ffi.cdef` blocks correctly.
    - Recommendation: Test ast-grep on a sample `abi.lua` with `ffi.cdef` blocks. If it fails, use the tree-sitter approach from `sdk_validator` for Lua.
 
-2. **Loader config struct extraction depth**
+2. **Loader config struct extraction depth** (RESOLVED: Simple struct emission only. NativeConfig and JsConfig are empty structs; PythonConfig tuple and DotnetConfig String fields handled by existing rust_type_to_*() converters in each generator.)
    - What we know: D-08 says scan loader crates for config structs. PythonConfig has `(u32, u32)` tuple, DotnetConfig has String fields.
    - What's unclear: Whether these complex types need full codegen or just simple struct emission.
    - Recommendation: Start with simple cases (NativeConfig is empty, JsConfig is empty). Handle PythonConfig/DotnetConfig as they come.
 
-3. **Array<T> generic handling across languages**
+3. **Array<T> generic handling across languages** (RESOLVED: Per D-21, generate single generic Array with void* items + size_t len + size_t align. No monomorphization needed. All languages use the same generic representation.)
    - What we know: D-21 says single generic `Array` with `void*` + `size_t`. Rust has `Array<T>` with generic type parameter.
    - What's unclear: How many concrete Array instantiations exist and whether all languages need all of them.
    - Recommendation: Generate a single generic Array per language. If specific concrete types are needed, add them as type aliases.
