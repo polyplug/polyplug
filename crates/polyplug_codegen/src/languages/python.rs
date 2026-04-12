@@ -381,3 +381,146 @@ impl Default for PythonGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{FieldInfo, StructInfo};
+
+    /// Test that CFUNCTYPE typedefs use proper ctypes types (not raw Rust syntax).
+    #[test]
+    fn python_cfunctype_uses_ctypes_params() {
+        let rust_type = "unsafeextern\"C\"fn(host:*constHostInterface,contract_id:u64)->AbiError";
+        let (return_type, params) = PythonGenerator::parse_function_pointer(rust_type)
+            .expect("should parse fn ptr");
+
+        assert_eq!(return_type, "AbiError");
+        // Params must be ctypes types, not raw Rust syntax.
+        assert!(
+            !params.iter().any(|p| p.contains("*const")),
+            "params should not contain raw pointer syntax: {:?}",
+            params
+        );
+        assert!(
+            params.iter().any(|p| p == "ctypes.c_void_p"),
+            "pointer param should be ctypes.c_void_p, got: {:?}",
+            params
+        );
+        assert!(
+            params.iter().any(|p| p == "ctypes.c_uint64"),
+            "u64 param should be ctypes.c_uint64, got: {:?}",
+            params
+        );
+    }
+
+    /// Test that CFUNCTYPE handles Option<fn ptr> (nullable).
+    #[test]
+    fn python_cfunctype_option_nullable() {
+        let rust_type = "Option<unsafeextern\"C\"fn(ReloadPhase)>";
+        let (typedef, _type_name) =
+            PythonGenerator::generate_cfunctype("RuntimeConfig", "on_reload", rust_type);
+        assert!(
+            typedef.contains("CFUNCTYPE"),
+            "should contain CFUNCTYPE: {}",
+            typedef
+        );
+        assert!(
+            typedef.contains("Nullable"),
+            "Option<fn ptr> should be marked nullable: {}",
+            typedef
+        );
+    }
+
+    /// Test that a struct with fn ptr fields generates CFUNCTYPE typedefs.
+    #[test]
+    fn python_struct_with_fn_ptr_generates_cfunctype() {
+        let generator = PythonGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("TestStruct"),
+            fields: vec![
+                FieldInfo {
+                    name: String::from("callback"),
+                    rust_type: String::from("unsafeextern\"C\"fn(*constu8,usize)->u32"),
+                    doc: None,
+                },
+                FieldInfo {
+                    name: String::from("value"),
+                    rust_type: String::from("u32"),
+                    doc: None,
+                },
+            ],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("CFUNCTYPE"),
+            "struct with fn ptr should emit CFUNCTYPE: {}",
+            output
+        );
+        assert!(
+            output.contains("ctypes.c_void_p"),
+            "pointer param should be ctypes.c_void_p: {}",
+            output
+        );
+    }
+
+    /// Test that Array<T> fields expand into 3 sub-fields.
+    #[test]
+    fn python_array_field_expands() {
+        let generator = PythonGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("WithArray"),
+            fields: vec![FieldInfo {
+                name: String::from("items"),
+                rust_type: String::from("Array<u8>"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains(r#"("items", ctypes.c_void_p)"#),
+            "Array items should be c_void_p: {}",
+            output
+        );
+        assert!(
+            output.contains("items_len"),
+            "Array should have len field: {}",
+            output
+        );
+        assert!(
+            output.contains("items__align"),
+            "Array should have align field: {}",
+            output
+        );
+    }
+
+    /// Test that compact fn ptr param with pointer is correctly converted.
+    #[test]
+    fn python_fn_ptr_with_const_ptr_param() {
+        let rust_type = "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->()";
+        let (return_type, params) = PythonGenerator::parse_function_pointer(rust_type)
+            .expect("should parse fn ptr");
+
+        assert_eq!(return_type, "None");
+        assert!(
+            params.contains(&"ctypes.c_char_p".to_string())
+                || params.contains(&"ctypes.c_void_p".to_string()),
+            "*const u8 should map to ctypes.c_char_p or c_void_p, got: {:?}",
+            params
+        );
+        assert!(
+            params.contains(&"ctypes.c_size_t".to_string()),
+            "usize should map to ctypes.c_size_t, got: {:?}",
+            params
+        );
+    }
+}

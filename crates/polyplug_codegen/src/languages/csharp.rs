@@ -408,3 +408,112 @@ impl Default for CSharpGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{FieldInfo, StructInfo};
+
+    /// Test that delegate definitions use proper C# types (not raw Rust syntax).
+    #[test]
+    fn csharp_delegate_uses_csharp_types() {
+        let rust_type = "unsafeextern\"C\"fn(this:*constHostInterface,contract_id:u64)->AbiError";
+        let (return_type, params) = CSharpGenerator::parse_function_pointer(rust_type)
+            .expect("should parse fn ptr");
+
+        assert_eq!(return_type, "AbiError");
+        // Params must be C# types, not raw Rust syntax.
+        assert!(
+            !params.iter().any(|p| p.contains("*const")),
+            "params should not contain raw pointer syntax: {:?}",
+            params
+        );
+        assert!(
+            params.iter().any(|p| p == "IntPtr"),
+            "pointer param should be IntPtr, got: {:?}",
+            params
+        );
+        assert!(
+            params.iter().any(|p| p == "ulong"),
+            "u64 param should be ulong, got: {:?}",
+            params
+        );
+    }
+
+    /// Test that struct with fn ptr fields generates delegate definitions.
+    #[test]
+    fn csharp_struct_with_fn_ptr_generates_delegate() {
+        let generator = CSharpGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("TestStruct"),
+            fields: vec![
+                FieldInfo {
+                    name: String::from("callback"),
+                    rust_type: String::from("unsafeextern\"C\"fn(*constu8,usize)->u32"),
+                    doc: None,
+                },
+                FieldInfo {
+                    name: String::from("value"),
+                    rust_type: String::from("u32"),
+                    doc: None,
+                },
+            ],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("[UnmanagedFunctionPointer(CallingConvention.Cdecl)]"),
+            "should emit UnmanagedFunctionPointer attribute: {}",
+            output
+        );
+        assert!(
+            output.contains("delegate"),
+            "should emit delegate: {}",
+            output
+        );
+        assert!(
+            output.contains("IntPtr"),
+            "pointer param should be IntPtr: {}",
+            output
+        );
+    }
+
+    /// Test that Array<T> fields expand into 3 sub-fields with PascalCase.
+    #[test]
+    fn csharp_array_field_expands() {
+        let generator = CSharpGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("WithArray"),
+            fields: vec![FieldInfo {
+                name: String::from("data"),
+                rust_type: String::from("Array<u8>"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("public IntPtr Data;"),
+            "Array items should be IntPtr with PascalCase: {}",
+            output
+        );
+        assert!(
+            output.contains("public nuint DataLen;"),
+            "Array should have Len field: {}",
+            output
+        );
+        assert!(
+            output.contains("public nuint DataAlign;"),
+            "Array should have Align field: {}",
+            output
+        );
+    }
+}

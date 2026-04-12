@@ -365,3 +365,83 @@ impl Default for LuaGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{FieldInfo, StructInfo};
+
+    /// Test that fn ptr typedefs produce valid C types (not Rust syntax).
+    #[test]
+    fn lua_fn_ptr_typedef_uses_c_types() {
+        let (typedef, _type_name) =
+            LuaGenerator::generate_fn_ptr_typedef("TestStruct", "callback", "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->u32");
+        assert!(
+            typedef.contains("uint32_t"),
+            "u32 return type should be uint32_t: {}",
+            typedef
+        );
+        assert!(
+            typedef.contains("const void*"),
+            "*const u8 should produce const void*: {}",
+            typedef
+        );
+        assert!(
+            typedef.contains("size_t"),
+            "usize should produce size_t: {}",
+            typedef
+        );
+    }
+
+    /// Test that void-returning fn ptrs don't produce extra ')' chars.
+    #[test]
+    fn lua_fn_ptr_void_return_no_extra_parens() {
+        let (typedef, _type_name) =
+            LuaGenerator::generate_fn_ptr_typedef("Test", "destroy", "unsafeextern\"C\"fn(this:*constHostInterface,instance:GuestContractInstance)->()");
+        assert!(
+            !typedef.contains("))"),
+            "void return type should not produce double-parens: {}",
+            typedef
+        );
+        assert!(
+            typedef.contains("void(*)"),
+            "void return type should produce void(*): {}",
+            typedef
+        );
+    }
+
+    /// Test that Array<T> fields expand into 3 sub-fields.
+    #[test]
+    fn lua_array_field_expands() {
+        let generator = LuaGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("WithArray"),
+            fields: vec![FieldInfo {
+                name: String::from("data"),
+                rust_type: String::from("Array<u8>"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("void* data;"),
+            "Array items should be void*: {}",
+            output
+        );
+        assert!(
+            output.contains("size_t data_len;"),
+            "Array should have len field: {}",
+            output
+        );
+        assert!(
+            output.contains("size_t data__align;"),
+            "Array should have align field: {}",
+            output
+        );
+    }
+}

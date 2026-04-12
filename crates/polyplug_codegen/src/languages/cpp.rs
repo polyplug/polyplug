@@ -360,3 +360,83 @@ impl Default for CppGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{FieldInfo, StructInfo};
+
+    /// Test that fn ptr typedefs produce valid C++ types.
+    #[test]
+    fn cpp_fn_ptr_typedef_uses_c_types() {
+        let (typedef, _type_name) =
+            CppGenerator::generate_fn_ptr_typedef("TestStruct", "callback", "unsafeextern\"C\"fn(ptr:*constu8,len:usize)->u32");
+        assert!(
+            typedef.contains("uint32_t"),
+            "u32 return type should be uint32_t: {}",
+            typedef
+        );
+        assert!(
+            typedef.contains("const void*"),
+            "*const u8 should produce const void*: {}",
+            typedef
+        );
+        assert!(
+            typedef.contains("size_t"),
+            "usize should produce size_t: {}",
+            typedef
+        );
+    }
+
+    /// Test that Array<T> fields expand into 3 sub-fields.
+    #[test]
+    fn cpp_array_field_expands() {
+        let generator = CppGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("WithArray"),
+            fields: vec![FieldInfo {
+                name: String::from("data"),
+                rust_type: String::from("Array<u8>"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("void* data;"),
+            "Array items should be void*: {}",
+            output
+        );
+        assert!(
+            output.contains("size_t data_len;"),
+            "Array should have len field: {}",
+            output
+        );
+        assert!(
+            output.contains("size_t data__align;"),
+            "Array should have align field: {}",
+            output
+        );
+    }
+
+    /// Test that void-returning fn ptrs produce correct typedefs.
+    #[test]
+    fn cpp_fn_ptr_void_return_correct() {
+        let (typedef, _type_name) =
+            CppGenerator::generate_fn_ptr_typedef("Test", "destroy", "unsafeextern\"C\"fn(ptr:*mutu8)->()");
+        assert!(
+            typedef.contains("void(*)"),
+            "void return should produce void(*): {}",
+            typedef
+        );
+        assert!(
+            !typedef.contains("()"),
+            "return type () should not appear in typedef: {}",
+            typedef
+        );
+    }
+}

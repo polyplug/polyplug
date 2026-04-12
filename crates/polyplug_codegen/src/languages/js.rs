@@ -341,3 +341,122 @@ impl Default for JsGenerator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{FieldInfo, StructInfo};
+
+    /// Test that structs emit both TypeScript interface and offset constants.
+    #[test]
+    fn js_struct_emits_interface_and_offsets() {
+        let generator = JsGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("TestStruct"),
+            fields: vec![
+                FieldInfo {
+                    name: String::from("value"),
+                    rust_type: String::from("u32"),
+                    doc: None,
+                },
+                FieldInfo {
+                    name: String::from("ptr"),
+                    rust_type: String::from("*constu8"),
+                    doc: None,
+                },
+            ],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("export interface TestStruct"),
+            "should emit TypeScript interface: {}",
+            output
+        );
+        assert!(
+            output.contains("TEST_STRUCT_VALUE_OFFSET"),
+            "should emit value offset constant: {}",
+            output
+        );
+        assert!(
+            output.contains("TEST_STRUCT_PTR_OFFSET"),
+            "should emit ptr offset constant: {}",
+            output
+        );
+        assert!(
+            output.contains("TEST_STRUCT_SIZE"),
+            "should emit size constant: {}",
+            output
+        );
+    }
+
+    /// Test that fn ptr fields emit as number in interface.
+    #[test]
+    fn js_fn_ptr_field_emits_as_number() {
+        let generator = JsGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("WithFnPtr"),
+            fields: vec![FieldInfo {
+                name: String::from("callback"),
+                rust_type: String::from("unsafeextern\"C\"fn(*constu8)->u32"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        // In the interface, fn ptr fields should be typed as number.
+        assert!(
+            output.contains("callback: number;"),
+            "fn ptr field should be typed as number in interface: {}",
+            output
+        );
+        assert!(
+            output.contains("WITH_FN_PTR_CALLBACK_OFFSET"),
+            "should emit offset constant for fn ptr: {}",
+            output
+        );
+    }
+
+    /// Test that Array<T> fields expand in interface and offsets.
+    #[test]
+    fn js_array_field_expands() {
+        let generator = JsGenerator::new();
+        let ctx = GenerationContext::new();
+        let item = StructInfo {
+            name: String::from("WithArray"),
+            fields: vec![FieldInfo {
+                name: String::from("items"),
+                rust_type: String::from("Array<u8>"),
+                doc: None,
+            }],
+            doc: None,
+            attributes: vec![],
+            size_hint: None,
+        };
+
+        let output = generator.generate_struct(&item, &ctx);
+        assert!(
+            output.contains("items: number;"),
+            "Array items should be number in interface: {}",
+            output
+        );
+        assert!(
+            output.contains("items_len: number;"),
+            "Array should have len field: {}",
+            output
+        );
+        assert!(
+            output.contains("WITH_ARRAY_ITEMS_OFFSET"),
+            "should emit items offset: {}",
+            output
+        );
+    }
+}
