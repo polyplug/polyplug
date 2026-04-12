@@ -5,6 +5,7 @@ After 18-02/18-03: All operations go through HostInterface struct fields.
 Only two FFI exports remain: polyplug_runtime_create, polyplug_runtime_destroy.
 
 The Runtime class holds a HostInterface pointer and calls methods through struct fields.
+All FFI struct types are imported from the auto-generated polyplug_abi module.
 """
 
 from __future__ import annotations
@@ -14,152 +15,37 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
-from polyplug_abi import AbiErrorCode, ReloadPhase, ReloadPhaseType, StringView
+# Import all FFI struct types from the auto-generated abi module.
+# The polyplug_abi package re-exports from sdks/python/abi/abi.py (per D-28).
+from polyplug_abi import (
+    AbiErrorCode,
+    Compatibility,
+    DispatchMechanisms,
+    DispatchType,
+    GuestContractInstance,
+    GuestContractInterface,
+    HostContractInterface,
+    HostContractInstance,
+    HostInterface,
+    ReloadPhase,
+    ReloadPhaseType,
+    RuntimeConfig,
+    StringView,
+    Version,
+    VmDispatch,
+)
 
 _LIB_NAME: str = "polyplug"
 
 # ─── Compatibility Constants ─────────────────────────────────────────────────────
 # These match polyplug_abi::Compatibility #[repr(u32)] enum
 
-COMPATIBILITY_STRICT: int = 0   # Exact major match and minor >= required
-COMPATIBILITY_RELAXED: int = 1  # Same major, any minor
-COMPATIBILITY_YOLO: int = 2     # Any version accepted
-
-
-# ─── RuntimeConfig Structure ─────────────────────────────────────────────────────
-# FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes)
-
-
-class RuntimeConfig(ctypes.Structure):
-    """FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
-
-    Layout:
-        offset 0: hot_reload_enabled (1 byte, c_uint8)
-        offset 1-3: padding (3 bytes)
-        offset 4: hot_reload_max_retries (4 bytes, c_uint32)
-        offset 8: hot_reload_retry_interval_ms (8 bytes, c_uint64)
-        offset 16: hot_reload_abort_on_max_retries (1 byte, c_uint8)
-        offset 17-19: padding (3 bytes)
-        offset 20: compatibility (4 bytes, c_uint32)
-    """
-
-    _fields_ = [
-        ("hot_reload_enabled", ctypes.c_uint8),           # offset 0, 1 byte
-        ("_pad1", ctypes.c_uint8 * 3),                    # padding 3 bytes
-        ("hot_reload_max_retries", ctypes.c_uint32),      # offset 4, 4 bytes
-        ("hot_reload_retry_interval_ms", ctypes.c_uint64), # offset 8, 8 bytes
-        ("hot_reload_abort_on_max_retries", ctypes.c_uint8), # offset 16, 1 byte
-        ("_pad2", ctypes.c_uint8 * 3),                    # padding 3 bytes
-        ("compatibility", ctypes.c_uint32),               # offset 20, 4 bytes
-    ]
-
-
-class RuntimeCreateOptionsC(ctypes.Structure):
-    """FFI RuntimeCreateOptions matching polyplug_abi::RuntimeCreateOptions."""
-
-    _fields_ = [
-        ("config", ctypes.POINTER(RuntimeConfig)),
-        ("on_reload", ctypes.c_void_p),
-    ]
-
-
-# ─── HostInterface Structure (18-03) ─────────────────────────────────────────────
-# FFI HostInterface matching polyplug_abi::HostInterface (144 bytes)
-
-
-class HostInterface(ctypes.Structure):
-    """FFI HostInterface matching polyplug_abi::HostInterface (144 bytes).
-
-    Contains runtime pointer and function pointers for all operations.
-    All function pointers use self-passing pattern (receive HostInterface* as first param).
-
-    Layout (18 fields, 144 bytes):
-        offset 0: runtime (*mut c_void)
-        offset 8: register_contract
-        offset 16: alloc
-        offset 24: free
-        offset 32: find_guest_contract
-        offset 40: find_all_guest_contracts
-        offset 48: resolve_guest_contract
-        offset 56: call_guest_method
-        offset 64: get_host_contract
-        offset 72: resolve_host_contract_interface
-        offset 80: list_bundles
-        offset 88: get_dependencies
-        offset 96: load_bundle
-        offset 104: reload_bundle
-        offset 112: register_host_contract
-        offset 120: register_loader
-        offset 128: get_last_error
-        offset 136: get_error_len
-    """
-
-    _fields_ = [
-        ("runtime", ctypes.c_void_p),                      # offset 0
-        ("register_contract", ctypes.c_void_p),            # offset 8
-        ("alloc", ctypes.c_void_p),                        # offset 16
-        ("free", ctypes.c_void_p),                         # offset 24
-        ("find_guest_contract", ctypes.c_void_p),         # offset 32
-        ("find_all_guest_contracts", ctypes.c_void_p),    # offset 40
-        ("resolve_guest_contract", ctypes.c_void_p),      # offset 48
-        ("call_guest_method", ctypes.c_void_p),           # offset 56
-        ("get_host_contract", ctypes.c_void_p),           # offset 64
-        ("resolve_host_contract_interface", ctypes.c_void_p), # offset 72
-        ("list_bundles", ctypes.c_void_p),                # offset 80
-        ("get_dependencies", ctypes.c_void_p),            # offset 88
-        ("load_bundle", ctypes.c_void_p),                 # offset 96
-        ("reload_bundle", ctypes.c_void_p),               # offset 104
-        ("register_host_contract", ctypes.c_void_p),      # offset 112
-        ("register_loader", ctypes.c_void_p),             # offset 120
-        ("get_last_error", ctypes.c_void_p),              # offset 128
-        ("get_error_len", ctypes.c_void_p),               # offset 136
-    ]
-
-
-# ─── Host Contract Interface Structures ─────────────────────────────────────────────
-
-
-class HostContractInterfaceHeader(ctypes.Structure):
-    """Host contract interface header — metadata for a host-provided contract."""
-
-    _fields_ = [
-        ("interface_version", ctypes.c_uint32),
-        ("contract_id", ctypes.c_uint64),
-        ("contract_major", ctypes.c_uint32),
-        ("contract_minor", ctypes.c_uint32),
-        ("function_count", ctypes.c_uint32),
-        ("dispatch_type", ctypes.c_uint32),
-    ]
-
-
-class VmHostContractDispatch(ctypes.Structure):
-    """VM dispatch for host contracts — call through a dispatch function."""
-
-    _fields_ = [
-        ("call", ctypes.c_void_p),
-        ("bridge_data", ctypes.c_void_p),
-    ]
-
-
-class HostContractDispatch(ctypes.Union):
-    """Union of host contract dispatch mechanisms."""
-
-    _fields_ = [
-        ("vm", VmHostContractDispatch),
-    ]
-
-
-class HostContractInterface(ctypes.Structure):
-    """Host contract interface — complete interface for a host-provided contract."""
-
-    _fields_ = [
-        ("header", HostContractInterfaceHeader),
-        ("dispatch", HostContractDispatch),
-    ]
-
+COMPATIBILITY_STRICT: int = Compatibility.Strict
+COMPATIBILITY_RELAXED: int = Compatibility.Relaxed
+COMPATIBILITY_YOLO: int = Compatibility.Yolo
 
 # DispatchType enum values for host contracts
-DISPATCH_TYPE_VIRTUAL_MACHINE: int = 1
+DISPATCH_TYPE_VIRTUAL_MACHINE: int = DispatchType.VirtualMachine
 _NULL_HANDLE: int = (1 << 64) - 1
 
 _BACKEND: str = "ctypes"
@@ -206,18 +92,16 @@ class CTypesBackend:
         self.lib.polyplug_runtime_destroy.restype = None
 
         # Options-based create for hot-reload config
-        self.lib.polyplug_runtime_create_with_options.argtypes = [
-            self.ctypes.POINTER(RuntimeCreateOptionsC)
-        ]
+        self.lib.polyplug_runtime_create_with_options.argtypes = [self.ctypes.c_void_p]
         self.lib.polyplug_runtime_create_with_options.restype = self.ctypes.c_void_p
 
     def create_host_interface(self) -> int:
         """Create runtime and return HostInterface pointer."""
         return self.lib.polyplug_runtime_create() or 0
 
-    def create_host_interface_with_options(self, options: RuntimeCreateOptionsC) -> int:
+    def create_host_interface_with_options(self, options_ptr: int) -> int:
         """Create runtime with options and return HostInterface pointer."""
-        return self.lib.polyplug_runtime_create_with_options(self.ctypes.byref(options)) or 0
+        return self.lib.polyplug_runtime_create_with_options(options_ptr) or 0
 
     def destroy_host_interface(self, host: int) -> None:
         """Destroy HostInterface and runtime."""
@@ -238,21 +122,6 @@ class CFFIBackend:
         void* polyplug_runtime_create(void);
         void polyplug_runtime_destroy(void* host);
         void* polyplug_runtime_create_with_options(const void* options);
-
-        typedef struct {
-            uint8_t hot_reload_enabled;
-            uint8_t _pad1[3];
-            uint32_t hot_reload_max_retries;
-            uint64_t hot_reload_retry_interval_ms;
-            uint8_t hot_reload_abort_on_max_retries;
-            uint8_t _pad2[3];
-            uint32_t compatibility;
-        } RuntimeConfig;
-
-        typedef struct {
-            const RuntimeConfig* config;
-            void (*on_reload)(uint32_t, uint64_t, const uint8_t*, size_t, uint32_t, const uint8_t*, size_t);
-        } RuntimeCreateOptions;
     """
 
     def __init__(self, lib_path: str) -> None:
@@ -265,23 +134,11 @@ class CFFIBackend:
         """Create runtime and return HostInterface pointer."""
         return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create())
 
-    def create_host_interface_with_options(self, options: RuntimeCreateOptionsC) -> int:
+    def create_host_interface_with_options(self, options_ptr: int) -> int:
         """Create runtime with options and return HostInterface pointer."""
-        # Convert ctypes struct to cffi
-        opts_ptr = self.ffi.new("RuntimeCreateOptions*")
-        if options.config:
-            config_cffi = self.ffi.new("RuntimeConfig*")
-            config_ptr = self.ctypes.cast(options.config, self.ctypes.POINTER(RuntimeConfig))
-            config = config_ptr.contents
-            config_cffi.hot_reload_enabled = config.hot_reload_enabled
-            config_cffi.hot_reload_max_retries = config.hot_reload_max_retries
-            config_cffi.hot_reload_retry_interval_ms = config.hot_reload_retry_interval_ms
-            config_cffi.hot_reload_abort_on_max_retries = config.hot_reload_abort_on_max_retries
-            config_cffi.compatibility = config.compatibility
-            opts_ptr.config = config_cffi
-        if options.on_reload:
-            opts_ptr.on_reload = self.ffi.cast("void*", options.on_reload)
-        return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create_with_options(opts_ptr))
+        return self.ffi.cast("uintptr_t", self.lib.polyplug_runtime_create_with_options(
+            self.ffi.cast("void*", options_ptr)
+        ))
 
     def destroy_host_interface(self, host: int) -> None:
         """Destroy HostInterface and runtime."""
@@ -398,18 +255,6 @@ _FREE_FN = ctypes.CFUNCTYPE(
 )
 
 
-class ReloadPhaseFfi(ctypes.Structure):
-    """FFI-safe struct for ReloadPhase."""
-
-    _fields_ = [
-        ("phase_type", ctypes.c_uint32),
-        ("bundle_id", ctypes.c_uint64),
-        ("bundle_name", StringView),
-        ("retry_count", ctypes.c_uint32),
-        ("reason", StringView),
-    ]
-
-
 class Runtime:
     """polyplug runtime for loading and managing plugins.
 
@@ -449,26 +294,31 @@ class Runtime:
         self._free_fn = _FREE_FN(self._host_struct.free)
 
     def _create_runtime_with_options(self) -> int:
-        """Create runtime using polyplug_runtime_create_with_options."""
-        options = RuntimeCreateOptionsC()
-        config_c = None
+        """Create runtime using polyplug_runtime_create_with_options.
+
+        The new RuntimeConfig (16 bytes, per D-22) has:
+        - compatibility (u32)
+        - hot_reload_enabled (bool/u8)
+        - on_reload (fn pointer or null)
+        """
+        # Build RuntimeConfig directly (16 bytes, auto-generated from abi.py)
+        config = RuntimeConfig()
+        config.hot_reload_enabled = False
+        config.compatibility = COMPATIBILITY_STRICT
 
         if self._config is not None:
-            config_c = RuntimeConfig(
-                hot_reload_enabled=1 if self._config.hot_reload_enabled else 0,
-                hot_reload_max_retries=self._config.hot_reload_max_retries,
-                hot_reload_retry_interval_ms=self._config.hot_reload_retry_interval_ms,
-                hot_reload_abort_on_max_retries=1 if self._config.hot_reload_abort_on_max_retries else 0,
-                compatibility=COMPATIBILITY_STRICT,
-            )
-            options.config = ctypes.pointer(config_c)
+            config.hot_reload_enabled = bool(self._config.hot_reload_enabled)
+            if hasattr(self._config, "compatibility"):
+                config.compatibility = self._config.compatibility
 
         if self._on_reload_cb is not None:
             if not hasattr(Runtime, "_c_callback"):
                 Runtime._c_callback = self._make_c_callback()
-            options.on_reload = ctypes.cast(Runtime._c_callback, ctypes.c_void_p)
+            config.on_reload = Runtime._c_callback
+        else:
+            config.on_reload = ctypes.cast(None, type(config.on_reload))
 
-        return self._backend.create_host_interface_with_options(options)
+        return self._backend.create_host_interface_with_options(ctypes.addressof(config))
 
     def __del__(self) -> None:
         host_ptr: int = getattr(self, "_host", 0)
@@ -658,16 +508,19 @@ class Runtime:
             Runtime._host_contract_callbacks: dict[int, ctypes.CFUNCTYPE] = {}
         Runtime._host_contract_callbacks[contract_id] = dispatch_callback
 
-        # Create HostContractInterface
+        # Create HostContractInterface (flat struct per D-25)
         interface = HostContractInterface()
-        interface.header.interface_version = 1
-        interface.header.contract_id = contract_id
-        interface.header.contract_major = contract_major
-        interface.header.contract_minor = contract_minor
-        interface.header.function_count = function_count
-        interface.header.dispatch_type = DISPATCH_TYPE_VIRTUAL_MACHINE
-        interface.dispatch.vm.call = ctypes.cast(dispatch_callback, ctypes.c_void_p)
-        interface.dispatch.vm.bridge_data = 0
+        interface.contract_id = contract_id
+        interface.contract_version = Version(
+            major=contract_major, minor=contract_minor, patch=0
+        )
+        interface.singleton = True
+        interface.dispatch_type = DISPATCH_TYPE_VIRTUAL_MACHINE
+        interface.runtime = 0  # Set by runtime during registration
+        interface.create_instance = ctypes.cast(None, type(interface.create_instance))
+        interface.destroy_instance = ctypes.cast(None, type(interface.destroy_instance))
+        interface.dispatch.vm.call = ctypes.cast(dispatch_callback, type(interface.dispatch.vm.call))
+        interface.dispatch.vm.loader_data = VmDispatch().loader_data
 
         # Store interface
         if not hasattr(Runtime, "_host_contract_interfaces"):
