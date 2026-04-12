@@ -19,7 +19,7 @@ The core runtime is loader-agnostic — the `polyplug` crate knows about the `Bu
 - [x] **Phase 6: Cleanup** - Naming consistency and documentation updates
 - [x] **Phase 7: Typed Handles** - Replace opaque c_void pointers with typed handles
 - [x] **Phase 8: Retroactive Verification** - VERIFICATION.md files for orphaned requirements
-- [x] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable→interface test mismatches
+- [x] **Phase 9: Codegen Test Cleanup** - Fix smoke.rs vtable->interface test mismatches
 - [x] **Phase 10: SDK Cleanup Completion** - Remaining SDK naming and cleanup items (completed 2026-04-06)
 
 ## Phase Details
@@ -188,7 +188,7 @@ Plans:
 - [x] 08-04-PLAN.md — Create Phase 07 VERIFICATION.md for TH-01 through TH-08
 
 ### Phase 9: Codegen Test Cleanup
-**Goal:** Fix smoke.rs test expectations for vtable→interface naming transition
+**Goal:** Fix smoke.rs test expectations for vtable->interface naming transition
 **Depends on:** Phase 8
 **Requirements:** CLN-01, CLN-04, SDK-05
 **Gap Closure:** Closes test/integration/flow gaps from audit
@@ -218,7 +218,7 @@ Plans:
 
 Plans:
 - [x] 10-01-PLAN.md — Create VERIFICATION.md for SDK-02, SDK-03, SDK-04, SDK-06, CLN-02 (already satisfied)
-- [x] 10-02-PLAN.md — Fix HostInterface → RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
+- [x] 10-02-PLAN.md — Fix HostInterface -> RuntimeAbi naming in C++ guest.hpp and C# AbiSizeTests.cs
 
 ## Progress
 
@@ -242,6 +242,7 @@ Plans:
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 2/2 | Complete    | 2026-04-11 |
 | 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
+| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 0/5 | Planned | - |
 
 ## Dependencies
 
@@ -298,6 +299,9 @@ Phase 17 (RuntimeStore Refactor)
         |
         v
 Phase 18 (Consolidate FFI to HostInterface)
+        |
+        v
+Phase 19 (Fix ABI Build Script + Auto-Generate SDK Structs)
 ```
 
 ### Phase 12: SDK Instance Model Completion
@@ -452,6 +456,35 @@ Plans:
 - [x] 18-04-PLAN.md — Lua + JS + C++ SDK updates for HostInterface API [Wave 3]
 - [x] 18-05-PLAN.md — Code generators + test updates + verification [Wave 4]
 
+### Phase 19: Fix ABI build script extractor.rs to auto-generate SDK structs then delete hand-written ABI structs from all 5 SDKs
+
+**Goal:** Rewrite polyplug_abi build script to walk module tree, auto-discover all #[repr(C)] types, generate typed SDK bindings for 5 languages, and delete all hand-written FFI struct definitions from SDK files.
+**Requirements:** D-01 through D-35 (35 implementation decisions from context session)
+**Depends on:** Phase 18
+**Success Criteria** (what must be TRUE):
+1. Build script walks the entire module tree recursively from lib.rs with zero whitelists
+2. All 25+ #[repr(C)] structs, 7+ #[repr(u32)] enums auto-discovered
+3. Generated abi.* files have typed function pointer signatures (not opaque void*)
+4. RuntimeConfig=16B, GuestContractHandle=4B, NativeDispatch=16B asserted in all SDKs
+5. Zero hand-written FFI struct definitions in SDK host files
+6. Zero PluginRegistrar references in codebase
+7. Helper methods preserved by ast-grep across regenerations
+8. All tests pass
+**Plans:** 5 plans
+
+Wave Structure:
+- Wave 1: Build script extractor rewrite (Plan 01)
+- Wave 2: Codegen generator enhancements — typed fn ptrs, layout assertions (Plan 02)
+- Wave 3: ast-grep integration for method body preservation (Plan 03)
+- Wave 4: Delete hand-written SDK structs (Plan 04) + Remove PluginRegistrar (Plan 05) - parallel
+
+Plans:
+- [ ] 19-01-PLAN.md — Rewrite extractor.rs: recursive module walk, auto-discovery, remove whitelists [Wave 1]
+- [ ] 19-02-PLAN.md — Enhance codegen generators: typed fn ptrs, size assertions, layout tests [Wave 2]
+- [ ] 19-03-PLAN.md — ast-grep method body preservation + auto-generated file headers [Wave 3]
+- [ ] 19-04-PLAN.md — Delete hand-written FFI structs from all 5 SDK host files [Wave 4]
+- [ ] 19-05-PLAN.md — Remove PluginRegistrar from guest SDKs and documentation [Wave 4]
+
 ---
 *Roadmap created: 2026-04-03*
 *Phase 1 plans added: 2026-04-03*
@@ -475,3 +508,4 @@ Plans:
 *Phase 16 added for milestone gap closure: 2026-04-09*
 *Phase 17 plans added: 2026-04-10*
 *Phase 18 plans added: 2026-04-10*
+*Phase 19 plans added: 2026-04-12*
