@@ -12,6 +12,7 @@ struct NativeDispatch {
     ///  Pointer to a static array of function pointers, indexed by function_id.
     void* const* functions;
 };
+static_assert(sizeof(NativeDispatch) == 16, "NativeDispatch size mismatch");
 
 ///  VM dispatch data — call through a dispatch function.
 ///
@@ -32,6 +33,7 @@ struct VmDispatch {
     ///  Opaque to the host; interpreted by the dispatch function.
     VmLoaderData loader_data;
 };
+static_assert(sizeof(VmDispatch) == 16, "VmDispatch size mismatch");
 
 ///  Opaque handle to VM loader-specific data.
 ///
@@ -44,6 +46,7 @@ struct VmLoaderData {
     ///  Opaque pointer to VM-specific loader data.
     void* data;
 };
+static_assert(sizeof(VmLoaderData) == 8, "VmLoaderData size mismatch");
 
 ///  Opaque handle to a guest contract instance.
 ///
@@ -88,6 +91,7 @@ struct GuestContractInstance {
     ///  The contract_id is set by create_instance and used for direct dispatch.
     GuestContractId contract_id;
 };
+static_assert(sizeof(GuestContractInstance) == 16, "GuestContractInstance size mismatch");
 
 ///  Guest Contract Interface — one per contract implemented by a guest (plugin).
 ///
@@ -163,6 +167,7 @@ struct GuestContractInterface {
     ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
     DispatchMechanisms dispatch;
 };
+static_assert(sizeof(GuestContractInterface) == 56, "GuestContractInterface size mismatch");
 
 ///  Host Interface — function table passed to guests during initialization.
 ///
@@ -430,6 +435,7 @@ struct HostInterface {
     ///  Length of last error message (0 if no error).
     HostInterface_get_error_len_fn get_error_len;
 };
+static_assert(sizeof(HostInterface) == 144, "HostInterface size mismatch");
 
 ///  Runtime Interface — function table returned to host from polyplug_runtime_create().
 ///
@@ -612,6 +618,7 @@ struct RuntimeInterface {
     ///  All instances must be destroyed before calling this.
     RuntimeInterface_destroy_fn destroy;
 };
+static_assert(sizeof(RuntimeInterface) == 96, "RuntimeInterface size mismatch");
 
 ///  Opaque handle to a host contract instance.
 ///
@@ -622,6 +629,7 @@ struct HostContractInstance {
     ///  The actual data is owned by the host.
     void* data;
 };
+static_assert(sizeof(HostContractInstance) == 8, "HostContractInstance size mismatch");
 
 ///  Host Contract Interface — for host-provided services.
 ///
@@ -708,6 +716,7 @@ struct HostContractInterface {
     ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
     DispatchMechanisms dispatch;
 };
+static_assert(sizeof(HostContractInterface) == 72, "HostContractInterface size mismatch");
 
 ///  Context passed to every guest `polyplug_init()` function.
 ///
@@ -720,6 +729,7 @@ struct BundleInitContext {
     ///  Absolute canonical path to the directory containing the loaded bundle.
     StringView bundle_path;
 };
+static_assert(sizeof(BundleInitContext) == 24, "BundleInitContext size mismatch");
 
 ///  Metadata about a plugin within a bundle.
 ///
@@ -735,6 +745,7 @@ struct PluginDescriptor {
     ///  Plugin version
     Version version;
 };
+static_assert(sizeof(PluginDescriptor) == 48, "PluginDescriptor size mismatch");
 
 ///  Opaque handle to a registered guest contract.
 ///
@@ -755,6 +766,7 @@ struct GuestContractHandle {
     ///  Slot in the registry array.
     uint32_t index;
 };
+static_assert(sizeof(GuestContractHandle) == 4, "GuestContractHandle size mismatch");
 
 ///  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
 ///
@@ -771,6 +783,7 @@ struct RuntimeConfig {
     ///  Optional hot-reload callback, or null for no callback.
     RuntimeConfig_on_reload_fn on_reload;
 };
+static_assert(sizeof(RuntimeConfig) == 16, "RuntimeConfig size mismatch");
 
 ///  FFI-safe reload phase for hot-reload callbacks.
 ///
@@ -790,6 +803,7 @@ struct ReloadPhase {
     ///  Failure reason (only for Failed phase).
     StringView reason;
 };
+static_assert(sizeof(ReloadPhase) == 48, "ReloadPhase size mismatch");
 
 ///  ABI error — returned by value from all ABI calls.
 ///
@@ -802,6 +816,7 @@ struct AbiError {
     ///  Empty/NULL if success. UTF-8 message if non-zero code.
     StringView message;
 };
+static_assert(sizeof(AbiError) == 24, "AbiError size mismatch");
 
 ///  FFI-safe array with caller-frees ownership model.
 ///
@@ -852,6 +867,7 @@ struct Buffer {
     ///  Bytes allocated.
     size_t cap;
 };
+static_assert(sizeof(Buffer) == 24, "Buffer size mismatch");
 
 ///  Dependency information returned by get_dependencies introspection API.
 ///
@@ -890,6 +906,7 @@ struct DependencyInfo {
     ///  - `bundle_id == 0`: Dependency is on any bundle providing the contract
     BundleId bundle_id;
 };
+static_assert(sizeof(DependencyInfo) == 24, "DependencyInfo size mismatch");
 
 ///  Non-owning UTF-8 string view.
 ///
@@ -901,6 +918,7 @@ struct StringView {
     ///  Byte count.
     size_t len;
 };
+static_assert(sizeof(StringView) == 16, "StringView size mismatch");
 
 ///  A three-component semantic version (major.minor.patch).
 struct Version {
@@ -911,6 +929,7 @@ struct Version {
     ///  Patch version.
     uint32_t patch;
 };
+static_assert(sizeof(Version) == 12, "Version size mismatch");
 
 enum class ContractType : uint32_t {
     Host = 0,

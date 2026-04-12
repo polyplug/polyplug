@@ -17,6 +17,9 @@ class NativeDispatch(ctypes.Structure):
         ("functions", ctypes.c_void_p),
     ]
 
+# Expected size: 16 bytes
+assert ctypes.sizeof(NativeDispatch) == 16, f"NativeDispatch expected 16 bytes, got {ctypes.sizeof(NativeDispatch)}"
+
 
 _vm_dispatch_call_t = ctypes.CFUNCTYPE(AbiError, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 class VmDispatch(ctypes.Structure):
@@ -29,6 +32,9 @@ class VmDispatch(ctypes.Structure):
         ("call", _vm_dispatch_call_t),
         ("loader_data", VmLoaderData),
     ]
+
+# Expected size: 16 bytes
+assert ctypes.sizeof(VmDispatch) == 16, f"VmDispatch expected 16 bytes, got {ctypes.sizeof(VmDispatch)}"
 
 
 class VmLoaderData(ctypes.Structure):
@@ -43,6 +49,9 @@ class VmLoaderData(ctypes.Structure):
     _fields_ = [
         ("data", ctypes.c_void_p),
     ]
+
+# Expected size: 8 bytes
+assert ctypes.sizeof(VmLoaderData) == 8, f"VmLoaderData expected 8 bytes, got {ctypes.sizeof(VmLoaderData)}"
 
 
 class GuestContractInstance(ctypes.Structure):
@@ -78,6 +87,9 @@ class GuestContractInstance(ctypes.Structure):
         ("data", ctypes.c_void_p),
         ("contract_id", GuestContractId),
     ]
+
+# Expected size: 16 bytes
+assert ctypes.sizeof(GuestContractInstance) == 16, f"GuestContractInstance expected 16 bytes, got {ctypes.sizeof(GuestContractInstance)}"
 
 
 _guest_contract_interface_create_instance_t = ctypes.CFUNCTYPE(GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
@@ -115,6 +127,9 @@ class GuestContractInterface(ctypes.Structure):
         ("destroy_instance", _guest_contract_interface_destroy_instance_t),
         ("dispatch", DispatchMechanisms),
     ]
+
+# Expected size: 56 bytes
+assert ctypes.sizeof(GuestContractInterface) == 56, f"GuestContractInterface expected 56 bytes, got {ctypes.sizeof(GuestContractInterface)}"
 
 
 _host_interface_register_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
@@ -185,6 +200,9 @@ class HostInterface(ctypes.Structure):
         ("get_error_len", _host_interface_get_error_len_t),
     ]
 
+# Expected size: 144 bytes
+assert ctypes.sizeof(HostInterface) == 144, f"HostInterface expected 144 bytes, got {ctypes.sizeof(HostInterface)}"
+
 
 _runtime_interface_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
 _runtime_interface_reload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, BundleId)
@@ -242,6 +260,9 @@ class RuntimeInterface(ctypes.Structure):
         ("destroy", _runtime_interface_destroy_t),
     ]
 
+# Expected size: 96 bytes
+assert ctypes.sizeof(RuntimeInterface) == 96, f"RuntimeInterface expected 96 bytes, got {ctypes.sizeof(RuntimeInterface)}"
+
 
 class HostContractInstance(ctypes.Structure):
     """ Opaque handle to a host contract instance.
@@ -252,6 +273,9 @@ class HostContractInstance(ctypes.Structure):
     _fields_ = [
         ("data", ctypes.c_void_p),
     ]
+
+# Expected size: 8 bytes
+assert ctypes.sizeof(HostContractInstance) == 8, f"HostContractInstance expected 8 bytes, got {ctypes.sizeof(HostContractInstance)}"
 
 
 _host_contract_interface_create_instance_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_void_p)
@@ -295,6 +319,9 @@ class HostContractInterface(ctypes.Structure):
         ("dispatch", DispatchMechanisms),
     ]
 
+# Expected size: 72 bytes
+assert ctypes.sizeof(HostContractInterface) == 72, f"HostContractInterface expected 72 bytes, got {ctypes.sizeof(HostContractInterface)}"
+
 
 class BundleInitContext(ctypes.Structure):
     """ Context passed to every guest `polyplug_init()` function.
@@ -307,6 +334,9 @@ class BundleInitContext(ctypes.Structure):
         ("bundle_id", ctypes.c_uint64),
         ("bundle_path", StringView),
     ]
+
+# Expected size: 24 bytes
+assert ctypes.sizeof(BundleInitContext) == 24, f"BundleInitContext expected 24 bytes, got {ctypes.sizeof(BundleInitContext)}"
 
 
 class PluginDescriptor(ctypes.Structure):
@@ -322,6 +352,9 @@ class PluginDescriptor(ctypes.Structure):
         ("contract_name", StringView),
         ("version", Version),
     ]
+
+# Expected size: 48 bytes
+assert ctypes.sizeof(PluginDescriptor) == 48, f"PluginDescriptor expected 48 bytes, got {ctypes.sizeof(PluginDescriptor)}"
 
 
 class GuestContractHandle(ctypes.Structure):
@@ -345,6 +378,9 @@ class GuestContractHandle(ctypes.Structure):
         ("index", ctypes.c_uint32),
     ]
 
+# Expected size: 4 bytes
+assert ctypes.sizeof(GuestContractHandle) == 4, f"GuestContractHandle expected 4 bytes, got {ctypes.sizeof(GuestContractHandle)}"
+
 
 _runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ReloadPhase)
 # Nullable function pointer (Option<fn>). Can be set to None.
@@ -360,6 +396,9 @@ class RuntimeConfig(ctypes.Structure):
         ("hot_reload_enabled", ctypes.c_bool),
         ("on_reload", _runtime_config_on_reload_t),
     ]
+
+# Expected size: 16 bytes
+assert ctypes.sizeof(RuntimeConfig) == 16, f"RuntimeConfig expected 16 bytes, got {ctypes.sizeof(RuntimeConfig)}"
 
 
 class ReloadPhase(ctypes.Structure):
@@ -379,6 +418,9 @@ class ReloadPhase(ctypes.Structure):
         ("reason", StringView),
     ]
 
+# Expected size: 48 bytes
+assert ctypes.sizeof(ReloadPhase) == 48, f"ReloadPhase expected 48 bytes, got {ctypes.sizeof(ReloadPhase)}"
+
 
 class AbiError(ctypes.Structure):
     """ ABI error — returned by value from all ABI calls.
@@ -391,6 +433,9 @@ class AbiError(ctypes.Structure):
         ("code", AbiErrorCode),
         ("message", StringView),
     ]
+
+# Expected size: 24 bytes
+assert ctypes.sizeof(AbiError) == 24, f"AbiError expected 24 bytes, got {ctypes.sizeof(AbiError)}"
 
 
 class Array(ctypes.Structure):
@@ -434,6 +479,9 @@ class Buffer(ctypes.Structure):
         ("cap", ctypes.c_size_t),
     ]
 
+# Expected size: 24 bytes
+assert ctypes.sizeof(Buffer) == 24, f"Buffer expected 24 bytes, got {ctypes.sizeof(Buffer)}"
+
 
 class DependencyInfo(ctypes.Structure):
     """ Dependency information returned by get_dependencies introspection API.
@@ -462,6 +510,9 @@ class DependencyInfo(ctypes.Structure):
         ("bundle_id", BundleId),
     ]
 
+# Expected size: 24 bytes
+assert ctypes.sizeof(DependencyInfo) == 24, f"DependencyInfo expected 24 bytes, got {ctypes.sizeof(DependencyInfo)}"
+
 
 class StringView(ctypes.Structure):
     """ Non-owning UTF-8 string view.
@@ -474,6 +525,9 @@ class StringView(ctypes.Structure):
         ("len", ctypes.c_size_t),
     ]
 
+# Expected size: 16 bytes
+assert ctypes.sizeof(StringView) == 16, f"StringView expected 16 bytes, got {ctypes.sizeof(StringView)}"
+
 
 class Version(ctypes.Structure):
     """ A three-component semantic version (major.minor.patch)."""
@@ -482,6 +536,9 @@ class Version(ctypes.Structure):
         ("minor", ctypes.c_uint32),
         ("patch", ctypes.c_uint32),
     ]
+
+# Expected size: 12 bytes
+assert ctypes.sizeof(Version) == 12, f"Version expected 12 bytes, got {ctypes.sizeof(Version)}"
 
 
 class ContractType(enum.IntEnum):

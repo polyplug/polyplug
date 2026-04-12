@@ -6,7 +6,7 @@ namespace Polyplug.Abi {
 ///
 ///  Used when `dispatch_type == DispatchType::Native`.
 ///  The `functions` array contains `function_count` function pointers.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 16)]
 public struct NativeDispatch
 {
     ///  Number of valid entries in the dispatch array.
@@ -15,6 +15,9 @@ public struct NativeDispatch
     public IntPtr Functions;
 }
 
+/// Expected size: 16 bytes
+Debug.Assert(Marshal.SizeOf<NativeDispatch>() == 16);
+
 ///  VM dispatch data — call through a dispatch function.
 ///
 ///  Used when `dispatch_type == DispatchType::VirtualMachine`.
@@ -22,7 +25,7 @@ public struct NativeDispatch
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate AbiError VmDispatchCallDelegate(VmLoaderData arg0, GuestContractInstance arg1, uint arg2, IntPtr arg3, IntPtr arg4);
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 16)]
 public struct VmDispatch
 {
     ///  Dispatch function called for every VM function invocation.
@@ -39,6 +42,9 @@ public struct VmDispatch
     public VmLoaderData LoaderData;
 }
 
+/// Expected size: 16 bytes
+Debug.Assert(Marshal.SizeOf<VmDispatch>() == 16);
+
 ///  Opaque handle to VM loader-specific data.
 ///
 ///  Wraps VM-specific state managed by each loader (Python, Lua, JS).
@@ -46,12 +52,15 @@ public struct VmDispatch
 ///
 ///  # OWNERSHIP
 ///  Owned by the loader. Lives for the lifetime of the loaded plugin.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 8)]
 public struct VmLoaderData
 {
     ///  Opaque pointer to VM-specific loader data.
     public IntPtr Data;
 }
+
+/// Expected size: 8 bytes
+Debug.Assert(Marshal.SizeOf<VmLoaderData>() == 8);
 
 ///  Opaque handle to a guest contract instance.
 ///
@@ -80,7 +89,7 @@ public struct VmLoaderData
 ///  # Dispatch
 ///  The `contract_id` field enables `call_guest_method` to dispatch without
 ///  looking up the contract in a map. This is zero-overhead dispatch.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 16)]
 public struct GuestContractInstance
 {
     ///  Opaque instance data pointer.
@@ -98,6 +107,9 @@ public struct GuestContractInstance
     ///  The contract_id is set by create_instance and used for direct dispatch.
     public GuestContractId ContractId;
 }
+
+/// Expected size: 16 bytes
+Debug.Assert(Marshal.SizeOf<GuestContractInstance>() == 16);
 
 ///  Guest Contract Interface — one per contract implemented by a guest (plugin).
 ///
@@ -128,7 +140,7 @@ public delegate GuestContractInstance GuestContractInterfaceCreateInstanceDelega
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate void GuestContractInterfaceDestroyInstanceDelegate(IntPtr arg0, GuestContractInstance arg1);
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 56)]
 public struct GuestContractInterface
 {
     ///  FNV-1a hash of "guest_contract:name@major_version".
@@ -179,6 +191,9 @@ public struct GuestContractInterface
     ///  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
     public DispatchMechanisms Dispatch;
 }
+
+/// Expected size: 56 bytes
+Debug.Assert(Marshal.SizeOf<GuestContractInterface>() == 56);
 
 ///  Host Interface — function table passed to guests during initialization.
 ///
@@ -259,7 +274,7 @@ public delegate nuint HostInterfaceGetLastErrorDelegate(IntPtr arg0, IntPtr arg1
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate nuint HostInterfaceGetErrorLenDelegate(IntPtr arg0);
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 144)]
 public struct HostInterface
 {
     ///  Opaque pointer to Runtime.
@@ -483,6 +498,9 @@ public struct HostInterface
     public HostInterfaceGetErrorLenDelegate GetErrorLen;
 }
 
+/// Expected size: 144 bytes
+Debug.Assert(Marshal.SizeOf<HostInterface>() == 144);
+
 ///  Runtime Interface — function table returned to host from polyplug_runtime_create().
 ///
 ///  Contains an opaque runtime pointer and function pointers for host calls.
@@ -544,7 +562,7 @@ public delegate IntPtr RuntimeInterfaceGetDependenciesDelegate(IntPtr arg0);
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate void RuntimeInterfaceDestroyDelegate(IntPtr arg0);
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 96)]
 public struct RuntimeInterface
 {
     ///  Opaque pointer to Runtime.
@@ -689,17 +707,23 @@ public struct RuntimeInterface
     public RuntimeInterfaceDestroyDelegate Destroy;
 }
 
+/// Expected size: 96 bytes
+Debug.Assert(Marshal.SizeOf<RuntimeInterface>() == 96);
+
 ///  Opaque handle to a host contract instance.
 ///
 ///  Created by `HostContractInterface::create_instance`, destroyed by `destroy_instance`.
 ///  For singleton host contracts, the same instance is returned for all callers.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 8)]
 public struct HostContractInstance
 {
     ///  Opaque instance data pointer.
     ///  The actual data is owned by the host.
     public IntPtr Data;
 }
+
+/// Expected size: 8 bytes
+Debug.Assert(Marshal.SizeOf<HostContractInstance>() == 8);
 
 ///  Host Contract Interface — for host-provided services.
 ///
@@ -733,7 +757,7 @@ public delegate HostContractInstance HostContractInterfaceCreateInstanceDelegate
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate void HostContractInterfaceDestroyInstanceDelegate(IntPtr arg0, HostContractInstance arg1);
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 72)]
 public struct HostContractInterface
 {
     ///  FNV-1a hash of "host_contract:name@major_version".
@@ -793,12 +817,15 @@ public struct HostContractInterface
     public DispatchMechanisms Dispatch;
 }
 
+/// Expected size: 72 bytes
+Debug.Assert(Marshal.SizeOf<HostContractInterface>() == 72);
+
 ///  Context passed to every guest `polyplug_init()` function.
 ///
 ///  # OWNERSHIP
 ///  The `bundle_path` pointer is runtime-owned and valid for the lifetime of the `PluginRuntime`.
 ///  **Plugin must not store the raw pointer** — copy the string value if persistence is needed.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct BundleInitContext
 {
     ///  Bundle ID for dependency enforcement during init.
@@ -807,13 +834,16 @@ public struct BundleInitContext
     public StringView BundlePath;
 }
 
+/// Expected size: 24 bytes
+Debug.Assert(Marshal.SizeOf<BundleInitContext>() == 24);
+
 ///  Metadata about a plugin within a bundle.
 ///
 ///  # OWNERSHIP
 ///  value type passed by pointer during init. The `name` and
 ///  `contract_name` StringViews are borrowed from the plugin's static memory.
 ///  The receiver must not free or outlive the plugin's library.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 48)]
 public struct PluginDescriptor
 {
     ///  Human-readable plugin name.
@@ -823,6 +853,9 @@ public struct PluginDescriptor
     ///  Plugin version
     public Version Version;
 }
+
+/// Expected size: 48 bytes
+Debug.Assert(Marshal.SizeOf<PluginDescriptor>() == 48);
 
 ///  Opaque handle to a registered guest contract.
 ///
@@ -839,12 +872,15 @@ public struct PluginDescriptor
 ///  # Safety
 ///  Handles become stale after unload. Call `resolve_contract` to validate.
 ///  Returns null pointer if the handle is invalid.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 4)]
 public struct GuestContractHandle
 {
     ///  Slot in the registry array.
     public uint Index;
 }
+
+/// Expected size: 4 bytes
+Debug.Assert(Marshal.SizeOf<GuestContractHandle>() == 4);
 
 ///  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
 ///
@@ -855,7 +891,7 @@ public struct GuestContractHandle
 public delegate void RuntimeConfigOnReloadDelegate(ReloadPhase arg0);
 
 // Nullable delegate (reference type, can be null).
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 16)]
 public struct RuntimeConfig
 {
     ///  Compatibility mode for version resolution.
@@ -866,6 +902,9 @@ public struct RuntimeConfig
     public RuntimeConfigOnReloadDelegate OnReload;
 }
 
+/// Expected size: 16 bytes
+Debug.Assert(Marshal.SizeOf<RuntimeConfig>() == 16);
+
 ///  FFI-safe reload phase for hot-reload callbacks.
 ///
 ///  Tagged union style struct — `phase_type` indicates which variant is active.
@@ -874,7 +913,7 @@ public struct RuntimeConfig
 ///  # Lifetime
 ///  `StringView` fields are borrowed from the caller's strings.
 ///  The callback must not store these views beyond the callback scope.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 48)]
 public struct ReloadPhase
 {
     ///  Type of reload phase.
@@ -887,12 +926,15 @@ public struct ReloadPhase
     public StringView Reason;
 }
 
+/// Expected size: 48 bytes
+Debug.Assert(Marshal.SizeOf<ReloadPhase>() == 48);
+
 ///  ABI error — returned by value from all ABI calls.
 ///
 ///  OWNERSHIP: `code` is a value type. `message.ptr` is allocated by the callee
 ///  via `host_alloc`. Caller frees with `polyplug_host_free(message.ptr, message.len, 1)`
 ///  after reading. If `code == AbiErrorCode::Ok`, `message.ptr` is NULL — no free needed.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct AbiError
 {
     ///  0 = success, non-zero = error.
@@ -900,6 +942,9 @@ public struct AbiError
     ///  Empty/NULL if success. UTF-8 message if non-zero code.
     public StringView Message;
 }
+
+/// Expected size: 24 bytes
+Debug.Assert(Marshal.SizeOf<AbiError>() == 24);
 
 ///  FFI-safe array with caller-frees ownership model.
 ///
@@ -945,7 +990,7 @@ public struct Array
 ///
 ///  OWNERSHIP: `ptr` is always allocated via `polyplug_host_alloc`.
 ///  Owner calls `polyplug_host_free(ptr, cap, align)` when done.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct Buffer
 {
     public IntPtr Ptr;
@@ -954,6 +999,9 @@ public struct Buffer
     ///  Bytes allocated.
     public nuint Cap;
 }
+
+/// Expected size: 24 bytes
+Debug.Assert(Marshal.SizeOf<Buffer>() == 24);
 
 ///  Dependency information returned by get_dependencies introspection API.
 ///
@@ -974,7 +1022,7 @@ public struct Buffer
 ///  - `contract_id`: The contract being depended upon
 ///  - `min_version`: Minimum version required
 ///  - `bundle_id`: Specific bundle if ByBundle, 0 if ByContract
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 24)]
 public struct DependencyInfo
 {
     ///  Contract ID of the dependency.
@@ -995,11 +1043,14 @@ public struct DependencyInfo
     public BundleId BundleId;
 }
 
+/// Expected size: 24 bytes
+Debug.Assert(Marshal.SizeOf<DependencyInfo>() == 24);
+
 ///  Non-owning UTF-8 string view.
 ///
 ///  OWNERSHIP: borrowed reference. `ptr` must remain valid for the duration
 ///  of the call. Never freed by the receiver.
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 16)]
 public struct StringView
 {
     ///  UTF-8 bytes, NOT null-terminated.
@@ -1008,8 +1059,11 @@ public struct StringView
     public nuint Len;
 }
 
+/// Expected size: 16 bytes
+Debug.Assert(Marshal.SizeOf<StringView>() == 16);
+
 ///  A three-component semantic version (major.minor.patch).
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 12)]
 public struct Version
 {
     ///  Major version.
@@ -1019,6 +1073,9 @@ public struct Version
     ///  Patch version.
     public uint Patch;
 }
+
+/// Expected size: 12 bytes
+Debug.Assert(Marshal.SizeOf<Version>() == 12);
 
 public enum ContractType : uint
 {

@@ -277,7 +277,15 @@ impl CodeGenerator for CSharpGenerator {
         // Emit delegate definitions before the struct.
         output.push_str(&delegates);
 
-        output.push_str("[StructLayout(LayoutKind.Sequential)]\n");
+        // Use Size attribute if size hint is known.
+        if let Some(size) = item.size_hint {
+            output.push_str(&format!(
+                "[StructLayout(LayoutKind.Sequential, Size = {})]\n",
+                size
+            ));
+        } else {
+            output.push_str("[StructLayout(LayoutKind.Sequential)]\n");
+        }
         output.push_str(&format!("public struct {}\n", item.name));
         output.push_str("{\n");
 
@@ -310,7 +318,21 @@ impl CodeGenerator for CSharpGenerator {
             output.push_str(&format!("    public {} {};\n", csharp_type, field_name));
         }
 
-        output.push_str("}\n\n");
+        output.push_str("}\n");
+
+        // Emit Debug.Assert for size validation if known.
+        if let Some(size) = item.size_hint {
+            output.push_str(&format!(
+                "\n/// Expected size: {} bytes\n",
+                size
+            ));
+            output.push_str(&format!(
+                "Debug.Assert(Marshal.SizeOf<{}>() == {});\n",
+                item.name, size
+            ));
+        }
+
+        output.push_str("\n");
         output
     }
 

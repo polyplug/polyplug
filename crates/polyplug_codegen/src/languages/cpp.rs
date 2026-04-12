@@ -293,7 +293,18 @@ impl CodeGenerator for CppGenerator {
             output.push_str(&format!("    {} {};\n", cpp_type, field.name));
         }
 
-        output.push_str("};\n\n");
+        output.push_str("};\n");
+
+        // Emit static_assert for size validation if known.
+        if let Some(size) = item.size_hint {
+            output.push_str(&format!(
+                "static_assert(sizeof({}) == {}, \"{} size mismatch\");\n\n",
+                item.name, size, item.name
+            ));
+        } else {
+            output.push_str("\n");
+        }
+
         output
     }
 

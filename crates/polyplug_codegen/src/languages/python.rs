@@ -302,6 +302,18 @@ impl CodeGenerator for PythonGenerator {
         }
         output.push_str("    ]\n");
 
+        // Emit size hint comment and assertion if known.
+        if let Some(size) = item.size_hint {
+            output.push_str(&format!(
+                "\n# Expected size: {} bytes\n",
+                size
+            ));
+            output.push_str(&format!(
+                "assert ctypes.sizeof({}) == {}, f\"{} expected {} bytes, got {{ctypes.sizeof({})}}\"\n",
+                item.name, size, item.name, size, item.name
+            ));
+        }
+
         output
     }
 

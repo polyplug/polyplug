@@ -287,7 +287,14 @@ impl CodeGenerator for LuaGenerator {
 
         output.push_str("    } ");
         output.push_str(&item.name);
-        output.push_str(";\n\n");
+        output.push_str(";\n");
+
+        // Emit size hint comment if known.
+        if let Some(size) = item.size_hint {
+            output.push_str(&format!("    -- Expected size: {} bytes\n", size));
+        }
+
+        output.push_str("\n");
 
         // Prepend typedefs before the struct.
         let mut result = typedefs;

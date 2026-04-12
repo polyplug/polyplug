@@ -230,8 +230,8 @@ impl CodeGenerator for JsGenerator {
             }
         }
 
-        // Total struct size constant.
-        let total_size = Self::align_up(offset, struct_align);
+        // Total struct size constant — prefer size_hint from Rust if available.
+        let total_size = item.size_hint.unwrap_or_else(|| Self::align_up(offset, struct_align));
         offset_constants.push_str(&format!(
             "export const {}_SIZE: number = {};\n\n",
             to_upper_snake_case(&item.name),

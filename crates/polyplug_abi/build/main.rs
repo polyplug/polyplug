@@ -91,6 +91,7 @@ fn main() {
                             fields,
                             doc,
                             repr_c: true,
+                            size_hint: None,
                         });
                     }
                 }
@@ -102,7 +103,7 @@ fn main() {
     }
 
     // ─── Step 3: Generate SDKs ───────────────────────────────────────────────
-    generate_all_sdks(&abi_types, &workspace_root, &tracked_files)
+    generate_all_sdks(&mut abi_types, &workspace_root, &tracked_files)
         .expect("Failed to generate SDKs");
 }
 
