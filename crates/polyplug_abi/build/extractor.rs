@@ -203,6 +203,7 @@ fn extract_struct(item: &ItemStruct) -> Option<AbiStruct> {
         fields,
         doc,
         repr_c: true,
+        size_hint: None,
     })
 }
 

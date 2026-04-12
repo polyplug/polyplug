@@ -32,6 +32,7 @@ fn map_struct(abi: &AbiStruct) -> StructInfo {
         fields: abi.fields.iter().map(map_field).collect(),
         doc: abi.doc.clone(),
         attributes,
+        size_hint: abi.size_hint,
     }
 }
 

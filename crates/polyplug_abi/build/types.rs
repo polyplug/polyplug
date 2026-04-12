@@ -30,6 +30,11 @@ pub struct AbiStruct {
     pub doc: Option<String>,
     /// Whether this struct has #[repr(C)].
     pub repr_c: bool,
+    /// Expected size in bytes from the Rust layout.
+    ///
+    /// Populated from the known size table in generate.rs.
+    /// Used to generate size assertions in SDK files.
+    pub size_hint: Option<usize>,
 }
 
 /// Information about a struct field.

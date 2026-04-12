@@ -30,6 +30,7 @@ fn make_fn_ptr_struct(name: &str, field_name: &str, fn_ptr_type: &str) -> Struct
         }],
         doc: None,
         attributes: vec!["repr(C)".to_string()],
+        size_hint: None,
     }
 }
 
@@ -61,6 +62,7 @@ fn make_host_interface_struct() -> StructInfo {
         ],
         doc: None,
         attributes: vec!["repr(C)".to_string()],
+        size_hint: None,
     }
 }
 
@@ -87,6 +89,7 @@ fn make_optional_fn_ptr_struct() -> StructInfo {
         ],
         doc: None,
         attributes: vec!["repr(C)".to_string()],
+        size_hint: None,
     }
 }
 
@@ -101,6 +104,7 @@ fn make_array_struct() -> StructInfo {
         }],
         doc: None,
         attributes: vec!["repr(C)".to_string()],
+        size_hint: None,
     }
 }
 

@@ -56,6 +56,11 @@ pub struct StructInfo {
     pub doc: Option<String>,
     /// Additional attributes (e.g., repr, derive).
     pub attributes: Vec<String>,
+    /// Expected size in bytes from the Rust layout, if known.
+    ///
+    /// Used to generate size assertions in SDK files.
+    /// Populated from the known size table in the build script.
+    pub size_hint: Option<usize>,
 }
 
 /// Information about an enum variant.
