@@ -1,7 +1,7 @@
 //! ABI-specific types for type extraction from syn AST.
 //!
-//! These types represent the extracted ABI information from `src/lib.rs`.
-//! They are used by the extractor module and will be converted to
+//! These types represent the extracted ABI information from the module tree.
+//! They are used by the extractor module and converted to
 //! `polyplug_codegen::data::AbiItems` for code generation.
 
 #![allow(dead_code)]
@@ -13,10 +13,8 @@ pub enum AbiType {
     Struct(AbiStruct),
     /// An enum definition (e.g., DispatchType).
     Enum(AbiEnum),
-    /// A union definition (e.g., PluginDispatch).
+    /// A union definition (e.g., DispatchMechanisms).
     Union(AbiUnion),
-    /// A function definition (e.g., FNV-1a hash helpers).
-    Function(AbiFunction),
     /// A constant value (e.g., ABI version, error codes).
     Const(AbiConst),
 }
@@ -72,7 +70,7 @@ pub struct AbiVariant {
 /// Information about a union extracted from the ABI.
 #[derive(Debug, Clone)]
 pub struct AbiUnion {
-    /// Union name (e.g., "PluginDispatch").
+    /// Union name (e.g., "DispatchMechanisms").
     pub name: String,
     /// Union variants.
     pub variants: Vec<AbiUnionVariant>,
@@ -87,19 +85,6 @@ pub struct AbiUnionVariant {
     pub name: String,
     /// Variant type name.
     pub rust_type: String,
-    /// Optional documentation comment.
-    pub doc: Option<String>,
-}
-
-/// Information about a function extracted from the ABI.
-#[derive(Debug, Clone)]
-pub struct AbiFunction {
-    /// Function name.
-    pub name: String,
-    /// Function parameters.
-    pub params: Vec<AbiField>,
-    /// Return type (None for void).
-    pub return_type: Option<String>,
     /// Optional documentation comment.
     pub doc: Option<String>,
 }
@@ -126,8 +111,6 @@ pub struct AbiTypes {
     pub enums: Vec<AbiEnum>,
     /// All unions.
     pub unions: Vec<AbiUnion>,
-    /// All functions.
-    pub functions: Vec<AbiFunction>,
     /// All constants.
     pub consts: Vec<AbiConst>,
 }
@@ -153,14 +136,17 @@ impl AbiTypes {
         self.unions.push(union_info);
     }
 
-    /// Add a function.
-    pub fn add_function(&mut self, function_info: AbiFunction) {
-        self.functions.push(function_info);
-    }
-
     /// Add a constant.
     pub fn add_const(&mut self, const_info: AbiConst) {
         self.consts.push(const_info);
+    }
+
+    /// Merge another AbiTypes into this one.
+    pub fn merge(&mut self, other: AbiTypes) {
+        self.structs.extend(other.structs);
+        self.enums.extend(other.enums);
+        self.unions.extend(other.unions);
+        self.consts.extend(other.consts);
     }
 
     /// Get all types as a flat vector.
@@ -174,9 +160,6 @@ impl AbiTypes {
         }
         for u in &self.unions {
             types.push(AbiType::Union(u.clone()));
-        }
-        for f in &self.functions {
-            types.push(AbiType::Function(f.clone()));
         }
         for c in &self.consts {
             types.push(AbiType::Const(c.clone()));

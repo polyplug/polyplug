@@ -1,85 +1,134 @@
-//! Type extractor — extracts ABI types from syn AST.
+//! Type extractor — recursively walks the module tree to auto-discover ABI types.
 //!
 //! This module parses Rust source code using `syn` and extracts all
-//! `#[repr(C)]` types (structs, enums, unions) plus ABI constants
-//! and functions into `AbiTypes` for code generation.
+//! `#[repr(C)]` types (structs, enums, unions) plus `POLYPLUG_` constants
+//! into `AbiTypes` for code generation.
+//!
+//! # Auto-discovery
+//!
+//! No whitelists are used. Types are discovered by:
+//! - **Structs**: Any `pub` struct with `#[repr(C)]`
+//! - **Enums**: Any `pub` enum with `#[repr(u*)]`
+//! - **Unions**: Any `pub` union with `#[repr(C)]`
+//! - **Constants**: Any `pub const` whose name starts with `POLYPLUG_`
+//!
+//! # Module tree walking
+//!
+//! Starting from `lib.rs`, the extractor recursively resolves all `mod X;`
+//! declarations (both `pub mod` and private `mod`) to their source files
+//! (`{dir}/X.rs` or `{dir}/X/mod.rs`) and extracts types from each file.
+//! Types within files are only extracted if they are `pub` and have the
+//! appropriate `#[repr(...)]` attributes.
+
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use syn::{
-    Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemFn, ItemStruct,
-    ItemUnion, Lit, Meta, Visibility, parse_file,
+    Attribute, Expr, ExprLit, Fields, File, Item, ItemConst, ItemEnum, ItemStruct, ItemUnion, Lit,
+    Meta, Visibility, parse_file,
 };
 
-use crate::types::{
-    AbiConst, AbiEnum, AbiField, AbiFunction, AbiStruct, AbiTypes, AbiUnion, AbiUnionVariant,
-    AbiVariant,
-};
+use crate::types::{AbiConst, AbiEnum, AbiField, AbiStruct, AbiTypes, AbiUnion, AbiUnionVariant, AbiVariant};
 
-/// ABI types that should be extracted by the extractor.
-const ABI_TYPES: &[&str] = &[
-    "StringView",
-    "Buffer",
-    "AbiError",
-    "GuestContractHandle",
-    "HostContext",
-    "RuntimeContext",     // Opaque handle wrapping HostContext
-    "VmLoaderData",       // Opaque handle for VM loader state
-    "GuestContractInstance", // Opaque handle for guest contract instances
-    "HostContractInstance",  // Opaque handle for host contract instances
-    "DispatchType",
-    "NativeDispatch",
-    "VmDispatch",
-    "PluginDispatch",
-    "GuestContractInterface",
-    "RuntimeAbi",
-    "PluginDescriptor",
-    "BundleInitContext",
-    "ExtensionEntry",
-    "RuntimeConfig",
-    "RuntimeLanguage",
-    "HostContractVTableHeader",
-    "NativeHostContractDispatch",
-    "VmHostContractDispatch",
-    "HostContractDispatch",
-    "HostContractVTable",
-    "AbiErrorCode",
-];
-
-/// ABI constants that should be extracted by the extractor.
-const ABI_CONSTANTS: &[&str] = &["POLYPLUG_ABI_VERSION"];
-
-/// ABI functions that should be extracted by the extractor.
-const ABI_FUNCTIONS: &[&str] = &[
-    "fnv1a_64",
-    "fnv1a_32",
-    "contract_id",
-    "extension_id",
-    "bundle_id",
-    "host_contract_id",
-    "plugin_contract_id",
-    "string_view_from_static",
-    "string_view_null",
-    "string_view_as_str",
-    "string_view_to_string_owned",
-    "buffer_as_slice",
-    "buffer_as_mut_slice",
-    "abi_error_ok",
-    "abi_error_panic_caught",
-    "abi_error_is_ok",
-    "plugin_handle_null",
-    "plugin_handle_is_null",
-];
-
-/// Extract all ABI types from Rust source code.
+/// Extract all ABI types by recursively walking the module tree starting from `src_dir/lib.rs`.
+///
+/// Returns both the extracted types and all source file paths discovered
+/// (for `cargo:rerun-if-changed` tracking).
 ///
 /// # Arguments
-/// * `source` - The Rust source code to parse.
+/// * `src_dir` - The `src/` directory containing `lib.rs`.
 ///
 /// # Returns
-/// An `AbiTypes` struct containing all extracted types, or a syn error.
-pub fn extract_types(source: &str) -> Result<AbiTypes, syn::Error> {
-    let file: File = parse_file(source)?;
-    let mut types: AbiTypes = AbiTypes::new();
+/// A tuple of `(AbiTypes, Vec<PathBuf>)` containing extracted types and tracked files.
+pub fn extract_from_dir(src_dir: &Path) -> Result<(AbiTypes, Vec<PathBuf>), String> {
+    let lib_rs: PathBuf = src_dir.join("lib.rs");
+    if !lib_rs.exists() {
+        return Err(format!("lib.rs not found at {}", lib_rs.display()));
+    }
 
+    let mut abi_types: AbiTypes = AbiTypes::new();
+    let mut tracked_files: Vec<PathBuf> = Vec::new();
+
+    // Track lib.rs itself
+    tracked_files.push(lib_rs.clone());
+
+    // Walk the module tree starting from lib.rs
+    walk_module_tree(src_dir, &lib_rs, &mut abi_types, &mut tracked_files)?;
+
+    Ok((abi_types, tracked_files))
+}
+
+/// Recursively walk the module tree, extracting types from each file.
+///
+/// For the given `module_file`, parses the source and:
+/// 1. Extracts all ABI types (structs, enums, unions, consts) from the file.
+/// 2. Finds `pub mod X;` declarations and resolves them to source files.
+/// 3. Recursively walks each resolved sub-module.
+///
+/// # Arguments
+/// * `dir` - The directory containing the current module file.
+/// * `module_file` - Path to the `.rs` file to parse.
+/// * `abi_types` - Mutable accumulator for discovered types.
+/// * `tracked_files` - Mutable accumulator for all discovered source paths.
+fn walk_module_tree(
+    dir: &Path,
+    module_file: &Path,
+    abi_types: &mut AbiTypes,
+    tracked_files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    let source: String = fs::read_to_string(module_file).map_err(|e| {
+        format!(
+            "Failed to read module file {}: {}",
+            module_file.display(),
+            e
+        )
+    })?;
+
+    let file: File = parse_file(&source)
+        .map_err(|e| format!("Failed to parse {}: {}", module_file.display(), e))?;
+
+    // Extract types from the current file
+    extract_types_from_file(&file, abi_types);
+
+    // Find and resolve mod declarations (both pub and private)
+    // Private mod declarations may still contain pub #[repr(C)] types
+    // that are re-exported by the parent module.
+    for item in &file.items {
+        if let Item::Mod(item_mod) = item {
+            // Only process file-based modules (not inline `mod name { ... }`)
+            if item_mod.content.is_some() {
+                continue;
+            }
+
+            let mod_name: String = item_mod.ident.to_string();
+
+            // Try dir/{name}.rs first, then dir/{name}/mod.rs
+            let file_path: PathBuf = dir.join(format!("{}.rs", mod_name));
+            let sub_dir: PathBuf = dir.join(&mod_name);
+            let mod_rs: PathBuf = sub_dir.join("mod.rs");
+
+            let target: &Path = if file_path.exists() {
+                &file_path
+            } else if mod_rs.exists() {
+                &mod_rs
+            } else {
+                // Module file not found — may be conditionally compiled.
+                // Skip silently rather than fail.
+                continue;
+            };
+
+            tracked_files.push(target.to_path_buf());
+
+            // Recursively walk the sub-module
+            walk_module_tree(&sub_dir, target, abi_types, tracked_files)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Extract types from a parsed file into the accumulator.
+fn extract_types_from_file(file: &File, types: &mut AbiTypes) {
     for item in &file.items {
         match item {
             Item::Const(item_const) => {
@@ -102,23 +151,22 @@ pub fn extract_types(source: &str) -> Result<AbiTypes, syn::Error> {
                     types.add_union(union_info);
                 }
             }
-            Item::Fn(item_fn) => {
-                if let Some(function_info) = extract_function(item_fn) {
-                    types.add_function(function_info);
-                }
-            }
             _ => {}
         }
     }
-
-    Ok(types)
 }
 
-/// Extract a constant if it's an ABI constant.
+/// Extract a constant if its name starts with `POLYPLUG_`.
+///
+/// Auto-discovers ABI constants by naming convention — no whitelist required.
 fn extract_const(item: &ItemConst) -> Option<AbiConst> {
     let name: String = item.ident.to_string();
 
-    if !ABI_CONSTANTS.contains(&name.as_str()) {
+    if !name.starts_with("POLYPLUG_") {
+        return None;
+    }
+
+    if !is_public(&item.vis) {
         return None;
     }
 
@@ -134,19 +182,19 @@ fn extract_const(item: &ItemConst) -> Option<AbiConst> {
     })
 }
 
-/// Extract a struct if it's an ABI struct with #[repr(C)].
+/// Extract a struct if it is `pub` and has `#[repr(C)]`.
+///
+/// Auto-discovers ABI structs by attribute — no whitelist required.
 fn extract_struct(item: &ItemStruct) -> Option<AbiStruct> {
-    let name: String = item.ident.to_string();
-
-    if !ABI_TYPES.contains(&name.as_str()) {
-        return None;
-    }
-
     if !is_public(&item.vis) {
         return None;
     }
 
-    let repr_c: bool = has_repr_c(&item.attrs);
+    if !has_repr_c(&item.attrs) {
+        return None;
+    }
+
+    let name: String = item.ident.to_string();
     let doc: Option<String> = extract_doc(&item.attrs);
     let fields: Vec<AbiField> = extract_fields(&item.fields);
 
@@ -154,7 +202,7 @@ fn extract_struct(item: &ItemStruct) -> Option<AbiStruct> {
         name,
         fields,
         doc,
-        repr_c,
+        repr_c: true,
     })
 }
 
@@ -204,19 +252,24 @@ fn extract_fields(fields: &Fields) -> Vec<AbiField> {
     }
 }
 
-/// Extract an enum if it's an ABI enum with #[repr(C)] or #[repr(uX)].
+/// Extract an enum if it is `pub` and has `#[repr(u*)]` or `#[repr(C)]`.
+///
+/// Auto-discovers ABI enums by attribute — no whitelist required.
 fn extract_enum(item: &ItemEnum) -> Option<AbiEnum> {
-    let name: String = item.ident.to_string();
-
-    if !ABI_TYPES.contains(&name.as_str()) {
-        return None;
-    }
-
     if !is_public(&item.vis) {
         return None;
     }
 
     let repr: String = extract_enum_repr(&item.attrs);
+
+    // Must have an integer repr (u8, u16, u32, u64, i8, i16, i32, i64) or C repr
+    let has_int_repr: bool = repr.starts_with('u') || repr.starts_with('i');
+    let has_c_repr: bool = has_repr_c(&item.attrs);
+    if !has_int_repr && !has_c_repr {
+        return None;
+    }
+
+    let name: String = item.ident.to_string();
     let doc: Option<String> = extract_doc(&item.attrs);
     let variants: Vec<AbiVariant> = item
         .variants
@@ -241,18 +294,19 @@ fn extract_enum(item: &ItemEnum) -> Option<AbiEnum> {
     })
 }
 
-/// Extract a union if it's an ABI union with #[repr(C)].
+/// Extract a union if it is `pub` and has `#[repr(C)]`.
+///
+/// Auto-discovers ABI unions by attribute — no whitelist required.
 fn extract_union(item: &ItemUnion) -> Option<AbiUnion> {
-    let name: String = item.ident.to_string();
-
-    if !ABI_TYPES.contains(&name.as_str()) {
-        return None;
-    }
-
     if !is_public(&item.vis) {
         return None;
     }
 
+    if !has_repr_c(&item.attrs) {
+        return None;
+    }
+
+    let name: String = item.ident.to_string();
     let doc: Option<String> = extract_doc(&item.attrs);
     let variants: Vec<AbiUnionVariant> = item
         .fields
@@ -278,69 +332,9 @@ fn extract_union(item: &ItemUnion) -> Option<AbiUnion> {
     })
 }
 
-/// Extract a function if it's an ABI function.
-fn extract_function(item: &ItemFn) -> Option<AbiFunction> {
-    let name: String = item.sig.ident.to_string();
-
-    if !ABI_FUNCTIONS.contains(&name.as_str()) {
-        return None;
-    }
-
-    if !is_visible(&item.vis) {
-        return None;
-    }
-
-    let doc: Option<String> = extract_doc(&item.attrs);
-    let return_type: Option<String> = match &item.sig.output {
-        syn::ReturnType::Default => None,
-        syn::ReturnType::Type(_, ty) => Some(type_to_string(ty)),
-    };
-
-    let params: Vec<AbiField> = item
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pat_type) => {
-                let name: String = match pat_type.pat.as_ref() {
-                    syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
-                    _ => return None,
-                };
-                let rust_type: String = type_to_string(&pat_type.ty);
-                let doc: Option<String> = None;
-
-                Some(AbiField {
-                    name,
-                    rust_type,
-                    doc,
-                })
-            }
-            syn::FnArg::Receiver(_) => None,
-        })
-        .collect();
-
-    Some(AbiFunction {
-        name,
-        params,
-        return_type,
-        doc,
-    })
-}
-
 /// Check if a visibility is public.
 fn is_public(vis: &Visibility) -> bool {
     matches!(vis, Visibility::Public(_))
-}
-
-/// Check if a visibility is public or pub(crate).
-fn is_visible(vis: &Visibility) -> bool {
-    match vis {
-        Visibility::Public(_) => true,
-        Visibility::Restricted(restricted) => {
-            restricted.path.segments.len() == 1 && restricted.path.segments[0].ident == "crate"
-        }
-        _ => false,
-    }
 }
 
 /// Check if attributes contain #[repr(C)].
