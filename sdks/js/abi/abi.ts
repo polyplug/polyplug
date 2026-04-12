@@ -11,6 +11,10 @@ export interface NativeDispatch {
     functions: bigint;
 }
 
+export const NATIVE_DISPATCH_FUNCTION_COUNT_OFFSET: number = 0;
+export const NATIVE_DISPATCH_FUNCTIONS_OFFSET: number = 8;
+export const NATIVE_DISPATCH_SIZE: number = 16;
+
 /**
  *  VM dispatch data — call through a dispatch function.
  * 
@@ -28,13 +32,17 @@ export interface VmDispatch {
      *  - `args`: Pointer to packed arguments (ABI-specific layout)
      *  - `out`: Pointer to output buffer for return value
      */
-    call: (loader_data: VmLoaderData, instance: GuestContractInstance, fn_id: number, args: bigint, out: bigint) => AbiError;
+    call: number;
     /**
      *  Loader-specific data handle.
      *  Opaque to the host; interpreted by the dispatch function.
      */
     loader_data: VmLoaderData;
 }
+
+export const VM_DISPATCH_CALL_OFFSET: number = 0;
+export const VM_DISPATCH_LOADER_DATA_OFFSET: number = 8;
+export const VM_DISPATCH_SIZE: number = 16;
 
 /**
  *  Opaque handle to VM loader-specific data.
@@ -49,6 +57,9 @@ export interface VmLoaderData {
     /**  Opaque pointer to VM-specific loader data. */
     data: bigint;
 }
+
+export const VM_LOADER_DATA_DATA_OFFSET: number = 0;
+export const VM_LOADER_DATA_SIZE: number = 8;
 
 /**
  *  Opaque handle to a guest contract instance.
@@ -99,6 +110,10 @@ export interface GuestContractInstance {
      */
     contract_id: GuestContractId;
 }
+
+export const GUEST_CONTRACT_INSTANCE_DATA_OFFSET: number = 0;
+export const GUEST_CONTRACT_INSTANCE_CONTRACT_ID_OFFSET: number = 8;
+export const GUEST_CONTRACT_INSTANCE_SIZE: number = 16;
 
 /**
  *  Guest Contract Interface — one per contract implemented by a guest (plugin).
@@ -163,7 +178,7 @@ export interface GuestContractInterface {
      *  # Thread Safety
      *  May be called from any thread. Implementation must handle synchronization.
      */
-    create_instance: (host: bigint, args: bigint) => GuestContractInstance;
+    create_instance: number;
     /**
      *  Destroy an instance of this contract.
      * 
@@ -177,7 +192,7 @@ export interface GuestContractInterface {
      *  # Safety
      *  After calling destroy_instance, the instance handle is invalid.
      */
-    destroy_instance: (host: bigint, instance: GuestContractInstance) => void;
+    destroy_instance: number;
     /**
      *  Union of dispatch mechanisms — access based on dispatch_type.
      * 
@@ -186,6 +201,14 @@ export interface GuestContractInterface {
      */
     dispatch: DispatchMechanisms;
 }
+
+export const GUEST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET: number = 0;
+export const GUEST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET: number = 8;
+export const GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET: number = 16;
+export const GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 24;
+export const GUEST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 32;
+export const GUEST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 40;
+export const GUEST_CONTRACT_INTERFACE_SIZE: number = 48;
 
 /**
  *  Host Interface — function table passed to guests during initialization.
@@ -242,7 +265,7 @@ export interface HostInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    register_contract: (this: bigint, descriptor: bigint, interface: bigint) => AbiError;
+    register_contract: number;
     /**
      *  Allocate memory using the host allocator.
      * 
@@ -257,7 +280,7 @@ export interface HostInterface {
      *  # Returns
      *  Pointer to allocated memory, or null on failure.
      */
-    alloc: (this: bigint, size: number, align: number) => bigint;
+    alloc: number;
     /**
      *  Free memory allocated via `alloc`.
      * 
@@ -269,7 +292,7 @@ export interface HostInterface {
      *  - `size`: Size used for allocation
      *  - `align`: Alignment used for allocation
      */
-    free: (this: bigint, ptr: bigint, size: number, align: number) => void;
+    free: number;
     /**
      *  Find a guest contract by contract_id and minimum version.
      * 
@@ -284,7 +307,7 @@ export interface HostInterface {
      *  # Returns
      *  GuestContractHandle for the first matching contract, or null handle.
      */
-    find_guest_contract: (this: bigint, contract_id: bigint, min_version: number) => GuestContractHandle;
+    find_guest_contract: number;
     /**
      *  Find all guest contracts matching contract_id and minimum version.
      * 
@@ -299,7 +322,7 @@ export interface HostInterface {
      *  # Returns
      *  Array of GuestContractHandle. Caller owns and must free.
      */
-    find_all_guest_contracts: (this: bigint, contract_id: bigint, min_version: number) => Array<GuestContractHandle>;
+    find_all_guest_contracts: number;
     /**
      *  Resolve a GuestContractHandle to a GuestContractInterface pointer.
      * 
@@ -312,7 +335,7 @@ export interface HostInterface {
      *  # Returns
      *  Pointer to GuestContractInterface, or null if invalid/stale.
      */
-    resolve_guest_contract: (this: bigint, handle: GuestContractHandle) => bigint;
+    resolve_guest_contract: number;
     /**
      *  Call a method on a guest contract instance.
      * 
@@ -329,7 +352,7 @@ export interface HostInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    call_guest_method: (this: bigint, instance: GuestContractInstance, method_id: number, args: bigint, out: bigint) => AbiError;
+    call_guest_method: number;
     /**
      *  Get a host contract instance by contract_id and minimum version.
      * 
@@ -344,7 +367,7 @@ export interface HostInterface {
      *  # Returns
      *  HostContractInstance for the contract.
      */
-    get_host_contract: (this: bigint, contract_id: bigint, min_version: number) => crate::host::HostContractInstance;
+    get_host_contract: number;
     /**
      *  Resolve a host contract interface by contract_id and minimum version.
      * 
@@ -360,7 +383,7 @@ export interface HostInterface {
      *  # Returns
      *  Pointer to HostContractInterface, or null if invalid/not found.
      */
-    resolve_host_contract_interface: (this: bigint, contract_id: bigint, min_version: number) => bigint;
+    resolve_host_contract_interface: number;
     /**
      *  List all loaded bundles.
      * 
@@ -373,7 +396,7 @@ export interface HostInterface {
      *  # Returns
      *  Array of BundleId. Caller owns and must free.
      */
-    list_bundles: (this: bigint) => Array<BundleId>;
+    list_bundles: number;
     /**
      *  Get dependencies for the calling bundle.
      * 
@@ -387,7 +410,7 @@ export interface HostInterface {
      *  Array of DependencyInfo. Caller owns and must free.
      *  Returns empty array if called outside bundle init context.
      */
-    get_dependencies: (this: bigint) => Array<DependencyInfo>;
+    get_dependencies: number;
     /**
      *  Load a plugin bundle from a path.
      * 
@@ -402,7 +425,7 @@ export interface HostInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    load_bundle: (this: bigint, path: bigint, path_len: number) => AbiError;
+    load_bundle: number;
     /**
      *  Reload a plugin bundle (hot-reload).
      * 
@@ -417,7 +440,7 @@ export interface HostInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    reload_bundle: (this: bigint, path: bigint, path_len: number) => AbiError;
+    reload_bundle: number;
     /**
      *  Register a host contract interface.
      * 
@@ -430,7 +453,7 @@ export interface HostInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    register_host_contract: (this: bigint, interface: bigint) => AbiError;
+    register_host_contract: number;
     /**
      *  Register a language loader.
      * 
@@ -444,7 +467,7 @@ export interface HostInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    register_loader: (this: bigint, runtime_name: StringView, loader_ptr: bigint) => AbiError;
+    register_loader: number;
     /**
      *  Get last error message.
      * 
@@ -459,7 +482,7 @@ export interface HostInterface {
      *  # Returns
      *  Number of bytes written (0 if no error or buffer too small).
      */
-    get_last_error: (this: bigint, buf: bigint, buf_len: number) => number;
+    get_last_error: number;
     /**
      *  Get last error message length.
      * 
@@ -472,8 +495,28 @@ export interface HostInterface {
      *  # Returns
      *  Length of last error message (0 if no error).
      */
-    get_error_len: (this: bigint) => number;
+    get_error_len: number;
 }
+
+export const HOST_INTERFACE_RUNTIME_OFFSET: number = 0;
+export const HOST_INTERFACE_REGISTER_CONTRACT_OFFSET: number = 8;
+export const HOST_INTERFACE_ALLOC_OFFSET: number = 16;
+export const HOST_INTERFACE_FREE_OFFSET: number = 24;
+export const HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET: number = 32;
+export const HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET: number = 40;
+export const HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET: number = 48;
+export const HOST_INTERFACE_CALL_GUEST_METHOD_OFFSET: number = 56;
+export const HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET: number = 64;
+export const HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET: number = 72;
+export const HOST_INTERFACE_LIST_BUNDLES_OFFSET: number = 80;
+export const HOST_INTERFACE_GET_DEPENDENCIES_OFFSET: number = 88;
+export const HOST_INTERFACE_LOAD_BUNDLE_OFFSET: number = 96;
+export const HOST_INTERFACE_RELOAD_BUNDLE_OFFSET: number = 104;
+export const HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET: number = 112;
+export const HOST_INTERFACE_REGISTER_LOADER_OFFSET: number = 120;
+export const HOST_INTERFACE_GET_LAST_ERROR_OFFSET: number = 128;
+export const HOST_INTERFACE_GET_ERROR_LEN_OFFSET: number = 136;
+export const HOST_INTERFACE_SIZE: number = 144;
 
 /**
  *  Runtime Interface — function table returned to host from polyplug_runtime_create().
@@ -529,7 +572,7 @@ export interface RuntimeInterface {
      *  AbiError::OK on success, error code on failure.
      *  Use `get_last_error()` for detailed error message.
      */
-    load_bundle: (this: bigint, path: bigint) => AbiError;
+    load_bundle: number;
     /**
      *  Reload a bundle (hot-reload).
      * 
@@ -547,7 +590,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    reload_bundle: (this: bigint, bundle_id: BundleId) => AbiError;
+    reload_bundle: number;
     /**
      *  Unload a bundle.
      * 
@@ -561,7 +604,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  AbiError::OK on success, error code on failure.
      */
-    unload_bundle: (this: bigint, bundle_id: BundleId) => AbiError;
+    unload_bundle: number;
     /**
      *  Find a guest contract by contract_id and minimum version.
      * 
@@ -576,7 +619,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  GuestContractHandle for the first matching contract, or null handle.
      */
-    find_by_contract: (this: bigint, contract_id: bigint, min_version: number) => GuestContractHandle;
+    find_by_contract: number;
     /**
      *  Find all guest contracts matching contract_id and minimum version.
      * 
@@ -591,7 +634,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  Array of GuestContractHandle. Caller owns and must free.
      */
-    find_all_by_contract: (this: bigint, contract_id: bigint, min_version: number) => Array<GuestContractHandle>;
+    find_all_by_contract: number;
     /**
      *  Resolve a GuestContractHandle to a GuestContractInterface pointer.
      * 
@@ -604,7 +647,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  Pointer to GuestContractInterface, or null if invalid/stale.
      */
-    resolve_contract: (this: bigint, handle: GuestContractHandle) => bigint;
+    resolve_contract: number;
     /**
      *  Get a host contract instance by contract_id and minimum version.
      * 
@@ -619,7 +662,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  HostContractInstance for the contract.
      */
-    get_host_contract: (this: bigint, contract_id: bigint, min_version: number) => HostContractInstance;
+    get_host_contract: number;
     /**
      *  Get the last error message.
      * 
@@ -632,7 +675,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  StringView containing the error message, or empty string if no error.
      */
-    get_last_error: (this: bigint) => StringView;
+    get_last_error: number;
     /**
      *  List all loaded bundles.
      * 
@@ -645,7 +688,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  Array of BundleId. Caller owns and must free.
      */
-    list_bundles: (this: bigint) => Array<BundleId>;
+    list_bundles: number;
     /**
      *  Get dependencies (returns empty array for host context).
      * 
@@ -658,7 +701,7 @@ export interface RuntimeInterface {
      *  # Returns
      *  Empty Array of DependencyInfo. Caller owns and must free.
      */
-    get_dependencies: (this: bigint) => Array<DependencyInfo>;
+    get_dependencies: number;
     /**
      *  Destroy the runtime and free this interface.
      * 
@@ -669,8 +712,22 @@ export interface RuntimeInterface {
      *  After calling destroy, the pointer is invalid and must not be used.
      *  All instances must be destroyed before calling this.
      */
-    destroy: (this: bigint) => void;
+    destroy: number;
 }
+
+export const RUNTIME_INTERFACE_RUNTIME_OFFSET: number = 0;
+export const RUNTIME_INTERFACE_LOAD_BUNDLE_OFFSET: number = 8;
+export const RUNTIME_INTERFACE_RELOAD_BUNDLE_OFFSET: number = 16;
+export const RUNTIME_INTERFACE_UNLOAD_BUNDLE_OFFSET: number = 24;
+export const RUNTIME_INTERFACE_FIND_BY_CONTRACT_OFFSET: number = 32;
+export const RUNTIME_INTERFACE_FIND_ALL_BY_CONTRACT_OFFSET: number = 40;
+export const RUNTIME_INTERFACE_RESOLVE_CONTRACT_OFFSET: number = 48;
+export const RUNTIME_INTERFACE_GET_HOST_CONTRACT_OFFSET: number = 56;
+export const RUNTIME_INTERFACE_GET_LAST_ERROR_OFFSET: number = 64;
+export const RUNTIME_INTERFACE_LIST_BUNDLES_OFFSET: number = 72;
+export const RUNTIME_INTERFACE_GET_DEPENDENCIES_OFFSET: number = 80;
+export const RUNTIME_INTERFACE_DESTROY_OFFSET: number = 88;
+export const RUNTIME_INTERFACE_SIZE: number = 96;
 
 /**
  *  Opaque handle to a host contract instance.
@@ -685,6 +742,9 @@ export interface HostContractInstance {
      */
     data: bigint;
 }
+
+export const HOST_CONTRACT_INSTANCE_DATA_OFFSET: number = 0;
+export const HOST_CONTRACT_INSTANCE_SIZE: number = 8;
 
 /**
  *  Host Contract Interface — for host-provided services.
@@ -764,7 +824,7 @@ export interface HostContractInterface {
      *  # Returns
      *  Opaque instance handle, or null handle on failure.
      */
-    create_instance: (this: bigint, args: bigint) => HostContractInstance;
+    create_instance: number;
     /**
      *  Destroy an instance of this host contract.
      * 
@@ -778,7 +838,7 @@ export interface HostContractInterface {
      *  # Safety
      *  After calling destroy_instance, the instance handle is invalid.
      */
-    destroy_instance: (this: bigint, instance: HostContractInstance) => void;
+    destroy_instance: number;
     /**
      *  Union of dispatch mechanisms — access based on dispatch_type.
      * 
@@ -787,6 +847,16 @@ export interface HostContractInterface {
      */
     dispatch: DispatchMechanisms;
 }
+
+export const HOST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET: number = 0;
+export const HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET: number = 8;
+export const HOST_CONTRACT_INTERFACE_SINGLETON_OFFSET: number = 16;
+export const HOST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET: number = 24;
+export const HOST_CONTRACT_INTERFACE_RUNTIME_OFFSET: number = 32;
+export const HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 40;
+export const HOST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 48;
+export const HOST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 56;
+export const HOST_CONTRACT_INTERFACE_SIZE: number = 64;
 
 /**
  *  Context passed to every guest `polyplug_init()` function.
@@ -801,6 +871,10 @@ export interface BundleInitContext {
     /**  Absolute canonical path to the directory containing the loaded bundle. */
     bundle_path: StringView;
 }
+
+export const BUNDLE_INIT_CONTEXT_BUNDLE_ID_OFFSET: number = 0;
+export const BUNDLE_INIT_CONTEXT_BUNDLE_PATH_OFFSET: number = 8;
+export const BUNDLE_INIT_CONTEXT_SIZE: number = 16;
 
 /**
  *  Metadata about a plugin within a bundle.
@@ -818,6 +892,11 @@ export interface PluginDescriptor {
     /**  Plugin version */
     version: Version;
 }
+
+export const PLUGIN_DESCRIPTOR_NAME_OFFSET: number = 0;
+export const PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET: number = 8;
+export const PLUGIN_DESCRIPTOR_VERSION_OFFSET: number = 16;
+export const PLUGIN_DESCRIPTOR_SIZE: number = 24;
 
 /**
  *  Opaque handle to a registered guest contract.
@@ -841,6 +920,9 @@ export interface GuestContractHandle {
     index: number;
 }
 
+export const GUEST_CONTRACT_HANDLE_INDEX_OFFSET: number = 0;
+export const GUEST_CONTRACT_HANDLE_SIZE: number = 4;
+
 /**
  *  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
  * 
@@ -854,8 +936,13 @@ export interface RuntimeConfig {
     /**  Whether hot-reload is enabled. */
     hot_reload_enabled: boolean;
     /**  Optional hot-reload callback, or null for no callback. */
-    on_reload: (arg0: ReloadPhase) => void;
+    on_reload: number;
 }
+
+export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
+export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 8;
+export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 16;
+export const RUNTIME_CONFIG_SIZE: number = 24;
 
 /**
  *  FFI-safe reload phase for hot-reload callbacks.
@@ -878,6 +965,12 @@ export interface ReloadPhase {
     reason: StringView;
 }
 
+export const RELOAD_PHASE_PHASE_TYPE_OFFSET: number = 0;
+export const RELOAD_PHASE_BUNDLE_ID_OFFSET: number = 8;
+export const RELOAD_PHASE_BUNDLE_NAME_OFFSET: number = 16;
+export const RELOAD_PHASE_REASON_OFFSET: number = 24;
+export const RELOAD_PHASE_SIZE: number = 32;
+
 /**
  *  ABI error — returned by value from all ABI calls.
  * 
@@ -891,6 +984,10 @@ export interface AbiError {
     /**  Empty/NULL if success. UTF-8 message if non-zero code. */
     message: StringView;
 }
+
+export const ABI_ERROR_CODE_OFFSET: number = 0;
+export const ABI_ERROR_MESSAGE_OFFSET: number = 8;
+export const ABI_ERROR_SIZE: number = 16;
 
 /**
  *  FFI-safe array with caller-frees ownership model.
@@ -938,6 +1035,11 @@ export interface Array {
     align: number;
 }
 
+export const ARRAY_ITEMS_OFFSET: number = 0;
+export const ARRAY_LEN_OFFSET: number = 8;
+export const ARRAY_ALIGN_OFFSET: number = 16;
+export const ARRAY_SIZE: number = 24;
+
 /**
  *  Owning byte buffer.
  * 
@@ -951,6 +1053,11 @@ export interface Buffer {
     /**  Bytes allocated. */
     cap: number;
 }
+
+export const BUFFER_PTR_OFFSET: number = 0;
+export const BUFFER_LEN_OFFSET: number = 8;
+export const BUFFER_CAP_OFFSET: number = 16;
+export const BUFFER_SIZE: number = 24;
 
 /**
  *  Dependency information returned by get_dependencies introspection API.
@@ -998,6 +1105,11 @@ export interface DependencyInfo {
     bundle_id: BundleId;
 }
 
+export const DEPENDENCY_INFO_CONTRACT_ID_OFFSET: number = 0;
+export const DEPENDENCY_INFO_MIN_VERSION_OFFSET: number = 8;
+export const DEPENDENCY_INFO_BUNDLE_ID_OFFSET: number = 16;
+export const DEPENDENCY_INFO_SIZE: number = 24;
+
 /**
  *  Non-owning UTF-8 string view.
  * 
@@ -1011,6 +1123,10 @@ export interface StringView {
     len: number;
 }
 
+export const STRING_VIEW_PTR_OFFSET: number = 0;
+export const STRING_VIEW_LEN_OFFSET: number = 8;
+export const STRING_VIEW_SIZE: number = 16;
+
 /**  A three-component semantic version (major.minor.patch). */
 export interface Version {
     /**  Major version. */
@@ -1020,6 +1136,11 @@ export interface Version {
     /**  Patch version. */
     patch: number;
 }
+
+export const VERSION_MAJOR_OFFSET: number = 0;
+export const VERSION_MINOR_OFFSET: number = 4;
+export const VERSION_PATCH_OFFSET: number = 8;
+export const VERSION_SIZE: number = 12;
 
 export const enum ContractType {
     Host = 0,

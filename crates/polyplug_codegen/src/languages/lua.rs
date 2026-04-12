@@ -114,16 +114,37 @@ impl LuaGenerator {
     fn convert_function_pointer(type_name: &str) -> String {
         let type_str = Self::strip_option(type_name);
 
-        let return_type = if let Some(pos) = type_str.find(")->") {
-            &type_str[pos + 3..]
+        let fn_start = type_str.find("fn(").unwrap_or(0);
+        let params_start = fn_start + 3;
+
+        // Find the matching closing paren for the fn parameter list.
+        let mut depth = 1i32;
+        let mut params_end = params_start;
+        for (i, c) in type_str[params_start..].chars().enumerate() {
+            match c {
+                '(' | '<' | '[' => depth += 1,
+                ')' | '>' | ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        params_end = params_start + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let lua_return = if type_str.len() > params_end + 1 {
+            let after = &type_str[params_end + 1..];
+            let trimmed = after.trim_start_matches('-').trim_start_matches('>').trim();
+            if trimmed.is_empty() {
+                String::from("void")
+            } else {
+                Self::rust_type_to_lua(trimmed)
+            }
         } else {
-            "void"
+            String::from("void")
         };
-
-        let lua_return = Self::rust_type_to_lua(return_type);
-
-        let params_start = type_str.find("fn(").map(|p| p + 3).unwrap_or(0);
-        let params_end = type_str.find(")->").unwrap_or(type_str.len());
 
         if params_start == 0 || params_end <= params_start {
             return format!("{}(*)()", lua_return);
@@ -382,8 +403,8 @@ mod tests {
             typedef
         );
         assert!(
-            typedef.contains("const void*"),
-            "*const u8 should produce const void*: {}",
+            typedef.contains("const uint8_t*"),
+            "*const u8 should produce const uint8_t*: {}",
             typedef
         );
         assert!(

@@ -12,6 +12,7 @@ local M = {}
         void* const* functions;
     } NativeDispatch;
 
+    typedef AbiError(*)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*) VmDispatch_call_fn;
     //  VM dispatch data — call through a dispatch function.
     // 
     //  Used when `dispatch_type == DispatchType::VirtualMachine`.
@@ -25,7 +26,7 @@ local M = {}
         //  - `fn_id`: Function index within the contract
         //  - `args`: Pointer to packed arguments (ABI-specific layout)
         //  - `out`: Pointer to output buffer for return value
-        AbiError(*)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*) call;
+        VmDispatch_call_fn call;
         //  Loader-specific data handle.
         //  Opaque to the host; interpreted by the dispatch function.
         VmLoaderData loader_data;
@@ -87,6 +88,8 @@ local M = {}
         GuestContractId contract_id;
     } GuestContractInstance;
 
+    typedef GuestContractInstance(*)(const HostInterface*, const void*) GuestContractInterface_create_instance_fn;
+    typedef void(*)(const HostInterface*, GuestContractInstance) GuestContractInterface_destroy_instance_fn;
     //  Guest Contract Interface — one per contract implemented by a guest (plugin).
     // 
     //  # Who provides
@@ -140,7 +143,7 @@ local M = {}
         // 
         //  # Thread Safety
         //  May be called from any thread. Implementation must handle synchronization.
-        GuestContractInstance(*)(const HostInterface*, const void*) create_instance;
+        GuestContractInterface_create_instance_fn create_instance;
         //  Destroy an instance of this contract.
         // 
         //  MUST be called before hot-reload for all instances.
@@ -152,7 +155,7 @@ local M = {}
         // 
         //  # Safety
         //  After calling destroy_instance, the instance handle is invalid.
-        void(*)(const HostInterface*, GuestContractInstance, )) destroy_instance;
+        GuestContractInterface_destroy_instance_fn destroy_instance;
         //  Union of dispatch mechanisms — access based on dispatch_type.
         // 
         //  For Native dispatch: use `dispatch.native.functions[fn_id]`.
@@ -160,6 +163,23 @@ local M = {}
         DispatchMechanisms dispatch;
     } GuestContractInterface;
 
+    typedef AbiError(*)(const HostInterface*, const PluginDescriptor*, const GuestContractInterface*) HostInterface_register_contract_fn;
+    typedef uint8_t*(*)(const HostInterface*, size_t, size_t) HostInterface_alloc_fn;
+    typedef void(*)(const HostInterface*, uint8_t*, size_t, size_t) HostInterface_free_fn;
+    typedef GuestContractHandle(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_find_guest_contract_fn;
+    typedef void*(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_find_all_guest_contracts_fn;
+    typedef const GuestContractInterface*(*)(const HostInterface*, GuestContractHandle) HostInterface_resolve_guest_contract_fn;
+    typedef AbiError(*)(const HostInterface*, GuestContractInstance, uint32_t, const void*, void*) HostInterface_call_guest_method_fn;
+    typedef crate::host::HostContractInstance(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_get_host_contract_fn;
+    typedef const crate::host::HostContractInterface*(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_resolve_host_contract_interface_fn;
+    typedef void*(*)(const HostInterface*) HostInterface_list_bundles_fn;
+    typedef void*(*)(const HostInterface*) HostInterface_get_dependencies_fn;
+    typedef AbiError(*)(const HostInterface*, const uint8_t*, size_t) HostInterface_load_bundle_fn;
+    typedef AbiError(*)(const HostInterface*, const uint8_t*, size_t) HostInterface_reload_bundle_fn;
+    typedef AbiError(*)(const HostInterface*, const crate::host::HostContractInterface*) HostInterface_register_host_contract_fn;
+    typedef AbiError(*)(const HostInterface*, StringView, void*) HostInterface_register_loader_fn;
+    typedef size_t(*)(const HostInterface*, uint8_t*, size_t) HostInterface_get_last_error_fn;
+    typedef size_t(*)(const HostInterface*) HostInterface_get_error_len_fn;
     //  Host Interface — function table passed to guests during initialization.
     // 
     //  Contains an opaque runtime pointer and function pointers for guest calls.
@@ -209,7 +229,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const HostInterface*, const PluginDescriptor*, const GuestContractInterface*) register_contract;
+        HostInterface_register_contract_fn register_contract;
         //  Allocate memory using the host allocator.
         // 
         //  Memory allocated here must be freed via `free`.
@@ -222,7 +242,7 @@ local M = {}
         // 
         //  # Returns
         //  Pointer to allocated memory, or null on failure.
-        uint8_t*(*)(const HostInterface*, size_t, size_t) alloc;
+        HostInterface_alloc_fn alloc;
         //  Free memory allocated via `alloc`.
         // 
         //  Must pass the same size and align used for allocation.
@@ -232,7 +252,7 @@ local M = {}
         //  - `ptr`: Pointer to memory to free
         //  - `size`: Size used for allocation
         //  - `align`: Alignment used for allocation
-        void(*)(const HostInterface*, uint8_t*, size_t, usize)) free;
+        HostInterface_free_fn free;
         //  Find a guest contract by contract_id and minimum version.
         // 
         //  Returns a GuestContractHandle that can be resolved to an interface.
@@ -245,7 +265,7 @@ local M = {}
         // 
         //  # Returns
         //  GuestContractHandle for the first matching contract, or null handle.
-        GuestContractHandle(*)(const HostInterface*, uint64_t, uint32_t) find_guest_contract;
+        HostInterface_find_guest_contract_fn find_guest_contract;
         //  Find all guest contracts matching contract_id and minimum version.
         // 
         //  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
@@ -258,7 +278,7 @@ local M = {}
         // 
         //  # Returns
         //  Array of GuestContractHandle. Caller owns and must free.
-        Array<GuestContractHandle>(*)(const HostInterface*, uint64_t, uint32_t) find_all_guest_contracts;
+        HostInterface_find_all_guest_contracts_fn find_all_guest_contracts;
         //  Resolve a GuestContractHandle to a GuestContractInterface pointer.
         // 
         //  Returns null if the handle is invalid or contract was unloaded.
@@ -269,7 +289,7 @@ local M = {}
         // 
         //  # Returns
         //  Pointer to GuestContractInterface, or null if invalid/stale.
-        const GuestContractInterface*(*)(const HostInterface*, GuestContractHandle) resolve_guest_contract;
+        HostInterface_resolve_guest_contract_fn resolve_guest_contract;
         //  Call a method on a guest contract instance.
         // 
         //  This is the cross-dispatch mechanism for calling methods across
@@ -284,7 +304,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const HostInterface*, GuestContractInstance, uint32_t, const void*, void*) call_guest_method;
+        HostInterface_call_guest_method_fn call_guest_method;
         //  Get a host contract instance by contract_id and minimum version.
         // 
         //  For singleton host contracts, returns the same instance every time.
@@ -297,7 +317,7 @@ local M = {}
         // 
         //  # Returns
         //  HostContractInstance for the contract.
-        crate::host::HostContractInstance(*)(const HostInterface*, uint64_t, uint32_t) get_host_contract;
+        HostInterface_get_host_contract_fn get_host_contract;
         //  Resolve a host contract interface by contract_id and minimum version.
         // 
         //  Returns the HostContractInterface pointer for the contract.
@@ -311,7 +331,7 @@ local M = {}
         // 
         //  # Returns
         //  Pointer to HostContractInterface, or null if invalid/not found.
-        const crate::host::HostContractInterface*(*)(const HostInterface*, uint64_t, uint32_t) resolve_host_contract_interface;
+        HostInterface_resolve_host_contract_interface_fn resolve_host_contract_interface;
         //  List all loaded bundles.
         // 
         //  Returns an Array of BundleId. Caller must free via `host->free`.
@@ -322,7 +342,7 @@ local M = {}
         // 
         //  # Returns
         //  Array of BundleId. Caller owns and must free.
-        Array<BundleId>(*)(const HostInterface*) list_bundles;
+        HostInterface_list_bundles_fn list_bundles;
         //  Get dependencies for the calling bundle.
         // 
         //  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
@@ -334,7 +354,7 @@ local M = {}
         //  # Returns
         //  Array of DependencyInfo. Caller owns and must free.
         //  Returns empty array if called outside bundle init context.
-        Array<DependencyInfo>(*)(const HostInterface*) get_dependencies;
+        HostInterface_get_dependencies_fn get_dependencies;
         //  Load a plugin bundle from a path.
         // 
         //  Host applications call this to load a bundle at runtime.
@@ -347,7 +367,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const HostInterface*, const uint8_t*, size_t) load_bundle;
+        HostInterface_load_bundle_fn load_bundle;
         //  Reload a plugin bundle (hot-reload).
         // 
         //  Replaces the bundle's contracts with new versions from the updated binary.
@@ -360,7 +380,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const HostInterface*, const uint8_t*, size_t) reload_bundle;
+        HostInterface_reload_bundle_fn reload_bundle;
         //  Register a host contract interface.
         // 
         //  Host applications register their contracts for plugins to consume.
@@ -371,7 +391,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const HostInterface*, const crate::host::HostContractInterface*) register_host_contract;
+        HostInterface_register_host_contract_fn register_host_contract;
         //  Register a language loader.
         // 
         //  Host applications register loaders for each runtime language they support.
@@ -383,7 +403,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const HostInterface*, StringView, void*) register_loader;
+        HostInterface_register_loader_fn register_loader;
         //  Get last error message.
         // 
         //  Returns the most recent error message from this runtime.
@@ -396,7 +416,7 @@ local M = {}
         // 
         //  # Returns
         //  Number of bytes written (0 if no error or buffer too small).
-        size_t(*)(const HostInterface*, uint8_t*, size_t) get_last_error;
+        HostInterface_get_last_error_fn get_last_error;
         //  Get last error message length.
         // 
         //  Returns the byte length of the most recent error message.
@@ -407,9 +427,20 @@ local M = {}
         // 
         //  # Returns
         //  Length of last error message (0 if no error).
-        size_t(*)(const HostInterface*) get_error_len;
+        HostInterface_get_error_len_fn get_error_len;
     } HostInterface;
 
+    typedef AbiError(*)(const RuntimeInterface*, const c_char*) RuntimeInterface_load_bundle_fn;
+    typedef AbiError(*)(const RuntimeInterface*, BundleId) RuntimeInterface_reload_bundle_fn;
+    typedef AbiError(*)(const RuntimeInterface*, BundleId) RuntimeInterface_unload_bundle_fn;
+    typedef GuestContractHandle(*)(const RuntimeInterface*, uint64_t, uint32_t) RuntimeInterface_find_by_contract_fn;
+    typedef void*(*)(const RuntimeInterface*, uint64_t, uint32_t) RuntimeInterface_find_all_by_contract_fn;
+    typedef const GuestContractInterface*(*)(const RuntimeInterface*, GuestContractHandle) RuntimeInterface_resolve_contract_fn;
+    typedef HostContractInstance(*)(const RuntimeInterface*, uint64_t, uint32_t) RuntimeInterface_get_host_contract_fn;
+    typedef StringView(*)(const RuntimeInterface*) RuntimeInterface_get_last_error_fn;
+    typedef void*(*)(const RuntimeInterface*) RuntimeInterface_list_bundles_fn;
+    typedef void*(*)(const RuntimeInterface*) RuntimeInterface_get_dependencies_fn;
+    typedef void(*)(const RuntimeInterface*) RuntimeInterface_destroy_fn;
     //  Runtime Interface — function table returned to host from polyplug_runtime_create().
     // 
     //  Contains an opaque runtime pointer and function pointers for host calls.
@@ -458,7 +489,7 @@ local M = {}
         //  # Returns
         //  AbiError::OK on success, error code on failure.
         //  Use `get_last_error()` for detailed error message.
-        AbiError(*)(const RuntimeInterface*, const c_char*) load_bundle;
+        RuntimeInterface_load_bundle_fn load_bundle;
         //  Reload a bundle (hot-reload).
         // 
         //  Triggers hot-reload of the specified bundle. The runtime will:
@@ -474,7 +505,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const RuntimeInterface*, BundleId) reload_bundle;
+        RuntimeInterface_reload_bundle_fn reload_bundle;
         //  Unload a bundle.
         // 
         //  Removes the bundle and all its guest contracts from the registry.
@@ -486,7 +517,7 @@ local M = {}
         // 
         //  # Returns
         //  AbiError::OK on success, error code on failure.
-        AbiError(*)(const RuntimeInterface*, BundleId) unload_bundle;
+        RuntimeInterface_unload_bundle_fn unload_bundle;
         //  Find a guest contract by contract_id and minimum version.
         // 
         //  Returns a GuestContractHandle that can be resolved to an interface.
@@ -499,7 +530,7 @@ local M = {}
         // 
         //  # Returns
         //  GuestContractHandle for the first matching contract, or null handle.
-        GuestContractHandle(*)(const RuntimeInterface*, uint64_t, uint32_t) find_by_contract;
+        RuntimeInterface_find_by_contract_fn find_by_contract;
         //  Find all guest contracts matching contract_id and minimum version.
         // 
         //  Returns an Array of GuestContractHandle. Caller must free via host->free.
@@ -512,7 +543,7 @@ local M = {}
         // 
         //  # Returns
         //  Array of GuestContractHandle. Caller owns and must free.
-        Array<GuestContractHandle>(*)(const RuntimeInterface*, uint64_t, uint32_t) find_all_by_contract;
+        RuntimeInterface_find_all_by_contract_fn find_all_by_contract;
         //  Resolve a GuestContractHandle to a GuestContractInterface pointer.
         // 
         //  Returns null if the handle is invalid or contract was unloaded.
@@ -523,7 +554,7 @@ local M = {}
         // 
         //  # Returns
         //  Pointer to GuestContractInterface, or null if invalid/stale.
-        const GuestContractInterface*(*)(const RuntimeInterface*, GuestContractHandle) resolve_contract;
+        RuntimeInterface_resolve_contract_fn resolve_contract;
         //  Get a host contract instance by contract_id and minimum version.
         // 
         //  For singleton host contracts, returns the same instance every time.
@@ -536,7 +567,7 @@ local M = {}
         // 
         //  # Returns
         //  HostContractInstance for the contract.
-        HostContractInstance(*)(const RuntimeInterface*, uint64_t, uint32_t) get_host_contract;
+        RuntimeInterface_get_host_contract_fn get_host_contract;
         //  Get the last error message.
         // 
         //  Returns detailed error message for the most recent failed operation.
@@ -547,7 +578,7 @@ local M = {}
         // 
         //  # Returns
         //  StringView containing the error message, or empty string if no error.
-        StringView(*)(const RuntimeInterface*) get_last_error;
+        RuntimeInterface_get_last_error_fn get_last_error;
         //  List all loaded bundles.
         // 
         //  Returns an Array of BundleId. Caller must free via host->free.
@@ -558,7 +589,7 @@ local M = {}
         // 
         //  # Returns
         //  Array of BundleId. Caller owns and must free.
-        Array<BundleId>(*)(const RuntimeInterface*) list_bundles;
+        RuntimeInterface_list_bundles_fn list_bundles;
         //  Get dependencies (returns empty array for host context).
         // 
         //  Hosts have no bundle dependencies, so this returns an empty array.
@@ -569,7 +600,7 @@ local M = {}
         // 
         //  # Returns
         //  Empty Array of DependencyInfo. Caller owns and must free.
-        Array<DependencyInfo>(*)(const RuntimeInterface*) get_dependencies;
+        RuntimeInterface_get_dependencies_fn get_dependencies;
         //  Destroy the runtime and free this interface.
         // 
         //  # Arguments
@@ -578,7 +609,7 @@ local M = {}
         //  # Safety
         //  After calling destroy, the pointer is invalid and must not be used.
         //  All instances must be destroyed before calling this.
-        void(*)(const RuntimeInterface)*) destroy;
+        RuntimeInterface_destroy_fn destroy;
     } RuntimeInterface;
 
     //  Opaque handle to a host contract instance.
@@ -591,6 +622,8 @@ local M = {}
         void* data;
     } HostContractInstance;
 
+    typedef HostContractInstance(*)(const HostContractInterface*, const void*) HostContractInterface_create_instance_fn;
+    typedef void(*)(const HostContractInterface*, HostContractInstance) HostContractInterface_destroy_instance_fn;
     //  Host Contract Interface — for host-provided services.
     // 
     //  Host contracts are services provided by the host application to plugins.
@@ -655,7 +688,7 @@ local M = {}
         // 
         //  # Returns
         //  Opaque instance handle, or null handle on failure.
-        HostContractInstance(*)(const HostContractInterface*, const void*) create_instance;
+        HostContractInterface_create_instance_fn create_instance;
         //  Destroy an instance of this host contract.
         // 
         //  For singleton contracts, this is typically a no-op (singleton lives forever).
@@ -667,7 +700,7 @@ local M = {}
         // 
         //  # Safety
         //  After calling destroy_instance, the instance handle is invalid.
-        void(*)(const HostContractInterface*, HostContractInstance, )) destroy_instance;
+        HostContractInterface_destroy_instance_fn destroy_instance;
         //  Union of dispatch mechanisms — access based on dispatch_type.
         // 
         //  For Native dispatch: use `dispatch.native.functions[fn_id]`.
@@ -722,6 +755,7 @@ local M = {}
         uint32_t index;
     } GuestContractHandle;
 
+    typedef void(*)(ReloadPhase) RuntimeConfig_on_reload_fn;
     //  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
     // 
     //  # OWNERSHIP
@@ -733,7 +767,7 @@ local M = {}
         //  Whether hot-reload is enabled.
         uint8_t hot_reload_enabled;
         //  Optional hot-reload callback, or null for no callback.
-        void(*)(ReloadPhase)>) on_reload;
+        RuntimeConfig_on_reload_fn on_reload;
     } RuntimeConfig;
 
     //  FFI-safe reload phase for hot-reload callbacks.

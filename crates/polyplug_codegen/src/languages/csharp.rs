@@ -40,6 +40,17 @@ impl CSharpGenerator {
         rust_type.starts_with("Array<")
     }
 
+    /// Convert a compact fn ptr parameter string to a C# type.
+    ///
+    /// The compact format from `quote!()` is `name:type` with no spaces,
+    /// e.g., `this:*constHostInterface` or `size:usize`.
+    /// This splits on `:` and converts only the type part.
+    fn convert_fn_param(param: &str) -> String {
+        let parts: Vec<&str> = param.splitn(2, ':').collect();
+        let type_part = if parts.len() == 2 { parts[1] } else { parts[0] };
+        Self::rust_type_to_csharp(type_part.trim())
+    }
+
     /// Parse a function pointer type string and return (return_type, param_types).
     fn parse_function_pointer(type_name: &str) -> Option<(String, Vec<String>)> {
         let type_str = Self::strip_option(type_name);
@@ -92,7 +103,7 @@ impl CSharpGenerator {
                 ',' if pdepth == 0 => {
                     let p = current.trim();
                     if !p.is_empty() {
-                        params.push(Self::rust_type_to_csharp(p));
+                        params.push(Self::convert_fn_param(p));
                     }
                     current.clear();
                 }
@@ -102,7 +113,7 @@ impl CSharpGenerator {
             }
         }
         if !current.trim().is_empty() {
-            params.push(Self::rust_type_to_csharp(current.trim()));
+            params.push(Self::convert_fn_param(current.trim()));
         }
 
         Some((return_type, params))

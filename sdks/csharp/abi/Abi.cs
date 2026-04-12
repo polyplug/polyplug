@@ -19,6 +19,9 @@ public struct NativeDispatch
 ///
 ///  Used when `dispatch_type == DispatchType::VirtualMachine`.
 ///  The `call` function receives `loader_data` which contains VM-specific state.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError VmDispatchCallDelegate(VmLoaderData arg0, GuestContractInstance arg1, uint arg2, IntPtr arg3, IntPtr arg4);
+
 [StructLayout(LayoutKind.Sequential)]
 public struct VmDispatch
 {
@@ -30,7 +33,7 @@ public struct VmDispatch
     ///  - `fn_id`: Function index within the contract
     ///  - `args`: Pointer to packed arguments (ABI-specific layout)
     ///  - `out`: Pointer to output buffer for return value
-    public unsafeextern"C"fn(loader_data:VmLoaderData,instance:GuestContractInstance,fn_id:u32,args:*const(),out:*mut(),)->AbiError Call;
+    public VmDispatchCallDelegate Call;
     ///  Loader-specific data handle.
     ///  Opaque to the host; interpreted by the dispatch function.
     public VmLoaderData LoaderData;
@@ -119,6 +122,12 @@ public struct GuestContractInstance
 ///  # Dispatch
 ///  - `dispatch_type == Native`: Call via `dispatch.native.functions[fn_id](instance, args, out)`
 ///  - `dispatch_type == VirtualMachine`: Call via `dispatch.vm.call(loader_data, instance, fn_id, args, out)`
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate GuestContractInstance GuestContractInterfaceCreateInstanceDelegate(IntPtr arg0, IntPtr arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void GuestContractInterfaceDestroyInstanceDelegate(IntPtr arg0, GuestContractInstance arg1);
+
 [StructLayout(LayoutKind.Sequential)]
 public struct GuestContractInterface
 {
@@ -151,7 +160,7 @@ public struct GuestContractInterface
     ///
     ///  # Thread Safety
     ///  May be called from any thread. Implementation must handle synchronization.
-    public unsafeextern"C"fn(host:*constHostInterface,args:*const(),)->GuestContractInstance CreateInstance;
+    public GuestContractInterfaceCreateInstanceDelegate CreateInstance;
     ///  Destroy an instance of this contract.
     ///
     ///  MUST be called before hot-reload for all instances.
@@ -163,7 +172,7 @@ public struct GuestContractInterface
     ///
     ///  # Safety
     ///  After calling destroy_instance, the instance handle is invalid.
-    public unsafeextern"C"fn(host:*constHostInterface,instance:GuestContractInstance,) DestroyInstance;
+    public GuestContractInterfaceDestroyInstanceDelegate DestroyInstance;
     ///  Union of dispatch mechanisms — access based on dispatch_type.
     ///
     ///  For Native dispatch: use `dispatch.native.functions[fn_id]`.
@@ -199,6 +208,57 @@ public struct GuestContractInterface
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing guests to call: `host->find_by_contract(host, id, ver)`
 ///  SDKs hide this pattern: `host.find_by_contract(id, ver)`
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError HostInterfaceRegisterContractDelegate(IntPtr arg0, IntPtr arg1, IntPtr arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr HostInterfaceAllocDelegate(IntPtr arg0, nuint arg1, nuint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void HostInterfaceFreeDelegate(IntPtr arg0, IntPtr arg1, nuint arg2, nuint arg3);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate GuestContractHandle HostInterfaceFindGuestContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr HostInterfaceFindAllGuestContractsDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr HostInterfaceResolveGuestContractDelegate(IntPtr arg0, GuestContractHandle arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError HostInterfaceCallGuestMethodDelegate(IntPtr arg0, GuestContractInstance arg1, uint arg2, IntPtr arg3, IntPtr arg4);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate crate::host::HostContractInstance HostInterfaceGetHostContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr HostInterfaceResolveHostContractInterfaceDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr HostInterfaceListBundlesDelegate(IntPtr arg0);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr HostInterfaceGetDependenciesDelegate(IntPtr arg0);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError HostInterfaceLoadBundleDelegate(IntPtr arg0, IntPtr arg1, nuint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError HostInterfaceReloadBundleDelegate(IntPtr arg0, IntPtr arg1, nuint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError HostInterfaceRegisterHostContractDelegate(IntPtr arg0, IntPtr arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError HostInterfaceRegisterLoaderDelegate(IntPtr arg0, StringView arg1, IntPtr arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate nuint HostInterfaceGetLastErrorDelegate(IntPtr arg0, IntPtr arg1, nuint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate nuint HostInterfaceGetErrorLenDelegate(IntPtr arg0);
+
 [StructLayout(LayoutKind.Sequential)]
 public struct HostInterface
 {
@@ -222,7 +282,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constHostInterface,descriptor:*constPluginDescriptor,interface:*constGuestContractInterface,)->AbiError RegisterContract;
+    public HostInterfaceRegisterContractDelegate RegisterContract;
     ///  Allocate memory using the host allocator.
     ///
     ///  Memory allocated here must be freed via `free`.
@@ -235,7 +295,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Pointer to allocated memory, or null on failure.
-    public unsafeextern"C"fn(this:*constHostInterface,size:usize,align:usize)->*mutu8 Alloc;
+    public HostInterfaceAllocDelegate Alloc;
     ///  Free memory allocated via `alloc`.
     ///
     ///  Must pass the same size and align used for allocation.
@@ -245,7 +305,7 @@ public struct HostInterface
     ///  - `ptr`: Pointer to memory to free
     ///  - `size`: Size used for allocation
     ///  - `align`: Alignment used for allocation
-    public unsafeextern"C"fn(this:*constHostInterface,ptr:*mutu8,size:usize,align:usize) Free;
+    public HostInterfaceFreeDelegate Free;
     ///  Find a guest contract by contract_id and minimum version.
     ///
     ///  Returns a GuestContractHandle that can be resolved to an interface.
@@ -258,7 +318,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  GuestContractHandle for the first matching contract, or null handle.
-    public unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->GuestContractHandle FindGuestContract;
+    public HostInterfaceFindGuestContractDelegate FindGuestContract;
     ///  Find all guest contracts matching contract_id and minimum version.
     ///
     ///  Returns an Array of GuestContractHandle. Caller must free via `host->free`.
@@ -271,7 +331,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Array of GuestContractHandle. Caller owns and must free.
-    public unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->Array<GuestContractHandle> FindAllGuestContracts;
+    public HostInterfaceFindAllGuestContractsDelegate FindAllGuestContracts;
     ///  Resolve a GuestContractHandle to a GuestContractInterface pointer.
     ///
     ///  Returns null if the handle is invalid or contract was unloaded.
@@ -282,7 +342,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Pointer to GuestContractInterface, or null if invalid/stale.
-    public unsafeextern"C"fn(this:*constHostInterface,handle:GuestContractHandle,)->*constGuestContractInterface ResolveGuestContract;
+    public HostInterfaceResolveGuestContractDelegate ResolveGuestContract;
     ///  Call a method on a guest contract instance.
     ///
     ///  This is the cross-dispatch mechanism for calling methods across
@@ -297,7 +357,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constHostInterface,instance:GuestContractInstance,method_id:u32,args:*const(),out:*mut(),)->AbiError CallGuestMethod;
+    public HostInterfaceCallGuestMethodDelegate CallGuestMethod;
     ///  Get a host contract instance by contract_id and minimum version.
     ///
     ///  For singleton host contracts, returns the same instance every time.
@@ -310,7 +370,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  HostContractInstance for the contract.
-    public unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->crate::host::HostContractInstance GetHostContract;
+    public HostInterfaceGetHostContractDelegate GetHostContract;
     ///  Resolve a host contract interface by contract_id and minimum version.
     ///
     ///  Returns the HostContractInterface pointer for the contract.
@@ -324,7 +384,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Pointer to HostContractInterface, or null if invalid/not found.
-    public unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->*constcrate::host::HostContractInterface ResolveHostContractInterface;
+    public HostInterfaceResolveHostContractInterfaceDelegate ResolveHostContractInterface;
     ///  List all loaded bundles.
     ///
     ///  Returns an Array of BundleId. Caller must free via `host->free`.
@@ -335,7 +395,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Array of BundleId. Caller owns and must free.
-    public unsafeextern"C"fn(this:*constHostInterface,)->Array<BundleId> ListBundles;
+    public HostInterfaceListBundlesDelegate ListBundles;
     ///  Get dependencies for the calling bundle.
     ///
     ///  Uses bundle_id from current BundleInitContext (TLS) to look up declared deps.
@@ -347,7 +407,7 @@ public struct HostInterface
     ///  # Returns
     ///  Array of DependencyInfo. Caller owns and must free.
     ///  Returns empty array if called outside bundle init context.
-    public unsafeextern"C"fn(this:*constHostInterface,)->Array<DependencyInfo> GetDependencies;
+    public HostInterfaceGetDependenciesDelegate GetDependencies;
     ///  Load a plugin bundle from a path.
     ///
     ///  Host applications call this to load a bundle at runtime.
@@ -360,7 +420,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constHostInterface,path:*constu8,path_len:usize,)->AbiError LoadBundle;
+    public HostInterfaceLoadBundleDelegate LoadBundle;
     ///  Reload a plugin bundle (hot-reload).
     ///
     ///  Replaces the bundle's contracts with new versions from the updated binary.
@@ -373,7 +433,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constHostInterface,path:*constu8,path_len:usize,)->AbiError ReloadBundle;
+    public HostInterfaceReloadBundleDelegate ReloadBundle;
     ///  Register a host contract interface.
     ///
     ///  Host applications register their contracts for plugins to consume.
@@ -384,7 +444,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constHostInterface,interface:*constcrate::host::HostContractInterface,)->AbiError RegisterHostContract;
+    public HostInterfaceRegisterHostContractDelegate RegisterHostContract;
     ///  Register a language loader.
     ///
     ///  Host applications register loaders for each runtime language they support.
@@ -396,7 +456,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public IntPtr RegisterLoader;
+    public HostInterfaceRegisterLoaderDelegate RegisterLoader;
     ///  Get last error message.
     ///
     ///  Returns the most recent error message from this runtime.
@@ -409,7 +469,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Number of bytes written (0 if no error or buffer too small).
-    public unsafeextern"C"fn(this:*constHostInterface,buf:*mutu8,buf_len:usize,)->usize GetLastError;
+    public HostInterfaceGetLastErrorDelegate GetLastError;
     ///  Get last error message length.
     ///
     ///  Returns the byte length of the most recent error message.
@@ -420,7 +480,7 @@ public struct HostInterface
     ///
     ///  # Returns
     ///  Length of last error message (0 if no error).
-    public unsafeextern"C"fn(this:*constHostInterface,)->usize GetErrorLen;
+    public HostInterfaceGetErrorLenDelegate GetErrorLen;
 }
 
 ///  Runtime Interface — function table returned to host from polyplug_runtime_create().
@@ -451,6 +511,39 @@ public struct HostInterface
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing hosts to call: `rt->load_bundle(rt, path)`
 ///  SDKs hide this pattern: `rt.load_bundle(path)`
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError RuntimeInterfaceLoadBundleDelegate(IntPtr arg0, IntPtr arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError RuntimeInterfaceReloadBundleDelegate(IntPtr arg0, BundleId arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate AbiError RuntimeInterfaceUnloadBundleDelegate(IntPtr arg0, BundleId arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate GuestContractHandle RuntimeInterfaceFindByContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr RuntimeInterfaceFindAllByContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr RuntimeInterfaceResolveContractDelegate(IntPtr arg0, GuestContractHandle arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate HostContractInstance RuntimeInterfaceGetHostContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate StringView RuntimeInterfaceGetLastErrorDelegate(IntPtr arg0);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr RuntimeInterfaceListBundlesDelegate(IntPtr arg0);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate IntPtr RuntimeInterfaceGetDependenciesDelegate(IntPtr arg0);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void RuntimeInterfaceDestroyDelegate(IntPtr arg0);
+
 [StructLayout(LayoutKind.Sequential)]
 public struct RuntimeInterface
 {
@@ -473,7 +566,7 @@ public struct RuntimeInterface
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
     ///  Use `get_last_error()` for detailed error message.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,path:*constc_char)->AbiError LoadBundle;
+    public RuntimeInterfaceLoadBundleDelegate LoadBundle;
     ///  Reload a bundle (hot-reload).
     ///
     ///  Triggers hot-reload of the specified bundle. The runtime will:
@@ -489,7 +582,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,bundle_id:BundleId)->AbiError ReloadBundle;
+    public RuntimeInterfaceReloadBundleDelegate ReloadBundle;
     ///  Unload a bundle.
     ///
     ///  Removes the bundle and all its guest contracts from the registry.
@@ -501,7 +594,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  AbiError::OK on success, error code on failure.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,bundle_id:BundleId)->AbiError UnloadBundle;
+    public RuntimeInterfaceUnloadBundleDelegate UnloadBundle;
     ///  Find a guest contract by contract_id and minimum version.
     ///
     ///  Returns a GuestContractHandle that can be resolved to an interface.
@@ -514,7 +607,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  GuestContractHandle for the first matching contract, or null handle.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,contract_id:u64,min_version:u32,)->GuestContractHandle FindByContract;
+    public RuntimeInterfaceFindByContractDelegate FindByContract;
     ///  Find all guest contracts matching contract_id and minimum version.
     ///
     ///  Returns an Array of GuestContractHandle. Caller must free via host->free.
@@ -527,7 +620,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  Array of GuestContractHandle. Caller owns and must free.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,contract_id:u64,min_version:u32,)->Array<GuestContractHandle> FindAllByContract;
+    public RuntimeInterfaceFindAllByContractDelegate FindAllByContract;
     ///  Resolve a GuestContractHandle to a GuestContractInterface pointer.
     ///
     ///  Returns null if the handle is invalid or contract was unloaded.
@@ -538,7 +631,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  Pointer to GuestContractInterface, or null if invalid/stale.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,handle:GuestContractHandle,)->*constGuestContractInterface ResolveContract;
+    public RuntimeInterfaceResolveContractDelegate ResolveContract;
     ///  Get a host contract instance by contract_id and minimum version.
     ///
     ///  For singleton host contracts, returns the same instance every time.
@@ -551,7 +644,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  HostContractInstance for the contract.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,contract_id:u64,min_version:u32,)->HostContractInstance GetHostContract;
+    public RuntimeInterfaceGetHostContractDelegate GetHostContract;
     ///  Get the last error message.
     ///
     ///  Returns detailed error message for the most recent failed operation.
@@ -562,7 +655,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  StringView containing the error message, or empty string if no error.
-    public unsafeextern"C"fn(this:*constRuntimeInterface)->StringView GetLastError;
+    public RuntimeInterfaceGetLastErrorDelegate GetLastError;
     ///  List all loaded bundles.
     ///
     ///  Returns an Array of BundleId. Caller must free via host->free.
@@ -573,7 +666,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  Array of BundleId. Caller owns and must free.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,)->Array<BundleId> ListBundles;
+    public RuntimeInterfaceListBundlesDelegate ListBundles;
     ///  Get dependencies (returns empty array for host context).
     ///
     ///  Hosts have no bundle dependencies, so this returns an empty array.
@@ -584,7 +677,7 @@ public struct RuntimeInterface
     ///
     ///  # Returns
     ///  Empty Array of DependencyInfo. Caller owns and must free.
-    public unsafeextern"C"fn(this:*constRuntimeInterface,)->Array<DependencyInfo> GetDependencies;
+    public RuntimeInterfaceGetDependenciesDelegate GetDependencies;
     ///  Destroy the runtime and free this interface.
     ///
     ///  # Arguments
@@ -593,7 +686,7 @@ public struct RuntimeInterface
     ///  # Safety
     ///  After calling destroy, the pointer is invalid and must not be used.
     ///  All instances must be destroyed before calling this.
-    public unsafeextern"C"fn(this:*constRuntimeInterface) Destroy;
+    public RuntimeInterfaceDestroyDelegate Destroy;
 }
 
 ///  Opaque handle to a host contract instance.
@@ -634,6 +727,12 @@ public struct HostContractInstance
 ///  # Self-Passing Pattern
 ///  `create_instance` and `destroy_instance` take `self: *const HostContractInterface`.
 ///  The runtime field provides access to runtime services.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate HostContractInstance HostContractInterfaceCreateInstanceDelegate(IntPtr arg0, IntPtr arg1);
+
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void HostContractInterfaceDestroyInstanceDelegate(IntPtr arg0, HostContractInstance arg1);
+
 [StructLayout(LayoutKind.Sequential)]
 public struct HostContractInterface
 {
@@ -674,7 +773,7 @@ public struct HostContractInterface
     ///
     ///  # Returns
     ///  Opaque instance handle, or null handle on failure.
-    public unsafeextern"C"fn(this:*constHostContractInterface,args:*const(),)->HostContractInstance CreateInstance;
+    public HostContractInterfaceCreateInstanceDelegate CreateInstance;
     ///  Destroy an instance of this host contract.
     ///
     ///  For singleton contracts, this is typically a no-op (singleton lives forever).
@@ -686,7 +785,7 @@ public struct HostContractInterface
     ///
     ///  # Safety
     ///  After calling destroy_instance, the instance handle is invalid.
-    public unsafeextern"C"fn(this:*constHostContractInterface,instance:HostContractInstance,) DestroyInstance;
+    public HostContractInterfaceDestroyInstanceDelegate DestroyInstance;
     ///  Union of dispatch mechanisms — access based on dispatch_type.
     ///
     ///  For Native dispatch: use `dispatch.native.functions[fn_id]`.
@@ -752,6 +851,10 @@ public struct GuestContractHandle
 ///  # OWNERSHIP
 ///  Borrowed for the duration of the runtime build only.
 ///  The runtime copies any data it needs to retain.
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+public delegate void RuntimeConfigOnReloadDelegate(ReloadPhase arg0);
+
+// Nullable delegate (reference type, can be null).
 [StructLayout(LayoutKind.Sequential)]
 public struct RuntimeConfig
 {
@@ -760,7 +863,7 @@ public struct RuntimeConfig
     ///  Whether hot-reload is enabled.
     public bool HotReloadEnabled;
     ///  Optional hot-reload callback, or null for no callback.
-    public Option<unsafeextern"C"fn(ReloadPhase)> OnReload;
+    public RuntimeConfigOnReloadDelegate OnReload;
 }
 
 ///  FFI-safe reload phase for hot-reload callbacks.

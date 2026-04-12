@@ -18,6 +18,7 @@ class NativeDispatch(ctypes.Structure):
     ]
 
 
+_vm_dispatch_call_t = ctypes.CFUNCTYPE(AbiError, VmLoaderData, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
 class VmDispatch(ctypes.Structure):
     """ VM dispatch data — call through a dispatch function.
     
@@ -25,7 +26,7 @@ class VmDispatch(ctypes.Structure):
      The `call` function receives `loader_data` which contains VM-specific state.
     """
     _fields_ = [
-        ("call", unsafeextern"C"fn(loader_data:VmLoaderData,instance:GuestContractInstance,fn_id:u32,args:*const(),out:*mut(),)->AbiError),
+        ("call", _vm_dispatch_call_t),
         ("loader_data", VmLoaderData),
     ]
 
@@ -79,6 +80,8 @@ class GuestContractInstance(ctypes.Structure):
     ]
 
 
+_guest_contract_interface_create_instance_t = ctypes.CFUNCTYPE(GuestContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_guest_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, GuestContractInstance)
 class GuestContractInterface(ctypes.Structure):
     """ Guest Contract Interface — one per contract implemented by a guest (plugin).
     
@@ -108,12 +111,29 @@ class GuestContractInterface(ctypes.Structure):
         ("contract_id", GuestContractId),
         ("contract_version", Version),
         ("dispatch_type", DispatchType),
-        ("create_instance", unsafeextern"C"fn(host:*constHostInterface,args:*const(),)->GuestContractInstance),
-        ("destroy_instance", unsafeextern"C"fn(host:*constHostInterface,instance:GuestContractInstance,)),
+        ("create_instance", _guest_contract_interface_create_instance_t),
+        ("destroy_instance", _guest_contract_interface_destroy_instance_t),
         ("dispatch", DispatchMechanisms),
     ]
 
 
+_host_interface_register_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+_host_interface_alloc_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
+_host_interface_free_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t)
+_host_interface_find_guest_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_interface_find_all_guest_contracts_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_interface_resolve_guest_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
+_host_interface_call_guest_method_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, GuestContractInstance, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p)
+_host_interface_get_host_contract_t = ctypes.CFUNCTYPE(crate::host::HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_interface_resolve_host_contract_interface_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_host_interface_list_bundles_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+_host_interface_get_dependencies_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+_host_interface_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
+_host_interface_reload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
+_host_interface_register_host_contract_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
+_host_interface_register_loader_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, StringView, ctypes.c_void_p)
+_host_interface_get_last_error_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
+_host_interface_get_error_len_t = ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_void_p)
 class HostInterface(ctypes.Structure):
     """ Host Interface — function table passed to guests during initialization.
     
@@ -146,26 +166,37 @@ class HostInterface(ctypes.Structure):
     """
     _fields_ = [
         ("runtime", ctypes.c_void_p),
-        ("register_contract", unsafeextern"C"fn(this:*constHostInterface,descriptor:*constPluginDescriptor,interface:*constGuestContractInterface,)->AbiError),
-        ("alloc", unsafeextern"C"fn(this:*constHostInterface,size:usize,align:usize)->*mutu8),
-        ("free", unsafeextern"C"fn(this:*constHostInterface,ptr:*mutu8,size:usize,align:usize)),
-        ("find_guest_contract", unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->GuestContractHandle),
-        ("find_all_guest_contracts", unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->Array<GuestContractHandle>),
-        ("resolve_guest_contract", unsafeextern"C"fn(this:*constHostInterface,handle:GuestContractHandle,)->*constGuestContractInterface),
-        ("call_guest_method", unsafeextern"C"fn(this:*constHostInterface,instance:GuestContractInstance,method_id:u32,args:*const(),out:*mut(),)->AbiError),
-        ("get_host_contract", unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->crate::host::HostContractInstance),
-        ("resolve_host_contract_interface", unsafeextern"C"fn(this:*constHostInterface,contract_id:u64,min_version:u32,)->*constcrate::host::HostContractInterface),
-        ("list_bundles", unsafeextern"C"fn(this:*constHostInterface,)->Array<BundleId>),
-        ("get_dependencies", unsafeextern"C"fn(this:*constHostInterface,)->Array<DependencyInfo>),
-        ("load_bundle", unsafeextern"C"fn(this:*constHostInterface,path:*constu8,path_len:usize,)->AbiError),
-        ("reload_bundle", unsafeextern"C"fn(this:*constHostInterface,path:*constu8,path_len:usize,)->AbiError),
-        ("register_host_contract", unsafeextern"C"fn(this:*constHostInterface,interface:*constcrate::host::HostContractInterface,)->AbiError),
-        ("register_loader", ctypes.c_void_p),
-        ("get_last_error", unsafeextern"C"fn(this:*constHostInterface,buf:*mutu8,buf_len:usize,)->usize),
-        ("get_error_len", unsafeextern"C"fn(this:*constHostInterface,)->usize),
+        ("register_contract", _host_interface_register_contract_t),
+        ("alloc", _host_interface_alloc_t),
+        ("free", _host_interface_free_t),
+        ("find_guest_contract", _host_interface_find_guest_contract_t),
+        ("find_all_guest_contracts", _host_interface_find_all_guest_contracts_t),
+        ("resolve_guest_contract", _host_interface_resolve_guest_contract_t),
+        ("call_guest_method", _host_interface_call_guest_method_t),
+        ("get_host_contract", _host_interface_get_host_contract_t),
+        ("resolve_host_contract_interface", _host_interface_resolve_host_contract_interface_t),
+        ("list_bundles", _host_interface_list_bundles_t),
+        ("get_dependencies", _host_interface_get_dependencies_t),
+        ("load_bundle", _host_interface_load_bundle_t),
+        ("reload_bundle", _host_interface_reload_bundle_t),
+        ("register_host_contract", _host_interface_register_host_contract_t),
+        ("register_loader", _host_interface_register_loader_t),
+        ("get_last_error", _host_interface_get_last_error_t),
+        ("get_error_len", _host_interface_get_error_len_t),
     ]
 
 
+_runtime_interface_load_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, ctypes.c_void_p)
+_runtime_interface_reload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, BundleId)
+_runtime_interface_unload_bundle_t = ctypes.CFUNCTYPE(AbiError, ctypes.c_void_p, BundleId)
+_runtime_interface_find_by_contract_t = ctypes.CFUNCTYPE(GuestContractHandle, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_runtime_interface_find_all_by_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_runtime_interface_resolve_contract_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, GuestContractHandle)
+_runtime_interface_get_host_contract_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint32)
+_runtime_interface_get_last_error_t = ctypes.CFUNCTYPE(StringView, ctypes.c_void_p)
+_runtime_interface_list_bundles_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+_runtime_interface_get_dependencies_t = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+_runtime_interface_destroy_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
 class RuntimeInterface(ctypes.Structure):
     """ Runtime Interface — function table returned to host from polyplug_runtime_create().
     
@@ -198,17 +229,17 @@ class RuntimeInterface(ctypes.Structure):
     """
     _fields_ = [
         ("runtime", ctypes.c_void_p),
-        ("load_bundle", unsafeextern"C"fn(this:*constRuntimeInterface,path:*constc_char)->AbiError),
-        ("reload_bundle", unsafeextern"C"fn(this:*constRuntimeInterface,bundle_id:BundleId)->AbiError),
-        ("unload_bundle", unsafeextern"C"fn(this:*constRuntimeInterface,bundle_id:BundleId)->AbiError),
-        ("find_by_contract", unsafeextern"C"fn(this:*constRuntimeInterface,contract_id:u64,min_version:u32,)->GuestContractHandle),
-        ("find_all_by_contract", unsafeextern"C"fn(this:*constRuntimeInterface,contract_id:u64,min_version:u32,)->Array<GuestContractHandle>),
-        ("resolve_contract", unsafeextern"C"fn(this:*constRuntimeInterface,handle:GuestContractHandle,)->*constGuestContractInterface),
-        ("get_host_contract", unsafeextern"C"fn(this:*constRuntimeInterface,contract_id:u64,min_version:u32,)->HostContractInstance),
-        ("get_last_error", unsafeextern"C"fn(this:*constRuntimeInterface)->StringView),
-        ("list_bundles", unsafeextern"C"fn(this:*constRuntimeInterface,)->Array<BundleId>),
-        ("get_dependencies", unsafeextern"C"fn(this:*constRuntimeInterface,)->Array<DependencyInfo>),
-        ("destroy", unsafeextern"C"fn(this:*constRuntimeInterface)),
+        ("load_bundle", _runtime_interface_load_bundle_t),
+        ("reload_bundle", _runtime_interface_reload_bundle_t),
+        ("unload_bundle", _runtime_interface_unload_bundle_t),
+        ("find_by_contract", _runtime_interface_find_by_contract_t),
+        ("find_all_by_contract", _runtime_interface_find_all_by_contract_t),
+        ("resolve_contract", _runtime_interface_resolve_contract_t),
+        ("get_host_contract", _runtime_interface_get_host_contract_t),
+        ("get_last_error", _runtime_interface_get_last_error_t),
+        ("list_bundles", _runtime_interface_list_bundles_t),
+        ("get_dependencies", _runtime_interface_get_dependencies_t),
+        ("destroy", _runtime_interface_destroy_t),
     ]
 
 
@@ -223,6 +254,8 @@ class HostContractInstance(ctypes.Structure):
     ]
 
 
+_host_contract_interface_create_instance_t = ctypes.CFUNCTYPE(HostContractInstance, ctypes.c_void_p, ctypes.c_void_p)
+_host_contract_interface_destroy_instance_t = ctypes.CFUNCTYPE(None, ctypes.c_void_p, HostContractInstance)
 class HostContractInterface(ctypes.Structure):
     """ Host Contract Interface — for host-provided services.
     
@@ -257,8 +290,8 @@ class HostContractInterface(ctypes.Structure):
         ("singleton", ctypes.c_bool),
         ("dispatch_type", DispatchType),
         ("runtime", ctypes.c_void_p),
-        ("create_instance", unsafeextern"C"fn(this:*constHostContractInterface,args:*const(),)->HostContractInstance),
-        ("destroy_instance", unsafeextern"C"fn(this:*constHostContractInterface,instance:HostContractInstance,)),
+        ("create_instance", _host_contract_interface_create_instance_t),
+        ("destroy_instance", _host_contract_interface_destroy_instance_t),
         ("dispatch", DispatchMechanisms),
     ]
 
@@ -313,6 +346,8 @@ class GuestContractHandle(ctypes.Structure):
     ]
 
 
+_runtime_config_on_reload_t = ctypes.CFUNCTYPE(None, ReloadPhase)
+# Nullable function pointer (Option<fn>). Can be set to None.
 class RuntimeConfig(ctypes.Structure):
     """ Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
     
@@ -323,7 +358,7 @@ class RuntimeConfig(ctypes.Structure):
     _fields_ = [
         ("compatibility", Compatibility),
         ("hot_reload_enabled", ctypes.c_bool),
-        ("on_reload", Option<unsafeextern"C"fn(ReloadPhase)>),
+        ("on_reload", _runtime_config_on_reload_t),
     ]
 
 

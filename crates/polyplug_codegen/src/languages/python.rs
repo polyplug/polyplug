@@ -36,6 +36,17 @@ impl PythonGenerator {
         rust_type.starts_with("Option<") && rust_type.ends_with('>')
     }
 
+    /// Convert a compact fn ptr parameter string to a ctypes type.
+    ///
+    /// The compact format from `quote!()` is `name:type` with no spaces,
+    /// e.g., `host:*constHostInterface` or `size:usize`.
+    /// This splits on `:` and converts only the type part.
+    fn convert_fn_param(param: &str) -> String {
+        let parts: Vec<&str> = param.splitn(2, ':').collect();
+        let type_part = if parts.len() == 2 { parts[1] } else { parts[0] };
+        Self::rust_type_to_python(type_part.trim())
+    }
+
     /// Check if a rust_type represents Array<T>.
     fn is_array(rust_type: &str) -> bool {
         rust_type.starts_with("Array<")
@@ -99,7 +110,7 @@ impl PythonGenerator {
                 ',' if pdepth == 0 => {
                     let p = current.trim();
                     if !p.is_empty() {
-                        params.push(Self::rust_type_to_python(p));
+                        params.push(Self::convert_fn_param(p));
                     }
                     current.clear();
                 }
@@ -109,7 +120,7 @@ impl PythonGenerator {
             }
         }
         if !current.trim().is_empty() {
-            params.push(Self::rust_type_to_python(current.trim()));
+            params.push(Self::convert_fn_param(current.trim()));
         }
 
         Some((return_type, params))
