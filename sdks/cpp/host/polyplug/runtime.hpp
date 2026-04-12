@@ -1,16 +1,17 @@
 // THIS FILE IS PART OF polyplug — header-only C++ binding.
 // RAII Runtime wrapper and fluent Builder for the polyplug plugin runtime.
 // Updated for HostInterface-based API (18-04 refactor).
+// All FFI struct types are imported from auto-generated abi.hpp (per D-26).
 
 #pragma once
 
-#include "../../abi/polyplug/abi.hpp"
+#include "polyplug/abi.hpp"
 #include "error.hpp"
 #include "handle.hpp"
-#include "runtime_config.hpp"
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,106 +20,23 @@
 static_assert(POLYPLUG_ABI_VERSION == 1,
     "polyplug header version mismatch — recompile against updated headers");
 
-namespace polyplug {
-
-// ─── HostInterface Struct (C ABI, 144 bytes) ─────────────────────────────────────
-
-/// HostInterface struct — function table for all runtime operations.
-/// Matches Rust #[repr(C)] layout exactly (ABI stability).
-/// Size: 144 bytes (18 pointer fields).
-struct HostInterface {
-    /// Opaque runtime pointer.
-    void* runtime;                          // offset 0
-
-    /// Register a guest contract implementation.
-    /// Called by plugins during polyplug_init().
-    void* register_contract;               // offset 8
-
-    /// Allocate memory using host allocator.
-    void* alloc;                           // offset 16
-
-    /// Free memory allocated via alloc.
-    void* free;                            // offset 24
-
-    /// Find a guest contract by contract_id and minimum version.
-    void* find_guest_contract;             // offset 32
-
-    /// Find all guest contracts matching contract_id.
-    void* find_all_guest_contracts;        // offset 40
-
-    /// Resolve a GuestContractHandle to an interface pointer.
-    void* resolve_guest_contract;          // offset 48
-
-    /// Call a method on a guest contract instance.
-    void* call_guest_method;               // offset 56
-
-    /// Get a host contract instance by contract_id.
-    void* get_host_contract;               // offset 64
-
-    /// Resolve a host contract interface by contract_id.
-    void* resolve_host_contract_interface; // offset 72
-
-    /// List all loaded bundles.
-    void* list_bundles;                    // offset 80
-
-    /// Get dependencies for the calling bundle.
-    void* get_dependencies;                // offset 88
-
-    /// Load a plugin bundle from path.
-    void* load_bundle;                     // offset 96
-
-    /// Reload a plugin bundle (hot-reload).
-    void* reload_bundle;                   // offset 104
-
-    /// Register a host contract interface.
-    void* register_host_contract;          // offset 112
-
-    /// Register a language loader.
-    void* register_loader;                 // offset 120
-
-    /// Get last error message.
-    void* get_last_error;                  // offset 128
-
-    /// Get last error message length.
-    void* get_error_len;                   // offset 136
-};
-
-static_assert(sizeof(HostInterface) == 144, "HostInterface must be 144 bytes (18 pointer fields)");
-
 struct ResolveHandle;
-
-} // namespace polyplug
 
 extern "C" {
     // ─── FFI Exports: Only create and destroy ─────────────────────────────────────
 
     /// Create a new runtime instance with default configuration.
     /// Returns HostInterface* for all operations.
-    const polyplug::HostInterface* polyplug_runtime_create();
+    const HostInterface* polyplug_runtime_create();
 
     /// Create a new runtime instance with options.
     /// Returns HostInterface* for all operations.
-    const polyplug::HostInterface* polyplug_runtime_create_with_options(const void* options);
+    const HostInterface* polyplug_runtime_create_with_options(const void* options);
 
     /// Destroy a runtime instance.
     /// Takes HostInterface* returned by polyplug_runtime_create.
-    void polyplug_runtime_destroy(const polyplug::HostInterface* host);
+    void polyplug_runtime_destroy(const HostInterface* host);
 }
-
-/// FFI RuntimeConfig matching polyplug_abi::RuntimeConfig (24 bytes).
-/// Must be in global namespace to match extern "C" FFI pattern.
-/// Layout verified against Rust offset tests.
-struct RuntimeConfig {
-    uint8_t hot_reload_enabled;           // offset 0, 1 byte
-    // padding 3 bytes (offset 1-3)
-    uint32_t hot_reload_max_retries;      // offset 4, 4 bytes
-    uint64_t hot_reload_retry_interval_ms; // offset 8, 8 bytes
-    uint8_t hot_reload_abort_on_max_retries; // offset 16, 1 byte
-    // padding 3 bytes (offset 17-19)
-    uint32_t compatibility;               // offset 20, 4 bytes (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
-};
-
-static_assert(sizeof(RuntimeConfig) == 24, "RuntimeConfig must be 24 bytes");
 
 namespace polyplug {
 
@@ -136,7 +54,7 @@ public:
             return *this;
         }
 
-        Builder& config(const polyplug::RuntimeConfig& cfg) noexcept {
+        Builder& config(const RuntimeConfig& cfg) noexcept {
             config_ = cfg;
             return *this;
         }
@@ -149,19 +67,7 @@ public:
         Runtime build() {
             // Build with options if config or callback set
             if (config_.has_value() || on_reload_cb_.has_value()) {
-                RuntimeConfig config_c{};
-                if (config_.has_value()) {
-                    config_c.hot_reload_enabled = config_->hot_reload_enabled ? 1 : 0;
-                    config_c.hot_reload_max_retries = config_->hot_reload_max_retries;
-                    config_c.hot_reload_retry_interval_ms = static_cast<uint64_t>(
-                        config_->hot_reload_retry_interval.count());
-                    config_c.hot_reload_abort_on_max_retries = config_->hot_reload_abort_on_max_retries ? 1 : 0;
-                    config_c.compatibility = config_->compatibility;
-                }
-
-                // Create options struct (simplified for FFI)
-                // Note: on_reload callback would need FFI callback wrapper
-                // For now, we pass config only
+                // Per D-22: RuntimeConfig is 16 bytes (compatibility, hot_reload_enabled, on_reload)
                 const HostInterface* h = polyplug_runtime_create();
                 if (h == nullptr) {
                     throw std::runtime_error("polyplug_runtime_create returned null");
@@ -179,7 +85,7 @@ public:
     private:
         std::vector<std::string> plugin_dirs_{};
         uint32_t compatibility_{0U};
-        std::optional<polyplug::RuntimeConfig> config_{};
+        std::optional<RuntimeConfig> config_{};
         std::optional<std::function<void(const ReloadPhase&)>> on_reload_cb_{};
     };
 
@@ -349,7 +255,7 @@ public:
         // This method is deprecated and does nothing
     }
 
-    static void set_config(const polyplug::RuntimeConfig& config) {
+    static void set_config(const RuntimeConfig& config) {
         // Note: set_config was removed from FFI surface in 18-02
         // Config is now passed via Runtime::Builder
     }

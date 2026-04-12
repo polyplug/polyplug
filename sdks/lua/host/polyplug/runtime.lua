@@ -1,37 +1,17 @@
 -- sdks/lua/host/polyplug/runtime.lua
 -- Runtime class with HostInterface-based API (18-04 refactor).
+-- All ABI struct types are imported from the auto-generated abi.lua (per D-26).
 
 local ffi = require('ffi')
 local abi = require('polyplug_abi')
 local reload_phase = require('polyplug.reload_phase')
 
--- ─── HostInterface FFI Definition ───────────────────────────────────────────────
--- HostInterface struct (144 bytes, 18 pointer fields)
--- All operations are accessed through this struct, not via separate FFI functions.
+-- ─── Host-specific FFI definitions ──────────────────────────────────────────────
+-- These are NOT in abi.lua because they are host-side only types.
+-- The ABI types (HostInterface, HostContractInterface, RuntimeConfig, etc.)
+-- are defined in the auto-generated sdks/lua/abi/abi.lua.
 ffi.cdef([[
-    // HostInterface struct — 144 bytes, 18 pointer fields
-    // Field order must match Rust #[repr(C)] layout exactly (ABI stability)
-    typedef struct HostInterface {
-        void* runtime;                          // offset 0
-        void* register_contract;               // offset 8
-        void* alloc;                           // offset 16
-        void* free;                            // offset 24
-        void* find_guest_contract;             // offset 32
-        void* find_all_guest_contracts;        // offset 40
-        void* resolve_guest_contract;          // offset 48
-        void* call_guest_method;               // offset 56
-        void* get_host_contract;               // offset 64
-        void* resolve_host_contract_interface; // offset 72
-        void* list_bundles;                    // offset 80
-        void* get_dependencies;                // offset 88
-        void* load_bundle;                     // offset 96
-        void* reload_bundle;                   // offset 104
-        void* register_host_contract;          // offset 112
-        void* register_loader;                 // offset 120
-        void* get_last_error;                  // offset 128
-        void* get_error_len;                   // offset 136
-    } HostInterface;
-
+    // Forward declaration for resolve handle
     typedef struct ResolveHandle ResolveHandle;
 
     // Only three FFI exports: create, create_with_options, destroy
@@ -39,7 +19,10 @@ ffi.cdef([[
     const HostInterface* polyplug_runtime_create_with_options(const void* options);
     void polyplug_runtime_destroy(const HostInterface* host);
 
-    // RuntimeConfig for create_with_options (24 bytes)
+    // Host-side RuntimeConfig for create_with_options (24 bytes)
+    // Matches the old 24-byte layout used by the host-side options struct.
+    // Per D-22: The auto-generated RuntimeConfig in abi.lua is 16 bytes (3 fields).
+    // The host-side uses the old layout for compatibility with the C FFI function.
     typedef struct {
         uint8_t hot_reload_enabled;        // offset 0
         uint8_t _pad1[3];                  // padding for alignment
@@ -48,7 +31,7 @@ ffi.cdef([[
         uint8_t hot_reload_abort_on_max_retries; // offset 16
         uint8_t _pad2[3];                  // padding for alignment
         uint32_t compatibility;            // offset 20 (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
-    } RuntimeConfig;
+    } HostRuntimeConfig;
 
     typedef void (*ReloadPhaseCallback)(
         uint32_t phase_type,
@@ -61,38 +44,9 @@ ffi.cdef([[
     );
 
     typedef struct {
-        const RuntimeConfig* config;
+        const HostRuntimeConfig* config;
         ReloadPhaseCallback on_reload;
     } RuntimeCreateOptions;
-
-    // Host Contract Interface types
-    typedef struct HostContractInterfaceHeader {
-        uint32_t vtable_version;
-        uint64_t contract_id;
-        uint32_t contract_major;
-        uint32_t contract_minor;
-        uint32_t function_count;
-        DispatchType dispatch_type;
-    } HostContractInterfaceHeader;
-
-    typedef struct NativeHostContractDispatch {
-        void* const* functions;
-    } NativeHostContractDispatch;
-
-    typedef struct VmHostContractDispatch {
-        AbiError (*call)(void*, uint32_t, const void*, void*);
-        void* bridge_data;
-    } VmHostContractDispatch;
-
-    typedef union HostContractDispatch {
-        NativeHostContractDispatch native;
-        VmHostContractDispatch vm;
-    } HostContractDispatch;
-
-    typedef struct HostContractInterface {
-        HostContractInterfaceHeader header;
-        HostContractDispatch dispatch;
-    } HostContractInterface;
 ]])
 
 local M = {}
@@ -185,7 +139,7 @@ function M.Runtime.new()
         local config_c
 
         if M._pending_config then
-            config_c = ffi.new("RuntimeConfig", {
+            config_c = ffi.new("HostRuntimeConfig", {
                 hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
                 _pad1 = {0, 0, 0},
                 hot_reload_max_retries = M._pending_config.hot_reload_max_retries,

@@ -5,6 +5,7 @@
  * Updated for HostInterface-based API (18-04 refactor).
  * All operations are accessed through HostInterface struct fields,
  * not via separate FFI functions.
+ * Offset constants imported from auto-generated abi.ts (per D-26).
  *
  * @module polyplug
  */
@@ -18,6 +19,32 @@ if (typeof Deno === "undefined") {
 }
 
 import { ReloadPhase } from "./reload_phase.js";
+
+// Import offset constants from the auto-generated abi.ts
+import {
+  HOST_INTERFACE_RUNTIME_OFFSET,
+  HOST_INTERFACE_REGISTER_CONTRACT_OFFSET,
+  HOST_INTERFACE_ALLOC_OFFSET,
+  HOST_INTERFACE_FREE_OFFSET,
+  HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET,
+  HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET,
+  HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET,
+  HOST_INTERFACE_CALL_GUEST_METHOD_OFFSET,
+  HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET,
+  HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
+  HOST_INTERFACE_LIST_BUNDLES_OFFSET,
+  HOST_INTERFACE_GET_DEPENDENCIES_OFFSET,
+  HOST_INTERFACE_LOAD_BUNDLE_OFFSET,
+  HOST_INTERFACE_RELOAD_BUNDLE_OFFSET,
+  HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET,
+  HOST_INTERFACE_REGISTER_LOADER_OFFSET,
+  HOST_INTERFACE_GET_LAST_ERROR_OFFSET,
+  HOST_INTERFACE_GET_ERROR_LEN_OFFSET,
+  RUNTIME_CONFIG_COMPATIBILITY_OFFSET,
+  RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET,
+  RUNTIME_CONFIG_ON_RELOAD_OFFSET,
+  RUNTIME_CONFIG_SIZE,
+} from "../../abi/abi.ts";
 
 export {
   getPlatformIdentifier,
@@ -49,27 +76,26 @@ const SYMBOLS = {
   polyplug_runtime_destroy: { parameters: ["pointer"], result: "void" },
 };
 
-// HostInterface struct offsets (144 bytes, 18 pointer fields)
-// Each field is a function pointer (8 bytes)
+// HostInterface struct offsets imported from auto-generated abi.ts (144 bytes, 18 pointer fields)
 const HOST_INTERFACE_OFFSETS = {
-  runtime: 0,
-  register_contract: 8,
-  alloc: 16,
-  free: 24,
-  find_guest_contract: 32,
-  find_all_guest_contracts: 40,
-  resolve_guest_contract: 48,
-  call_guest_method: 56,
-  get_host_contract: 64,
-  resolve_host_contract_interface: 72,
-  list_bundles: 80,
-  get_dependencies: 88,
-  load_bundle: 96,
-  reload_bundle: 104,
-  register_host_contract: 112,
-  register_loader: 120,
-  get_last_error: 128,
-  get_error_len: 136,
+  runtime: HOST_INTERFACE_RUNTIME_OFFSET,
+  register_contract: HOST_INTERFACE_REGISTER_CONTRACT_OFFSET,
+  alloc: HOST_INTERFACE_ALLOC_OFFSET,
+  free: HOST_INTERFACE_FREE_OFFSET,
+  find_guest_contract: HOST_INTERFACE_FIND_GUEST_CONTRACT_OFFSET,
+  find_all_guest_contracts: HOST_INTERFACE_FIND_ALL_GUEST_CONTRACTS_OFFSET,
+  resolve_guest_contract: HOST_INTERFACE_RESOLVE_GUEST_CONTRACT_OFFSET,
+  call_guest_method: HOST_INTERFACE_CALL_GUEST_METHOD_OFFSET,
+  get_host_contract: HOST_INTERFACE_GET_HOST_CONTRACT_OFFSET,
+  resolve_host_contract_interface: HOST_INTERFACE_RESOLVE_HOST_CONTRACT_INTERFACE_OFFSET,
+  list_bundles: HOST_INTERFACE_LIST_BUNDLES_OFFSET,
+  get_dependencies: HOST_INTERFACE_GET_DEPENDENCIES_OFFSET,
+  load_bundle: HOST_INTERFACE_LOAD_BUNDLE_OFFSET,
+  reload_bundle: HOST_INTERFACE_RELOAD_BUNDLE_OFFSET,
+  register_host_contract: HOST_INTERFACE_REGISTER_HOST_CONTRACT_OFFSET,
+  register_loader: HOST_INTERFACE_REGISTER_LOADER_OFFSET,
+  get_last_error: HOST_INTERFACE_GET_LAST_ERROR_OFFSET,
+  get_error_len: HOST_INTERFACE_GET_ERROR_LEN_OFFSET,
 };
 
 // Module-level caches for hot path performance
@@ -80,7 +106,7 @@ const _decoder = new TextDecoder();
 // Module-level pending callbacks for hot-reload notification
 /** @type {function(ReloadPhase): void | null} */
 let _pendingReloadCallback = null;
-/** @type {{ hotReloadEnabled: boolean, hotReloadMaxRetries: number, hotReloadRetryIntervalMs: number, hotReloadAbortOnMaxRetries: boolean, compatibility: number } | null} */
+/** @type {{ hotReloadEnabled: boolean, compatibility: number } | null} */
 let _pendingConfig = null;
 /** @type {Deno.UnsafeCallback | null} */
 let _ffiReloadCallback = null;
@@ -148,19 +174,14 @@ export function onReload(callback) {
 /**
  * Set runtime configuration for subsequently created runtimes.
  * Must be called BEFORE creating a Runtime instance.
+ * Per D-22: RuntimeConfig is 16 bytes (compatibility, hot_reload_enabled, on_reload).
  * @param {Object} config - Configuration options
  * @param {boolean} [config.hotReloadEnabled=false] - Whether hot-reload is enabled
- * @param {number} [config.hotReloadMaxRetries=3] - Maximum retry attempts
- * @param {number} [config.hotReloadRetryIntervalMs=3000] - Interval between retries in ms
- * @param {boolean} [config.hotReloadAbortOnMaxRetries=true] - Abort after max retries
  * @param {number} [config.compatibility=0] - Compatibility mode (COMPATIBILITY_STRICT=0, RELAXED=1, YOLO=2)
  */
 export function setConfig(config) {
     _pendingConfig = {
         hotReloadEnabled: config.hotReloadEnabled ?? false,
-        hotReloadMaxRetries: config.hotReloadMaxRetries ?? 3,
-        hotReloadRetryIntervalMs: config.hotReloadRetryIntervalMs ?? 3000,
-        hotReloadAbortOnMaxRetries: config.hotReloadAbortOnMaxRetries ?? true,
         compatibility: config.compatibility ?? COMPATIBILITY_STRICT,
     };
 }
@@ -474,6 +495,7 @@ export function openPolyplug(soPath) {
 /**
  * Create new runtime instance.
  * Uses HostInterface-based API: polyplug_runtime_create returns HostInterface*.
+ * Per D-22: RuntimeConfig is 16 bytes (compatibility, hot_reload_enabled, on_reload).
  * @param {Deno.DynamicLibrary} lib - Dynamic library
  * @returns {Runtime}
  */
@@ -481,27 +503,15 @@ export function runtimeNew(lib) {
   let host;
 
   if (_pendingConfig || _pendingReloadCallback) {
-    const optionsBuf = new Uint8Array(24);
-    const optionsView = new DataView(optionsBuf.buffer);
-    let configBuf = null;
+    // RuntimeConfig is 16 bytes per D-22: compatibility(u32) + padding(4) + hot_reload_enabled(bool/u8) + padding(7) + on_reload(fn ptr)
+    const configBuf = new Uint8Array(RUNTIME_CONFIG_SIZE);
+    const configView = new DataView(configBuf.buffer);
 
     if (_pendingConfig) {
-      // RuntimeConfig is 24 bytes matching polyplug_abi::RuntimeConfig
-      configBuf = new Uint8Array(24);
-      const configView = new DataView(configBuf.buffer);
-
-      // offset 0: hot_reload_enabled (1 byte bool)
-      configView.setUint8(0, _pendingConfig.hotReloadEnabled ? 1 : 0);
-      // offset 4: hot_reload_max_retries (4 bytes u32)
-      configView.setUint32(4, _pendingConfig.hotReloadMaxRetries, true);
-      // offset 8: hot_reload_retry_interval_ms (8 bytes u64)
-      configView.setBigUint64(8, BigInt(_pendingConfig.hotReloadRetryIntervalMs), true);
-      // offset 16: hot_reload_abort_on_max_retries (1 byte bool)
-      configView.setUint8(16, _pendingConfig.hotReloadAbortOnMaxRetries ? 1 : 0);
-      // offset 20: compatibility (4 bytes u32 enum)
-      configView.setUint32(20, _pendingConfig.compatibility, true);
-
-      optionsView.setBigUint64(0, Deno.UnsafePointer.value(Deno.UnsafePointer.of(configBuf)), true);
+      // offset 0: compatibility (4 bytes u32)
+      configView.setUint32(RUNTIME_CONFIG_COMPATIBILITY_OFFSET, _pendingConfig.compatibility, true);
+      // offset 8: hot_reload_enabled (1 byte bool)
+      configView.setUint8(RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET, _pendingConfig.hotReloadEnabled ? 1 : 0);
     }
 
     if (_pendingReloadCallback) {
@@ -520,11 +530,12 @@ export function runtimeNew(lib) {
           callback(phase);
         }
       );
-      optionsView.setBigUint64(8, Deno.UnsafePointer.value(_ffiReloadCallback.pointer), true);
+      // offset 16: on_reload (fn pointer, 8 bytes)
+      configView.setBigUint64(RUNTIME_CONFIG_ON_RELOAD_OFFSET, Deno.UnsafePointer.value(_ffiReloadCallback.pointer), true);
     }
 
-    const optionsPtr = Deno.UnsafePointer.of(optionsBuf);
-    host = lib.symbols.polyplug_runtime_create_with_options(optionsPtr);
+    const configPtr = Deno.UnsafePointer.of(configBuf);
+    host = lib.symbols.polyplug_runtime_create_with_options(configPtr);
   } else {
     host = lib.symbols.polyplug_runtime_create();
   }
