@@ -7,9 +7,8 @@ local abi = require('polyplug_abi')
 local reload_phase = require('polyplug.reload_phase')
 
 -- ─── Host-specific FFI definitions ──────────────────────────────────────────────
--- These are NOT in abi.lua because they are host-side only types.
--- The ABI types (HostInterface, HostContractInterface, RuntimeConfig, etc.)
--- are defined in the auto-generated sdks/lua/abi/abi.lua.
+-- Only FFI function declarations live here. All struct types (RuntimeConfig,
+-- ReloadPhase, HostInterface, etc.) come from the auto-generated abi.lua.
 ffi.cdef([[
     // Forward declaration for resolve handle
     typedef struct ResolveHandle ResolveHandle;
@@ -19,33 +18,11 @@ ffi.cdef([[
     const HostInterface* polyplug_runtime_create_with_options(const void* options);
     void polyplug_runtime_destroy(const HostInterface* host);
 
-    // Host-side RuntimeConfig for create_with_options (24 bytes)
-    // Matches the old 24-byte layout used by the host-side options struct.
-    // Per D-22: The auto-generated RuntimeConfig in abi.lua is 16 bytes (3 fields).
-    // The host-side uses the old layout for compatibility with the C FFI function.
+    // Host-side options wrapper: references the ABI RuntimeConfig (16 bytes)
+    // and the ABI RuntimeConfig_on_reload_fn callback type (both from abi.lua).
     typedef struct {
-        uint8_t hot_reload_enabled;        // offset 0
-        uint8_t _pad1[3];                  // padding for alignment
-        uint32_t hot_reload_max_retries;   // offset 4
-        uint64_t hot_reload_retry_interval_ms; // offset 8
-        uint8_t hot_reload_abort_on_max_retries; // offset 16
-        uint8_t _pad2[3];                  // padding for alignment
-        uint32_t compatibility;            // offset 20 (Compatibility enum: Strict=0, Relaxed=1, Yolo=2)
-    } HostRuntimeConfig;
-
-    typedef void (*ReloadPhaseCallback)(
-        uint32_t phase_type,
-        uint64_t bundle_id,
-        const uint8_t* bundle_name,
-        size_t bundle_name_len,
-        uint32_t retry_count,
-        const uint8_t* reason,
-        size_t reason_len
-    );
-
-    typedef struct {
-        const HostRuntimeConfig* config;
-        ReloadPhaseCallback on_reload;
+        const RuntimeConfig* config;
+        RuntimeConfig_on_reload_fn on_reload;
     } RuntimeCreateOptions;
 ]])
 
@@ -139,38 +116,40 @@ function M.Runtime.new()
         local config_c
 
         if M._pending_config then
-            config_c = ffi.new("HostRuntimeConfig", {
-                hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
-                _pad1 = {0, 0, 0},
-                hot_reload_max_retries = M._pending_config.hot_reload_max_retries,
-                hot_reload_retry_interval_ms = M._pending_config.hot_reload_retry_interval_ms,
-                hot_reload_abort_on_max_retries = M._pending_config.hot_reload_abort_on_max_retries and 1 or 0,
-                _pad2 = {0, 0, 0},
+            config_c = ffi.new("RuntimeConfig", {
                 compatibility = M._pending_config.compatibility or M.COMPATIBILITY_STRICT,
+                hot_reload_enabled = M._pending_config.hot_reload_enabled and 1 or 0,
+                on_reload = nil,  -- set separately below if callback provided
             })
             options.config = config_c
         end
 
         if M._pending_reload_callback then
             local callback = M._pending_reload_callback
-            M._ffi_reload_callback = ffi.cast("ReloadPhaseCallback", function(
-                phase_type, bundle_id, bundle_name_ptr, bundle_name_len,
-                retry_count, reason_ptr, reason_len
+            M._ffi_reload_callback = ffi.cast("RuntimeConfig_on_reload_fn", function(
+                phase_struct
             )
-                local bundle_name = ""
-                if bundle_name_ptr ~= nil and bundle_name_len > 0 then
-                    bundle_name = ffi.string(bundle_name_ptr, bundle_name_len)
-                end
-                local reason = ""
-                if reason_ptr ~= nil and reason_len > 0 then
-                    reason = ffi.string(reason_ptr, reason_len)
-                end
+                -- Extract fields from the ABI ReloadPhase struct
                 local phase = reload_phase.new(
-                    phase_type, bundle_id, bundle_name, retry_count, reason
+                    phase_struct.phase_type,
+                    phase_struct.bundle_id,
+                    abi.to_str(phase_struct.bundle_name),
+                    nil,       -- retry_count removed from ABI
+                    abi.to_str(phase_struct.reason)
                 )
                 callback(phase)
             end)
             options.on_reload = M._ffi_reload_callback
+            -- If no config was provided but we have a callback, create a
+            -- default config so the on_reload pointer is paired with a config.
+            if not config_c then
+                config_c = ffi.new("RuntimeConfig", {
+                    compatibility = M.COMPATIBILITY_STRICT,
+                    hot_reload_enabled = 0,
+                    on_reload = nil,
+                })
+                options.config = config_c
+            end
         end
 
         host_ptr = lib.polyplug_runtime_create_with_options(options)
