@@ -2,6 +2,7 @@
 // DO NOT EDIT STRUCT/FIELD DEFINITIONS.
 // Helper methods are preserved by ast-grep across regenerations.
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Polyplug.Abi {
 

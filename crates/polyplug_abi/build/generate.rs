@@ -83,6 +83,449 @@ impl TargetLang {
 /// in target languages. Simple generics (Array<T>, Option<...>) and tuples are allowed.
 const UNREPRESENTABLE_PATTERNS: &[&str] = &["dyn ", "impl ", "for<", "where "];
 
+// ─── Inline Helper Method Source (per language) ───────────────────────────────
+//
+// Per D-12: Helper methods are embedded as const strings so they survive across
+// rebuilds without relying on external files that get deleted after merge.
+
+/// C# StringViewHelper class body (no namespace wrapper, no using statements).
+/// Merged into Abi.cs inside the Polyplug.Abi namespace.
+const HELPER_CSHARP_STRING_VIEW: &str = r#"
+/// <summary>
+/// Helpers for constructing and converting StringViews at the ABI boundary.
+/// This is the unified implementation used by both host and guest.
+/// </summary>
+public static class StringViewHelper
+{
+    /// <summary>
+    /// Returns a StringView pointing at the pinned byte array via a GCHandle.
+    /// Caller owns the GCHandle and must keep it alive while the StringView is in use.
+    /// </summary>
+    public static StringView FromPinnedHandle(GCHandle handle, int length) =>
+        new StringView { Ptr = handle.AddrOfPinnedObject(), Len = (nuint)length };
+
+    /// <summary>
+    /// Returns a StringView pointing at a pre-pinned IntPtr. Caller ensures ptr validity.
+    /// </summary>
+    public static StringView FromPtr(IntPtr ptr, int length) =>
+        new StringView { Ptr = ptr, Len = (nuint)length };
+
+    /// <summary>
+    /// Creates a StringView from a .NET string by pinning it in memory.
+    /// The GCHandle must be kept alive while the StringView is in use.
+    /// For guest plugins, return strings should use host allocation via registrar.
+    /// </summary>
+    public static (StringView View, GCHandle Handle) FromStringPinned(string str)
+    {
+        if (string.IsNullOrEmpty(str))
+            return (new StringView { Ptr = IntPtr.Zero, Len = 0 }, default);
+
+        byte[] bytes = Encoding.UTF8.GetBytes(str);
+        GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        StringView sv = new StringView { Ptr = handle.AddrOfPinnedObject(), Len = (nuint)bytes.Length };
+        return (sv, handle);
+    }
+
+    /// <summary>
+    /// Converts a StringView to a .NET string by copying the UTF-8 bytes.
+    /// </summary>
+    public static string ToString(this StringView sv)
+    {
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return string.Empty;
+
+        byte[] bytes = new byte[(int)sv.Len];
+        Marshal.Copy(sv.Ptr, bytes, 0, (int)sv.Len);
+        return Encoding.UTF8.GetString(bytes);
+    }
+
+    /// <summary>
+    /// Converts a StringView to a .NET string. Alias for ToString.
+    /// </summary>
+    public static string ToStr(StringView sv) => ToString(sv);
+
+    /// <summary>
+    /// Checks if a StringView starts with the given prefix.
+    /// </summary>
+    public static bool StartsWith(StringView sv, string prefix)
+    {
+        if (string.IsNullOrEmpty(prefix))
+            return true;
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return false;
+
+        string str = ToString(sv);
+        return str.StartsWith(prefix);
+    }
+
+    /// <summary>
+    /// Checks if a StringView ends with the given suffix.
+    /// </summary>
+    public static bool EndsWith(StringView sv, string suffix)
+    {
+        if (string.IsNullOrEmpty(suffix))
+            return true;
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return false;
+
+        string str = ToString(sv);
+        return str.EndsWith(suffix);
+    }
+
+    /// <summary>
+    /// Strips the prefix from a StringView if it starts with it.
+    /// Returns the original string if the prefix is not present.
+    /// </summary>
+    public static string StripPrefix(StringView sv, string prefix)
+    {
+        if (string.IsNullOrEmpty(prefix))
+            return ToString(sv);
+
+        string str = ToString(sv);
+        if (str.StartsWith(prefix))
+            return str.Substring(prefix.Length);
+        return str;
+    }
+
+    /// <summary>
+    /// Splits a StringView by the given delimiter and returns an array of strings.
+    /// </summary>
+    public static string[] Split(StringView sv, string delimiter)
+    {
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return System.Array.Empty<string>();
+
+        string str = ToString(sv);
+        if (string.IsNullOrEmpty(delimiter))
+            return new[] { str };
+
+        return str.Split(new[] { delimiter }, System.StringSplitOptions.None);
+    }
+}
+"#;
+
+/// C# StringHelpers class body (no namespace wrapper, no using statements).
+/// Requires `using System.Runtime.InteropServices;` and `using System.Text;`
+/// which are included in the generated Abi.cs header.
+const HELPER_CSHARP_STRING_HELPERS: &str = r#"
+/// <summary>
+/// String helper methods for working with StringView.
+/// Native C# implementation for zero overhead.
+/// </summary>
+public static unsafe class StringHelpers
+{
+    /// <summary>
+    /// Converts a StringView to a .NET string by copying the UTF-8 bytes.
+    /// </summary>
+    public static string ToString(StringView sv)
+    {
+        if (sv.Ptr == IntPtr.Zero || sv.Len == 0)
+            return string.Empty;
+
+        return Encoding.UTF8.GetString((byte*)sv.Ptr, (int)sv.Len);
+    }
+
+    /// <summary>
+    /// Strips the prefix from a StringView if it starts with it.
+    /// Returns the original string if the prefix is not present.
+    /// </summary>
+    public static string StripPrefix(StringView sv, string prefix)
+    {
+        string str = ToString(sv);
+        if (str.StartsWith(prefix))
+        {
+            return str.Substring(prefix.Length);
+        }
+        return str;
+    }
+
+    /// <summary>
+    /// Checks if a StringView starts with the given prefix.
+    /// </summary>
+    public static bool StartsWith(StringView sv, string prefix)
+    {
+        return ToString(sv).StartsWith(prefix);
+    }
+
+    /// <summary>
+    /// Splits a StringView by the given delimiter.
+    /// </summary>
+    public static string[] Split(StringView sv, char delimiter)
+    {
+        return ToString(sv).Split(delimiter);
+    }
+
+    /// <summary>
+    /// Allocates a StringView from a .NET string using the host allocator.
+    /// The returned StringView owns its memory and must be freed by the host.
+    /// </summary>
+    public static StringView AllocString(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return new StringView { Ptr = IntPtr.Zero, Len = 0 };
+
+        byte[] bytes = Encoding.UTF8.GetBytes(value);
+        GCHandle handle = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+        return new StringView
+        {
+            Ptr = handle.AddrOfPinnedObject(),
+            Len = (nuint)bytes.Length,
+        };
+    }
+}
+"#;
+
+/// Lua helper function definitions (function M.* only, no module boilerplate).
+/// Merged into abi.lua before `return M`.
+const HELPER_LUA: &str = r#"
+--- Convert StringView to Lua string.
+-- @param sv StringView from polyplug ABI (ffi.cdata)
+-- @return string Lua string (UTF-8), empty string if nil/empty
+function M.to_str(sv)
+    if not sv or not sv.ptr or sv.len == 0 then
+        return ""
+    end
+    return ffi.string(sv.ptr, sv.len)
+end
+
+--- Check if StringView starts with prefix.
+-- @param sv StringView from polyplug ABI
+-- @param prefix string Prefix string to check for
+-- @return boolean True if the string starts with the prefix
+function M.starts_with(sv, prefix)
+    local s = M.to_str(sv)
+    return s:sub(1, #prefix) == prefix
+end
+
+--- Check if StringView ends with suffix.
+-- @param sv StringView from polyplug ABI
+-- @param suffix string Suffix string to check for
+-- @return boolean True if the string ends with the suffix
+function M.ends_with(sv, suffix)
+    local s = M.to_str(sv)
+    if #suffix > #s then
+        return false
+    end
+    return s:sub(-#suffix) == suffix
+end
+
+--- Strip prefix from StringView if present.
+-- @param sv StringView from polyplug ABI
+-- @param prefix string Prefix string to strip
+-- @return string String with prefix removed if present, otherwise original
+function M.strip_prefix(sv, prefix)
+    local s = M.to_str(sv)
+    if s:sub(1, #prefix) == prefix then
+        return s:sub(#prefix + 1)
+    end
+    return s
+end
+
+--- Split StringView by delimiter.
+-- @param sv StringView from polyplug ABI
+-- @param delimiter string Delimiter string to split by (default: whitespace)
+-- @return table Array of strings resulting from the split
+function M.split(sv, delimiter)
+    local s = M.to_str(sv)
+    if s == "" then
+        return {}
+    end
+
+    delimiter = delimiter or "%s+"
+    local result = {}
+    local pattern = "(.-)" .. delimiter .. "()"
+    local last_pos = 1
+
+    for part, pos in s:gmatch(pattern) do
+        table.insert(result, part)
+        last_pos = pos
+    end
+
+    -- Add the remaining part after the last delimiter
+    table.insert(result, s:sub(last_pos))
+
+    return result
+end
+"#;
+
+/// JavaScript/TypeScript helper function definitions (no import lines).
+/// Merged into abi.ts after generated type definitions.
+const HELPER_JS: &str = r#"
+/**
+ * Convert a StringView to a JavaScript string.
+ * @param sv - The StringView to convert.
+ * @returns The JavaScript string, or empty string if null/empty.
+ */
+export function stringViewToString(sv: StringView | null | undefined): string {
+    if (!sv || sv.ptr === 0n || sv.len === 0) return '';
+    // Note: Actual implementation requires FFI access to read memory.
+    // This is a placeholder - the host/guest libraries provide actual implementation.
+    return '';
+}
+
+/**
+ * Strip a prefix from a string.
+ * @param sv - The input StringView or string.
+ * @param prefix - The prefix to strip.
+ * @returns The string without prefix, or original if prefix not present.
+ */
+export function stripPrefix(sv: StringView | string, prefix: string): string {
+    const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    if (s.startsWith(prefix)) {
+        return s.slice(prefix.length);
+    }
+    return s;
+}
+
+/**
+ * Check if a string starts with a prefix.
+ * @param sv - The input StringView or string.
+ * @param prefix - The prefix to check.
+ * @returns True if the string starts with the prefix.
+ */
+export function startsWith(sv: StringView | string, prefix: string): boolean {
+    const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    return s.startsWith(prefix);
+}
+
+/**
+ * Check if a string ends with a suffix.
+ * @param sv - The input StringView or string.
+ * @param suffix - The suffix to check.
+ * @returns True if the string ends with the suffix.
+ */
+export function endsWith(sv: StringView | string, suffix: string): boolean {
+    const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    return s.endsWith(suffix);
+}
+
+/**
+ * Convert a StringView to a JavaScript string (shorthand alias).
+ * @param sv - The StringView to convert.
+ * @returns The JavaScript string, or empty string if null/empty.
+ */
+export function toStr(sv: StringView | null | undefined): string {
+    return stringViewToString(sv);
+}
+
+/**
+ * Split a string by a delimiter.
+ * @param sv - The input StringView or string.
+ * @param delimiter - The delimiter to split by.
+ * @returns An array of strings.
+ */
+export function split(sv: StringView | string, delimiter: string): string[] {
+    const s: string = typeof sv === 'string' ? sv : stringViewToString(sv);
+    return s.split(delimiter);
+}
+"#;
+
+/// C++ helper function definitions (no #pragma once, no #include directives).
+/// Includes namespace wrappers since merge_cpp_helpers appends at end of file
+/// and the generated abi.hpp has a closing namespace brace already.
+const HELPER_CPP: &str = r#"
+
+namespace polyplug {
+namespace abi {
+
+/// Convert StringView to std::string_view (zero-copy)
+inline std::string_view to_string_view(StringView sv) noexcept {
+    if (!sv.ptr || sv.len == 0) return {};
+    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
+}
+
+/// Convert StringView to std::string (copies data)
+inline std::string to_string(StringView sv) {
+    if (!sv.ptr || sv.len == 0) return {};
+    return {reinterpret_cast<const char*>(sv.ptr), sv.len};
+}
+
+/// Convert StringView to std::string (alias for to_string)
+inline std::string to_str(StringView sv) {
+    return to_string(sv);
+}
+
+/// Strip prefix from a string.
+/// @param sv The input StringView.
+/// @param prefix The prefix to strip.
+/// @return std::string_view without prefix if it starts with prefix, otherwise original.
+inline std::string_view strip_prefix(StringView sv, std::string_view prefix) noexcept {
+    auto s = to_string_view(sv);
+    if (s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix) {
+        return s.substr(prefix.size());
+    }
+    return s;
+}
+
+/// Check if string starts with prefix.
+/// @param sv The input StringView.
+/// @param prefix The prefix to check.
+/// @return true if string starts with prefix.
+inline bool starts_with(StringView sv, std::string_view prefix) noexcept {
+    auto s = to_string_view(sv);
+    return s.size() >= prefix.size() && s.substr(0, prefix.size()) == prefix;
+}
+
+/// Check if string ends with suffix.
+/// @param sv The input StringView.
+/// @param suffix The suffix to check.
+/// @return true if string ends with suffix.
+inline bool ends_with(StringView sv, std::string_view suffix) noexcept {
+    auto s = to_string_view(sv);
+    if (s.size() < suffix.size()) return false;
+    return s.substr(s.size() - suffix.size()) == suffix;
+}
+
+/// Split string by delimiter.
+/// @param sv The input StringView.
+/// @param delimiter The delimiter character.
+/// @return Vector of string_views.
+inline std::vector<std::string_view> split(StringView sv, char delimiter) {
+    auto s = to_string_view(sv);
+    std::vector<std::string_view> result;
+    size_t start = 0;
+
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i == s.size() || s[i] == delimiter) {
+            if (i > start) {
+                result.push_back(s.substr(start, i - start));
+            }
+            start = i + 1;
+        }
+    }
+
+    return result;
+}
+
+/// Create StringView from string literal (borrowed)
+inline StringView string_view(const char* s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s), std::strlen(s)};
+}
+
+/// Create StringView from std::string (borrowed - ensure string outlives view)
+inline StringView string_view(const std::string& s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
+}
+
+/// Create StringView from std::string_view (borrowed)
+inline StringView string_view(std::string_view s) noexcept {
+    return {reinterpret_cast<const uint8_t*>(s.data()), s.size()};
+}
+
+/// Allocate StringView from std::string using host allocator
+inline StringView alloc_string(const std::string& s) {
+    auto* ptr = static_cast<uint8_t*>(polyplug_host_alloc(s.size(), 1));
+    if (!ptr) {
+        return StringView{nullptr, 0};
+    }
+    std::memcpy(ptr, s.data(), s.size());
+    return StringView{ptr, s.size()};
+}
+
+} // namespace abi
+} // namespace polyplug
+"#;
+
 /// Known struct sizes from Rust layout.
 ///
 /// MAINTENANCE: Update this table when Rust struct layouts change.
@@ -236,54 +679,34 @@ pub fn generate_language_sdk(lang: TargetLang, abi_types: &AbiTypes) -> String {
 }
 
 impl TargetLang {
-    /// Return the helper files that should be merged into the generated abi.* file.
-    ///
-    /// Per D-12: Helper files contain hand-written methods that must be preserved.
-    /// Python has no separate helper file (methods are inline in abi.py or runtime.py).
-    fn helper_files(&self) -> Vec<&'static str> {
-        match self {
-            TargetLang::CSharp => vec!["StringViewHelper.cs", "StringHelpers.cs"],
-            TargetLang::Lua => vec!["string_view_helper.lua"],
-            TargetLang::JavaScript => vec!["string_view_helper.ts"],
-            TargetLang::Cpp => vec!["polyplug/string_view_helper.hpp"],
-            TargetLang::Python => vec![],
-        }
-    }
-
     /// Return files in the abi directory that should be deleted before regeneration
-    /// (the generated abi.* file itself). Helper files are preserved during deletion
-    /// and consumed during the merge step.
+    /// (the generated abi.* file itself).
     fn generated_filenames(&self) -> Vec<&'static str> {
         vec![self.output_filename()]
     }
 }
 
-/// Read all helper file contents for a given language.
+/// Return inline helper method content for a given language.
 ///
-/// Returns a vector of (filename, contents) pairs for each helper file found.
-fn read_helper_files(
-    lang: TargetLang,
-    abi_dir: &Path,
-) -> Vec<(String, String)> {
-    let mut helpers = Vec::new();
-    for helper_name in lang.helper_files() {
-        let helper_path = abi_dir.join(helper_name);
-        if helper_path.exists() {
-            match fs::read_to_string(&helper_path) {
-                Ok(contents) => {
-                    helpers.push((helper_name.to_string(), contents));
-                }
-                Err(e) => {
-                    println!(
-                        "cargo:warning=Failed to read helper file {}: {}",
-                        helper_path.display(),
-                        e
-                    );
-                }
-            }
-        }
+/// Per D-12: Helper methods are embedded as const strings so they survive
+/// across consecutive rebuilds without relying on external helper files.
+fn get_inline_helpers(lang: TargetLang) -> Vec<(String, String)> {
+    match lang {
+        TargetLang::CSharp => vec![
+            ("StringViewHelper.cs".to_string(), HELPER_CSHARP_STRING_VIEW.to_string()),
+            ("StringHelpers.cs".to_string(), HELPER_CSHARP_STRING_HELPERS.to_string()),
+        ],
+        TargetLang::Lua => vec![
+            ("string_view_helper.lua".to_string(), HELPER_LUA.to_string()),
+        ],
+        TargetLang::JavaScript => vec![
+            ("string_view_helper.ts".to_string(), HELPER_JS.to_string()),
+        ],
+        TargetLang::Cpp => vec![
+            ("string_view_helper.hpp".to_string(), HELPER_CPP.to_string()),
+        ],
+        TargetLang::Python => vec![],
     }
-    helpers
 }
 
 /// Delete old generated abi.* files before writing fresh ones.
@@ -298,24 +721,6 @@ fn delete_old_generated_files(lang: TargetLang, abi_dir: &Path) {
                 println!(
                     "cargo:warning=Failed to delete old file {}: {}",
                     path.display(),
-                    e
-                );
-            }
-        }
-    }
-}
-
-/// Delete helper files after they have been successfully merged.
-///
-/// Once merged into abi.*, the separate helper files are no longer needed.
-fn delete_merged_helper_files(lang: TargetLang, abi_dir: &Path) {
-    for helper_name in lang.helper_files() {
-        let helper_path = abi_dir.join(helper_name);
-        if helper_path.exists() {
-            if let Err(e) = fs::remove_file(&helper_path) {
-                println!(
-                    "cargo:warning=Failed to delete merged helper {}: {}",
-                    helper_path.display(),
                     e
                 );
             }
@@ -762,8 +1167,8 @@ pub fn generate_all_sdks(
             .join(lang.language_name())
             .join("abi");
 
-        // ── Step 1: Read helper files BEFORE deleting anything ──
-        let helpers = read_helper_files(lang, &abi_dir);
+        // ── Step 1: Get inline helper method content (D-12) ──
+        let helpers = get_inline_helpers(lang);
 
         // ── Step 2: Delete old generated abi.* files (D-11) ──
         delete_old_generated_files(lang, &abi_dir);
@@ -785,11 +1190,6 @@ pub fn generate_all_sdks(
         }
 
         fs::write(&output_path, sdk)?;
-
-        // ── Step 5: Delete now-merged helper files ──
-        if !helpers.is_empty() {
-            delete_merged_helper_files(lang, &abi_dir);
-        }
     }
 
     // Generate layout test source files per D-31.

@@ -403,7 +403,7 @@ impl CodeGenerator for CSharpGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "using System.Runtime.InteropServices;\n\nnamespace Polyplug.Abi {\n\n".to_string()
+        "using System.Runtime.InteropServices;\nusing System.Text;\n\nnamespace Polyplug.Abi {\n\n".to_string()
     }
 
     fn generate_footer(&self, _ctx: &GenerationContext) -> String {

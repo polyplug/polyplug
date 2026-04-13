@@ -1245,12 +1245,6 @@ export const POLYPLUG_ABI_VERSION: number = 1;
 // ─── Helper Methods (preserved from helper files) ───
 
 /**
- * StringView helper functions for the polyplug plugin runtime.
- * @module polyplug_abi/string_view_helper
- */
-
-
-/**
  * Convert a StringView to a JavaScript string.
  * @param sv - The StringView to convert.
  * @returns The JavaScript string, or empty string if null/empty.

@@ -1027,9 +1027,6 @@ union DispatchMechanisms {
 #define POLYPLUG_ABI_VERSION 1U
 
 // ─── Helper Methods (preserved from helper files) ───
-
-
-
 namespace polyplug {
 namespace abi {
 
@@ -1089,7 +1086,7 @@ inline std::vector<std::string_view> split(StringView sv, char delimiter) {
     auto s = to_string_view(sv);
     std::vector<std::string_view> result;
     size_t start = 0;
-    
+
     for (size_t i = 0; i <= s.size(); ++i) {
         if (i == s.size() || s[i] == delimiter) {
             if (i > start) {
@@ -1098,7 +1095,7 @@ inline std::vector<std::string_view> split(StringView sv, char delimiter) {
             start = i + 1;
         }
     }
-    
+
     return result;
 }
 

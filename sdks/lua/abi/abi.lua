@@ -1059,23 +1059,21 @@ function M.split(sv, delimiter)
     if s == "" then
         return {}
     end
-    
+
     delimiter = delimiter or "%s+"
     local result = {}
     local pattern = "(.-)" .. delimiter .. "()"
     local last_pos = 1
-    
+
     for part, pos in s:gmatch(pattern) do
         table.insert(result, part)
         last_pos = pos
     end
-    
+
     -- Add the remaining part after the last delimiter
     table.insert(result, s:sub(last_pos))
-    
+
     return result
 end
-
-return M
 
 return M
