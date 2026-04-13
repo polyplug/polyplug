@@ -78,6 +78,24 @@ impl JsGenerator {
         }
     }
 
+    /// Look up the (size, alignment) of a named ABI type.
+    ///
+    /// These must match the Rust `#[repr(C)]` layouts exactly.
+    fn named_type_layout(type_str: &str) -> Option<(usize, usize)> {
+        match type_str {
+            // Structs — sizes from Rust offset_of / std::mem::size_of
+            "StringView" => Some((16, 8)),   // { ptr(8), len(8) }
+            "Version" => Some((12, 4)),      // { major(4), minor(4), patch(4) }
+            "Buffer" => Some((24, 8)),       // { ptr(8), len(8), align(8) }
+            "AbiError" => Some((24, 8)),     // { code(4), _pad(4), message(16) }
+            "Array" => Some((24, 8)),        // { items(8), len(8), align(8) }
+            // All #[repr(u32)] enums — 4 bytes, 4-aligned
+            "AbiErrorCode" | "DispatchType" | "Compatibility" | "ReloadPhaseType"
+            | "ContractType" | "RuntimeLanguage" | "ParseVersionError" => Some((4, 4)),
+            _ => None,
+        }
+    }
+
     /// Compute the byte size of a known Rust type for offset calculation.
     fn type_size(rust_type: &str) -> usize {
         let type_str = Self::strip_option(rust_type);
@@ -89,6 +107,9 @@ impl JsGenerator {
         }
         if type_str.starts_with('*') {
             return 8; // raw pointer
+        }
+        if let Some((size, _)) = Self::named_type_layout(type_str) {
+            return size;
         }
         match type_str {
             "u64" | "i64" | "usize" | "isize" => 8,
@@ -110,6 +131,9 @@ impl JsGenerator {
         }
         if type_str.starts_with('*') {
             return 8;
+        }
+        if let Some((_, align)) = Self::named_type_layout(type_str) {
+            return align;
         }
         match type_str {
             "u64" | "i64" | "usize" | "isize" => 8,

@@ -202,7 +202,11 @@ impl PythonGenerator {
             "isize" => String::from("ctypes.c_ssize_t"),
             "bool" => String::from("ctypes.c_bool"),
             "()" => String::from("None"),
-            other => String::from(other),
+            other => {
+                // Strip Rust path prefixes (e.g., "crate::host::HostContractInstance" → "HostContractInstance").
+                let stripped = other.rsplit("::").next().unwrap_or(other);
+                String::from(stripped)
+            }
         }
     }
 

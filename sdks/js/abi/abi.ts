@@ -207,7 +207,7 @@ export interface GuestContractInterface {
 
 export const GUEST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET: number = 0;
 export const GUEST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET: number = 8;
-export const GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET: number = 16;
+export const GUEST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET: number = 20;
 export const GUEST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 24;
 export const GUEST_CONTRACT_INTERFACE_DESTROY_INSTANCE_OFFSET: number = 32;
 export const GUEST_CONTRACT_INTERFACE_DISPATCH_OFFSET: number = 40;
@@ -853,7 +853,7 @@ export interface HostContractInterface {
 
 export const HOST_CONTRACT_INTERFACE_CONTRACT_ID_OFFSET: number = 0;
 export const HOST_CONTRACT_INTERFACE_CONTRACT_VERSION_OFFSET: number = 8;
-export const HOST_CONTRACT_INTERFACE_SINGLETON_OFFSET: number = 16;
+export const HOST_CONTRACT_INTERFACE_SINGLETON_OFFSET: number = 20;
 export const HOST_CONTRACT_INTERFACE_DISPATCH_TYPE_OFFSET: number = 24;
 export const HOST_CONTRACT_INTERFACE_RUNTIME_OFFSET: number = 32;
 export const HOST_CONTRACT_INTERFACE_CREATE_INSTANCE_OFFSET: number = 40;
@@ -897,8 +897,8 @@ export interface PluginDescriptor {
 }
 
 export const PLUGIN_DESCRIPTOR_NAME_OFFSET: number = 0;
-export const PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET: number = 8;
-export const PLUGIN_DESCRIPTOR_VERSION_OFFSET: number = 16;
+export const PLUGIN_DESCRIPTOR_CONTRACT_NAME_OFFSET: number = 16;
+export const PLUGIN_DESCRIPTOR_VERSION_OFFSET: number = 32;
 export const PLUGIN_DESCRIPTOR_SIZE: number = 48;
 
 /**
@@ -943,8 +943,8 @@ export interface RuntimeConfig {
 }
 
 export const RUNTIME_CONFIG_COMPATIBILITY_OFFSET: number = 0;
-export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 8;
-export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 16;
+export const RUNTIME_CONFIG_HOT_RELOAD_ENABLED_OFFSET: number = 4;
+export const RUNTIME_CONFIG_ON_RELOAD_OFFSET: number = 8;
 export const RUNTIME_CONFIG_SIZE: number = 16;
 
 /**
@@ -971,7 +971,7 @@ export interface ReloadPhase {
 export const RELOAD_PHASE_PHASE_TYPE_OFFSET: number = 0;
 export const RELOAD_PHASE_BUNDLE_ID_OFFSET: number = 8;
 export const RELOAD_PHASE_BUNDLE_NAME_OFFSET: number = 16;
-export const RELOAD_PHASE_REASON_OFFSET: number = 24;
+export const RELOAD_PHASE_REASON_OFFSET: number = 32;
 export const RELOAD_PHASE_SIZE: number = 48;
 
 /**

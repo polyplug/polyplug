@@ -1022,9 +1022,10 @@ ffi.cdef[[
         NativeDispatch native;
         VmDispatch vm;
     } DispatchMechanisms;
-]]
 
 M.POLYPLUG_ABI_VERSION = ffi.cast("uint32_t", 1)
+]]
+
 
 -- ─── Helper Methods (preserved from helper files) ───
 
