@@ -60,8 +60,8 @@ public static class MyPlugin
 {
     public static void Init(HostInterface host, BundleInitContext ctx)
     {
-        // Register your contract implementations
-        registrar.Register<IPipelineDecoder>(new DecoderImpl());
+        // Register your contract implementations via the host interface
+        host.RegisterContract(host, ref descriptor, ref contractInterface);
     }
 }
 

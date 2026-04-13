@@ -46,8 +46,8 @@ end
 ```lua
 local polyplug_guest = require("polyplug_guest")
 
-polyplug_guest.plugin(function(registrar, ctx)
-    registrar.register("PipelineDecoder", DecoderImpl())
+polyplug_guest.plugin(function(host, ctx)
+    host.register_contract(host, descriptor, contractInterface)
 end)
 
 DecoderImpl = {}

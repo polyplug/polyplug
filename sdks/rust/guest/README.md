@@ -63,17 +63,22 @@ static MY_FNS: [FnPtr; 1] = [FnPtr(my_fn as *const ())];
 
 static MY_VTABLE: GuestContractInterface = GuestContractInterface {
     contract_id: MY_CONTRACT_ID,
-    contract_version: 1 << 16, // major=1, minor=0, patch=0
-    function_count: 1,
-    functions: MY_FNS.as_ptr(),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    dispatch_type: DispatchType::Native,
+    create_instance: my_create_instance,
+    destroy_instance: my_destroy_instance,
+    dispatch: DispatchMechanisms {
+        native: NativeDispatch {
+            function_count: 1,
+            functions: MY_FNS.as_ptr(),
+        },
+    },
 };
 
 static MY_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     name:          StringView { ptr: b"my_plugin".as_ptr(), len: 9 },
     contract_name: StringView { ptr: b"my.contract".as_ptr(), len: 11 },
-    version_major: 1,
-    version_minor: 0,
-    version_patch: 0,
+    version:       Version { major: 1, minor: 0, patch: 0 },
 };
 
 #[unsafe(no_mangle)]
@@ -88,7 +93,7 @@ pub unsafe extern "C" fn polyplug_init(host: *const HostInterface) -> AbiError {
     }
     // SAFETY: host is non-null and provided by the host per ABI contract.
     let iface: &HostInterface = unsafe { &*host };
-    // SAFETY: register_plugin is a valid function pointer set by the host.
+    // SAFETY: register_contract is a valid function pointer set by the host.
     unsafe { (iface.register_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE) }
 }
 ```
@@ -195,13 +200,25 @@ One per contract your plugin implements. Must be `'static`.
 #[repr(C)]
 pub struct GuestContractInterface {
     pub contract_id:      u64,
-    pub contract_version: u32,
-    pub function_count:   u32,
-    pub functions:        *const FnPtr,
+    pub contract_version: Version,     // { major: u32, minor: u32, patch: u32 }
+    pub dispatch_type:    DispatchType, // Native (0) or VirtualMachine (1)
+    pub create_instance:  unsafe extern "C" fn(
+        host: *const HostInterface,
+        args: *const (),
+    ) -> GuestContractInstance,
+    pub destroy_instance: unsafe extern "C" fn(
+        host: *const HostInterface,
+        instance: GuestContractInstance,
+    ),
+    pub dispatch:         DispatchMechanisms, // union of NativeDispatch or VmDispatch
 }
 ```
 
-`contract_version` encodes `(major << 16) | (minor << 8) | patch`.
+- `contract_id` is the FNV-1a 64-bit hash of `"name@major_version"`.
+- `dispatch_type` determines how to access the `dispatch` union:
+  - `Native` — use `dispatch.native.functions[fn_id]` for direct function pointer calls.
+  - `VirtualMachine` — use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
+- `create_instance` / `destroy_instance` manage instance lifecycle (required for hot-reload).
 
 ---
 
@@ -214,9 +231,7 @@ Metadata about your plugin. Must be `'static`.
 pub struct PluginDescriptor {
     pub name:          StringView,   // plugin instance name
     pub contract_name: StringView,   // e.g. "pipeline.transformer"
-    pub version_major: u32,
-    pub version_minor: u32,
-    pub version_patch: u32,
+    pub version:       Version,      // { major: u32, minor: u32, patch: u32 }
 }
 ```
 
@@ -229,37 +244,70 @@ Passed by the host to your `polyplug_init`. Use it **only during init** — do n
 ```rust
 #[repr(C)]
 pub struct HostInterface {
+    pub runtime: *mut c_void,
     pub register_contract: unsafe extern "C" fn(
-        host:       *const HostInterface,
-        descriptor: *const PluginDescriptor,
-        vtable:     *const GuestContractInterface,
+        this:        *const HostInterface,
+        descriptor:  *const PluginDescriptor,
+        interface:   *const GuestContractInterface,
     ) -> AbiError,
-    pub host: *const HostInterface,
+    pub alloc: unsafe extern "C" fn(this: *const HostInterface, size: usize, align: usize) -> *mut u8,
+    pub free: unsafe extern "C" fn(this: *const HostInterface, ptr: *mut u8, size: usize, align: usize),
+    pub find_guest_contract: unsafe extern "C" fn(
+        this: *const HostInterface,
+        contract_id: u64,
+        min_version: u32,
+    ) -> GuestContractHandle,
+    pub find_all_guest_contracts: unsafe extern "C" fn(
+        this: *const HostInterface,
+        contract_id: u64,
+        min_version: u32,
+    ) -> Array<GuestContractHandle>,
+    pub resolve_guest_contract: unsafe extern "C" fn(
+        this: *const HostInterface,
+        handle: GuestContractHandle,
+    ) -> *const GuestContractInterface,
+    pub call_guest_method: unsafe extern "C" fn(
+        this:     *const HostInterface,
+        instance: GuestContractInstance,
+        method_id: u32,
+        args:     *const (),
+        out:      *mut (),
+    ) -> AbiError,
+    pub get_host_contract: unsafe extern "C" fn(
+        this: *const HostInterface,
+        contract_id: u64,
+        min_version: u32,
+    ) -> HostContractInstance,
+    pub resolve_host_contract_interface: unsafe extern "C" fn(
+        this: *const HostInterface,
+        contract_id: u64,
+        min_version: u32,
+    ) -> *const HostContractInterface,
+    pub list_bundles: unsafe extern "C" fn(this: *const HostInterface) -> Array<BundleId>,
+    pub get_dependencies: unsafe extern "C" fn(this: *const HostInterface) -> Array<DependencyInfo>,
+    pub load_bundle: unsafe extern "C" fn(
+        this: *const HostInterface, path: *const u8, path_len: usize,
+    ) -> AbiError,
+    pub reload_bundle: unsafe extern "C" fn(
+        this: *const HostInterface, path: *const u8, path_len: usize,
+    ) -> AbiError,
+    pub register_host_contract: unsafe extern "C" fn(
+        this: *const HostInterface,
+        interface: *const HostContractInterface,
+    ) -> AbiError,
+    pub register_loader: unsafe extern "C" fn(
+        this: *const HostInterface, runtime_name: StringView, loader_ptr: *mut c_void,
+    ) -> AbiError,
+    pub get_last_error: unsafe extern "C" fn(
+        this: *const HostInterface, buf: *mut u8, buf_len: usize,
+    ) -> usize,
+    pub get_error_len: unsafe extern "C" fn(this: *const HostInterface) -> usize,
 }
 ```
 
-Call `(reg.register_plugin)(registrar, &MY_DESCRIPTOR, &MY_VTABLE)` for each contract
+All functions use the self-passing pattern — the first parameter is always the
+`HostInterface` pointer itself. Call `(iface.register_contract)(host, &MY_DESCRIPTOR, &MY_VTABLE)` for each contract
 your plugin implements.
-
----
-
-### `HostInterface`
-
-Capabilities provided by the host. Access via `registrar.host` during init, or store the
-pointer for later use (the host ensures it remains valid for the plugin's lifetime).
-
-```rust
-#[repr(C)]
-pub struct HostInterface {
-    pub alloc:                unsafe extern "C" fn(size: usize, align: usize) -> *mut u8,
-    pub free:                 unsafe extern "C" fn(ptr: *mut u8, size: usize, align: usize),
-    pub find_by_contract:     unsafe extern "C" fn(contract_id: u64, min_version: u32) -> GuestContractHandle,
-    pub find_by_bundle:       unsafe extern "C" fn(bundle_id: u64, contract_id: u64, min_version: u32) -> GuestContractHandle,
-    pub find_all_by_contract: unsafe extern "C" fn(contract_id: u64, min_version: u32, out: *mut GuestContractHandle, out_cap: usize) -> usize,
-    pub resolve_plugin:       unsafe extern "C" fn(handle: GuestContractHandle) -> *const GuestContractInterface,
-    pub get_extension:        unsafe extern "C" fn(extension_id: u32) -> *const (),
-}
-```
 
 ---
 
@@ -436,17 +484,22 @@ static TRANSFORM_FNS: [FnPtr; 1] = [FnPtr(plugin_transform as *const ())];
 
 static TRANSFORM_VTABLE: GuestContractInterface = GuestContractInterface {
     contract_id:      TRANSFORMER_CONTRACT_ID,
-    contract_version: 1 << 16,
-    function_count:   1,
-    functions:        TRANSFORM_FNS.as_ptr(),
+    contract_version: Version { major: 1, minor: 0, patch: 0 },
+    dispatch_type:    DispatchType::Native,
+    create_instance:  my_create_instance,
+    destroy_instance: my_destroy_instance,
+    dispatch:         DispatchMechanisms {
+        native: NativeDispatch {
+            function_count: 1,
+            functions:      TRANSFORM_FNS.as_ptr(),
+        },
+    },
 };
 
 static TRANSFORM_DESCRIPTOR: PluginDescriptor = PluginDescriptor {
     name:          StringView { ptr: b"my_transformer".as_ptr(), len: 14 },
     contract_name: StringView { ptr: b"pipeline.transformer".as_ptr(), len: 20 },
-    version_major: 1,
-    version_minor: 0,
-    version_patch: 0,
+    version:       Version { major: 1, minor: 0, patch: 0 },
 };
 ```
 
@@ -491,7 +544,7 @@ Key points demonstrated:
 - **Proper error returns** instead of panics
 - **Static vtable construction** with `FnPtr`
 - **`// SAFETY:` comments** on every `unsafe` block
-- **`polyplug_init`** null-checking the `registrar` before dereferencing
+- **`polyplug_init`** null-checking the `host` pointer before dereferencing
 
 ```
 examples/guests/native/

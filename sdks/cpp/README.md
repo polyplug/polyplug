@@ -57,7 +57,7 @@ if (decoder) {
 #include <polyplug/guest.hpp>
 
 POLYPLUG_PLUGIN_INIT {
-    registrar.Register<PipelineDecoder>(std::make_unique<DecoderImpl>());
+    host->register_contract(host, &descriptor, &contractInterface);
 }
 
 class DecoderImpl : public IPipelineDecoder {

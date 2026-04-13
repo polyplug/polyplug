@@ -52,8 +52,8 @@ if (decoder) {
 ```typescript
 import { plugin } from "@polyplug/guest";
 
-plugin((registrar, ctx) => {
-    registrar.register<PipelineDecoder>(new DecoderImpl());
+plugin((host, ctx) => {
+    host.registerContract(host, descriptor, contractInterface);
 });
 
 class DecoderImpl implements PipelineDecoder {

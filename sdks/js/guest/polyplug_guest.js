@@ -113,7 +113,7 @@ export function getHostVtable() {
  * Host interface for plugin registration.
  *
  * @typedef {Object} HostInterface
- * @property {Function} register_plugin - Function to register a plugin
+ * @property {Function} register_contract - Function to register a guest contract
  * @property {*} host - Host interface pointer
  */
 
