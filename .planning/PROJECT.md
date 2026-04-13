@@ -38,6 +38,8 @@ This enables:
 - All FFI types consolidated in `polyplug_abi`
 - Simplified registry (no VTableSlot wrapper, no generation counter)
 - All five SDKs updated to use `polyplug_abi` types
+- Auto-generated SDK bindings via build script codegen (Phase 19)
+- Helper methods embedded inline in codegen for rebuild persistence (Phase 19)
 
 ### Out of Scope
 
@@ -67,4 +69,4 @@ This enables:
 | 2026-04-03 | `guest_contract:` hash prefix | Consistent naming with Guest/Host terminology |
 
 ---
-*Last updated: 2026-04-06 (Phase 10 complete — v1.1 milestone finished)*
+*Last updated: 2026-04-13 (Phase 19 complete — ABI build script auto-generates SDK structs)*
