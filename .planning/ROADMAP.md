@@ -242,7 +242,7 @@ Plans:
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 2/2 | Complete    | 2026-04-11 |
 | 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
-| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 6/6 | Complete   | 2026-04-13 |
+| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 6/6 | Complete    | 2026-04-13 |
 
 ## Dependencies
 
