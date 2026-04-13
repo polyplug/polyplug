@@ -13,7 +13,7 @@
 //   #include <polyplug/guest.hpp>
 //
 //   POLYPLUG_GUEST_MAIN {
-//       // registrar->register_plugin(registrar, &kDescriptor, &kVTable);
+//       // host->register_contract(host, &kDescriptor, &kInterface);
 //       AbiError err{};
 //       err.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
 //       err.message.ptr = nullptr;
@@ -154,7 +154,7 @@ inline const HostInterface* get_host_interface() noexcept {
 ///
 /// Usage:
 ///   POLYPLUG_GUEST_MAIN {
-///       // register contracts via registrar->register_plugin(...)
+///       // register contracts via host->register_contract(host, &desc, &iface)
 ///       AbiError ok{};
 ///       ok.code        = static_cast<uint32_t>(AbiErrorCode::Ok);
 ///       ok.message.ptr = nullptr;
@@ -163,6 +163,6 @@ inline const HostInterface* get_host_interface() noexcept {
 ///   }
 ///
 /// The macro expands to:
-///   extern "C" AbiError polyplug_init(const HostInterface* host)
+///   extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
 #define POLYPLUG_GUEST_MAIN \
-    extern "C" AbiError polyplug_init(const HostInterface* host)
+    extern "C" AbiError polyplug_init(const HostInterface* host, const BundleInitContext* ctx)
