@@ -249,7 +249,7 @@ public delegate IntPtr HostInterfaceResolveGuestContractDelegate(IntPtr arg0, Gu
 public delegate AbiError HostInterfaceCallGuestMethodDelegate(IntPtr arg0, GuestContractInstance arg1, uint arg2, IntPtr arg3, IntPtr arg4);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-public delegate crate::host::HostContractInstance HostInterfaceGetHostContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
+public delegate HostContractInstance HostInterfaceGetHostContractDelegate(IntPtr arg0, ulong arg1, uint arg2);
 
 [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate IntPtr HostInterfaceResolveHostContractInterfaceDelegate(IntPtr arg0, ulong arg1, uint arg2);

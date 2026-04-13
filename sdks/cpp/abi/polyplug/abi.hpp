@@ -207,13 +207,13 @@ typedef GuestContractHandle(*)(const HostInterface*, uint64_t, uint32_t) HostInt
 typedef void*(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_find_all_guest_contracts_fn;
 typedef const GuestContractInterface*(*)(const HostInterface*, GuestContractHandle) HostInterface_resolve_guest_contract_fn;
 typedef AbiError(*)(const HostInterface*, GuestContractInstance, uint32_t, const void*, void*) HostInterface_call_guest_method_fn;
-typedef crate::host::HostContractInstance(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_get_host_contract_fn;
-typedef const crate::host::HostContractInterface*(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_resolve_host_contract_interface_fn;
+typedef HostContractInstance(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_get_host_contract_fn;
+typedef const HostContractInterface*(*)(const HostInterface*, uint64_t, uint32_t) HostInterface_resolve_host_contract_interface_fn;
 typedef void*(*)(const HostInterface*) HostInterface_list_bundles_fn;
 typedef void*(*)(const HostInterface*) HostInterface_get_dependencies_fn;
 typedef AbiError(*)(const HostInterface*, const uint8_t*, size_t) HostInterface_load_bundle_fn;
 typedef AbiError(*)(const HostInterface*, const uint8_t*, size_t) HostInterface_reload_bundle_fn;
-typedef AbiError(*)(const HostInterface*, const crate::host::HostContractInterface*) HostInterface_register_host_contract_fn;
+typedef AbiError(*)(const HostInterface*, const HostContractInterface*) HostInterface_register_host_contract_fn;
 typedef AbiError(*)(const HostInterface*, StringView, void*) HostInterface_register_loader_fn;
 typedef size_t(*)(const HostInterface*, uint8_t*, size_t) HostInterface_get_last_error_fn;
 typedef size_t(*)(const HostInterface*) HostInterface_get_error_len_fn;
@@ -468,7 +468,7 @@ static_assert(sizeof(HostInterface) == 144, "HostInterface size mismatch");
 ///  Each function receives the interface pointer as its first parameter,
 ///  allowing hosts to call: `rt->load_bundle(rt, path)`
 ///  SDKs hide this pattern: `rt.load_bundle(path)`
-typedef AbiError(*)(const RuntimeInterface*, const c_char*) RuntimeInterface_load_bundle_fn;
+typedef AbiError(*)(const RuntimeInterface*, const char*) RuntimeInterface_load_bundle_fn;
 typedef AbiError(*)(const RuntimeInterface*, BundleId) RuntimeInterface_reload_bundle_fn;
 typedef AbiError(*)(const RuntimeInterface*, BundleId) RuntimeInterface_unload_bundle_fn;
 typedef GuestContractHandle(*)(const RuntimeInterface*, uint64_t, uint32_t) RuntimeInterface_find_by_contract_fn;
@@ -846,7 +846,7 @@ struct Array {
     ///
     ///  # Ownership
     ///  Caller owns. Must be freed via `host->free` with same size/align.
-    T* items;
+    void* items;
     ///  Number of elements.
     ///
     ///  Used to calculate total size for freeing: `len * sizeof(T)`.

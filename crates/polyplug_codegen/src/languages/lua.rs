@@ -94,6 +94,17 @@ impl LuaGenerator {
             return String::from("void");
         }
 
+        // Strip Rust module paths (e.g., "crate::host::HostContractInstance" -> "HostContractInstance").
+        if let Some(short) = rust_type
+            .rsplit("::")
+            .next()
+        {
+            // Only strip if it actually had a :: separator (avoid stripping single-word types).
+            if rust_type.contains("::") {
+                return Self::rust_type_to_lua(short);
+            }
+        }
+
         match rust_type {
             "u64" => String::from("uint64_t"),
             "u32" => String::from("uint32_t"),
@@ -107,6 +118,8 @@ impl LuaGenerator {
             "isize" => String::from("ptrdiff_t"),
             "bool" => String::from("uint8_t"),
             "()" => String::from("void"),
+            "c_char" => String::from("int8_t"),
+            "T" => String::from("void"), // Generic placeholder — used as void* for opaque pointers
             other => String::from(other),
         }
     }

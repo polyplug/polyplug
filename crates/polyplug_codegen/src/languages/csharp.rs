@@ -191,6 +191,17 @@ impl CSharpGenerator {
             return Self::rust_type_to_csharp(inner);
         }
 
+        // Strip Rust module paths (e.g., "crate::host::HostContractInstance" -> "HostContractInstance").
+        if let Some(short) = rust_type
+            .rsplit("::")
+            .next()
+        {
+            // Only strip if it actually had a :: separator (avoid stripping single-word types).
+            if rust_type.contains("::") {
+                return Self::rust_type_to_csharp(short);
+            }
+        }
+
         match rust_type {
             "u64" => String::from("ulong"),
             "u32" => String::from("uint"),
