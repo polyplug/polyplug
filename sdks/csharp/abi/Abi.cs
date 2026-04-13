@@ -20,7 +20,6 @@ public struct NativeDispatch
 }
 
 /// Expected size: 16 bytes
-Debug.Assert(Marshal.SizeOf<NativeDispatch>() == 16);
 
 ///  VM dispatch data — call through a dispatch function.
 ///
@@ -47,7 +46,6 @@ public struct VmDispatch
 }
 
 /// Expected size: 16 bytes
-Debug.Assert(Marshal.SizeOf<VmDispatch>() == 16);
 
 ///  Opaque handle to VM loader-specific data.
 ///
@@ -64,7 +62,6 @@ public struct VmLoaderData
 }
 
 /// Expected size: 8 bytes
-Debug.Assert(Marshal.SizeOf<VmLoaderData>() == 8);
 
 ///  Opaque handle to a guest contract instance.
 ///
@@ -113,7 +110,6 @@ public struct GuestContractInstance
 }
 
 /// Expected size: 16 bytes
-Debug.Assert(Marshal.SizeOf<GuestContractInstance>() == 16);
 
 ///  Guest Contract Interface — one per contract implemented by a guest (plugin).
 ///
@@ -197,7 +193,6 @@ public struct GuestContractInterface
 }
 
 /// Expected size: 56 bytes
-Debug.Assert(Marshal.SizeOf<GuestContractInterface>() == 56);
 
 ///  Host Interface — function table passed to guests during initialization.
 ///
@@ -503,7 +498,6 @@ public struct HostInterface
 }
 
 /// Expected size: 144 bytes
-Debug.Assert(Marshal.SizeOf<HostInterface>() == 144);
 
 ///  Runtime Interface — function table returned to host from polyplug_runtime_create().
 ///
@@ -712,7 +706,6 @@ public struct RuntimeInterface
 }
 
 /// Expected size: 96 bytes
-Debug.Assert(Marshal.SizeOf<RuntimeInterface>() == 96);
 
 ///  Opaque handle to a host contract instance.
 ///
@@ -727,7 +720,6 @@ public struct HostContractInstance
 }
 
 /// Expected size: 8 bytes
-Debug.Assert(Marshal.SizeOf<HostContractInstance>() == 8);
 
 ///  Host Contract Interface — for host-provided services.
 ///
@@ -822,7 +814,6 @@ public struct HostContractInterface
 }
 
 /// Expected size: 72 bytes
-Debug.Assert(Marshal.SizeOf<HostContractInterface>() == 72);
 
 ///  Context passed to every guest `polyplug_init()` function.
 ///
@@ -839,7 +830,6 @@ public struct BundleInitContext
 }
 
 /// Expected size: 24 bytes
-Debug.Assert(Marshal.SizeOf<BundleInitContext>() == 24);
 
 ///  Metadata about a plugin within a bundle.
 ///
@@ -859,7 +849,6 @@ public struct PluginDescriptor
 }
 
 /// Expected size: 48 bytes
-Debug.Assert(Marshal.SizeOf<PluginDescriptor>() == 48);
 
 ///  Opaque handle to a registered guest contract.
 ///
@@ -884,7 +873,6 @@ public struct GuestContractHandle
 }
 
 /// Expected size: 4 bytes
-Debug.Assert(Marshal.SizeOf<GuestContractHandle>() == 4);
 
 ///  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
 ///
@@ -907,7 +895,6 @@ public struct RuntimeConfig
 }
 
 /// Expected size: 16 bytes
-Debug.Assert(Marshal.SizeOf<RuntimeConfig>() == 16);
 
 ///  FFI-safe reload phase for hot-reload callbacks.
 ///
@@ -931,7 +918,6 @@ public struct ReloadPhase
 }
 
 /// Expected size: 48 bytes
-Debug.Assert(Marshal.SizeOf<ReloadPhase>() == 48);
 
 ///  ABI error — returned by value from all ABI calls.
 ///
@@ -948,7 +934,6 @@ public struct AbiError
 }
 
 /// Expected size: 24 bytes
-Debug.Assert(Marshal.SizeOf<AbiError>() == 24);
 
 ///  FFI-safe array with caller-frees ownership model.
 ///
@@ -1005,7 +990,6 @@ public struct Buffer
 }
 
 /// Expected size: 24 bytes
-Debug.Assert(Marshal.SizeOf<Buffer>() == 24);
 
 ///  Dependency information returned by get_dependencies introspection API.
 ///
@@ -1048,7 +1032,6 @@ public struct DependencyInfo
 }
 
 /// Expected size: 24 bytes
-Debug.Assert(Marshal.SizeOf<DependencyInfo>() == 24);
 
 ///  Non-owning UTF-8 string view.
 ///
@@ -1064,7 +1047,6 @@ public struct StringView
 }
 
 /// Expected size: 16 bytes
-Debug.Assert(Marshal.SizeOf<StringView>() == 16);
 
 ///  A three-component semantic version (major.minor.patch).
 [StructLayout(LayoutKind.Sequential, Size = 12)]
@@ -1079,7 +1061,6 @@ public struct Version
 }
 
 /// Expected size: 12 bytes
-Debug.Assert(Marshal.SizeOf<Version>() == 12);
 
 public enum ContractType : uint
 {

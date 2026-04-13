@@ -331,15 +331,11 @@ impl CodeGenerator for CSharpGenerator {
 
         output.push_str("}\n");
 
-        // Emit Debug.Assert for size validation if known.
+        // Emit size documentation comment if known (actual validation is in LayoutTests.cs).
         if let Some(size) = item.size_hint {
             output.push_str(&format!(
                 "\n/// Expected size: {} bytes\n",
                 size
-            ));
-            output.push_str(&format!(
-                "Debug.Assert(Marshal.SizeOf<{}>() == {});\n",
-                item.name, size
             ));
         }
 
