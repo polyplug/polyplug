@@ -16,7 +16,6 @@ use polyplug_codegen::languages::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Target language for SDK generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1076,55 +1075,6 @@ fn merge_cpp_helpers(generated_code: &str, helpers: &[(String, String)]) -> Stri
     result
 }
 
-/// Check if `sg` (ast-grep CLI) is available in PATH.
-fn is_sg_available() -> bool {
-    Command::new("sg")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-/// Run ast-grep scan to extract method definitions from a file.
-///
-/// Per D-14: Uses `sg` CLI tool via `std::process::Command`, NOT as a Rust library.
-/// Returns JSON string of matches, or None if sg is unavailable or fails.
-fn sg_scan_methods(language: &str, pattern: &str, file_path: &Path) -> Option<String> {
-    if !is_sg_available() {
-        return None;
-    }
-
-    let rule = format!(
-        "id: find_methods\nlanguage: {language}\nrule:\n  pattern: {pattern}"
-    );
-
-    let output = Command::new("sg")
-        .arg("scan")
-        .arg("--inline-rules")
-        .arg(&rule)
-        .arg("--json")
-        .arg(file_path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        println!(
-            "cargo:warning=ast-grep scan failed for {}: {}",
-            file_path.display(),
-            stderr
-        );
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if stdout.is_empty() || stdout == "null" {
-        return None;
-    }
-
-    Some(stdout.to_string())
-}
-
 /// Generate all SDKs and write to sdks/{lang}/abi/.
 ///
 /// # Arguments
@@ -1193,13 +1143,6 @@ pub fn generate_all_sdks(
 
     // Generate layout test source files per D-31.
     generate_layout_tests(abi_types, workspace_root)?;
-
-    // Report ast-grep availability status.
-    if is_sg_available() {
-        println!("cargo:warning=ast-grep (sg) available for future method preservation");
-    } else {
-        println!("cargo:warning=ast-grep (sg) not found in PATH -- method preservation skipped");
-    }
 
     Ok(())
 }
