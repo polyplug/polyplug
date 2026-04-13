@@ -20,8 +20,11 @@ from polyplug_guest import (
     StringView,
 )
 from polyplug_abi import (
-    PluginDispatch,
     NativeDispatch,
+    DispatchMechanisms,
+    HostInterface,
+    Version,
+    DispatchType,
 )
 
 # ── Contract constants ────────────────────────────────────────────────────────
@@ -123,48 +126,24 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
     ctypes.cast(_FN_RESET, ctypes.c_void_p),
 )
 
-# ── HostInterface definition (matches polyplug_abi::HostInterface) ───────────────────
-
-
-class HostInterface(ctypes.Structure):
-    """HostInterface passed to polyplug_init. 64 bytes (8 function pointers)."""
-
-    _fields_ = [
-        ("register_plugin", ctypes.c_void_p),
-        ("alloc", ctypes.c_void_p),
-        ("free", ctypes.c_void_p),
-        ("find_by_contract", ctypes.c_void_p),
-        ("find_by_bundle", ctypes.c_void_p),
-        ("find_all_by_contract", ctypes.c_void_p),
-        ("resolve_plugin", ctypes.c_void_p),
-        ("get_extension", ctypes.c_void_p),
-    ]
-
-
-# Type for register_plugin function pointer.
-# On x86_64 System V ABI, AbiError (24 bytes) is returned via sret pointer.
-_REGISTER_PLUGIN_FN_TYPE = ctypes.CFUNCTYPE(
-    None,  # void return - result written via sret pointer
-    ctypes.POINTER(AbiError),  # sret: hidden pointer where caller expects AbiError
-    ctypes.c_void_p,  # rt_ctx
-    ctypes.POINTER(PluginDescriptor),  # descriptor
-    ctypes.POINTER(GuestContractInterface),  # interface
-)
+# ── HostInterface definition ───────────────────────────────────────────────────
+# Use the auto-generated HostInterface from polyplug_abi (imported above).
 
 # ── Plugin interface ──────────────────────────────────────────────────
 
 # Create native dispatch with function pointer array
 _native_dispatch = NativeDispatch(
-    functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p)
+    function_count=4,
+    functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p),
 )
-_dispatch = PluginDispatch(native=_native_dispatch)
+_dispatch = DispatchMechanisms(native=_native_dispatch)
 
 _VTABLE = GuestContractInterface(
-    rt_ctx=None,  # Will be set by host during registration
     contract_id=_TEST_ADD_CONTRACT_ID,
-    contract_version=(0 << 16) | 0,  # minor=0, patch=0
-    function_count=4,
-    dispatch_type=0,  # DispatchType.Native
+    contract_version=Version(major=1, minor=0, patch=0),
+    dispatch_type=DispatchType.Native,
+    create_instance=None,
+    destroy_instance=None,
     dispatch=_dispatch,
 )
 
@@ -180,9 +159,7 @@ _CONTRACT_NAME_PTR: ctypes.c_void_p = ctypes.cast(
 _DESCRIPTOR = PluginDescriptor(
     name=StringView(ptr=_PLUGIN_NAME_PTR, len=len(_PLUGIN_NAME_BYTES)),
     contract_name=StringView(ptr=_CONTRACT_NAME_PTR, len=len(_CONTRACT_NAME_BYTES)),
-    version_major=1,
-    version_minor=0,
-    version_patch=0,
+    version=Version(major=1, minor=0, patch=0),
 )
 
 # ── ABI entry points ──────────────────────────────────────────────────────────
@@ -193,24 +170,19 @@ def polyplug_abi_version() -> int:
     return 1
 
 
-def polyplug_init(rt_ctx: int, host_vtable: int, ctx_ptr: int) -> None:
-    """Called by PythonLoader with rt_ctx, host_vtable, and ctx pointers."""
-    if host_vtable == 0:
-        raise RuntimeError("host_vtable is null")
+def polyplug_init(host_addr: int, ctx_ptr: int) -> None:
+    """Called by PythonLoader with the HostInterface address and BundleInitContext pointer."""
+    if host_addr == 0:
+        raise RuntimeError("host interface pointer is null")
 
-    # Cast the host_vtable pointer to HostInterface structure
-    host = HostInterface.from_address(host_vtable)
+    # Cast the host pointer to the auto-generated HostInterface structure
+    host = HostInterface.from_address(host_addr)
 
-    # Cast the register_plugin function pointer to the correct type (sret convention)
-    register_fn = ctypes.cast(host.register_plugin, _REGISTER_PLUGIN_FN_TYPE)
-
-    # Allocate space for the return value (AbiError struct)
-    err = AbiError()
-    register_fn(
-        ctypes.byref(err),  # sret pointer
-        rt_ctx,  # rt_ctx passed through
+    # Call register_contract via the auto-generated delegate (self-passing pattern)
+    err = host.register_contract(
+        host_addr,  # self: HostInterface pointer
         ctypes.byref(_DESCRIPTOR),
         ctypes.byref(_VTABLE),
     )
     if err.code != AbiErrorCode.Ok:
-        raise RuntimeError(f"register_plugin failed with code {err.code}")
+        raise RuntimeError(f"register_contract failed with code {err.code}")

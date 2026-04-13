@@ -120,7 +120,7 @@ _FUNCTIONS_ARRAY = (ctypes.c_void_p * 4)(
 
 _VTABLE = GuestContractInterface(
     contract_id=_TEST_ADD_CONTRACT_ID,
-    contract_version=(0 << 16) | 0,  # minor=0, patch=0
+    contract_version=(1 << 16) | 0,  # version 1.0.0 (major=1, minor=0)
     function_count=4,
     functions=ctypes.cast(_FUNCTIONS_ARRAY, ctypes.c_void_p),
 )

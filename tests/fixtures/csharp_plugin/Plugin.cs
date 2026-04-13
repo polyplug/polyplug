@@ -43,14 +43,14 @@ public static class Plugin
 
             s_interface = new GuestContractInterface
             {
-                RtCtx = nint.Zero,
                 ContractId = TEST_ADD_CONTRACT_ID,
-                ContractVersion = 1 << 16,
-                FunctionCount = 4,
+                ContractVersion = new Version { Major = 1, Minor = 0, Patch = 0 },
                 DispatchType = DispatchType.Native,
-                Dispatch = new PluginDispatch
+                CreateInstance = null,
+                DestroyInstance = null,
+                Dispatch = new DispatchMechanisms
                 {
-                    Native = new NativeDispatch { Functions = s_functionsPtr }
+                    Native = new NativeDispatch { FunctionCount = 4, Functions = s_functionsPtr }
                 }
             };
 
@@ -61,9 +61,7 @@ public static class Plugin
                 {
                     Name = new StringView { Ptr = (nint)namePtr, Len = (nuint)s_nameBytes.Length },
                     ContractName = new StringView { Ptr = (nint)contractPtr, Len = (nuint)s_contractBytes.Length },
-                    VersionMajor = 1,
-                    VersionMinor = 0,
-                    VersionPatch = 0
+                    Version = new Version { Major = 1, Minor = 0, Patch = 0 }
                 };
             }
         }
@@ -114,22 +112,19 @@ public static class Plugin
     }
 
     [UnmanagedCallersOnly(EntryPoint = "PolyplugInit")]
-    public static uint PolyplugInit(nint rtCtx, nint hostVTablePtr, nint ctxPtr)
+    public static uint PolyplugInit(nint hostPtr, nint ctxPtr)
     {
         unsafe
         {
-            if (hostVTablePtr == nint.Zero)
+            if (hostPtr == nint.Zero)
                 return 1;
 
-            var hostVTable = (HostInterface*)hostVTablePtr;
-            var registerPlugin = (delegate* unmanaged<nint, PluginDescriptor*, GuestContractInterface*, AbiError>)hostVTable->RegisterPlugin;
-
-            s_interface.RtCtx = rtCtx;
+            var host = (HostInterface*)hostPtr;
 
             fixed (PluginDescriptor* descPtr = &s_descriptor)
             fixed (GuestContractInterface* ifacePtr = &s_interface)
             {
-                var result = registerPlugin(rtCtx, descPtr, ifacePtr);
+                var result = host->RegisterContract((nint)host, (nint)descPtr, (nint)ifacePtr);
                 return result.Code;
             }
         }
