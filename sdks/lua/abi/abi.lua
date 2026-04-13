@@ -6,7 +6,7 @@ local M = {}
 
 ffi.cdef[[
     //  Native dispatch data — direct function pointer array.
-    //
+    // 
     //  Used when `dispatch_type == DispatchType::Native`.
     //  The `functions` array contains `function_count` function pointers.
     typedef struct NativeDispatch {
