@@ -16,6 +16,11 @@ static_assert(POLYPLUG_ABI_VERSION == 1,
 namespace polyplug {
 
 /// Returns true if two GuestContractHandles refer to the same slot.
+///
+/// Note: GuestContractHandle currently has only an index field (no generation).
+/// This is intentional — the generational index pattern uses generation at the
+/// registry level, not in the handle itself. The handle is validated by
+/// `resolve_contract`, which checks the slot's current generation.
 inline bool operator==(GuestContractHandle a, GuestContractHandle b) noexcept {
     return a.index == b.index;
 }
