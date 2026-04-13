@@ -1,149 +1,169 @@
 ---
 phase: 19-fix-abi-build-script-extractor-rs-to-auto-generate-sdk-struc
-reviewed: 2026-04-12T00:00:00Z
-depth: quick
-files_reviewed: 18
+reviewed: 2026-04-13T00:00:00Z
+depth: standard
+files_reviewed: 7
 files_reviewed_list:
-  - crates/polyplug_abi/build/extractor.rs
   - crates/polyplug_abi/build/generate.rs
-  - crates/polyplug_abi/build/main.rs
-  - crates/polyplug_abi/build/mapper.rs
-  - crates/polyplug_abi/build/types.rs
-  - crates/polyplug_codegen/src/languages/cpp.rs
   - crates/polyplug_codegen/src/languages/csharp.rs
-  - crates/polyplug_codegen/src/languages/js.rs
-  - crates/polyplug_codegen/src/languages/lua.rs
-  - crates/polyplug_codegen/src/languages/python.rs
-  - crates/polyplug_codegen/src/data.rs
-  - sdks/python/host/polyplug/runtime.py
-  - sdks/csharp/host/NativeMethods.cs
-  - sdks/lua/host/polyplug/runtime.lua
-  - sdks/js/host/polyplug/mod.js
-  - sdks/cpp/host/polyplug/runtime.hpp
-  - sdks/cpp/guest/polyplug/guest.hpp
-  - sdks/js/guest/polyplug_guest.js
+  - sdks/cpp/abi/polyplug/abi.hpp
+  - sdks/cpp/host/polyplug/handle.hpp
+  - sdks/csharp/abi/Abi.cs
+  - sdks/js/abi/abi.ts
+  - sdks/lua/abi/abi.lua
 findings:
-  critical: 2
-  warning: 4
-  info: 4
-  total: 10
+  critical: 3
+  warning: 6
+  info: 3
+  total: 12
 status: issues_found
 ---
 
 # Phase 19: Code Review Report
 
-**Reviewed:** 2026-04-12T00:00:00Z
-**Depth:** quick
-**Files Reviewed:** 18
+**Reviewed:** 2026-04-13T00:00:00Z
+**Depth:** standard
+**Files Reviewed:** 7
 **Status:** issues_found
 
 ## Summary
 
-Quick-depth pattern scan across 18 files spanning the ABI build script extractor, codegen language generators, and SDK host/guest bindings. Found 2 critical issues, 4 warnings, and 4 informational items. The critical issues are a function that silently discards its result (returns empty string unconditionally) and duplicated typedef generation that causes redundant work. The SDK files are otherwise clean of hardcoded secrets, injection vulnerabilities, and dangerous function calls.
+Reviewed the ABI build script code generator (`generate.rs`), the C# codegen backend (`csharp.rs`), and the five generated SDK ABI files (C++, C#, Lua, JavaScript, plus C++ `handle.hpp`). Three critical issues found: all three are caused by the code generator emitting raw Rust type syntax (`crate::host::...`, `T*`, `c_char`) into non-Rust target language files, which will cause compilation or parse failures. Six warnings cover duplicate enum definitions, C# `Debug.Assert` outside method bodies, Lua comment style inconsistencies, a broken PascalCase-to-UPPER_SNAKE_CASE converter, and other code quality concerns. Three informational items cover dead code and noisy build output.
 
 ## Critical Issues
 
-### CR-01: StringViewHelper.toString always returns empty string
+### CR-01: Raw Rust path syntax `crate::host::*` emitted into C++, Lua, and C# generated files
 
-**File:** `sdks/js/guest/polyplug_guest.js:182-185`
-**Issue:** The `StringViewHelper.toString()` method unconditionally returns `''` after checking for null/empty input. The actual string decoding logic is never executed. This is dead code that will silently produce wrong results for any caller using this method instead of the separate `toStr()` function.
-**Fix:**
-```javascript
-static toString(sv) {
-    if (!sv || sv.len === 0) return '';
-    // Delegate to the working toStr implementation
-    return toStr(sv);
-}
-```
+**File:** `sdks/cpp/abi/polyplug/abi.hpp:210-216`
+**Also:** `sdks/lua/abi/abi.lua:181-187`, `sdks/csharp/abi/Abi.cs:252`
 
-### CR-02: CppGenerator and LuaGenerator emit duplicate typedefs for function pointer fields
+**Issue:** The generated code contains Rust module path syntax like `crate::host::HostContractInstance` and `crate::host::HostContractInterface` in C++ typedefs, Lua typedefs, and C# delegate definitions. These are Rust-specific paths that are syntactically invalid in all three target languages. This will cause:
+- C++: compilation failure (`crate` is not a valid identifier in this context)
+- C#: compilation failure (`crate::host` is not valid C# syntax)
+- Lua/LuaJIT FFI: parse failure from `ffi.cdef`
 
-**File:** `crates/polyplug_codegen/src/languages/cpp.rs:252-258` and `crates/polyplug_codegen/src/languages/cpp.rs:284-289`
-**Issue:** In `generate_struct`, function pointer typedefs are generated twice: once in the pre-scan loop (lines 252-258) that collects into `typedefs`, and again inside the field iteration loop (lines 284-289) via `generate_fn_ptr_typedef`. The pre-scan loop emits them to the `typedefs` string which is then prepended to the output. The second call inside the field loop discards the first return value (the typedef text) and only uses the type name. While the second call does not produce visible duplication in the output (the typedef text is discarded via `_`), it recomputes the typedef string wastefully. More importantly, the `generate_fn_ptr_typedef` call on line 287 is a redundant re-computation -- the first call already produced the same typedef name. The same pattern exists in `lua.rs:249-255` and `lua.rs:277-282`.
-**Fix:** Store the `(typedef_text, type_name)` pairs from the pre-scan in a `HashMap<String, String>` keyed by field name, and look up the type name during field iteration instead of calling `generate_fn_ptr_typedef` a second time.
+This indicates the type mapping in the code generator is not translating these types correctly. The `HostContractInstance` and `HostContractInterface` types used as return/parameter types in `HostInterface` function pointers are resolving to their raw Rust FQN instead of the target-language equivalent.
+
+**Fix:** The `rust_type_to_csharp`, C++ type mapper, and Lua type mapper need to recognize `crate::host::HostContractInstance` and `crate::host::HostContractInterface` and map them to the correct target types. For C++ this should be `HostContractInstance` / `HostContractInterface`. For C# it should be `HostContractInstance` / `HostContractInterface`. The root cause is likely in how the ABI extractor records these types or how the codegen resolves cross-module type references.
+
+### CR-02: Generic `T*` emitted in Array struct for C++ and Lua generated files
+
+**File:** `sdks/cpp/abi/polyplug/abi.hpp:849`
+**Also:** `sdks/lua/abi/abi.lua:847`
+
+**Issue:** The generated `Array` struct emits `T* items;` as the pointer field. `T*` is generic syntax that is not valid in C without a typedef, and it is not valid for LuaJIT `ffi.cdef` at all. The C++ output has `T*` which will not compile without a template declaration wrapping the struct. The Lua output has `T*` inside `ffi.cdef` which will cause a LuaJIT parse error at load time. The C# version correctly maps to `IntPtr`, but C++ and Lua do not.
+
+**Fix:** The C++ and Lua code generators should emit `void* items;` (or equivalent opaque pointer) for the Array struct's items field, since the Array type is generic and the actual element type is not known at codegen time. The C# generator already handles this correctly by using `IntPtr`.
+
+### CR-03: `c_char` type emitted into C++ and Lua generated files
+
+**File:** `sdks/cpp/abi/polyplug/abi.hpp:471`
+**Also:** `sdks/lua/abi/abi.lua:442`
+
+**Issue:** The `RuntimeInterface_load_bundle_fn` typedef uses `const c_char*` as the path parameter type. `c_char` is a Rust FFI type alias (`std::ffi::c_char`) that does not exist in C++ standard headers (it should be `char`) or in LuaJIT FFI. This will cause compilation or parse failures in both target languages.
+
+**Fix:** The type mapper should translate `c_char` to `char` for C++ and the full `const c_char*` to `const char*` for both C++ and Lua. Add `c_char` to the type mapping tables in the C++ and Lua code generators.
 
 ## Warnings
 
-### WR-01: C++ Runtime::build() ignores config and callback in both branches
+### WR-01: Duplicate `AbiErrorCode` enum in C# generated output
 
-**File:** `sdks/cpp/host/polyplug/runtime.hpp:67-83`
-**Issue:** The `Builder::build()` method has a conditional that checks `config_.has_value() || on_reload_cb_.has_value()`, but both the true and false branches call `polyplug_runtime_create()` without passing any options. The "with options" FFI function `polyplug_runtime_create_with_options` is declared at line 34 but never called. This means configuration and reload callbacks are silently ignored.
+**File:** `sdks/csharp/abi/Abi.cs:1136-1162` and `sdks/csharp/abi/Abi.cs:1187-1201`
+
+**Issue:** The `AbiErrorCode` enum is emitted twice in the generated C# file. The first occurrence (line 1136) is from the main code generation loop iterating over extracted ABI types. The second occurrence (line 1187) is from `generate_footer()` in the C# generator (`csharp.rs:412-426`), which hardcodes `AbiErrorCode` and `AbiConstants`. This will cause a C# compilation error due to duplicate type definition within the same namespace.
+
+**Fix:** Either remove `AbiErrorCode` from `generate_footer()` in `csharp.rs` (since it is now generated from extracted types), or skip it during the main iteration loop by filtering it out. The footer should only contain types that are NOT already extracted from the ABI definition.
+
+### WR-02: C# `Debug.Assert` emitted outside method context
+
+**File:** `sdks/csharp/abi/Abi.cs:23,50,67,116,200,506,715,825,842,862,887,910,934,951,1008,1051,1067,1082`
+
+**Issue:** The generated C# file emits `Debug.Assert(Marshal.SizeOf<T>() == N)` statements as standalone statements at namespace level (outside any method body). In C#, executable statements must be inside method bodies. These will cause compilation errors. The code generator emits these right after each struct definition as size documentation, but they are not syntactically valid at the namespace level. This is produced by `csharp.rs:324-333` in the `generate_struct` method.
+
+**Fix:** Either wrap these asserts in a static test method (e.g., a `ValidateLayout()` method in a static class), emit them as comments (`// Expected size: N bytes`), or remove them since the layout test file (`LayoutTests.cs`) already validates sizes using xUnit.
+
+### WR-03: Lua generated file uses C-style `//` comments outside `ffi.cdef` context
+
+**File:** `sdks/lua/abi/abi.lua:7-10,20-21,40-51` (and many more)
+
+**Issue:** The generated Lua file uses C-style `//` line comments for doc content. While LuaJIT's `ffi.cdef` does accept C-style comments (since it parses C syntax), the file structure appears to place all content within `ffi.cdef` blocks where `//` is valid. However, if the file structure changes or if any content ends up outside `ffi.cdef`, the `//` comments would be syntax errors in Lua. The generated file is inconsistent: it uses `--` for some structural elements but `//` for all doc content.
+
+**Fix:** The Lua code generator should ensure `//` comments only appear within `ffi.cdef` string blocks and use `--` for any content outside those blocks. This requires the generator to track whether it is inside an `ffi.cdef` context.
+
+### WR-04: `to_upper_snake_case_for_generate` produces incorrect output for consecutive uppercase letters
+
+**File:** `crates/polyplug_abi/build/generate.rs:1383-1396`
+
+**Issue:** The function inserts an underscore before every uppercase character (except at position 0), then uppercases all other characters. For an input like `AbiError`, this produces `A_B_I_E_R_R_O_R` instead of the intended `ABI_ERROR`. The function only looks at individual character casing without considering consecutive uppercase runs. This affects the generated JS layout test file imports, which use constants like `ABI_ERROR_SIZE`.
+
 **Fix:**
-```cpp
-Runtime build() {
-    if (config_.has_value() || on_reload_cb_.has_value()) {
-        // Build RuntimeConfig and call polyplug_runtime_create_with_options
-        RuntimeConfig cfg = config_.value_or(RuntimeConfig{});
-        if (on_reload_cb_.has_value()) {
-            // Wire callback into cfg.on_reload
+```rust
+fn to_upper_snake_case_for_generate(s: &str) -> String {
+    let mut result = String::new();
+    let mut prev_lower = false;
+    for c in s.chars() {
+        if c.is_uppercase() {
+            if prev_lower || (!result.is_empty() && result.ends_with('_')) {
+                // Only add underscore at lowercase->uppercase boundary
+            } else if !result.is_empty() {
+                result.push('_');
+            }
+            result.push(c);
+            prev_lower = false;
+        } else {
+            result.push(c.to_ascii_uppercase());
+            prev_lower = c.is_ascii_lowercase();
         }
-        const HostInterface* h = polyplug_runtime_create_with_options(&cfg);
-        if (h == nullptr) {
-            throw std::runtime_error("polyplug_runtime_create_with_options returned null");
-        }
-        return Runtime(h);
-    } else {
-        const HostInterface* h = polyplug_runtime_create();
-        if (h == nullptr) {
-            throw std::runtime_error("polyplug_runtime_create returned null");
-        }
-        return Runtime(h);
     }
+    result
 }
 ```
+A correct implementation would group consecutive uppercase letters and only insert underscores at boundaries.
 
-### WR-02: C++ find_guest_contract marked noexcept but calls ensure_host() which throws
+### WR-05: Incomplete Lua depth tracking in `count_lua_openers` with dead code
 
-**File:** `sdks/cpp/host/polyplug/runtime.hpp:149-153`
-**Issue:** `find_guest_contract` is declared `noexcept`, but `ensure_host()` at line 150 calls `throw std::runtime_error("Runtime is destroyed")`. Throwing from a `noexcept` function calls `std::terminate`. The same issue affects `resolve_guest_contract` (line 189) and `find_by_bundle` (line 157).
-**Fix:** Either remove `noexcept` from these methods, or change `ensure_host()` to return an error code / use a different failure mode for `noexcept` methods.
+**File:** `crates/polyplug_abi/build/generate.rs:799-843`
 
-### WR-03: Lua runtime module-level mutable state is shared across all instances
+**Issue:** The `count_lua_openers` function has a dead loop at lines 799-803 that iterates over keywords (`["if", "for", "while", "function"]`) but does nothing inside the loop body (the comment says "already counted in openers"). This code is unreachable and misleading. Additionally, the function only counts openers at the start of a line (`trimmed.starts_with(...)`) and misses nested constructs where keywords appear mid-line. The `then` branch at lines 840-841 has a comment about `elseif` but no implementation. While the inline helpers in `HELPER_LUA` are simple enough that this works today, any more complex Lua patterns could cause the depth tracker to desync.
 
-**File:** `sdks/lua/host/polyplug/runtime.lua:119-120`
-**Issue:** `M._pending_reload_callback` and `M._pending_config` are module-level state. If `on_reload` or `set_config` is called, the state persists for all subsequent `Runtime.new()` calls. There is no mechanism to clear this state after consumption, meaning a second `Runtime.new()` call will re-use the previous callback/config unintentionally.
-**Fix:** Clear `M._pending_reload_callback` and `M._pending_config` to `nil` after they are consumed in `M.Runtime.new()`.
+**Fix:** Remove the dead loop at lines 799-803. Document the limitation that only line-start keywords are tracked. If more complex Lua extraction is needed in the future, consider a proper parser.
 
-### WR-04: JS guest toStr passes Number(ptr) to UnsafePointerView which expects pointer
+### WR-06: `handle.hpp` equality operator compares only `index`, not `generation`
 
-**File:** `sdks/js/guest/polyplug_guest.js:297-299`
-**Issue:** When `typeof sv.ptr === 'bigint'` and Deno is available, the code does `const ptrNum = Number(ptr)` then passes `ptrNum` to `new Deno.UnsafePointerView(ptrNum)`. On a 64-bit system, `Number()` truncates BigInt values larger than 2^53, causing pointer corruption for addresses in the upper half of the address space.
-**Fix:**
-```javascript
-if (typeof Deno !== 'undefined' && Deno.UnsafePointerView) {
-    const view = new Deno.UnsafePointerView(ptr); // Pass BigInt directly
-    return view.getUtf8String(sv.len);
-}
-```
+**File:** `sdks/cpp/host/polyplug/handle.hpp:19-21`
+
+**Issue:** The `operator==` for `GuestContractHandle` compares only `a.index == b.index`. The architecture documentation states the system uses a "generational index pattern for safe handle management" with `{ index: u32, generation: u32 }`. The current generated `GuestContractHandle` in `abi.hpp` only has an `index` field (no `generation`), which means either: (a) the generation field was intentionally removed from the ABI, or (b) there is an extraction gap. If generation is ever re-introduced, this comparison would silently treat stale handles as equal to valid ones.
+
+**Fix:** If generation is intentionally removed, add a comment to `GuestContractHandle` documenting this design decision. If generation should be tracked, update the struct and comparison operators.
 
 ## Info
 
-### IN-01: TODO comment in Lua runtime
+### IN-01: `sg_scan_methods` function is unused
 
-**File:** `sdks/lua/host/polyplug/runtime.lua:254`
-**Issue:** `-- TODO: Implement via list_bundles + find_guest_contract if needed` -- a deprecated method stub with a TODO marker. This is intentional technical debt for a removed FFI function, so low priority.
-**Fix:** Consider removing the deprecated `find_by_bundle` method entirely if it is not planned for reimplementation.
+**File:** `crates/polyplug_abi/build/generate.rs:1093-1127`
 
-### IN-02: Console.log reference in commented-out JS SDK code
+**Issue:** The `sg_scan_methods` function is defined but never called anywhere in the codebase. It appears to be infrastructure prepared for future ast-grep-based method extraction (D-14), but since helper methods are now inlined as const strings (D-12), this function is dead code.
 
-**File:** `sdks/js/host/polyplug/native-loader.ts:147`
-**Issue:** A commented-out `console.log` example appears in a JSDoc comment. This is documentation-only, not a debug artifact.
-**Fix:** No action needed -- this is intentional documentation.
+**Fix:** Either remove the function or add a comment indicating it is reserved for future use.
 
-### IN-03: Build script main.rs uses unwrap/expect freely
+### IN-02: `is_sg_available` emits cargo warnings on every build
 
-**File:** `crates/polyplug_abi/build/main.rs:37,40,42,48,107`
-**Issue:** Multiple `unwrap()` and `expect()` calls in the build script entry point. This is acceptable per the crate-level `#![allow(clippy::expect_used)]` and `#![allow(clippy::unwrap_used)]` directives at line 12-13. Build scripts are expected to panic on configuration errors rather than propagate errors gracefully.
-**Fix:** No action needed.
+**File:** `crates/polyplug_abi/build/generate.rs:1199-1203`
 
-### IN-04: Duplicated is_option/strip_option/is_array/is_function_pointer methods across generators
+**Issue:** The build script unconditionally prints `cargo:warning=ast-grep (sg) available...` or `cargo:warning=ast-grep (sg) not found...` on every build. Cargo warnings are visible in IDEs and CI logs. Since ast-grep is not required for the build (helpers are inlined), these messages add noise.
 
-**File:** `crates/polyplug_codegen/src/languages/cpp.rs:23-35`, `crates/polyplug_codegen/src/languages/csharp.rs:23-39`, `crates/polyplug_codegen/src/languages/js.rs:18-35`, `crates/polyplug_codegen/src/languages/lua.rs:18-31`, `crates/polyplug_codegen/src/languages/python.rs:18-53`
-**Issue:** Each language generator re-implements the same `is_option`, `strip_option`, `is_array`, and (in some cases) `is_function_pointer` helper methods with identical logic. These could be extracted into a shared utility module or a trait method.
-**Fix:** Extract common type-inspection methods into a shared `TypeUtils` trait or module to reduce duplication.
+**Fix:** Consider using `println!("cargo:rustc-env=...")` or only emitting the warning when the result changes.
+
+### IN-03: `UNREPRESENTABLE_PATTERNS` check could produce false positives
+
+**File:** `crates/polyplug_abi/build/generate.rs:84`
+
+**Issue:** The pattern `"dyn "` would match types containing "dyn " anywhere in the string, such as hypothetical field names or documentation. Similarly `"impl "` could match inside doc strings. This is unlikely to cause problems in practice for this codebase, but a more precise check would be more robust.
+
+**Fix:** Consider using word-boundary-aware matching or checking specifically at type boundaries.
 
 ---
 
-_Reviewed: 2026-04-12T00:00:00Z_
+_Reviewed: 2026-04-13T00:00:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: quick_
+_Depth: standard_
