@@ -4,7 +4,6 @@ mod buffer;
 mod dependency_info;
 mod error_code;
 mod string_view;
-mod vector;
 mod version;
 
 pub use abi_error::AbiError;

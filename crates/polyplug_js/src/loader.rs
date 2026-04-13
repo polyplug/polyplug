@@ -146,12 +146,7 @@ unsafe extern "C" fn js_dispatch(
     let out_usize: usize = out as usize;
 
     let call_result: Result<i32, rquickjs::Error> = data.ctx.with(|ctx| {
-        eprintln!(
-            "[polyplug_js] js_dispatch: calling JS function fn_id={}",
-            fn_id
-        );
         let js_fn: Function<'_> = func_persistent.clone().restore(&ctx)?;
-        eprintln!("[polyplug_js] js_dispatch: function restored");
 
         let args_bigint: rquickjs::BigInt<'_> =
             rquickjs::BigInt::from_u64(ctx.clone(), args_usize as u64)?;
@@ -160,7 +155,6 @@ unsafe extern "C" fn js_dispatch(
 
         let result: i32 = js_fn
             .call::<(rquickjs::BigInt<'_>, rquickjs::BigInt<'_>), i32>((args_bigint, out_bigint))?;
-        eprintln!("[polyplug_js] js_dispatch: function returned {}", result);
         Ok(result)
     });
 
@@ -170,13 +164,10 @@ unsafe extern "C" fn js_dispatch(
             code: unsafe { core::mem::transmute(code as u32) },
             message: StringView::null(),
         },
-        Err(e) => {
-            eprintln!("[polyplug_js] JS function call failed: {}", e);
-            AbiError {
-                code: AbiErrorCode::Generic,
-                message: StringView::null(),
-            }
-        }
+        Err(_) => AbiError {
+            code: AbiErrorCode::Generic,
+            message: StringView::null(),
+        },
     }
 }
 
@@ -197,34 +188,13 @@ fn get_host_interface_from_globals<'js>(
     let polyplug_obj: Object<'js> = ctx
         .globals()
         .get::<&str, Object<'js>>("polyplug")
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_js] get_host_interface_from_globals: failed to get 'polyplug' global: {}",
-                e
-            );
-            e
-        })
         .ok()?;
 
     let vtable_lo: u32 = polyplug_obj
         .get::<&str, u32>("_hostVtableLo")
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_js] get_host_interface_from_globals: failed to get '_hostVtableLo': {}",
-                e
-            );
-            e
-        })
         .ok()?;
     let vtable_hi: u32 = polyplug_obj
         .get::<&str, u32>("_hostVtableHi")
-        .map_err(|e| {
-            eprintln!(
-                "[polyplug_js] get_host_interface_from_globals: failed to get '_hostVtableHi': {}",
-                e
-            );
-            e
-        })
         .ok()?;
 
     let host_interface_ptr: *const HostInterface =
@@ -710,15 +680,12 @@ fn register_host_functions<'js>(
 
     let read_u32_fn: Function<'js> = Function::new(ctx.clone(), |ptr_num: f64| -> u32 {
         let ptr_u64: u64 = ptr_num as u64;
-        eprintln!("[polyplug_js] readU32: ptr={:#x}", ptr_u64);
         let ptr: *const u32 = ptr_u64 as usize as *const u32;
         if ptr.is_null() {
             return 0;
         }
         // SAFETY: ptr is a valid pointer provided by the host for reading.
-        let value: u32 = unsafe { *ptr };
-        eprintln!("[polyplug_js] readU32: value={:#x}", value);
-        value
+        unsafe { *ptr }
     })
     .map_err(|e: rquickjs::Error| {
         RuntimeError::Loader(LoaderError::InitFailed {

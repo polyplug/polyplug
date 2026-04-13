@@ -65,16 +65,16 @@ pub fn get_init_bundle_id() -> u64 {
 // ─── Runtime Configuration ───────────────────────────────────────────────────
 
 /// Type alias for the warning callback to avoid repetition.
-pub type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
+pub(crate) type WarningCb = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Type alias for the reload callback.
-pub type ReloadCb = Arc<dyn Fn(polyplug_abi::runtime::ReloadPhase) + Send + Sync>;
+pub(crate) type ReloadCb = Arc<dyn Fn(polyplug_abi::runtime::ReloadPhase) + Send + Sync>;
 
 /// Options for `Runtime::load_bundle_with`.
 ///
 /// The `compatibility` field overrides the global `RuntimeBuilder::compatibility` setting
 /// for this specific bundle load only.
-pub struct LoadOptions {
+pub(crate) struct LoadOptions {
     pub compatibility: Compatibility,
     pub ignore_function_count_mismatch: bool,
 }
@@ -386,7 +386,7 @@ impl Runtime {
     }
 
     /// Load a single plugin bundle explicitly with options.
-    pub fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), RuntimeError> {
+    pub(crate) fn load_bundle_with(&self, path: &Path, opts: LoadOptions) -> Result<(), RuntimeError> {
         // Determine the bundle directory: if path is a file, use its parent; otherwise use path as-is.
         let bundle_dir: &Path = if path.is_file() {
             path.parent().unwrap_or(path)

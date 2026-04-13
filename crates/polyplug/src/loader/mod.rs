@@ -9,5 +9,5 @@ mod manifest;
 pub mod scanner;
 
 pub use bundle_loader::BundleLoader;
-pub use loaded_bundle::LoadedBundle;
+pub(crate) use loaded_bundle::LoadedBundle;
 pub use manifest::{parse_manifest, ManifestData, ManifestDependency, RawManifestDependency};
