@@ -242,7 +242,7 @@ Plans:
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 2/2 | Complete    | 2026-04-11 |
 | 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
-| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 0/6 | Planned | - |
+| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 6/6 | Complete   | 2026-04-13 |
 
 ## Dependencies
 
@@ -470,7 +470,7 @@ Plans:
 6. Zero PluginRegistrar references in codebase
 7. Helper methods preserved by ast-grep across regenerations
 8. All tests pass
-**Plans:** 6 plans (5 main + 1 gap closure)
+**Plans:** 6/6 plans complete
 
 Wave Structure:
 - Wave 1: Build script extractor rewrite (Plan 01)
@@ -479,12 +479,12 @@ Wave Structure:
 - Wave 4: Delete hand-written SDK structs (Plan 04) + Remove PluginRegistrar (Plan 05) - parallel
 
 Plans:
-- [ ] 19-01-PLAN.md — Rewrite extractor.rs: recursive module walk, auto-discovery, remove whitelists [Wave 1]
-- [ ] 19-02-PLAN.md — Enhance codegen generators: typed fn ptrs, size assertions, layout tests [Wave 2]
-- [ ] 19-03-PLAN.md — ast-grep method body preservation + auto-generated file headers [Wave 3]
-- [ ] 19-04-PLAN.md — Delete hand-written FFI structs from all 5 SDK host files [Wave 4]
-- [ ] 19-05-PLAN.md — Remove PluginRegistrar from guest SDKs and documentation [Wave 4]
-- [ ] 19-06-PLAN.md — Gap closure: embed helper methods inline + fix C++ handle.hpp generation field [Wave 5]
+- [x] 19-01-PLAN.md — Rewrite extractor.rs: recursive module walk, auto-discovery, remove whitelists [Wave 1]
+- [x] 19-02-PLAN.md — Enhance codegen generators: typed fn ptrs, size assertions, layout tests [Wave 2]
+- [x] 19-03-PLAN.md — ast-grep method body preservation + auto-generated file headers [Wave 3]
+- [x] 19-04-PLAN.md — Delete hand-written FFI structs from all 5 SDK host files [Wave 4]
+- [x] 19-05-PLAN.md — Remove PluginRegistrar from guest SDKs and documentation [Wave 4]
+- [x] 19-06-PLAN.md — Gap closure: embed helper methods inline + fix C++ handle.hpp generation field [Wave 5]
 
 ---
 *Roadmap created: 2026-04-03*
