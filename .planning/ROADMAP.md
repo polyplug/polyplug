@@ -78,7 +78,7 @@ Plans:
 3. HostContractInterface supports singleton field; get_host_contract returns same instance for singletons
 4. Codegen generates instance wrappers for guest contracts and host contract implementations
 5. Cross-dispatch call_method works for plugin-plugin calls across dispatch types
-**Plans:** 5 plans
+**Plans:** 6 plans (5 main + 1 gap closure)
 
 Plans:
 - [ ] 03-01-PLAN.md — Parser singleton field support and GuestContractInterface naming verification
@@ -242,7 +242,7 @@ Plans:
 | 16. Milestone Gap Closure | 5/5 | Complete | 2026-04-09 |
 | 17. RuntimeStore Refactor | 2/2 | Complete    | 2026-04-11 |
 | 18. Consolidate FFI to HostInterface | 5/5 | Complete    | 2026-04-10 |
-| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 0/5 | Planned | - |
+| 19. Fix ABI Build Script + Auto-Generate SDK Structs | 0/6 | Planned | - |
 
 ## Dependencies
 
@@ -392,7 +392,7 @@ Plans:
 3. 4 generator comments updated (no "VTable" in non-test code)
 4. Documentation uses Guest/Host terminology consistently
 5. All tests pass
-**Plans:** 5 plans
+**Plans:** 6 plans (5 main + 1 gap closure)
 
 Wave Structure:
 - Wave 1: REQUIREMENTS.md checkbox updates (Plan 01)
@@ -470,7 +470,7 @@ Plans:
 6. Zero PluginRegistrar references in codebase
 7. Helper methods preserved by ast-grep across regenerations
 8. All tests pass
-**Plans:** 5 plans
+**Plans:** 6 plans (5 main + 1 gap closure)
 
 Wave Structure:
 - Wave 1: Build script extractor rewrite (Plan 01)
@@ -484,6 +484,7 @@ Plans:
 - [ ] 19-03-PLAN.md — ast-grep method body preservation + auto-generated file headers [Wave 3]
 - [ ] 19-04-PLAN.md — Delete hand-written FFI structs from all 5 SDK host files [Wave 4]
 - [ ] 19-05-PLAN.md — Remove PluginRegistrar from guest SDKs and documentation [Wave 4]
+- [ ] 19-06-PLAN.md — Gap closure: embed helper methods inline + fix C++ handle.hpp generation field [Wave 5]
 
 ---
 *Roadmap created: 2026-04-03*
