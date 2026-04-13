@@ -302,9 +302,9 @@ impl CodeGenerator for LuaGenerator {
         output.push_str(&item.name);
         output.push_str(";\n");
 
-        // Emit size hint comment if known.
+        // Emit size hint comment if known (C-style since inside ffi.cdef).
         if let Some(size) = item.size_hint {
-            output.push_str(&format!("    -- Expected size: {} bytes\n", size));
+            output.push_str(&format!("    // Expected size: {} bytes\n", size));
         }
 
         output.push_str("\n");
@@ -393,11 +393,11 @@ impl CodeGenerator for LuaGenerator {
     }
 
     fn generate_header(&self, _ctx: &GenerationContext) -> String {
-        "local ffi = require(\"ffi\")\nlocal M = {}\n\n".to_string()
+        "local ffi = require(\"ffi\")\nlocal M = {}\n\nffi.cdef[[\n".to_string()
     }
 
     fn generate_footer(&self, _ctx: &GenerationContext) -> String {
-        "return M\n".to_string()
+        "]]\n\nreturn M\n".to_string()
     }
 }
 

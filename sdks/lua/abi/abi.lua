@@ -4,8 +4,9 @@
 local ffi = require("ffi")
 local M = {}
 
+ffi.cdef[[
     //  Native dispatch data — direct function pointer array.
-    // 
+    //
     //  Used when `dispatch_type == DispatchType::Native`.
     //  The `functions` array contains `function_count` function pointers.
     typedef struct NativeDispatch {
@@ -14,7 +15,7 @@ local M = {}
         //  Pointer to a static array of function pointers, indexed by function_id.
         void* const* functions;
     } NativeDispatch;
-    -- Expected size: 16 bytes
+    // Expected size: 16 bytes
 
     typedef AbiError(*)(VmLoaderData, GuestContractInstance, uint32_t, const void*, void*) VmDispatch_call_fn;
     //  VM dispatch data — call through a dispatch function.
@@ -35,7 +36,7 @@ local M = {}
         //  Opaque to the host; interpreted by the dispatch function.
         VmLoaderData loader_data;
     } VmDispatch;
-    -- Expected size: 16 bytes
+    // Expected size: 16 bytes
 
     //  Opaque handle to VM loader-specific data.
     // 
@@ -48,7 +49,7 @@ local M = {}
         //  Opaque pointer to VM-specific loader data.
         void* data;
     } VmLoaderData;
-    -- Expected size: 8 bytes
+    // Expected size: 8 bytes
 
     //  Opaque handle to a guest contract instance.
     // 
@@ -93,7 +94,7 @@ local M = {}
         //  The contract_id is set by create_instance and used for direct dispatch.
         GuestContractId contract_id;
     } GuestContractInstance;
-    -- Expected size: 16 bytes
+    // Expected size: 16 bytes
 
     typedef GuestContractInstance(*)(const HostInterface*, const void*) GuestContractInterface_create_instance_fn;
     typedef void(*)(const HostInterface*, GuestContractInstance) GuestContractInterface_destroy_instance_fn;
@@ -169,7 +170,7 @@ local M = {}
         //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
         DispatchMechanisms dispatch;
     } GuestContractInterface;
-    -- Expected size: 56 bytes
+    // Expected size: 56 bytes
 
     typedef AbiError(*)(const HostInterface*, const PluginDescriptor*, const GuestContractInterface*) HostInterface_register_contract_fn;
     typedef uint8_t*(*)(const HostInterface*, size_t, size_t) HostInterface_alloc_fn;
@@ -437,7 +438,7 @@ local M = {}
         //  Length of last error message (0 if no error).
         HostInterface_get_error_len_fn get_error_len;
     } HostInterface;
-    -- Expected size: 144 bytes
+    // Expected size: 144 bytes
 
     typedef AbiError(*)(const RuntimeInterface*, const int8_t*) RuntimeInterface_load_bundle_fn;
     typedef AbiError(*)(const RuntimeInterface*, BundleId) RuntimeInterface_reload_bundle_fn;
@@ -620,7 +621,7 @@ local M = {}
         //  All instances must be destroyed before calling this.
         RuntimeInterface_destroy_fn destroy;
     } RuntimeInterface;
-    -- Expected size: 96 bytes
+    // Expected size: 96 bytes
 
     //  Opaque handle to a host contract instance.
     // 
@@ -631,7 +632,7 @@ local M = {}
         //  The actual data is owned by the host.
         void* data;
     } HostContractInstance;
-    -- Expected size: 8 bytes
+    // Expected size: 8 bytes
 
     typedef HostContractInstance(*)(const HostContractInterface*, const void*) HostContractInterface_create_instance_fn;
     typedef void(*)(const HostContractInterface*, HostContractInstance) HostContractInterface_destroy_instance_fn;
@@ -718,7 +719,7 @@ local M = {}
         //  For VM dispatch: use `dispatch.vm.call(loader_data, instance, fn_id, args, out)`.
         DispatchMechanisms dispatch;
     } HostContractInterface;
-    -- Expected size: 72 bytes
+    // Expected size: 72 bytes
 
     //  Context passed to every guest `polyplug_init()` function.
     // 
@@ -731,7 +732,7 @@ local M = {}
         //  Absolute canonical path to the directory containing the loaded bundle.
         StringView bundle_path;
     } BundleInitContext;
-    -- Expected size: 24 bytes
+    // Expected size: 24 bytes
 
     //  Metadata about a plugin within a bundle.
     // 
@@ -747,7 +748,7 @@ local M = {}
         //  Plugin version
         Version version;
     } PluginDescriptor;
-    -- Expected size: 48 bytes
+    // Expected size: 48 bytes
 
     //  Opaque handle to a registered guest contract.
     // 
@@ -768,7 +769,7 @@ local M = {}
         //  Slot in the registry array.
         uint32_t index;
     } GuestContractHandle;
-    -- Expected size: 4 bytes
+    // Expected size: 4 bytes
 
     typedef void(*)(ReloadPhase) RuntimeConfig_on_reload_fn;
     //  Configuration for the polyplug runtime passed to `polyplug_runtime_create`.
@@ -784,7 +785,7 @@ local M = {}
         //  Optional hot-reload callback, or null for no callback.
         RuntimeConfig_on_reload_fn on_reload;
     } RuntimeConfig;
-    -- Expected size: 16 bytes
+    // Expected size: 16 bytes
 
     //  FFI-safe reload phase for hot-reload callbacks.
     // 
@@ -804,7 +805,7 @@ local M = {}
         //  Failure reason (only for Failed phase).
         StringView reason;
     } ReloadPhase;
-    -- Expected size: 48 bytes
+    // Expected size: 48 bytes
 
     //  ABI error — returned by value from all ABI calls.
     // 
@@ -817,7 +818,7 @@ local M = {}
         //  Empty/NULL if success. UTF-8 message if non-zero code.
         StringView message;
     } AbiError;
-    -- Expected size: 24 bytes
+    // Expected size: 24 bytes
 
     //  FFI-safe array with caller-frees ownership model.
     // 
@@ -868,7 +869,7 @@ local M = {}
         //  Bytes allocated.
         size_t cap;
     } Buffer;
-    -- Expected size: 24 bytes
+    // Expected size: 24 bytes
 
     //  Dependency information returned by get_dependencies introspection API.
     // 
@@ -907,7 +908,7 @@ local M = {}
         //  - `bundle_id == 0`: Dependency is on any bundle providing the contract
         BundleId bundle_id;
     } DependencyInfo;
-    -- Expected size: 24 bytes
+    // Expected size: 24 bytes
 
     //  Non-owning UTF-8 string view.
     // 
@@ -919,7 +920,7 @@ local M = {}
         //  Byte count.
         size_t len;
     } StringView;
-    -- Expected size: 16 bytes
+    // Expected size: 16 bytes
 
     //  A three-component semantic version (major.minor.patch).
     typedef struct Version {
@@ -930,7 +931,7 @@ local M = {}
         //  Patch version.
         uint32_t patch;
     } Version;
-    -- Expected size: 12 bytes
+    // Expected size: 12 bytes
 
     typedef enum ContractType {
         ContractType_Host = 0,
@@ -1021,6 +1022,7 @@ local M = {}
         NativeDispatch native;
         VmDispatch vm;
     } DispatchMechanisms;
+]]
 
 M.POLYPLUG_ABI_VERSION = ffi.cast("uint32_t", 1)
 
