@@ -1380,14 +1380,27 @@ fn to_snake_case(s: &str) -> String {
 }
 
 /// Convert PascalCase to UPPER_SNAKE_CASE for JS constants.
+///
+/// Handles consecutive uppercase letters correctly:
+/// `AbiError` -> `ABI_ERROR`, not `A_B_I_E_R_R_O_R`.
 fn to_upper_snake_case_for_generate(s: &str) -> String {
     let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
+    let chars: Vec<char> = s.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
         if c.is_uppercase() {
+            // Insert underscore at boundaries:
+            // - Before uppercase if previous was lowercase (e.g., `aB` -> `a_B`)
+            // - Before uppercase if next is lowercase and we have a run of uppercase
+            //   (e.g., `ABIError` -> `ABI_Error`)
             if i > 0 {
-                result.push('_');
+                let prev = chars[i - 1];
+                if prev.is_ascii_lowercase() {
+                    result.push('_');
+                } else if prev.is_uppercase() && i + 1 < chars.len() && chars[i + 1].is_ascii_lowercase() {
+                    result.push('_');
+                }
             }
-            result.push(c);
+            result.push(*c);
         } else {
             result.push(c.to_ascii_uppercase());
         }
