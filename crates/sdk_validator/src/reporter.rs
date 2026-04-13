@@ -37,6 +37,7 @@ impl Reporter {
     /// # Arguments
     ///
     /// * `languages` - The ordered list of language names to display.
+    #[allow(dead_code)]
     pub fn with_languages(languages: Vec<String>) -> Self {
         Self { languages }
     }

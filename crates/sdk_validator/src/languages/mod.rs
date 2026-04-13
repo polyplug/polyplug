@@ -47,11 +47,13 @@ impl ValidationResult {
     }
 
     /// Check if all required methods are present.
+    #[allow(dead_code)]
     pub fn is_complete(&self) -> bool {
         self.missing_methods.is_empty()
     }
 
     /// Get the completion percentage (0-100).
+    #[allow(dead_code)]
     pub fn completion_percentage(&self) -> u8 {
         let total: usize = self.found_methods.len() + self.missing_methods.len();
         if total == 0 {

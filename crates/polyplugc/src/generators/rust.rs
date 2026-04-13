@@ -28,10 +28,6 @@ use polyplug_codegen::PolyplugcError;
 pub(crate) struct RustGenerator;
 
 impl CodeGenerator for RustGenerator {
-    fn language_name(&self) -> &'static str {
-        "rust"
-    }
-
     fn generate_host(
         &self,
         ir: &ValidatedIr,
@@ -471,26 +467,6 @@ fn generate_bundle_manifest(ir: &ValidatedIr) -> String {
         bundle_id = bundle.bundle_id
     )
 }
-
-#[allow(dead_code)]
-const GUEST_ALLOCATOR_TEMPLATE: &str = r#"
-use std::alloc::{GlobalAlloc, Layout};
-
-struct HostAllocator;
-
-// SAFETY: host_alloc and host_free use the system allocator, which is thread-safe.
-unsafe impl GlobalAlloc for HostAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        polyplug_host_alloc(layout.size(), layout.align())
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        polyplug_host_free(ptr, layout.size(), layout.align())
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: HostAllocator = HostAllocator;
-"#;
 
 // ─── Guest code generation helpers ────────────────────────────────────────────────
 

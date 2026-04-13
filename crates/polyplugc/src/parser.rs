@@ -66,7 +66,6 @@ pub(crate) struct RawContract {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct RawHostContract {
     pub name: String,
     pub version: String,
@@ -155,14 +154,10 @@ pub(crate) struct RawBundlePlugin {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawDependency {
-    #[allow(dead_code)]
     pub kind: String,
-    #[allow(dead_code)]
     pub contract: String,
-    #[allow(dead_code)]
     pub min_version: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub bundle: Option<String>,
 }
 
@@ -184,16 +179,6 @@ pub fn parse_api_str(content: &str) -> Result<ValidatedIr, PolyplugcError> {
             message: format!("TOML parse error: {e}"),
         })?;
     lower_api(raw)
-}
-
-#[allow(dead_code)]
-pub fn parse_bundle(path: &Path) -> Result<ValidatedIr, PolyplugcError> {
-    let content: String =
-        std::fs::read_to_string(path).map_err(|e| PolyplugcError::ReadFailed {
-            path: path.to_string_lossy().into_owned(),
-            source: e,
-        })?;
-    parse_bundle_str(&content)
 }
 
 #[allow(dead_code)]

@@ -27,10 +27,6 @@ use polyplug_codegen::PolyplugcError;
 pub(crate) struct CppGenerator;
 
 impl CodeGenerator for CppGenerator {
-    fn language_name(&self) -> &'static str {
-        "cpp"
-    }
-
     fn generate_host(
         &self,
         ir: &ValidatedIr,

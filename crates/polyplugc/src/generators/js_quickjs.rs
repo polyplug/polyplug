@@ -32,10 +32,6 @@ use polyplug_codegen::PolyplugcError;
 pub(crate) struct JsQuickjsGenerator;
 
 impl CodeGenerator for JsQuickjsGenerator {
-    fn language_name(&self) -> &'static str {
-        "js-quickjs"
-    }
-
     fn generate_host(
         &self,
         ir: &ValidatedIr,

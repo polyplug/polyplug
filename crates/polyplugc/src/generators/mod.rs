@@ -70,8 +70,4 @@ pub(crate) trait CodeGenerator {
         ir: &ValidatedIr,
         files: &mut GeneratedFiles,
     ) -> Result<(), PolyplugcError>;
-
-    /// Language identifier used in file extensions and header comments.
-    #[allow(dead_code)]
-    fn language_name(&self) -> &'static str;
 }

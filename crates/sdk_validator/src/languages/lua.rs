@@ -18,6 +18,7 @@ pub enum LuaValidatorError {
     Language(String),
 
     #[error("Failed to parse Lua file: {path}")]
+    #[allow(dead_code)]
     Parse {
         path: String,
         #[source]
@@ -25,6 +26,7 @@ pub enum LuaValidatorError {
     },
 
     #[error("Failed to read file: {path}")]
+    #[allow(dead_code)]
     Read {
         path: String,
         #[source]

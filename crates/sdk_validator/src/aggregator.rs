@@ -40,6 +40,7 @@ impl MethodStatus {
     }
 
     /// Get the completion percentage (0-100).
+    #[allow(dead_code)]
     pub fn completion_percentage(&self) -> u8 {
         let total: usize = self.found_in.len() + self.missing_in.len();
         if total == 0 {

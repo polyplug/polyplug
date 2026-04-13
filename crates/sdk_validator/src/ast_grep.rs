@@ -72,6 +72,7 @@ pub enum NamingConvention {
 
 impl NamingConvention {
     /// Convert to a human-readable string.
+    #[allow(dead_code)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Snake => "snake_case",
@@ -391,6 +392,7 @@ impl AstGrepRunner {
     }
 
     /// Create a new AstGrepRunner with a specific binary path.
+    #[allow(dead_code)]
     pub fn with_binary_path(binary_path: String) -> Self {
         Self {
             binary_path: Some(binary_path),
@@ -398,6 +400,7 @@ impl AstGrepRunner {
     }
 
     /// Check if ast-grep is available.
+    #[allow(dead_code)]
     pub fn is_available(&self) -> bool {
         let binary = self.binary_path.as_deref().unwrap_or("sg");
         Command::new(binary)
@@ -408,11 +411,13 @@ impl AstGrepRunner {
     }
 
     /// Get the path to the ast-grep binary being used.
+    #[allow(dead_code)]
     pub fn binary_location(&self) -> &str {
         self.binary_path.as_deref().unwrap_or("sg")
     }
 
     /// Check if ast-grep can be found in PATH.
+    #[allow(dead_code)]
     pub fn can_find_in_path() -> bool {
         std::env::var("PATH")
             .map(|path| {

@@ -22,10 +22,6 @@ use polyplug_codegen::PolyplugcError;
 pub(crate) struct LuaGenerator;
 
 impl CodeGenerator for LuaGenerator {
-    fn language_name(&self) -> &'static str {
-        "lua"
-    }
-
     fn generate_host(
         &self,
         ir: &ValidatedIr,
@@ -556,34 +552,6 @@ fn generate_host_caller_method(
     out.push_str("    end");
 }
 
-/// Legacy function - kept for reference but no longer used.
-/// The new pattern uses generate_host_contract_caller and generate_host_caller_method.
-#[allow(dead_code)]
-fn generate_host_caller_function(out: &mut String, func: &ResolvedFunction, prefix: &str) {
-    let fn_name: String = format!("{}_{}", prefix, func.name);
-    let sig_params: String = build_lua_sig_params(func);
-    out.push_str(&format!("function M.{fn_name}(interface{sig_params})\n"));
-    emit_lua_host_args_setup(out, func, prefix);
-    emit_lua_host_out_setup(out, &func.returns);
-    out.push_str("    local fn_ptr = interface.dispatch.native.functions[");
-    out.push_str(&format!("{}]", func.function_id));
-    out.push('\n');
-    out.push_str("    if fn_ptr == nil then\n");
-    out.push_str("        error(\"missing function pointer\", 2)\n");
-    out.push_str("    end\n");
-    out.push_str("    local fn = ffi.cast(DispatchFnType, fn_ptr)\n");
-    out.push_str("    local err = fn(args_ptr, out_ptr)\n");
-    out.push_str("    if err ~= 0 then\n");
-    out.push_str("        error(\"polyplug call failed\", 2)\n");
-    out.push_str("    end\n");
-    if has_return_value(&func.returns) {
-        out.push_str("    return out_val\n");
-    } else {
-        out.push_str("    return nil\n");
-    }
-    out.push_str("end\n");
-}
-
 fn generate_guest_plugin_interface(
     out: &mut String,
     plugin_name: &str,
@@ -1105,37 +1073,6 @@ fn lua_host_param_type_annotation(ty: &ResolvedTypeRef) -> String {
 
 /// Generate Lua return type annotation for host contract methods.
 fn lua_host_return_type_annotation(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
-        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
-    }
-}
-
-/// Generate Lua type annotation for guest caller method parameters.
-/// For guest callers, we use ergonomic Lua types:
-/// - StringView -> string (converted to StringView at ABI boundary)
-/// - Buffer -> string (Lua uses strings for byte buffers)
-/// - UserDefined -> userdata
-/// - Primitives -> number (Lua's numeric type)
-#[allow(dead_code)]
-fn lua_guest_caller_param_type_name(ty: &ResolvedTypeRef) -> String {
-    match ty {
-        ResolvedTypeRef::Primitive(_) => "number".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Buffer) => "string".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Ptr) => "userdata".to_owned(),
-        ResolvedTypeRef::AbiType(AbiBuiltin::Void) => "nil".to_owned(),
-        ResolvedTypeRef::UserDefined(_) => "userdata".to_owned(),
-    }
-}
-
-/// Generate Lua return type annotation for guest caller methods.
-#[allow(dead_code)]
-fn lua_guest_caller_return_type_name(ty: &ResolvedTypeRef) -> String {
     match ty {
         ResolvedTypeRef::Primitive(_) => "number".to_owned(),
         ResolvedTypeRef::AbiType(AbiBuiltin::StringView) => "string".to_owned(),
@@ -2141,50 +2078,6 @@ mod tests {
             host_contract_name_to_lua_caller("host.HostLogger"),
             "HostLoggerContract"
         );
-    }
-
-    #[test]
-    fn lua_guest_caller_param_type_stringview() {
-        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
-        assert_eq!(lua_guest_caller_param_type_name(&ty), "string");
-    }
-
-    #[test]
-    fn lua_guest_caller_param_type_buffer() {
-        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
-        assert_eq!(lua_guest_caller_param_type_name(&ty), "string");
-    }
-
-    #[test]
-    fn lua_guest_caller_param_type_primitives() {
-        assert_eq!(
-            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::U32)),
-            "number"
-        );
-        assert_eq!(
-            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::I64)),
-            "number"
-        );
-        assert_eq!(
-            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::F64)),
-            "number"
-        );
-        assert_eq!(
-            lua_guest_caller_param_type_name(&ResolvedTypeRef::Primitive(PrimitiveType::Bool)),
-            "number"
-        );
-    }
-
-    #[test]
-    fn lua_guest_caller_return_type_stringview() {
-        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::StringView);
-        assert_eq!(lua_guest_caller_return_type_name(&ty), "string");
-    }
-
-    #[test]
-    fn lua_guest_caller_return_type_buffer() {
-        let ty: ResolvedTypeRef = ResolvedTypeRef::AbiType(AbiBuiltin::Buffer);
-        assert_eq!(lua_guest_caller_return_type_name(&ty), "string");
     }
 
     #[test]

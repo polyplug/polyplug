@@ -61,12 +61,6 @@ impl Version {
             patch,
         })
     }
-
-    /// Encode minor.patch as (minor << 16 | patch) for ABI storage.
-    #[allow(dead_code)]
-    pub fn minor_patch_encoded(&self) -> u32 {
-        (self.minor << 16) | self.patch
-    }
 }
 
 // ─── Primitive and ABI Types ──────────────────────────────────────────────────────
@@ -277,7 +271,6 @@ pub struct ResolvedContract {
     pub name: String,
     /// Precomputed FNV-1a hash of "name@major".
     pub contract_id: u64,
-    #[allow(dead_code)]
     pub version: Version,
     pub functions: Vec<ResolvedFunction>,
 }
@@ -289,7 +282,6 @@ pub struct ResolvedHostContract {
     pub name: String,
     /// Precomputed FNV-1a hash of "host_contract:name@major".
     pub contract_id: u64,
-    #[allow(dead_code)]
     pub version: Version,
     /// Whether this contract provides a singleton instance.
     /// If true, `get_host_contract` returns the same instance for all callers.
@@ -299,38 +291,26 @@ pub struct ResolvedHostContract {
 
 #[derive(Debug)]
 pub struct ResolvedPlugin {
-    #[allow(dead_code)]
     pub name: String,
     #[allow(dead_code)]
     pub version: Version,
-    #[allow(dead_code)]
     pub implements: Vec<String>,
-    #[allow(dead_code)]
     pub optional: Vec<String>,
 }
 
 #[derive(Debug)]
 pub struct ResolvedBundle {
-    #[allow(dead_code)]
     pub name: String,
-    #[allow(dead_code)]
     pub version: Version,
-    #[allow(dead_code)]
     pub runtime: String,
-    #[allow(dead_code)]
     pub file: polyplug_codegen::ResolvedBundleFile,
-    #[allow(dead_code)]
     pub plugins: Vec<ResolvedPlugin>,
-    #[allow(dead_code)]
     pub bundle_id: u64,
-    #[allow(dead_code)]
     pub dependencies: Vec<ResolvedDependency>,
-    #[allow(dead_code)]
     pub needs_reinit_on_dep_reload: bool,
 }
 
 /// A resolved bundle dependency — either by contract (any provider) or by bundle (specific provider).
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ResolvedDependency {
     ByContract {
@@ -354,7 +334,6 @@ pub struct ValidatedIr {
     pub enums: Vec<EnumDef>,
     pub contracts: Vec<ResolvedContract>,
     pub host_contracts: Vec<ResolvedHostContract>,
-    #[allow(dead_code)]
     pub bundle: Option<ResolvedBundle>,
 }
 
@@ -427,16 +406,6 @@ mod tests {
         assert_eq!(v.major, 1);
         assert_eq!(v.minor, 65535);
         assert_eq!(v.patch, 65535);
-    }
-
-    #[test]
-    fn version_minor_patch_encoded() {
-        let v: Version = Version {
-            major: 1,
-            minor: 3,
-            patch: 5,
-        };
-        assert_eq!(v.minor_patch_encoded(), (3 << 16) | 5);
     }
 
     #[test]

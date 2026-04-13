@@ -3,8 +3,6 @@
 //! Parses the golden method set configuration that defines the authoritative
 //! method signatures each language SDK must implement.
 
-#![allow(dead_code)]
-
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;

@@ -2016,10 +2016,6 @@ fn cs_host_abi_type_name(ty: &ResolvedTypeRef) -> String {
 }
 
 impl CodeGenerator for CSharpGenerator {
-    fn language_name(&self) -> &'static str {
-        "csharp"
-    }
-
     fn generate_host(
         &self,
         ir: &ValidatedIr,

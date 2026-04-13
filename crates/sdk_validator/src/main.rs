@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 mod aggregator;
 mod ast_grep;
 mod cli;

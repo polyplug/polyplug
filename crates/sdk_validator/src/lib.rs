@@ -4,8 +4,6 @@
 //! across different languages (Rust, Python, C#, C++, TypeScript, JavaScript)
 //! are consistent with each other.
 
-#![allow(dead_code)]
-
 pub mod aggregator;
 pub mod ast_grep;
 pub mod config;
