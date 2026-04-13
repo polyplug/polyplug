@@ -2238,7 +2238,7 @@ mod tests {
 
     #[test]
     fn plugin_class_name_conversion() {
-        assert_eq!(contract_name_to_guest_contract_class("test.add"), "TestAddPlugin");
+        assert_eq!(contract_name_to_guest_contract_class("test.add"), "TestAddGuestContract");
     }
 
     #[test]
