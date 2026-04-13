@@ -14,6 +14,7 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 polyplug = { workspace = true }
 polyplug_abi = { workspace = true }
+polyplug_utils = { workspace = true }
 netcorehost = { workspace = true, features = ["nethost", "net10_0"] }
 pelite = { workspace = true }
 tempfile = { workspace = true }
@@ -24,7 +25,6 @@ download-nethost = ["netcorehost/nethost-download"]
 
 [dev-dependencies]
 criterion = { workspace = true }
-polyplug_utils = { workspace = true }
 
 [[bench]]
 name = "dispatch_benchmark"
