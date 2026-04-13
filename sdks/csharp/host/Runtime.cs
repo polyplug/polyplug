@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
+using Polyplug.Abi;
+
 namespace Polyplug.Host;
 
 public sealed class Runtime
@@ -13,7 +15,7 @@ public sealed class Runtime
 
     // HostInterface pointer and loaded struct (18-03)
     private nint _host;
-    private NativeMethods.HostInterface _hostStruct;
+    private HostInterface _hostStruct;
 
     // Cached function pointer delegates (18-03)
     private LoadBundleDelegate? _loadBundleFn;
@@ -66,7 +68,7 @@ public sealed class Runtime
         {
             ThrowLastError("Failed to create runtime.");
         }
-        _hostStruct = Marshal.PtrToStructure<NativeMethods.HostInterface>(_host);
+        _hostStruct = Marshal.PtrToStructure<HostInterface>(_host);
         CacheFunctionPointers();
     }
 
@@ -82,13 +84,14 @@ public sealed class Runtime
             throw new InvalidOperationException("HostInterface pointer is null.");
         }
         _host = hostInterfacePtr;
-        _hostStruct = Marshal.PtrToStructure<NativeMethods.HostInterface>(_host);
+        _hostStruct = Marshal.PtrToStructure<HostInterface>(_host);
         CacheFunctionPointers();
     }
 
     /// <summary>
     /// Register a callback to be invoked during hot-reload operations.
     /// Must be called BEFORE creating a Runtime instance.
+    /// The callback is stored statically so the C ABI trampoline can reference it.
     /// </summary>
     public static void OnReload(Action<ReloadPhase> callback)
     {
@@ -103,27 +106,23 @@ public sealed class Runtime
 
             if (callback is null)
             {
-                uint result = NativeMethods.PolyplugRuntimeOnReload(nint.Zero);
-                if (result != 0u)
-                {
-                    ThrowLastError("Failed to clear reload callback.");
-                }
+                s_reloadTrampoline = null;
                 return;
             }
 
-            ReloadCallbackNative nativeCallback = OnReloadNative;
-            s_reloadCallbackHandle = GCHandle.Alloc(nativeCallback);
-
-            uint r = NativeMethods.PolyplugRuntimeOnReload(Marshal.GetFunctionPointerForDelegate(nativeCallback));
-            if (r != 0u)
-            {
-                s_reloadCallbackHandle.Free();
-                ThrowLastError("Failed to register reload callback.");
-            }
+            OnReloadTrampoline trampoline = OnReloadNative;
+            s_reloadCallbackHandle = GCHandle.Alloc(trampoline);
+            s_reloadTrampoline = trampoline;
         }
     }
 
-    private static void OnReloadNative(NativeMethods.ReloadPhaseFfi phaseFfi)
+    /// <summary>
+    /// C ABI trampoline for the reload callback. Stored as a static so the
+    /// delegate is not garbage-collected while the runtime holds the pointer.
+    /// </summary>
+    private static OnReloadTrampoline? s_reloadTrampoline;
+
+    private static void OnReloadNative(Polyplug.Abi.ReloadPhase phase)
     {
         Action<ReloadPhase>? cb = s_reloadCallback;
         if (cb is null)
@@ -131,20 +130,15 @@ public sealed class Runtime
             return;
         }
 
-        ReloadPhase phase = ConvertReloadPhase(phaseFfi);
-        cb(phase);
+        ReloadPhaseType type = (ReloadPhaseType)phase.PhaseType;
+        string bundleName = StringViewToString(phase.BundleName);
+        string reason = StringViewToString(phase.Reason);
+
+        // Polyplug.Abi.ReloadPhase has no RetryCount field; use 0 as default.
+        cb(new ReloadPhase(type, (ulong)phase.BundleId, bundleName, 0u, reason));
     }
 
-    private static ReloadPhase ConvertReloadPhase(NativeMethods.ReloadPhaseFfi phaseFfi)
-    {
-        ReloadPhaseType type = (ReloadPhaseType)phaseFfi.PhaseType;
-        string bundleName = StringViewToString(phaseFfi.BundleName);
-        string reason = StringViewToString(phaseFfi.Reason);
-
-        return new ReloadPhase(type, phaseFfi.BundleId, bundleName, phaseFfi.RetryCount, reason);
-    }
-
-    private static string StringViewToString(NativeMethods.StringViewC sv)
+    private static string StringViewToString(StringView sv)
     {
         if (sv.Ptr == nint.Zero || sv.Len == nuint.Zero)
         {
@@ -158,7 +152,29 @@ public sealed class Runtime
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate void ReloadCallbackNative(NativeMethods.ReloadPhaseFfi phase);
+    private delegate void OnReloadTrampoline(Polyplug.Abi.ReloadPhase phase);
+
+    /// <summary>
+    /// Build a RuntimeConfig struct that includes the stored reload callback.
+    /// Returns null if no callback has been set via OnReload().
+    /// </summary>
+    internal static RuntimeConfig? BuildRuntimeConfig()
+    {
+        lock (s_lock)
+        {
+            if (s_reloadTrampoline is null)
+            {
+                return null;
+            }
+
+            return new RuntimeConfig
+            {
+                Compatibility = Compatibility.Strict,
+                HotReloadEnabled = true,
+                OnReload = s_reloadTrampoline,
+            };
+        }
+    }
 
     private void CacheFunctionPointers()
     {
@@ -237,7 +253,7 @@ public sealed class Runtime
 
         try
         {
-            NativeMethods.HostInterface tempStruct = Marshal.PtrToStructure<NativeMethods.HostInterface>(tempHost);
+            HostInterface tempStruct = Marshal.PtrToStructure<HostInterface>(tempHost);
             GetErrorLenDelegate getLen = Marshal.GetDelegateForFunctionPointer<GetErrorLenDelegate>(tempStruct.GetErrorLen);
             GetLastErrorDelegate getErr = Marshal.GetDelegateForFunctionPointer<GetLastErrorDelegate>(tempStruct.GetLastError);
 
