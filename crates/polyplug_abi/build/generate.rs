@@ -795,12 +795,6 @@ fn extract_lua_helper_methods(content: &str) -> String {
             if trimmed == "end" || trimmed.starts_with("end ") || trimmed.starts_with("end--") {
                 depth = depth.saturating_sub(1);
             }
-            // Also count `end` in compound statements
-            for keyword in &["if", "for", "while", "function"] {
-                if trimmed.starts_with(keyword) {
-                    // already counted in openers
-                }
-            }
             if depth == 0 {
                 methods.push(current.trim().to_string());
                 current.clear();
@@ -817,6 +811,11 @@ fn extract_lua_helper_methods(content: &str) -> String {
 }
 
 /// Count Lua block-opening keywords in a line.
+///
+/// # Limitations
+/// Only tracks keywords at the start of a line (`starts_with`). Nested constructs
+/// where keywords appear mid-line are not tracked. This is sufficient for the
+/// inline helper methods in `HELPER_LUA`, which are simple top-level functions.
 fn count_lua_openers(line: &str) -> i32 {
     let mut count = 0i32;
     let trimmed = line.trim();
