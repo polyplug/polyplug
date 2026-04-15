@@ -7,7 +7,6 @@
 #![allow(clippy::identity_op)]
 
 use super::types::*;
-use polyplug::ffi::polyplug_runtime_resolve_guest_contract;
 use polyplug_abi::AbiError;
 use polyplug_abi::AbiErrorCode;
 use polyplug_abi::DispatchType;
@@ -65,7 +64,7 @@ impl PipelineDecoderContract {
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface =
-            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
+            unsafe { ((*host).resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -219,7 +218,7 @@ impl DataTransformerContract {
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface =
-            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
+            unsafe { ((*host).resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -373,7 +372,7 @@ impl PipelineEncoderContract {
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface =
-            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
+            unsafe { ((*host).resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -527,7 +526,7 @@ impl DataReporterContract {
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface =
-            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
+            unsafe { ((*host).resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
@@ -681,7 +680,7 @@ impl PipelineValidatorContract {
     pub fn new(handle: GuestContractHandle, host: *const HostInterface) -> Option<Self> {
         // Resolve the interface from the handle via FFI
         let interface: *const GuestContractInterface =
-            unsafe { polyplug_runtime_resolve_guest_contract(host as *const _, handle.pack()) };
+            unsafe { ((*host).resolve_guest_contract)(host, handle) };
         if interface.is_null() {
             return None;
         }
